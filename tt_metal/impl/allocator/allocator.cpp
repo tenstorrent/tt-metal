@@ -17,12 +17,12 @@ namespace tt_metal {
 namespace allocator {
 
 void BankManager::init_allocator(uint64_t size_bytes, uint64_t offset) {
-    this->allocator_ = std::make_unique<FreeList>(
+    this->allocator_.reset(new FreeList(
         size_bytes,
         offset,
         this->min_allocation_size_bytes_,
         ADDRESS_ALIGNMENT,
-        FreeList::SearchPolicy::FIRST
+        FreeList::SearchPolicy::FIRST)
     );
 }
 
@@ -119,7 +119,7 @@ BankManager::~BankManager() {
     deallocate_all();
     allocated_buffers_.clear();
     bank_id_to_bank_offset_.clear();
-    this->allocator_.reset(nullptr);
+    this->allocator_;
 }
 
 BankManager&& BankManager::operator=(BankManager&& that) {

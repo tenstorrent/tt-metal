@@ -52,16 +52,12 @@ FreeList::Block *FreeList::search_best(uint64_t size_bytes, bool bottom_up) {
     while (curr_block != nullptr) {
         if (curr_block->size == size_bytes) {
             best_block = curr_block;
-            break;
-        } else if (curr_block->size >= size_bytes) {
-            if (best_block == nullptr or curr_block->size < best_block->size) {
-                best_block = curr_block;
-            }
+            return best_block;
         }
         curr_block = bottom_up ? curr_block->next_free : curr_block->prev_free;
     }
-
-    return best_block;
+    //best search fail over to search first
+    return search_first(size_bytes,bottom_up);
 }
 
 FreeList::Block *FreeList::search_first(uint64_t size_bytes, bool bottom_up) {
