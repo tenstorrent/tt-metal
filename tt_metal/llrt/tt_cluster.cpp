@@ -120,6 +120,8 @@ void Cluster::generate_cluster_descriptor() {
 
 void Cluster::initialize_device_drivers() {
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
+
         this->open_driver(mmio_device_id, controlled_devices);
 
         tt_device_params default_params;
@@ -137,6 +139,20 @@ void Cluster::assert_risc_reset() {
     }
 }
 
+void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
+    // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
+    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent-metal/tt-metal/issues/4087
+    TT_ASSERT(controlled_device_ids.size() <= 4, "Unable to assign each device to its own host memory channel!");
+    uint16_t channel = 0;
+    this->device_to_host_mem_channel_[mmio_device_id] = channel++;
+    for (const chip_id_t &device_id : controlled_device_ids) {
+        if (device_id == mmio_device_id) {
+            continue;
+        }
+        this->device_to_host_mem_channel_[device_id] = channel++;
+    }
+}
+
 void Cluster::get_metal_desc_from_tt_desc(
     const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
     const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
@@ -151,9 +167,10 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
 
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        // This is the target/desired number of mem channels per arch/device. Silicon driver will attempt to open
-        // this many hugepages as channels, and assert if workload uses more than available.
-        uint32_t num_host_mem_ch_per_mmio_device = 1;
+        // This is the target/desired number of mem channels per arch/device.
+        // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than available.
+        // Metal currently uses assigns 1 channel per device
+        uint32_t num_host_mem_ch_per_mmio_device = controlled_device_ids.size();
         std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
         dynamic_tlb_config["REG_TLB"] = DEVICE_DATA.REG_TLB;
         // This will remove harvested rows from the soc descriptor
@@ -495,14 +512,13 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     this->get_driver(chip_id).read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
 }
 
-void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const {
-    constexpr uint16_t channel = 0;
+void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->get_driver(src_device_id).write_to_sysmem(vec, size_in_bytes, addr, channel, src_device_id);
 }
 
-void Cluster::read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const {
-    // TODO: Uplift
-    constexpr uint16_t channel = 0;
+void Cluster::read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->get_driver(src_device_id).read_from_sysmem(vec, addr, channel, size_in_bytes, src_device_id);
 }
 
@@ -613,6 +629,10 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
         std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+}
+
+uint32_t Cluster::get_tensix_soft_reset_addr() const {
+    return DEVICE_DATA.TENSIX_SOFT_RESET_ADDR;
 }
 
 }  // namespace tt

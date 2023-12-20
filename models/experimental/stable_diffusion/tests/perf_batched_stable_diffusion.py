@@ -225,7 +225,7 @@ def test_perf(device, expected_inference_time, expected_compile_time):
         # predict the noise residual
         with torch.no_grad():
             tt_noise_pred = tt_unet(tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings)
-            ttl.device.Synchronize()
+            ttl.device.Synchronize(device)
             noise_pred = tt_to_torch_tensor(tt_noise_pred)
 
         # perform guidance

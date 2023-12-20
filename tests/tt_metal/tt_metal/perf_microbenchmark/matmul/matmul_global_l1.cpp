@@ -1214,8 +1214,8 @@ int main(int argc, char** argv) {
 
     // took from run_operation.cpp
     auto start = std::chrono::high_resolution_clock::now();
-    EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-    Finish(*::detail::GLOBAL_CQ);
+    EnqueueProgram(::detail::GetCommandQueue(device), program, false);
+    Finish(::detail::GetCommandQueue(device));
     auto end = std::chrono::high_resolution_clock::now();
     duration = end - start;
     tt_metal::DumpDeviceProfileResults(device, program);

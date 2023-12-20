@@ -14,6 +14,7 @@
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/host_api.hpp"
 
 using std::unique_lock;
 using std::mutex;
@@ -21,9 +22,6 @@ using std::mutex;
 namespace tt::tt_metal{
 
     namespace detail {
-        // To be removed at a later time, but need a global
-        // command queue for the time being.
-        inline unique_ptr<CommandQueue> GLOBAL_CQ;
 
         inline static bool DispatchStateCheck( bool isFastDispatch){
             static bool fd = isFastDispatch;
@@ -275,10 +273,28 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline void Synchronize()
+        inline CommandQueue &GetCommandQueue(Device *device)
         {
-            if (detail::GLOBAL_CQ) {
-                Finish(*detail::GLOBAL_CQ);
+            detail::DispatchStateCheck(true);
+            // For now there is only one SW CommandQueue per device
+            static std::vector<std::unique_ptr<CommandQueue>> command_queues( GetNumAvailableDevices() );
+            chip_id_t id = device->id();
+            TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
+            TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
+            static std::mutex cq_creation_mutex;
+            {
+                std::lock_guard<std::mutex> lock(cq_creation_mutex);
+                if (not command_queues[id] or (command_queues[id] and command_queues[id]->device != device)) {
+                    command_queues[device->id()] = std::make_unique<CommandQueue>(device);
+                }
+            }
+            return *(command_queues[id]);
+        }
+
+        inline void Synchronize(Device *device)
+        {
+            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+                Finish(GetCommandQueue(device));
             }
         }
 
@@ -287,10 +303,10 @@ namespace tt::tt_metal{
             device->deallocate_buffers();
         }
 
-        inline void ClearCommandQueueProgramCache()
+        inline void ClearCommandQueueProgramCache(Device *device)
         {
-            if (detail::GLOBAL_CQ) {
-                ClearProgramCache(*detail::GLOBAL_CQ);
+            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+                ClearProgramCache(GetCommandQueue(device));
             }
         }
 
@@ -422,5 +438,71 @@ namespace tt::tt_metal{
                 specified_core_spec
             );
         }
+
+        // Sending dispatch kernel. TODO(agrebenisan): Needs a refactor
+        inline void SendDispatchKernelToDevice(Device *device) {
+            ZoneScoped;
+
+            Program dispatch_program = CreateProgram();
+            auto dispatch_cores = device->dispatch_cores().begin();
+            CoreCoord producer_logical_core = *dispatch_cores++;
+            CoreCoord consumer_logical_core = *dispatch_cores;
+
+            CoreCoord producer_physical_core = device->worker_core_from_logical_core(producer_logical_core);
+            CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
+
+            std::map<string, string> producer_defines = {
+                {"IS_DISPATCH_KERNEL", ""},
+                {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
+                {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
+            };
+            std::map<string, string> consumer_defines = {
+                {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
+                {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
+            };
+            std::vector<uint32_t> dispatch_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr()};
+            tt::tt_metal::CreateKernel(
+                dispatch_program,
+                "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
+                producer_logical_core,
+                tt::tt_metal::DataMovementConfig {
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = dispatch_compile_args,
+                    .defines = producer_defines});
+
+            tt::tt_metal::CreateKernel(
+                dispatch_program,
+                "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
+                consumer_logical_core,
+                tt::tt_metal::DataMovementConfig {
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = dispatch_compile_args,
+                    .defines = consumer_defines});
+
+            tt::tt_metal::CreateSemaphore(dispatch_program, producer_logical_core, 2);
+            tt::tt_metal::CreateSemaphore(dispatch_program, consumer_logical_core, 0);
+
+            CompileProgram(device, dispatch_program);
+            ConfigureDeviceWithProgram(device, dispatch_program);
+
+            uint32_t fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
+            vector<uint32_t> fifo_addr_vector = {fifo_addr};
+            WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
+            WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
+
+            tt::Cluster::instance().l1_barrier(device->id());
+
+            const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
+            auto [tlb_offset, tlb_size] = tlb_data;
+
+            launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
+
+            // TODO(pkeller): Should use detail::LaunchProgram once we have a mechanism to avoid running all RISCs
+            tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
+            tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
+        }
+
     }
 }

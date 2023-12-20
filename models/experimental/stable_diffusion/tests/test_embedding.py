@@ -22,9 +22,7 @@ from models.experimental.stable_diffusion.tt.embeddings import TtTimestepEmbeddi
 
 def test_run_embedding_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -53,7 +51,7 @@ def test_run_embedding_inference(device):
     tt_model.eval()
 
     tt_output = tt_model(tt_input)
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)

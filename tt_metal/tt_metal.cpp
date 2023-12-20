@@ -450,7 +450,6 @@ namespace detail {
         DumpDeviceProfileResults(device, program);
     }
 
-
     bool ConfigureDeviceWithProgram(Device *device, Program &program) {
         ZoneScoped;
         bool pass = true;
@@ -544,7 +543,7 @@ namespace detail {
         ZoneScoped;
         program.compile(device);
     }
-}
+}   // namespace detail
 
 size_t GetNumAvailableDevices() {
 #ifdef TT_METAL_VERSIM_DISABLED
@@ -564,18 +563,10 @@ size_t GetNumPCIeDevices() {
 
 Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
     Device * dev = new Device(device_id, l1_bank_remap);
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        detail::GLOBAL_CQ = std::make_unique<CommandQueue>(dev);
-    }
     return dev;
 }
 
 bool CloseDevice(Device *device) {
-    // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
-    if (detail::GLOBAL_CQ) {
-        detail::GLOBAL_CQ.reset(nullptr);
-    }
     return device->close();
 }
 

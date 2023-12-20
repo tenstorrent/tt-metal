@@ -13,7 +13,6 @@
 
 
 #include "jit_build/build.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
@@ -163,7 +162,10 @@ class EnqueueWrapCommand : public Command {
     EnqueueCommandType type();
 };
 
-void send_dispatch_kernel_to_device(Device* device);
+// Fwd declares
+namespace detail{
+    CommandQueue &GetCommandQueue(Device *device);
+}
 
 class CommandQueue {
    public:
@@ -173,7 +175,7 @@ class CommandQueue {
 
    private:
     Device* device;
-    SystemMemoryWriter sysmem_writer;
+
     // thread processing_thread;
     map<uint64_t, unique_ptr<Buffer>>
         program_to_buffer;
@@ -199,6 +201,7 @@ class CommandQueue {
     friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
     friend void ClearProgramCache(CommandQueue& cq);
+    friend CommandQueue &detail::GetCommandQueue(Device *device);
 };
 
 } // namespace tt::tt_metal

@@ -79,7 +79,7 @@ def run_perf_mistral(expected_inference_time, expected_compile_time, device, mod
             tokenizer,
             max_tokens=max_tokens,
         )
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_output
 
@@ -92,7 +92,7 @@ def run_perf_mistral(expected_inference_time, expected_compile_time, device, mod
             tokenizer,
             max_tokens=max_tokens,
         )
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_output
 

@@ -167,7 +167,7 @@ def run_bert_question_and_answering_inference_squadv2(
         logger.info(f"\tTT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
         logger.info(f"\tCPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
 
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
 
         return eval_score
 

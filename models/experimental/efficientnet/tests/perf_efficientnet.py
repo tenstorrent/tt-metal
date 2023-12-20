@@ -60,12 +60,12 @@ def test_perf_efficientnet_b0(
     with torch.no_grad():
         profiler.start(cpu_key)
         hf_model(test_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_output = tt_model(tt_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_output
 
@@ -73,7 +73,7 @@ def test_perf_efficientnet_b0(
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_output
 

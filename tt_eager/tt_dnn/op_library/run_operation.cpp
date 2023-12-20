@@ -211,11 +211,11 @@ std::vector<Tensor> run_device_operation(
 
             if (USE_FAST_DISPATCH) {
 #ifndef TTNN_ENABLE_LOGGING
-                EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
+                EnqueueProgram(tt::tt_metal::detail::GetCommandQueue(device), program, false);
 #else
                 const auto start{std::chrono::steady_clock::now()};
-                EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
-                Finish(*tt::tt_metal::detail::GLOBAL_CQ);
+                EnqueueProgram(tt::tt_metal::detail::GetCommandQueue(device), program, false);
+                Finish(tt::tt_metal::detail::GetCommandQueue(device));
                 const auto end{std::chrono::steady_clock::now()};
                 const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                 tt::log_info(

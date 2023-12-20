@@ -83,7 +83,7 @@ protected:
             tt::tt_metal::detail::LaunchProgram(this->device_, program);
         } else {
             // Fast Dispatch uses the command queue
-            CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+            CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(this->device_);
             EnqueueProgram(cq, program, false);
             Finish(cq);
         }

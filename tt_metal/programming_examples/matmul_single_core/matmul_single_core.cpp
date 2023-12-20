@@ -52,7 +52,7 @@ void matmul_single_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat1
     * Setup program to execute along with its buffers and kernels to use
     * Core range is just single core
     */
-    CommandQueue& cq = *detail::GLOBAL_CQ;
+    CommandQueue& cq = tt_metal::detail::GetCommandQueue(device);
     Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

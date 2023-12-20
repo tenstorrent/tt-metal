@@ -19,7 +19,6 @@ from models.utility_functions import (
 )
 
 
-
 _batch_size = 1
 
 
@@ -27,9 +26,7 @@ _batch_size = 1
     "pcc, PERF_CNT",
     ((0.99, 2),),
 )
-def test_vgg_inference(
-    device, pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict
-):
+def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
     disable_persistent_kernel_cache()
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
@@ -69,14 +66,10 @@ def test_vgg_inference(
             profiler.end("\nAverage execution time of tt_vgg model")
 
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.to_torch()).reshape(tt_output.shape())
+        tt_output = torch.Tensor(tt_output.to_torch())
 
-        logger.info(
-            f"Correct Output: {class_labels[torch.argmax(torch_output).item()]}"
-        )
-        logger.info(
-            f"Predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n"
-        )
+        logger.info(f"Correct Output: {class_labels[torch.argmax(torch_output).item()]}")
+        logger.info(f"Predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n")
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."

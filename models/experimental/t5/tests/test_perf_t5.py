@@ -74,7 +74,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
             attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask,
         )
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_model_outputs
 
@@ -87,7 +87,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
             attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask,
         )
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_model_outputs
 

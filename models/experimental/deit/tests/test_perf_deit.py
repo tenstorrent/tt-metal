@@ -46,14 +46,14 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
         profiler.start(first_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
 
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)

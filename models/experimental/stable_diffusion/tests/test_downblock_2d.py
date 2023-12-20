@@ -22,9 +22,7 @@ from models.experimental.stable_diffusion.tt.downblock_2d import TtDownBlock2D
 
 def test_run_downblock_real_input_inference(device, model_location_generator):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -51,12 +49,10 @@ def test_run_downblock_real_input_inference(device, model_location_generator):
     tt_sample = torch_to_tt_tensor_rm(sample, device)
     tt_emb = torch_to_tt_tensor_rm(emb, device)
 
-    tt_downblock = TtDownBlock2D(
-        **kwargs, state_dict=state_dict, base_address=base_address
-    )
+    tt_downblock = TtDownBlock2D(**kwargs, state_dict=state_dict, base_address=base_address)
 
     tt_out, tt_output_states = tt_downblock(tt_sample, tt_emb)
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)
@@ -68,9 +64,7 @@ def test_run_downblock_real_input_inference(device, model_location_generator):
 
 def test_run_downblock_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()

@@ -397,7 +397,7 @@ int main(int argc, char **argv) {
             per_core_N);
 
 
-        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+        CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

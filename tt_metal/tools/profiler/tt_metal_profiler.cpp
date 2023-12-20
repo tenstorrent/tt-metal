@@ -33,9 +33,10 @@ void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_c
     {
         ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");
         //TODO: (MO) This global is temporary need to update once the new interface is in
-        if (GLOBAL_CQ) {
-            Finish(*GLOBAL_CQ);
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+            Finish(GetCommandQueue(device));
         }
+
         TT_FATAL(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
         auto worker_cores_used_in_program =\
             device->worker_cores_from_logical_cores(logical_cores);

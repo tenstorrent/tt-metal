@@ -10,7 +10,6 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -31,9 +30,9 @@ void MAIN {
 
 
     #ifdef FUSE_PRE_ADD
-        binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1);
+        binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1, tt::CB::c_intermed0);
     #else
-        binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
+        binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_intermed0);
     #endif
 
     constexpr uint32_t onetile = 1;
@@ -77,6 +76,8 @@ void MAIN {
          * X + Y
          */
         #ifdef FUSE_PRE_ADD
+            unpack_reconfig_data_format(tt::CB::c_in0, tt::CB::c_in1);
+            pack_reconfig_data_format(tt::CB::c_intermed0);
             add_tiles_init();
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 ACQ();
@@ -95,6 +96,7 @@ void MAIN {
                 cb_pop_front(cb_in, blk);
                 cb_pop_front(cb_inb, blk);
             }
+            unpack_reconfig_data_format(tt::CB::c_intermed0, tt::CB::c_intermed0);
             // by the end of this loop we should end up with Wt tiles in cb_x
         #endif
 
@@ -204,6 +206,11 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
                         //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
                         //if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
+            if constexpr(do_gamma == 0 && do_beta == 0) {
+                pack_reconfig_data_format(tt::CB::c_out0);
+            } else {
+                pack_reconfig_data_format(tt::CB::c_intermed0);
+            }
             cb_reserve_back(cb_im_or_out, blk);
 
             ACQ();
@@ -217,6 +224,9 @@ void MAIN {
             REL();
 
             if (do_gamma) {
+                if constexpr(do_beta == 0) {
+                    pack_reconfig_data_format(tt::CB::c_out0);
+                }
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : tt::CB::c_out0;
                 mul_bcast_rows_init_short();
@@ -234,6 +244,7 @@ void MAIN {
                 REL();
             }
             if (do_beta) {
+                pack_reconfig_data_format(tt::CB::c_out0);
                 ACQ();
                 add_bcast_rows_init_short();
                 cb_reserve_back(tt::CB::c_out0, blk);
