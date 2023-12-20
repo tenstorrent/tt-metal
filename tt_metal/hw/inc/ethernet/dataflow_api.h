@@ -33,9 +33,10 @@ erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_S
 volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 
 extern uint32_t __erisc_jump_table;
-void (*rtos_context_switch_ptr)();
 volatile uint32_t *RtosTable =
     (volatile uint32_t *)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
+
+void (*rtos_context_switch_ptr)();
 
 void __attribute__((section("code_l1"))) risc_context_switch() {
     ncrisc_noc_full_sync();

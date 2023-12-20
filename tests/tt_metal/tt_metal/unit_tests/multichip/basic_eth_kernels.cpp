@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <functional>
 #include <random>
 
+#include "device_fixture.hpp"
 #include "n300_device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
@@ -533,6 +533,7 @@ bool eth_hung_kernels(
 }  // namespace unit_tests::erisc::kernels
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
+    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -540,7 +541,10 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
-        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        auto [device_id, receiver_core] = device_0->get_connected_ethernet_core(sender_core);
+        if (device_1->id() != device_id) {
+            continue;
+        }
         ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
             device_0,
             device_1,
@@ -577,6 +581,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
+    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -584,7 +589,10 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
-        CoreCoord receiver_core = std::get<1>(device_1->get_connected_ethernet_core(sender_core));
+        auto [device_id, receiver_core] = device_1->get_connected_ethernet_core(sender_core);
+        if (device_0->id() != device_id) {
+            continue;
+        }
         ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
             device_1,
             device_0,
@@ -617,6 +625,56 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
+    }
+}
+
+TEST_F(DeviceFixture, EthKernelsDirectSendAllConnectedChips) {
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    for (const auto& sender_device : devices_) {
+        for (const auto& receiver_device : devices_) {
+            if (sender_device->id() == receiver_device->id()) {
+                continue;
+            }
+            for (const auto& sender_core : sender_device->get_active_ethernet_cores()) {
+                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
+                if (receiver_device->id() != device_id) {
+                    continue;
+                }
+                ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                    sender_device,
+                    receiver_device,
+                    WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core));
+                ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                    sender_device,
+                    receiver_device,
+                    4 * WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core));
+                ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                    sender_device,
+                    receiver_device,
+                    256 * WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core));
+                ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                    sender_device,
+                    receiver_device,
+                    1000 * WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core));
+            }
+        }
     }
 }
 

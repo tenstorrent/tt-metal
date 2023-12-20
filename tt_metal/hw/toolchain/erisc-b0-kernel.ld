@@ -1,12 +1,20 @@
-/* Copyright (C) 2014-2017 Free Software Foundation, Inc.
-   Copying and distribution of this script, with or without modification,
-   are permitted in any medium without royalty provided the copyright
-   notice and this notice are preserved.  */
-
 /*
-  This file contains pre-processor directives that are compiled to create tensix-sections.ld,
-  any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
-*/
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+INCLUDE "erisc-b0-memory.ld"
+
+REGION_ALIAS("REGION_APP_IRAM_CODE", ERISC_APP_IRAM_CODE)
+REGION_ALIAS("REGION_APP_KERNEL_CODE", ERISC_APP_KERNEL_CODE)
+REGION_ALIAS("REGION_APP_KERNEL_DATA", ERISC_APP_KERNEL_DATA)
+REGION_ALIAS("REGION_LDM", LOCAL_DATA_MEM)
+
+__firmware_stack_size = 1024;
+__firmware_global_pointer = ORIGIN(ERISC_DATA) + 2048;
+
+__firmware_start = ORIGIN(REGION_APP_KERNEL_CODE);
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
@@ -18,112 +26,52 @@ SECTIONS
   /* Read-only sections, merged into text segment: */
   PROVIDE (__executable_start = __firmware_start);
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
+  PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
   .init __firmware_start :
   {
     KEEP (*(SORT_NONE(.init)))
-  } > REGION_CODE
-
-  .fw_version :
+  } > REGION_APP_KERNEL_CODE
+  code_l1 :
   {
-    KEEP (*(.fw_version));
-  } > REGION_CODE
+    *(code_l1)
+  } > REGION_APP_KERNEL_CODE
+  PROVIDE (__ecode_l1 = .);
+  .text :
 
-  .text           :
   {
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
-    /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_CODE
-  .fini           :
-  {
-    KEEP (*(SORT_NONE(.fini)))
-  } > REGION_CODE
+  } > REGION_APP_KERNEL_CODE
+
+
   PROVIDE (__etext = .);
   _etext = .; PROVIDE (_etext = .);
+
   PROVIDE (etext = .);
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_RODATA
-  .rodata1        : { *(.rodata1) } > REGION_RODATA
+  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_KERNEL_CODE
+  .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE
   .sdata2         :
   {
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_DATA
+  } > REGION_APP_KERNEL_DATA
+  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_KERNEL_DATA
   /* Adjust the address for the data segment.  We want to adjust up to
      the same address within the page on the next page up.  */
   . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE));
-  .preinit_array     :
-  {
-    PROVIDE_HIDDEN (__preinit_array_start = .);
-    KEEP (*(.preinit_array))
-    PROVIDE_HIDDEN (__preinit_array_end = .);
-  } > REGION_RODATA
-  .init_array     :
-  {
-    PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
-    KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
-    PROVIDE_HIDDEN (__init_array_end = .);
-  } > REGION_RODATA
-  .fini_array     :
-  {
-    PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
-    KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
-    PROVIDE_HIDDEN (__fini_array_end = .);
-  } > REGION_RODATA
-  .ctors          :
-  {
-    /* gcc uses crtbegin.o to find the start of
-       the constructors, so we make sure it is
-       first.  Because this is a wildcard, it
-       doesn't matter if the user does not
-       actually link against crtbegin.o; the
-       linker won't look for a file to match a
-       wildcard.  The wildcard also means that it
-       doesn't matter which directory crtbegin.o
-       is in.  */
-    KEEP (*crtbegin.o(.ctors))
-    KEEP (*crtbegin?.o(.ctors))
-    /* We don't want to include the .ctor section from
-       the crtend.o file until after the sorted ctors.
-       The .ctor section from the crtend file contains the
-       end of ctors marker and it must be last */
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
-    KEEP (*(SORT(.ctors.*)))
-    KEEP (*(.ctors))
-  } > REGION_RODATA
-  .dtors          :
-  {
-    KEEP (*crtbegin.o(.dtors))
-    KEEP (*crtbegin?.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
-    KEEP (*(SORT(.dtors.*)))
-    KEEP (*(.dtors))
-  } > REGION_RODATA
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_DATA
-  .dynamic        : { *(.dynamic) } > REGION_DATA
+  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_KERNEL_DATA
+  .dynamic        : { *(.dynamic) } > REGION_APP_KERNEL_DATA
   . = DATA_SEGMENT_RELRO_END (0, .);
   .data           :
   {
     *(.data .data.* .gnu.linkonce.d.*)
     SORT(CONSTRUCTORS)
-  } > REGION_DATA
-  .data1          : { *(.data1) } > REGION_DATA
-  .got            : { *(.got.plt) *(.igot.plt) *(.got) *(.igot) } > REGION_DATA
-  /* We want the small data sections together, so single-instruction offsets
-     can access them all, and initialized data all before uninitialized, so
-     we can shorten the on-disk segment size.  */
-  .sdata          :
-  {
-    /*__global_pointer$ = __firmware_global_pointer;*/
-    *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
-    *(.sdata .sdata.* .gnu.linkonce.s.*)
-  } > REGION_DATA
+  } > REGION_APP_KERNEL_DATA
+
   . = ALIGN(4); /* startup code will use word writes to zero bss */
   _edata = .; PROVIDE (edata = .);
   . = .;
@@ -133,7 +81,7 @@ SECTIONS
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
-  } > REGION_DATA
+  } > REGION_APP_KERNEL_DATA
   . = ALIGN(4);
   __l1_bss_end = .;
 
@@ -151,12 +99,13 @@ SECTIONS
       pad the .data section.  */
    . = ALIGN(4);
    __ldm_bss_end = .;
-  } > REGION_DATA
+  } > REGION_APP_KERNEL_DATA
   . = ALIGN(32 / 8);
   . = SEGMENT_START("ldata-segment", .);
   . = ALIGN(32 / 8);
   _end = .; PROVIDE (end = .);
   . = DATA_SEGMENT_END (.);
+
 
   .stack :
   {
@@ -171,7 +120,7 @@ SECTIONS
   data_noinit (NOLOAD):
   {
     *(data_noinit)
-  } > REGION_APP_DATA
+  } > REGION_APP_KERNEL_DATA
 
   l1_memory :
   {
@@ -267,3 +216,4 @@ SECTIONS
         *(.got.plt) *(.igot.plt) *(.got) *(.igot)
   }
 }
+INCLUDE "tensix-address.ld"
