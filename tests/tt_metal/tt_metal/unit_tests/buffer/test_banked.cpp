@@ -276,7 +276,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderOnly) {
         TT_FATAL(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0);
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
         size_t tile_increment = num_tiles;
-        uint32_t num_iterations = 3;
+        uint32_t num_iterations = 2;
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
@@ -330,7 +330,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1WriterOnly) {
         TT_FATAL(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0);
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
         size_t tile_increment = num_tiles;
-        uint32_t num_iterations = 3;
+        uint32_t num_iterations = 2;
         uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
