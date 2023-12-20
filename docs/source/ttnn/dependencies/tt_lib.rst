@@ -40,7 +40,7 @@ Below, is an example of how to declare a new on-device operation with all of the
         }
     };
 
-Or to add one with a memmber:
+Or to add one with a member:
 
 .. code-block::
 
@@ -642,7 +642,7 @@ and then unary operations for,
 Complex Operations (Type 2)
 ---------------------------
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
-operations; specifically this storage allows for compute without the cost of split-concat implict in
+operations; specifically this storage allows for compute without the cost of split-concat implicit in
 the Type 1 contiguous representations.
 
 Other Operations
