@@ -36,6 +36,7 @@ struct p_gpr_unpack
     constexpr static uint PERF_UNPACK_NUM_TILES_1 = 35;   // num tiles for input operands 2-3
     constexpr static uint PERF_UNPACK_NUM_TILES_2 = 36;   // num tiles for input operands 4-5
     constexpr static uint PERF_UNPACK_NUM_TILES_3 = 37;   // num tiles for input operands 6-7
+    constexpr static uint FACE_DIM_16x16    = 40;   // Holds face dimension (16x16)
     constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
     constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore
     constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;

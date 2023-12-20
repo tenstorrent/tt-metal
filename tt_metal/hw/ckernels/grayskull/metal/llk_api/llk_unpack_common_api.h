@@ -30,7 +30,7 @@ template <bool mail2math = true, bool mail2pack = true>
 inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;
-    std::uint32_t offset_address = cb_interface[operand_id].fifo_page_size * tile_index;
+    std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX(unpack_src_format[operand_id], tile_index);
     std::uint32_t address = base_address + offset_address;
     _llk_unpack_get_tile_<mail2math, mail2pack>(address, p_tile);
 }
