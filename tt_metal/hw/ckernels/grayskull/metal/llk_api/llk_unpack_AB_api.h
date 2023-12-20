@@ -58,10 +58,10 @@ inline void llk_unpack_AB(
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
-    std::uint32_t offset_address_a = cb_interface[operandA_id].fifo_page_size * tile_index_a;
+    std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX<true>(unpack_src_format[operandA_id], tile_index_a);
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
-    std::uint32_t offset_address_b = cb_interface[operandB_id].fifo_page_size * tile_index_b;
+    std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX<true>(unpack_src_format[operandB_id], tile_index_b);
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     _llk_unpack_AB_<BType>(address_a, address_b, transpose_of_faces > 0);
