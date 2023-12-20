@@ -34,7 +34,7 @@ Within the ``tools/tt_gdb`` directory,
 
 Compiling under debug mode
 --------------------------
-To get the most out of `tt_gdb`, you must compile under debug mode. This will use different debug ld files for the RISCs, and will enable debug symbols. To enable under debug mode, use
+To get the most out of `tt_gdb`, you must compile under debug mode. This will use different debug ld files for the riscs, and will enable debug symbols. To enable under debug mode, use
 `DEBUG_MODE=1` when compiling a test.
 
 For example, below is a snippet of compiling with `DEBUG_MODE=1` for compilation of the datacopy op.

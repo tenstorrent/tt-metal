@@ -5,7 +5,7 @@ Matmul (Single Core)
 
 We'll build a program that will perform matmul operations on two tensors
 with equal-size inner dimension. We will then go through specific sections of
-the program.
+the propram.
 
 The full example program is in
 ``tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp``
@@ -31,7 +31,7 @@ The initial level of host-side code can broken up into sections:
 - Set input and output vector variables, using the user-defined parameters (M, N, K, B)
 - Tilizing the input vector, and untilizing the device output to vector (row-major layout)
 - Call ``matmul_single_core()`` program and retrieve output results (details in next section)
-- Validate the device computation results vs. golden results on cpu
+- Validate the device compuation results vs. golden results on cpu
 - Close Device
 
 .. code-block:: cpp

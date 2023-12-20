@@ -96,7 +96,7 @@ For profiling your entire python program, run your program as follows:
 Pytest Sessions
 ^^^^^^^^^^^^^^^
 
-For pytest scripts you can import pytest as a module and pass its arguments accordingly. For example, to profile a BERT unit test you can run the following:
+For pytest scripts you can import pytest as a module and pass its arguments accordingly. For example, to profile a bert unit test you can run the following:
 
 ..  code-block:: sh
 

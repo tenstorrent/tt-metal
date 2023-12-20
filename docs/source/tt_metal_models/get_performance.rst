@@ -49,7 +49,7 @@ Perf files will write the results in a csv file ``perf_YOUR_MODEL_date.csv``. Th
 
 * **First Run**: Includes compilation time and inference time; without any caching enabled.
 * **Second Run** and **Inference Time GS**: Inference time of abovementioned model on Grayskull. It is referred to as Second Run since during the first run we cache the compile program and do not pay for the compilation at the second run.
-* **Compile Time**: Compile time as the name suggest, calculated by subtracting Second Run from the First Run.
+* **Compile Time**: Compile time as the name suggest, calcualted by subtracting Second Run from the First Run.
 * **Throughput GS** Throughput of the model on Grayskull, computed as (batch*inf/sec) where inf is inference time on Grayskull.
 * **Inference Time CPU** Inference time of abovementioned model on CPU.
 * **Throughput cpu** Throughput of the model's implementation of pytorch on CPU, computed as (batch*inf/sec) where inf inference time on CPU.
@@ -67,4 +67,4 @@ We also maintain ``tests/scripts/run_performance.sh`` to facilitate an easy way 
     ./tests/scripts/run_performance.sh
 
 
-This script will run all the perf files and merge the output csv files into on ``perf.csv`` file.
+This script will run all the perf files and merge the outputed csv files into on ``perf.csv`` file.

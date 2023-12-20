@@ -73,7 +73,7 @@ The inner for loop of "nop" instructions is executed multiple times. The count i
 
 The beginning of each iteration of the outer loop is timestamped under id number 5.
 
-Device-side profiler provides marker information for all RISCs and cores used in the program. The following is the portion of the output csv of the ``full_buffer`` test for NCRISC on core 0,0 on device 0:
+Deivce-side profiler provides marker information for all riscs and cores used in the program. The following is the portion of the output csv of the ``full_buffer`` test for NCRISC on core 0,0 on device 0:
 
 ..  code-block:: c++
 

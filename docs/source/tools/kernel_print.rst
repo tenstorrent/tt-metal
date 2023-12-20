@@ -76,7 +76,7 @@ back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back``
 
         // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CB::c_intermed1` and print it.
         DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL();
-        // Note that since the MATH core does not have access to CBs, so this is an invalid print:
+        // Note that since the MATH core does not have acces to CBs, so this is an invalid print:
         DPRINT_MATH({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
 
         // Print a full tile
