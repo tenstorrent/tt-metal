@@ -32,10 +32,8 @@ struct SystemMemoryCQInterface {
     // Equation for issue fifo size is
     // | issue_fifo_wr_ptr + command size B - issue_fifo_rd_ptr |
     // Space available would just be issue_fifo_limit - issue_fifo_size
-    SystemMemoryCQInterface(uint32_t command_queue_size, std::optional<float> command_issue_queue_split) : command_queue_size(command_queue_size) {
-        float issue_queue_split = command_issue_queue_split.has_value() ? command_issue_queue_split.value() : default_issue_queue_split;
-
-        this->command_issue_region_size = tt::round_up(command_queue_size * issue_queue_split, 32);
+    SystemMemoryCQInterface(uint32_t command_queue_size) : command_queue_size(command_queue_size) {
+        this->command_issue_region_size = tt::round_up(command_queue_size * this->default_issue_queue_split, 32);
         this->command_completion_region_size = this->command_queue_size - this->command_issue_region_size;
 
         this->issue_fifo_size = (this->command_issue_region_size - CQ_START) >> 4;
@@ -51,6 +49,9 @@ struct SystemMemoryCQInterface {
     }
 
     const uint32_t command_queue_size;
+
+    // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B aligned and remaining space is dedicated for completion queue
+    // Smaller issue queues can lead to more stalls for applications that send more work to device than readback data.
     static constexpr float default_issue_queue_split = 0.75;
     uint32_t command_issue_region_size;
     uint32_t command_completion_region_size;
@@ -83,8 +84,9 @@ class SystemMemoryManager {
    public:
     SystemMemoryCQInterface cq_interface;
     SystemMemoryManager(chip_id_t device_id, const std::set<CoreCoord> &dev_dispatch_cores, const std::function<CoreCoord (CoreCoord)> &worker_from_logical) :
+        cq_interface(tt::Cluster::instance().get_host_channel_size(device_id, tt::Cluster::instance().get_assigned_channel_for_device(device_id))),
         device_id(device_id),
-        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device->id())),
+        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
         hugepage_start(
             (char*) tt::Cluster::instance().host_dma_address(0, tt::Cluster::instance().get_associated_mmio_device(device_id), tt::Cluster::instance().get_assigned_channel_for_device(device_id))),
         fast_write_callable(

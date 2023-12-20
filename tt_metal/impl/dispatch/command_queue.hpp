@@ -186,7 +186,7 @@ namespace detail{
 
 class CommandQueue {
    public:
-    CommandQueue(Device* device, std::optional<float> command_issue_queue_split);
+    CommandQueue(Device* device);
 
     ~CommandQueue();
 

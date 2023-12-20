@@ -440,10 +440,8 @@ namespace tt::tt_metal{
         }
 
         // Sending dispatch kernel. TODO(agrebenisan): Needs a refactor
-        inline void SendDispatchKernelToDevice(Device *device) {
+        inline void SendDispatchKernelToDevice(Device *device, uint32_t command_issue_region_size, uint32_t command_completion_region_size) {
             ZoneScoped;
-            // Ideally, this should be some separate API easily accessible in
-            // TT-metal, don't like the fact that I'm writing this from scratch
 
             Program dispatch_program = CreateProgram();
             auto dispatch_cores = device->dispatch_cores().begin();
@@ -463,8 +461,8 @@ namespace tt::tt_metal{
                 {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
             };
 
-            std::vector<uint32_t> producer_compile_args = {DeviceCommand::COMMAND_ISSUE_REGION_SIZE};
-            std::vector<uint32_t> consumer_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr(), DeviceCommand::COMMAND_ISSUE_REGION_SIZE, DeviceCommand::COMMAND_COMPLETION_REGION_SIZE}
+            std::vector<uint32_t> producer_compile_args = {command_issue_region_size};
+            std::vector<uint32_t> consumer_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr(), command_issue_region_size, command_completion_region_size}
 
             tt::tt_metal::CreateKernel(
                 dispatch_program,
@@ -497,7 +495,7 @@ namespace tt::tt_metal{
             tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_READ_PTR, issue_fifo_addr_vector);
             tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_WRITE_PTR, issue_fifo_addr_vector);
             
-            uint32_t completion_fifo_addr = DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4;
+            uint32_t completion_fifo_addr = command_issue_region_size >> 4;
             vector<uint32_t> completion_fifo_addr_vector = {completion_fifo_addr};
             tt::tt_metal::detail::WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_WRITE_PTR, completion_fifo_addr_vector);
             tt::tt_metal::detail::WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_READ_PTR, completion_fifo_addr_vector);
