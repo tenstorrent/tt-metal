@@ -269,7 +269,7 @@ def get_num_required_hugepages(assert_devs_exist=True):
 
     host_has_grayskull = get_host_has_grayskull()
 
-    num_required_hugepages = num_tt_devices if host_has_grayskull else num_tt_devices * 4
+    num_required_hugepages = num_tt_devices if host_has_grayskull else num_tt_devices * 2
 
     return num_required_hugepages
 
