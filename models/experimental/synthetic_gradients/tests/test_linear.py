@@ -73,7 +73,7 @@ def run_linear_test(in_features, out_features, device):
 
     linear_tt = ttLinear(weight_tt, bias_tt)
     output_tt = linear_tt(inputs_tt)
-    output_tt = untilize(torch.Tensor(output_tt.cpu().to_torch()).reshape(output_tt.shape()))
+    output_tt = untilize(torch.Tensor(output_tt.cpu().to_torch()))
     output_tt = output_tt[0, 0, 0, :]
 
     test_results, output = comp_allclose_and_pcc(output_torch, output_tt)

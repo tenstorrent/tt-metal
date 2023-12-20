@@ -34,8 +34,6 @@ def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict):
         tt_output = tt_vgg(tt_image)
 
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.to_torch()).reshape(tt_output.shape())
+        tt_output = torch.Tensor(tt_output.to_torch())
 
-        logger.info(
-            f"GS's predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n"
-        )
+        logger.info(f"GS's predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n")
