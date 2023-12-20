@@ -228,7 +228,7 @@ Below ``Vec`` means any vector type.
 Below is a list of library calls, further documentation is below.
 
 Grayskull and Wormhole
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: c++
 
@@ -465,7 +465,7 @@ For example:
                                      // to preserve the value in LReg1 (if desired)
 
 Miscellaneous
-============
+=============
 
 Register Pressure Management
 ----------------------------
