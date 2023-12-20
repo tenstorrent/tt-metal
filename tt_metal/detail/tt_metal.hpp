@@ -462,7 +462,7 @@ namespace tt::tt_metal{
             };
 
             std::vector<uint32_t> producer_compile_args = {command_issue_region_size};
-            std::vector<uint32_t> consumer_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr(), command_issue_region_size, command_completion_region_size}
+            std::vector<uint32_t> consumer_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr(), command_issue_region_size, command_completion_region_size};
 
             tt::tt_metal::CreateKernel(
                 dispatch_program,
@@ -494,7 +494,7 @@ namespace tt::tt_metal{
             vector<uint32_t> issue_fifo_addr_vector = {issue_fifo_addr};
             tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_READ_PTR, issue_fifo_addr_vector);
             tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_WRITE_PTR, issue_fifo_addr_vector);
-            
+
             uint32_t completion_fifo_addr = command_issue_region_size >> 4;
             vector<uint32_t> completion_fifo_addr_vector = {completion_fifo_addr};
             tt::tt_metal::detail::WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_WRITE_PTR, completion_fifo_addr_vector);

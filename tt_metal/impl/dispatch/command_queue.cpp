@@ -809,6 +809,9 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
     ZoneScopedN("CommandQueue_read_buffer");
     TT_FATAL(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
 
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
+
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     uint32_t padded_page_size = align(buffer.page_size(), 32);
@@ -824,7 +827,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         }
         tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
 
-        const uint32_t command_queue_size = this->sysmem_manager.cq_interface.command_queue_size;
+        const uint32_t command_queue_size = this->device->sysmem_manager->cq_interface.command_queue_size;
         uint32_t available_space_bytes = command_queue_size - (get_cq_completion_wr_ptr(this->device->id()) << 4);
         if (available_space_bytes < padded_page_size) {
             // Wrap the completion region because a single page won't fit in available space
@@ -860,11 +863,11 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
             // If page size is not 32B-aligned, we cannot do a contiguous copy
             uint32_t dst_address_offset = unpadded_dst_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < bytes_read; sysmem_address_offset += padded_page_size) {
-                tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, 0);
+                tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, mmio_device_id, channel);
                 dst_address_offset += buffer.page_size();
             }
         } else {
-            tt::Cluster::instance().read_sysmem((char*)dst + unpadded_dst_offset, bytes_read, command.read_buffer_addr, 0);
+            tt::Cluster::instance().read_sysmem((char*)dst + unpadded_dst_offset, bytes_read, command.read_buffer_addr, mmio_device_id, channel);
         }
 
         this->device->sysmem_manager->completion_queue_pop_front(bytes_read); // signal to device that data has been read
@@ -902,7 +905,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t total_pages_to_write = buffer.num_pages();
     uint32_t dst_offset = 0;
-    const uint32_t command_issue_region_size = this->sysmem_manager.cq_interface.command_issue_region_size;
+    const uint32_t command_issue_region_size = this->device->sysmem_manager->cq_interface.command_issue_region_size;
 
     auto get_num_pages_to_write = [&total_pages_to_write, &padded_page_size] (uint32_t available_space_bytes) {
         uint32_t available_data_space_bytes = available_space_bytes - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
@@ -916,11 +919,11 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
     };
 
     while (total_pages_to_write > 0) {
-        uint32_t available_space_bytes = command_issue_region_size - this->sysmem_manager.get_issue_queue_write_ptr();
+        uint32_t available_space_bytes = command_issue_region_size - this->device->sysmem_manager->get_issue_queue_write_ptr();
         if (available_space_bytes <= DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND) {
             // No space for the command
             this->wrap();
-            available_space_bytes = command_issue_region_size - this->sysmem_manager.get_issue_queue_write_ptr(); // recompute after wrapping
+            available_space_bytes = command_issue_region_size - this->device->sysmem_manager->get_issue_queue_write_ptr(); // recompute after wrapping
         }
         tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
 
@@ -985,7 +988,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     if ((this->device->sysmem_manager->get_issue_queue_write_ptr()) + host_data_and_device_command_size >=
         this->device->sysmem_manager->cq_interface.command_issue_region_size) {
         TT_ASSERT(
-            host_data_and_device_command_size <= this->sysmem_manager.cq_interface.command_issue_region_size - CQ_START, "EnqueueProgram command size too large");
+            host_data_and_device_command_size <= this->device->sysmem_manager->cq_interface.command_issue_region_size - CQ_START, "EnqueueProgram command size too large");
         this->wrap();
     }
 

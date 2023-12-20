@@ -84,7 +84,8 @@ class SystemMemoryManager {
    public:
     SystemMemoryCQInterface cq_interface;
     SystemMemoryManager(chip_id_t device_id, const std::set<CoreCoord> &dev_dispatch_cores, const std::function<CoreCoord (CoreCoord)> &worker_from_logical) :
-        cq_interface(tt::Cluster::instance().get_host_channel_size(device_id, tt::Cluster::instance().get_assigned_channel_for_device(device_id))),
+        cq_interface(
+            tt::Cluster::instance().get_host_channel_size(tt::Cluster::instance().get_associated_mmio_device(device_id), tt::Cluster::instance().get_assigned_channel_for_device(device_id))),
         device_id(device_id),
         m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
         hugepage_start(
@@ -93,7 +94,7 @@ class SystemMemoryManager {
             tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         dispatch_cores(dev_dispatch_cores),
         worker_from_logical_callable(worker_from_logical) {
-        
+
         auto dispatch_cores_iter = dispatch_cores.begin();
         const std::tuple<uint32_t, uint32_t> producer_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device_id, this->worker_from_logical_callable(*dispatch_cores_iter++))).value();
         auto [producer_tlb_offset, producer_tlb_size] = producer_tlb_data;

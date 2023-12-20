@@ -308,7 +308,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, mmio_device_id, channel);
 
-        detail::SendDispatchKernelToDevice(this, this->sysmem_manager->cq_interface.command_issue_region_size, this->sysmem_manager->cq_interface.command_completion_region_size););
+        detail::SendDispatchKernelToDevice(this, this->sysmem_manager->cq_interface.command_issue_region_size, this->sysmem_manager->cq_interface.command_completion_region_size);
     }
 
     return true;
@@ -340,7 +340,7 @@ bool Device::close() {
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->sysmem_writer.reset(nullptr);
+        this->sysmem_manager.reset(nullptr);
     }
 
     this->active_devices_.deactivate_device(this->id_);
