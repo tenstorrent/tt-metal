@@ -125,6 +125,11 @@ void DeviceModule(py::module &m_device) {
     m_device.def("Synchronize", &detail::Synchronize, R"doc(
         Wait for all kernels on TT device to complete.
     )doc");
+    m_device.def("SetLazyCommandQueueMode", &detail::SetLazyCommandQueueMode, R"doc(
+        If set to true, the host does not notify the device that there are commands available other than
+        the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
+        that the write pointer has been updated.
+    )doc");
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");

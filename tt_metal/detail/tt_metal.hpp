@@ -298,6 +298,12 @@ namespace tt::tt_metal{
             }
         }
 
+        inline void SetLazyCommandQueueMode(bool lazy)
+        {
+            DispatchStateCheck(true);
+            LAZY_COMMAND_QUEUE_MODE = lazy;
+        }
+
         inline void DeallocateBuffers(Device * device)
         {
             device->deallocate_buffers();

@@ -155,7 +155,7 @@ class SystemMemoryManager {
         tt_driver_atomics::sfence();
     }
 
-    void issue_queue_push_back(uint32_t push_size_B) {
+    void issue_queue_push_back(uint32_t push_size_B, bool lazy) {
         // All data needs to be 32B aligned
         uint32_t push_size_16B =
             (((push_size_B - 1) | 31) + 1) >> 4;  // Terse way to find next multiple of 32 in 16B words
@@ -170,7 +170,9 @@ class SystemMemoryManager {
         }
 
         // Notify dispatch core
-        this->send_issue_queue_write_ptr();
+        if (not lazy) {
+            this->send_issue_queue_write_ptr();
+        }
     }
 
     void completion_queue_wait_front() {

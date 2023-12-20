@@ -404,7 +404,7 @@ void EnqueueReadBufferCommand::process() {
 
     this->manager.issue_queue_reserve_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+    this->manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, LAZY_COMMAND_QUEUE_MODE);
 }
 
 EnqueueCommandType EnqueueReadBufferCommand::type() { return this->type_; }
@@ -531,7 +531,7 @@ void EnqueueWriteBufferCommand::process() {
         this->manager.cq_write((char*)this->src + unpadded_src_offset, data_size_in_bytes, system_memory_temporary_storage_address);
     }
 
-    this->manager.issue_queue_push_back(cmd_size);
+    this->manager.issue_queue_push_back(cmd_size, LAZY_COMMAND_QUEUE_MODE);
 }
 
 EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
@@ -689,7 +689,7 @@ void EnqueueProgramCommand::process() {
         }
     }
 
-    this->manager.issue_queue_push_back(cmd_size);
+    this->manager.issue_queue_push_back(cmd_size, LAZY_COMMAND_QUEUE_MODE);
 }
 
 EnqueueCommandType EnqueueProgramCommand::type() { return this->type_; }
@@ -710,7 +710,7 @@ void FinishCommand::process() {
 
     this->manager.issue_queue_reserve_back(cmd_size);
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->manager.issue_queue_push_back(cmd_size);
+    this->manager.issue_queue_push_back(cmd_size, false);
 }
 
 EnqueueCommandType FinishCommand::type() { return this->type_; }
@@ -740,7 +740,7 @@ void EnqueueWrapCommand::process() {
 
     this->manager.issue_queue_reserve_back(wrap_packet_size_bytes);
     this->manager.cq_write(command_vector.data(), command_vector.size() * sizeof(uint32_t), write_ptr);
-    this->manager.issue_queue_push_back(wrap_packet_size_bytes);
+    this->manager.issue_queue_push_back(wrap_packet_size_bytes, LAZY_COMMAND_QUEUE_MODE);
     if (this->wrap_region == DeviceCommand::WrapRegion::COMPLETION) {
         // Wrap the read pointers for completion queue because device will start writing data at head of completion queue and there are no more reads to be done at current completion queue write pointer
         // If we don't wrap the read then the subsequent read buffer command may attempt to read past the total command queue size
