@@ -341,6 +341,20 @@ struct p_sfpu
     constexpr static uint kCONST_Exp_5Bit = 1;
 };
 
+struct p_sfpswap
+{
+    // SFPSWAP instruction modes
+    constexpr static uint UNCONDITIONALLY = 0;
+    constexpr static uint ALL_ROWS_MAX = 1;
+    constexpr static uint ROWS_01_MAX = 2;
+    constexpr static uint ROWS_02_MAX = 3;
+    constexpr static uint ROWS_03_MAX = 4;
+    constexpr static uint ROW_0_MAX = 5;
+    constexpr static uint ROW_1_MAX = 6;
+    constexpr static uint ROW_2_MAX = 5;
+    constexpr static uint ROW_3_MAX = 6;
+};
+
 struct p_exp {
     constexpr static uint FRAC_BITS = 3;
     constexpr static uint C23_73 = 0x4340; // Based on FRAC_BITS

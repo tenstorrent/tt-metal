@@ -128,17 +128,6 @@ inline void clear_bank_valid()
     }
 }
 
-inline void update_dest_offset_id()
-{
-    //ping-pong between 0 and 1
-    dest_offset_id = 1 - dest_offset_id;
-}
-
-inline uint32_t get_dest_buffer_base()
-{
-    return (0 != dest_offset_id) ? DEST_REGISTER_HALF_SIZE : 0x0;
-}
-
 inline void wait_math_semaphores()
 {
     // wait while math semaphore is on max, no room to write math results

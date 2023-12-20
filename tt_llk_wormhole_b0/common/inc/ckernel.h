@@ -257,6 +257,17 @@ inline void reset_dest_offset_id()
     dest_offset_id = 0;
 }
 
+inline void update_dest_offset_id()
+{
+    //ping-pong between 0 and 1
+    dest_offset_id = 1 - dest_offset_id;
+}
+
+inline uint32_t get_dest_buffer_base()
+{
+    return (0 != dest_offset_id) ? DEST_REGISTER_HALF_SIZE : 0x0;
+}
+
 // MOP run version without zmask
 inline void mop_run(const uint8_t type, const uint8_t count)
 {
