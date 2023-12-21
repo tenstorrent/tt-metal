@@ -1,6 +1,7 @@
 name: "[stress] Fast Dispatch post-commit on WH BM"
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 jobs:

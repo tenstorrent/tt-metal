@@ -1,6 +1,7 @@
 name: "[stress] Fast Dispatch post-commit on GS VM"
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 jobs:
