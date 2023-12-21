@@ -1,4 +1,8 @@
 name: "[stress] Fast Dispatch post-commit on GS BM"
+
+on:
+  workflow_dispatch:
+
 jobs:
   stress-build-and-unit-tests:
     timeout-minutes: 1440

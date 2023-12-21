@@ -5,15 +5,16 @@ on:
   schedule:
     - cron: "0 4 * * *"
 
-stress-gs-fd:
-  uses: ./.github/workflows/stress-vm-gs-fd.yaml
-  secrets: inherit
-stress-gs-sd:
-  uses: ./.github/workflows/stress-vm-gs-sd.yaml
-  secrets: inherit
-stress-wh-fd:
-  uses: ./.github/workflows/stress-vm-wh-fd.yaml
-  secrets: inherit
-stress-wh-sd:
-  uses: ./.github/workflows/stress-vm-wh-sd.yaml
-  secrets: inherit
+jobs:
+  stress-gs-fd:
+    uses: ./.github/workflows/stress-vm-gs-fd.yaml
+    secrets: inherit
+  stress-gs-sd:
+    uses: ./.github/workflows/stress-vm-gs-sd.yaml
+    secrets: inherit
+  stress-wh-fd:
+    uses: ./.github/workflows/stress-vm-wh-fd.yaml
+    secrets: inherit
+  stress-wh-sd:
+    uses: ./.github/workflows/stress-vm-wh-sd.yaml
+    secrets: inherit
