@@ -5,10 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
-from loguru import logger
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
 
 
 @pytest.mark.parametrize(
@@ -26,24 +23,14 @@ from loguru import logger
 #   result: at::fill(self_t, value_t)
 def test_bw_fill(input_shapes, device):
     torch.manual_seed(12386)
-    grad_data = torch.randn(input_shapes).bfloat16()
-
-    grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
-
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
     pyt_y = torch.zeros_like(grad_data)
-
     grad_sum = grad_data.sum()
     pyt_y.fill_(grad_sum)
 
     tt_output_tensor_on_device = tt_lib.tensor.fill_bw(grad_tensor)
 
-    tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
-
-    tt_output_tensor = tt_output_tensor / tt_output_tensor.numel()
-    golden_output_tensor = pyt_y / pyt_y.numel()
-
-    comp_pass, comp_out = comparison_funcs.comp_allclose(golden_output_tensor, tt_output_tensor, atol=4, rtol=1e-1)
-    logger.info(comp_out)
+    golden_tensor = list()
+    golden_tensor.append(pyt_y)
+    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
