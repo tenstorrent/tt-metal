@@ -86,7 +86,6 @@ extern volatile uint tt_reg_ptr *instrn_buffer;
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
 extern volatile uint tt_reg_ptr *trisc_l1_mailbox;
-extern volatile uint local_mem_barrier;
 extern volatile uint8_t tt_l1_ptr *debug_buffer;
 
 extern uint32_t cfg_state_id;
@@ -252,15 +251,10 @@ inline void mop_run(const uint8_t type, const uint8_t count)
     TTI_MOP(type, count - 1, 0); // Run the MOP
 }
 
-inline void mem_barrier(uint32_t data)
-{
-    local_mem_barrier = data;
-}
-
 // Register read (workaround for bug
 // #976
 // now handled by the compiler)
-inline uint reg_read_barrier(uint32_t addr)
+inline uint reg_read(uint32_t addr)
 {
     volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *> (addr);
     uint data = p_reg[0];
@@ -407,8 +401,8 @@ inline void clear_mailbox_values(uint16_t value = 0) {
 
 inline uint64_t read_wall_clock()
 {
-   uint32_t timestamp_low = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
-   uint32_t timestamp_high = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
+   uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+   uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
    return ((uint64_t)timestamp_high << 32) | timestamp_low;
 }
 
@@ -425,10 +419,10 @@ void debug_dump_seek(uint8_t offset);
 inline void stall_kernel(uint32_t num_cycles) {
 #if DELAY_EN > 0
     TT_LLK_DUMP("stall_kernel({})", num_cycles);
-    uint32_t start_clk_l = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t start_clk_l = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t elapsed_time = 0;
     while (elapsed_time <= num_cycles) {
-        uint32_t current_clk_l = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t current_clk_l = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
         if (current_clk_l >= start_clk_l) {
             elapsed_time = current_clk_l - start_clk_l;
         } else {

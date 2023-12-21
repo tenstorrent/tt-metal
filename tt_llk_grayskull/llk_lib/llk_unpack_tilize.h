@@ -35,10 +35,6 @@ inline void _llk_unpack_tilize_hw_configure_(const std::uint32_t unpack_src_form
 inline void _llk_unpack_tilize_init_(const std::uint32_t unpack_src_format=0, const std::uint32_t unpack_dst_format=0, const std::uint32_t ct_dim=0) {
     const std::uint32_t block_c_dim = ct_dim * TILE_C_DIM;
 
-    // Save state of unpacker config for quick restore
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0, THCON_SEC0_REG2_Out_data_format_ADDR32); // Save unpack config[0]
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32); // Save tile x dim per context
-
     // Override default settings
     unpack_config_u config = {0};
     config.f.out_data_format = unpack_dst_format;
