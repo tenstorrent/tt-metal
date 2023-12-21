@@ -114,7 +114,11 @@ ALWI void copy_tile_init()
 ALWI void copy_tile(uint32_t icb, uint32_t itile, uint32_t idst)
 {
     UNPACK(( llk_unpack_A<BroadcastType::NONE, false>(icb, itile)  ));
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(idst)  ));
+    #else
+    MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf, DST_ACCUM_MODE>(idst)  ));
+    #endif
 }
 
 ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles)
