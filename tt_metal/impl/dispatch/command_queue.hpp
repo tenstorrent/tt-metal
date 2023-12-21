@@ -220,4 +220,6 @@ class CommandQueue {
     friend CommandQueue &detail::GetCommandQueue(Device *device);
 };
 
+inline bool LAZY_COMMAND_QUEUE_MODE = false;
+
 } // namespace tt::tt_metal

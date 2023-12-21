@@ -393,5 +393,7 @@ def test_bert_batch_dram_with_program_cache(
         assert tt_lib.program_cache.num_entries() == 19
     elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
         assert tt_lib.program_cache.num_entries() == 17
+    elif batch == 9 and model_config_str in {"BFLOAT8_B-L1", "BFLOAT8_B-DRAM"}:
+        assert tt_lib.program_cache.num_entries() == 17
     else:
         assert tt_lib.program_cache.num_entries() == 16

@@ -81,9 +81,9 @@ operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeads::create_program(const
     TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
     if (input_tensor.is_sharded()) {
-        return multi_core_split_fused_qkv_and_split_heads_sharded(input_tensor, output_tensors, this->compute_with_storage_grid_size);
+        return multi_core_split_query_key_value_and_split_heads_sharded(input_tensor, output_tensors, this->compute_with_storage_grid_size);
     } else {
-        return multi_core_split_fused_qkv_and_split_heads(input_tensor, output_tensors, this->compute_with_storage_grid_size);
+        return multi_core_split_query_key_value_and_split_heads(input_tensor, output_tensors, this->compute_with_storage_grid_size);
     }
 }
 

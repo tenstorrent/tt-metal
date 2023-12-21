@@ -31,7 +31,7 @@ def ttnn_optimized_multi_head_attention(
         query,
         key,
         value,
-    ) = ttnn.nlp.split_fused_qkv_and_split_heads(
+    ) = ttnn.nlp.split_query_key_value_and_split_heads(
         fused_qkv_output,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         core_grid=(batch_size, num_cores_x),
@@ -124,7 +124,7 @@ def ttnn_optimized_bert_encoder(
 
     multi_head_attention_add_and_layer_norm_output = ttnn.layer_norm(
         hidden_states,
-        residual_input=multi_head_attention_output,
+        residual_input_tensor=multi_head_attention_output,
         weight=parameters.attention.output.LayerNorm.weight,
         bias=parameters.attention.output.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -142,7 +142,7 @@ def ttnn_optimized_bert_encoder(
 
     feedforward_add_and_layer_norm_output = ttnn.layer_norm(
         multi_head_attention_add_and_layer_norm_output,
-        residual_input=feedforward_output,
+        residual_input_tensor=feedforward_output,
         weight=parameters.output.LayerNorm.weight,
         bias=parameters.output.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,

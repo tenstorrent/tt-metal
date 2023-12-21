@@ -15,6 +15,13 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.fixture(autouse=True)
+def ttnn_enable_debug_decorator():
+    ttnn.decorators.ENABLE_DEBUG_DECORATOR = True
+    yield
+    ttnn.decorators.ENABLE_DEBUG_DECORATOR = False
+
+
 MODEL_NAME = "google/flan-t5-small"
 
 
@@ -342,6 +349,8 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_size):
+    torch.manual_seed(0)
+
     config = transformers.T5Config.from_pretrained(model_name)
     model = transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval()
 

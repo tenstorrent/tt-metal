@@ -13,6 +13,7 @@ from ttnn.tensor import (
     DRAM_MEMORY_CONFIG,
 )
 from ttnn.core import reshape, _reshape_to_4D
+from ttnn.decorators import debug_decorator
 
 
 THIS_MODULE = sys.modules[__name__]
@@ -21,6 +22,25 @@ __all__ = []
 
 
 def register_ttl_unary_function(name, ttl_unary_function):
+    def _torch_unary(input_tensor: Tensor, **_):
+        import torch
+        import ttnn
+
+        name_to_torch_function = {
+            "exp": torch.exp,
+            "tanh": torch.tanh,
+            "gelu": torch.nn.functional.gelu,
+            "rsqrt": torch.rsqrt,
+        }
+        torch_function = name_to_torch_function[name]
+
+        input_tensor = ttnn.from_device(input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.to_torch(input_tensor)
+
+        return torch_function(input_tensor)
+
+    @debug_decorator(_torch_unary, name=name)
     def unary_function(input_tensor: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
         f"""{name}(input_tensor: Tensor) -> Tensor
 
@@ -75,6 +95,20 @@ for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
 
 
 def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
+    def _torch_unary(input_tensor: Tensor, parameter, **_):
+        import torch
+        import ttnn
+
+        name_to_torch_function = {"pow": torch.pow}
+        torch_function = name_to_torch_function[name]
+
+        input_tensor = ttnn.from_device(input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.to_torch(input_tensor)
+
+        return torch_function(input_tensor, parameter)
+
+    @debug_decorator(_torch_unary, name=name)
     def unary_function(
         input_tensor: Tensor, parameter: float, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
     ) -> Tensor:

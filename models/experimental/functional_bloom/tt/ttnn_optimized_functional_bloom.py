@@ -66,11 +66,11 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
     return alibi.reshape(batch_size, num_heads, 1, seq_length).to(dtype)
 
 
-def split_fused_qkv_and_split_heads(
+def split_query_key_value_and_split_heads(
     fused_qkv: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     batch_size, *_ = fused_qkv.shape
-    output = ttnn.nlp.split_fused_qkv_and_split_heads(
+    output = ttnn.nlp.split_query_key_value_and_split_heads(
         fused_qkv, core_grid=(batch_size, 12), memory_config=BLOOM_MEMORY_CONFIG
     )
     return output
@@ -80,7 +80,7 @@ def create_query_key_value(hidden_states, weight, bias):
     fused_qkv = ttnn.linear(
         hidden_states, weight, bias=bias, core_grid=(9, 12), memory_config=BLOOM_MEMORY_CONFIG, dtype=BLOOM_DTYPE
     )
-    query, key, value = split_fused_qkv_and_split_heads(fused_qkv)
+    query, key, value = split_query_key_value_and_split_heads(fused_qkv)
     ttnn.deallocate(fused_qkv)
 
     return query, key, value
