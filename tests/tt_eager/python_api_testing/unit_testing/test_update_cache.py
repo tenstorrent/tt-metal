@@ -53,7 +53,6 @@ class TestUpdateCache:
 
     @skip_for_wormhole_b0()
     @pytest.mark.parametrize("cache_idx", [0, 1, 127, 128, 1024, 1057])
-    @pytest.mark.skip("Watcher error, see issue #4086")
     def test_update_cache_and_slice_decode(self, head_dim, max_seq_len, num_users, cache_idx, device):
         input_shape = [num_users, 1, 1, head_dim]
         cache_shape = [num_users, 1, max_seq_len, head_dim]

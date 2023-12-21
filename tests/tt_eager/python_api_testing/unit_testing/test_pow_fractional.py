@@ -9,7 +9,6 @@ import tt_lib as ttl
 from models.utility_functions import comp_pcc
 from loguru import logger
 from models.utility_functions import skip_for_wormhole_b0
-import pytest
 
 
 @skip_for_wormhole_b0()
