@@ -37,7 +37,7 @@ void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_c
             Finish(GetCommandQueue(device));
         }
 
-        TT_FATAL(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
+        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
         auto worker_cores_used_in_program =\
             device->worker_cores_from_logical_cores(logical_cores);
         auto device_id = device->id();

@@ -568,7 +568,7 @@ void Program::compile( Device * device )
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
-    tt_set_profiler_state_for_debug_print(profile_kernel);
+    DprintServerSetProfilerState(profile_kernel);
 
     // compile all kernels in parallel
     for (Kernel * kernel : kernels_) {

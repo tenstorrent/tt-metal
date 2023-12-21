@@ -363,30 +363,6 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     return 0;
 }
 
-void Cluster::reset_debug_print_server_buffers() const {
-    for (const auto &[device_id, mmio_device_id] : this->device_to_mmio_device_) {
-        auto workers = get_soc_desc(device_id).workers;
-        for (const CoreCoord &core : workers)
-            for (int hart_id = 0; hart_id < 5; hart_id++) {  // TODO(AP): must match DPRINT_NHARTS, magic
-                // compute the buffer address for the requested hart
-                uint32_t base_addr = PRINT_BUFFER_NC + hart_id * PRINT_BUFFER_SIZE;
-
-                // The way this works is we first initialize all dprint buffers
-                // for all cores and all harts to this magic number.
-                // This way the device DPRINT will know that this core hasn't been initialized
-                // from tt_start_debug_print_server
-                // If we didn't have this mechanism them DPRINT in the kernel would have no way of knowing
-                // Whether the host is polling it's buffer and flushing it.
-                // If kernel code (in debug_print.h) detects that this magic value is present
-                // Then it simply skips the print entirely. It prevents the kernel code
-                // from hanging in a stall waiting for the host to flush the buffer
-                // and removes the requirement that the host must listen on device's buffer.
-                vector<uint32_t> initbuf = {uint32_t(DEBUG_PRINT_SERVER_DISABLED_MAGIC)};
-                write_core(initbuf.data(), initbuf.size() * sizeof(uint32_t), {uint32_t(device_id), core}, base_addr);
-            }
-    }
-}
-
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
