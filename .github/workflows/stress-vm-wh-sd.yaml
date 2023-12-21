@@ -2,7 +2,6 @@ name: "[stress] Slow Dispatch post-commit on WH VM"
 
 on:
   workflow_call:
-  workflow_dispatch:
 
 jobs:
   stress-build-and-unit-tests:
