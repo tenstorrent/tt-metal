@@ -274,6 +274,7 @@ def test_bert_linear(
         (True, False, False, 2688, 4096, 1024, None),
     ],
 )
+@skip_for_wormhole_b0("WH ND hang, see issue #4392")
 def test_bert_linear_batch7(
     device, fidelity, in0_sharded, out_sharded, in1_in_dram, has_bias, M, K, N, activation, function_level_defaults
 ):
