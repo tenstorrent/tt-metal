@@ -119,7 +119,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
-    this->allocator_.reset( new L1BankingAllocator(config) );
+    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
 void Device::initialize_build() {

@@ -183,7 +183,7 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
-        device_driver = std::make_unique<tt_SiliconDevice>(
+        device_driver = std::move( std::make_unique<tt_SiliconDevice>(
             sdesc_path,
             this->cluster_desc_path_,
             controlled_device_ids,
@@ -191,7 +191,7 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
             dynamic_tlb_config,
             skip_driver_allocs,
             clean_system_resources,
-            perform_harvesting);
+            perform_harvesting) );
 
         device_driver->set_driver_host_address_params(host_address_params);
         device_driver->set_driver_eth_interface_params(eth_interface_params);
@@ -199,7 +199,7 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata that is later expected to be populated by unrelated APIs
         TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1);
     } else if (this->target_type_ == TargetDevice::Versim) {
-        device_driver = std::make_unique<tt_VersimDevice>(sdesc_path, this->cluster_desc_path_);
+        device_driver = std::move( std::make_unique<tt_VersimDevice>(sdesc_path, this->cluster_desc_path_) );
     }
     device_driver->set_device_dram_address_params(dram_address_params);
     device_driver->set_device_l1_address_params(l1_address_params);

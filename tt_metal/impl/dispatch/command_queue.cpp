@@ -1216,8 +1216,8 @@ void CommandQueue::enqueue_program(Program& program, std::optional<std::referenc
 
         program_to_buffer.emplace(
             program_id,
-            std::make_unique<Buffer>(
-                this->device, program_data_size_in_bytes, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM));
+            std::move( std::make_unique<Buffer>(
+                this->device, program_data_size_in_bytes, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM) ));
 
         this->enqueue_write_buffer(*program_to_buffer.at(program_id), program_pages.data(), false);
 
