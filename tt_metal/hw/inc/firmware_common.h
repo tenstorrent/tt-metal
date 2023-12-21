@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//TODO: This file should be deleted after fixing redefinition errors,
-// functions should be moved to ckernel_globals.h
 #pragma once
 
 #include <cstdint>

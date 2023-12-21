@@ -130,5 +130,3 @@ inline void _llk_pack_(std::uint32_t tile_index, std::uint32_t pack_dst_format, 
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
     }
 }
-
-#include "llk_pack_untilize.h"
