@@ -6,10 +6,6 @@ import torch
 import pytest
 import tt_lib
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
-from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -21,9 +17,9 @@ from loguru import logger
     ),
 )
 def test_bw_add(input_shapes, device):
-    in_data, input_tensor = bw_data_gen(input_shapes, device, True)
-    other_data, other_tensor = bw_data_gen(input_shapes, device, True)
-    grad_data, grad_tensor = bw_data_gen(input_shapes, device)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    other_data, other_tensor = data_gen_pt_tt(input_shapes, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
 
     tt_output_tensor_on_device = tt_lib.tensor.add_bw(grad_tensor, input_tensor, other_tensor)
 
@@ -38,5 +34,5 @@ def test_bw_add(input_shapes, device):
     golden_tensor.append(in_data.grad)
     golden_tensor.append(other_data.grad)
 
-    status = compare_results(tt_output_tensor_on_device, golden_tensor, comparison_funcs.comp_pcc)
+    status = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert status

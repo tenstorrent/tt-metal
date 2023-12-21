@@ -131,7 +131,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
     m_tensor.def("tan_bw", &tt::tt_metal::tan_bw,
-            py::arg("grad").noconvert(), py::arg("tan_result").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                 Performs backward operations for tangent with given ``grad``
 
                 Input tensors must have BFLOAT16 data type.
@@ -142,7 +142,7 @@ namespace tt::tt_metal::detail{
                     :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                     "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "tan_result", "Result tensor of an tangent forward operation", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                    "input", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
@@ -265,7 +265,7 @@ namespace tt::tt_metal::detail{
             )doc");
 
     m_tensor.def("sqrt_bw", &tt::tt_metal::sqrt_bw,
-            py::arg("grad").noconvert(), py::arg("sqrt_result").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                 Performs backward operations for sqrt with given ``grad``.
 
                 Input tensors must have BFLOAT16 data type.
@@ -276,7 +276,7 @@ namespace tt::tt_metal::detail{
                     :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                     "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "sqrt_result", "Result tensor of a sqrt forward operation", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                    "input", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 

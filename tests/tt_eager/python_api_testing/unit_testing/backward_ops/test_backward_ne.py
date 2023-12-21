@@ -5,10 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
-from loguru import logger
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
 
 
 @pytest.mark.parametrize(
@@ -20,19 +17,12 @@ from loguru import logger
     ),
 )
 def test_bw_unary_ne(input_shapes, device):
-    torch.manual_seed(12386)
-    grad_data = torch.randn(input_shapes).bfloat16()
-
-    grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
     tt_output_tensor_on_device = tt_lib.tensor.ne_bw(grad_tensor)
     pyt_y = torch.zeros_like(grad_data)
 
-    tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+    golden_tensor = list()
+    golden_tensor.append(pyt_y)
 
-    golden_output_tensor = pyt_y
-
-    comp_pass, comp_out = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor)
-    logger.info(comp_out)
+    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
