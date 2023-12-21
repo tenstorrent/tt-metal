@@ -106,8 +106,10 @@ void py_module(py::module& m_primary) {
            const MatmulDefaultProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity) {
-            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, math_fidelity);
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode) {
+            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -116,6 +118,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -136,8 +140,10 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity) {
-            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, math_fidelity);
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode) {
+            return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -146,6 +152,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -167,9 +175,11 @@ void py_module(py::module& m_primary) {
            const MatmulDefaultProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity) {
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode) {
             return matmul(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -179,6 +189,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -201,9 +213,11 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseMultiCastProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity) {
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode) {
             return matmul(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -213,6 +227,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -235,9 +251,11 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity) {
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode) {
             return matmul(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -247,6 +265,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
@@ -269,9 +289,11 @@ void py_module(py::module& m_primary) {
            const std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity) {
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode) {
             return matmul_1d(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -281,6 +303,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
