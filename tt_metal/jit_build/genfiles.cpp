@@ -293,6 +293,22 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
     emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 }
 
+static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
+    string dst_accum_format_descriptor = options.path + "chlkc_dst_accum_mode.h";
+
+    ofstream file_stream;
+
+    file_stream.open(dst_accum_format_descriptor);
+
+    if (options.fp32_dest_acc_en == 0) {
+        file_stream << "constexpr bool DST_ACCUM_MODE = false;" << endl;
+    } else {
+        file_stream << "constexpr bool DST_ACCUM_MODE = true;" << endl;
+    }
+
+    file_stream.close();
+}
+
 static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
@@ -329,9 +345,11 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env,
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
+        std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
         td.join();
         tm.join();
         ta.join();
+        tf.join();
     } catch (std::runtime_error &ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
