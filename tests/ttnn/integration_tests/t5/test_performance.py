@@ -24,8 +24,8 @@ MODEL_NAME = "google/flan-t5-small"
 def test_t5_for_conditional_generation(device, use_program_cache, model_name, batch_size, sequence_size):
     config = transformers.T5Config.from_pretrained(model_name)
 
-    torch_input_ids = torch_random((batch_size, sequence_size), 0, 1, dtype=torch.int64)
-    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, 1, dtype=torch.int64)
+    torch_input_ids = torch_random((batch_size, sequence_size), 0, 10, dtype=torch.int64)
+    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, 10, dtype=torch.int64)
 
     parameters = preprocess_model_parameters(
         f"ttnn_functional_t5",

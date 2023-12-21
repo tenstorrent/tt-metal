@@ -18,23 +18,6 @@ def t5_layer_norm(hidden_states, *, weight, eps=1e-6):
     # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
     # half-precision inputs is done in fp32
 
-    # import tt_lib as ttl
-
-    # original_shape = tuple(hidden_states.shape)
-    # hidden_states = ttnn.core._reshape_to_4D(hidden_states)
-
-    # ttl_hidden_states = hidden_states._tensor
-    # ttl_weight = weight._tensor
-    # ttl_hidden_states = ttl.tensor.rmsnorm(ttl_hidden_states, eps, ttl_weight)
-
-    # hidden_states = ttnn.Tensor(ttl_hidden_states)
-    # hidden_states = ttnn.reshape(hidden_states, original_shape)
-
-    # return hidden_states
-
-    original_shape = tuple(hidden_states.shape)
-    hidden_states = ttnn.core._reshape_to_4D(hidden_states)
-
     squared_hidden_states = ttnn.pow(hidden_states, 2)
     averaged_squared_hidden_states = ttnn.mean(
         squared_hidden_states,
@@ -47,7 +30,6 @@ def t5_layer_norm(hidden_states, *, weight, eps=1e-6):
 
     hidden_states = hidden_states * std
     hidden_states = hidden_states * weight
-    hidden_states = ttnn.reshape(hidden_states, original_shape)
 
     return hidden_states
 
@@ -189,15 +171,6 @@ def t5_block(
         num_heads=num_heads,
     )
 
-    # clamp inf values to enable fp16 training
-    if hidden_states.dtype == torch.float16:
-        clamp_value = torch.where(
-            torch.isinf(hidden_states).any(),
-            torch.finfo(hidden_states.dtype).max - 1000,
-            torch.finfo(hidden_states.dtype).max,
-        )
-        hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
-
     do_cross_attention = encoder_hidden_states is not None
     if do_cross_attention:
         hidden_states = t5_layer_cross_attention(
@@ -208,26 +181,8 @@ def t5_block(
             num_heads=num_heads,
         )
 
-        # clamp inf values to enable fp16 training
-        if hidden_states.dtype == torch.float16:
-            clamp_value = torch.where(
-                torch.isinf(hidden_states).any(),
-                torch.finfo(hidden_states.dtype).max - 1000,
-                torch.finfo(hidden_states.dtype).max,
-            )
-            hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
-
     # Apply Feed Forward layer
     hidden_states = t5_layer_ff(hidden_states, parameters.layer[-1])
-
-    # clamp inf values to enable fp16 training
-    if hidden_states.dtype == torch.float16:
-        clamp_value = torch.where(
-            torch.isinf(hidden_states).any(),
-            torch.finfo(hidden_states.dtype).max - 1000,
-            torch.finfo(hidden_states.dtype).max,
-        )
-        hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
     return hidden_states  # hidden-states, present_key_value_states, (self-attention position bias), (self-attention weights), (cross-attention position bias), (cross-attention weights)
 
@@ -268,12 +223,12 @@ def t5_stack(
 
 
 def t5_for_conditional_generation(
-    input_ids: Optional[torch.LongTensor],
-    decoder_input_ids: Optional[torch.LongTensor],
+    input_ids: Optional[ttnn.Tensor],
+    decoder_input_ids: Optional[ttnn.Tensor],
     parameters,
     *,
     num_heads,
-) -> torch.FloatTensor:
+) -> ttnn.Tensor:
     # Encode
     hidden_states = t5_stack(
         input_ids=input_ids,
