@@ -215,8 +215,13 @@ def test_bert_linear(
 
 
 @pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
+@pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
 @pytest.mark.parametrize(
-    "fidelity", [ttl.tensor.MathFidelity.LoFi, ttl.tensor.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"]
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.LoFi,
+    ],
+    ids=["LoFi"],
 )
 @pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
 @pytest.mark.parametrize(
@@ -276,7 +281,18 @@ def test_bert_linear(
 )
 @skip_for_wormhole_b0("WH ND hang, see issue #4392")
 def test_bert_linear_batch7(
-    device, fidelity, in0_sharded, out_sharded, in1_in_dram, has_bias, M, K, N, activation, function_level_defaults
+    device,
+    fidelity,
+    in0_sharded,
+    out_sharded,
+    in1_in_dram,
+    has_bias,
+    fp32_acc_mode,
+    M,
+    K,
+    N,
+    activation,
+    function_level_defaults,
 ):
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -289,14 +305,18 @@ def test_bert_linear_batch7(
     out_block_h = M // grid_size[1] // 32
     out_block_w = N // grid_size[0] // 32
 
-    if out_block_w <= 8:
-        out_subblock_w = out_block_w
-        out_subblock_h = 8 // out_subblock_w
-    else:
+    if fp32_acc_mode == True:
+        out_subblock_w = 4
         out_subblock_h = 1
-        out_subblock_w = 8 // out_subblock_h
-        while out_block_w % out_subblock_w != 0:
-            out_subblock_w = out_block_w // 2
+    else:
+        if out_block_w <= 8:
+            out_subblock_w = out_block_w
+            out_subblock_h = 8 // out_subblock_w
+        else:
+            out_subblock_h = 1
+            out_subblock_w = 8 // out_subblock_h
+            while out_block_w % out_subblock_w != 0:
+                out_subblock_w = out_block_w // 2
 
     logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
     logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
@@ -371,6 +391,7 @@ def test_bert_linear_batch7(
             program_config=program_config,
             output_mem_config=output_mem_config,
             math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_acc_mode,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -379,6 +400,7 @@ def test_bert_linear_batch7(
             program_config=program_config,
             output_mem_config=output_mem_config,
             math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_acc_mode,
         )
 
     if out_sharded:

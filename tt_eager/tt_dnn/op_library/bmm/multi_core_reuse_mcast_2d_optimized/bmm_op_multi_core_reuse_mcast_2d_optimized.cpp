@@ -23,7 +23,7 @@ using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,
-    MathFidelity math_fidelity,
+    MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -405,9 +405,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
 
     // Create compute kernel
-    bool fp32_dest_acc_en = true;
+    // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
-    bool math_approx_mode = false;
+    // bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         device->arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
@@ -811,7 +811,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation) {
     const auto& ashape = a.shape(), bshape = b.shape();
 
     // CB dataformats
@@ -903,7 +903,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     if (core_range.x > 1 && core_range.y > 1) {
         return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
             device,
-            math_fidelity,
+            math_fidelity, fp32_dest_acc_en, math_approx_mode,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -927,8 +927,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation) {
-     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, transpose_mcast, fused_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation) {
+     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, math_fidelity, fp32_dest_acc_en, math_approx_mode, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, transpose_mcast, fused_activation);
 }
 
 }  // namespace tt_metal
