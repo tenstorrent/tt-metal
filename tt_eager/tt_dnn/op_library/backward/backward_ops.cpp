@@ -125,15 +125,18 @@ std::vector<Tensor> binary_assign_bw(const Tensor& grad, const Tensor& input, co
     return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& sqrt_result, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    Tensor sqrt_result = sqrt(input, output_mem_config);
     Tensor result = mul(grad, recip(mul_unary(sqrt_result, 2.0, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_nan  = full_like(input, std::nanf(""), output_mem_config);
+    result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
-std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& sqrt_result, const MemoryConfig& output_mem_config)
+std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _sqrt_bw)(grad, sqrt_result, output_mem_config);
+    return operation::decorate_as_composite(__func__, _sqrt_bw)(grad, input, output_mem_config);
 }
 
 
@@ -195,16 +198,16 @@ std::vector<Tensor> sigmoid_bw(const Tensor& grad, const Tensor& input,
 }
 
 
-
-std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    Tensor tan_result = tan(input, output_mem_config);
     Tensor result = mul(grad, add1(square(tan_result, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
-std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config)
+std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _tan_bw)(grad, tan_result, output_mem_config);
+    return operation::decorate_as_composite(__func__, _tan_bw)(grad, input, output_mem_config);
 }
 
 std::vector<Tensor> _addcdiv_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config) {

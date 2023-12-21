@@ -5,10 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
-from loguru import logger
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
 
 
 @pytest.mark.parametrize(
@@ -20,25 +17,12 @@ from loguru import logger
     ),
 )
 def test_bw_binary_assign(input_shapes, device):
-    torch.manual_seed(0)
-    in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
-    other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
-    grad_data = torch.randn(input_shapes).bfloat16()
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    other_data, other_tensor = data_gen_pt_tt(input_shapes, device, True)
 
-    grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
-
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
-
-    other_tensor = (
-        tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
 
     tt_output_tensor_on_device = tt_lib.tensor.binary_assign_bw(grad_tensor, input_tensor, other_tensor)
-    tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
     in_data.retain_grad()
 
@@ -46,8 +30,7 @@ def test_bw_binary_assign(input_shapes, device):
 
     pyt_y.backward(gradient=grad_data)
 
-    golden_output_tensor = in_data.grad
-
-    comp_pass, comp_out = comparison_funcs.comp_equal(golden_output_tensor, tt_output_tensor)
-    logger.info(comp_out)
-    assert comp_pass
+    golden_tensor = list()
+    golden_tensor.append(in_data.grad)
+    status = compare_results(tt_output_tensor_on_device, golden_tensor)
+    assert status
