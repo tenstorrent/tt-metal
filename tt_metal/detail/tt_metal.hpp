@@ -298,6 +298,12 @@ namespace tt::tt_metal{
             }
         }
 
+        inline void SetLazyCommandQueueMode(bool lazy)
+        {
+            DispatchStateCheck(true);
+            LAZY_COMMAND_QUEUE_MODE = lazy;
+        }
+
         inline void DeallocateBuffers(Device * device)
         {
             device->deallocate_buffers();
@@ -440,7 +446,7 @@ namespace tt::tt_metal{
         }
 
         // Sending dispatch kernel. TODO(agrebenisan): Needs a refactor
-        inline void SendDispatchKernelToDevice(Device *device) {
+        inline void SendDispatchKernelToDevice(Device *device, uint32_t command_issue_region_size, uint32_t command_completion_region_size) {
             ZoneScoped;
 
             Program dispatch_program = CreateProgram();
@@ -460,7 +466,10 @@ namespace tt::tt_metal{
                 {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
                 {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
             };
-            std::vector<uint32_t> dispatch_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr()};
+
+            std::vector<uint32_t> producer_compile_args = {command_issue_region_size};
+            std::vector<uint32_t> consumer_compile_args = {tt::Cluster::instance().get_tensix_soft_reset_addr(), command_issue_region_size, command_completion_region_size};
+
             tt::tt_metal::CreateKernel(
                 dispatch_program,
                 "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
@@ -468,7 +477,7 @@ namespace tt::tt_metal{
                 tt::tt_metal::DataMovementConfig {
                     .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = dispatch_compile_args,
+                    .compile_args = producer_compile_args,
                     .defines = producer_defines});
 
             tt::tt_metal::CreateKernel(
@@ -478,19 +487,24 @@ namespace tt::tt_metal{
                 tt::tt_metal::DataMovementConfig {
                     .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = dispatch_compile_args,
+                    .compile_args = consumer_compile_args,
                     .defines = consumer_defines});
 
             tt::tt_metal::CreateSemaphore(dispatch_program, producer_logical_core, 2);
             tt::tt_metal::CreateSemaphore(dispatch_program, consumer_logical_core, 0);
 
-            CompileProgram(device, dispatch_program);
-            ConfigureDeviceWithProgram(device, dispatch_program);
+            detail::CompileProgram(device, dispatch_program);
+            tt::tt_metal::detail::ConfigureDeviceWithProgram(device, dispatch_program);
 
-            uint32_t fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
-            vector<uint32_t> fifo_addr_vector = {fifo_addr};
-            WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
-            WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
+            uint32_t issue_fifo_addr = CQ_START >> 4;
+            vector<uint32_t> issue_fifo_addr_vector = {issue_fifo_addr};
+            tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_READ_PTR, issue_fifo_addr_vector);
+            tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_WRITE_PTR, issue_fifo_addr_vector);
+
+            uint32_t completion_fifo_addr = command_issue_region_size >> 4;
+            vector<uint32_t> completion_fifo_addr_vector = {completion_fifo_addr};
+            tt::tt_metal::detail::WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_WRITE_PTR, completion_fifo_addr_vector);
+            tt::tt_metal::detail::WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_READ_PTR, completion_fifo_addr_vector);
 
             tt::Cluster::instance().l1_barrier(device->id());
 

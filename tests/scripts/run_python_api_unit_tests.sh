@@ -35,7 +35,7 @@ pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_matmuls_and_bmms_with_mixed_precision.py::test_bert_large_bmm -k "pre_softmax_bmm and batch_9"
 
 # BERT TMs
-pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_split_fused_qkv_and_split_heads.py -k "in0_L1-out_L1 and batch_9"
+pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_split_query_key_value_and_split_heads.py -k "in0_L1-out_L1 and batch_9"
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_concatenate_heads.py -k "in0_L1-out_L1 and batch_9"
 
 # Test program cache

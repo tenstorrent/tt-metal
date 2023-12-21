@@ -6,6 +6,9 @@ if [[ -z "$TT_METAL_HOME" ]]; then
 fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
+
+env pytest tests/ttnn/integration_tests
+
 env pytest models/experimental/whisper -k whisper_attention
 env pytest models/experimental/whisper -k WhipserDecoderLayer_inference
 
@@ -129,5 +132,3 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
   env pytest models/demos/resnet/tests/test_demo.py::test_demo_imagenet[8-400]
 fi
 fi
-
-env pytest tests/ttnn/integration_tests

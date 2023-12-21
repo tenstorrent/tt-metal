@@ -36,7 +36,7 @@ import pytest
     (ttl.tensor.DataType.BFLOAT8_B,),
     ids=["BFLOAT8_B"],
 )
-def test_split_fused_qkv_and_split_heads_with_program_cache(device, dtype, in0_mem_config, out_mem_config):
+def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
 
     sharded_mem_config = ttl.tensor.MemoryConfig(
@@ -61,7 +61,7 @@ def test_split_fused_qkv_and_split_heads_with_program_cache(device, dtype, in0_m
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 
-    q, k, v = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(
+    q, k, v = ttl.operations.primary.transformers.split_query_key_value_and_split_heads(
         in0_t_shard, ttl.tensor.CoreCoord(grid_size[0], grid_size[1]), sharded_mem_config, num_heads
     )
 

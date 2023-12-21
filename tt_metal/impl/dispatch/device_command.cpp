@@ -18,7 +18,7 @@ DeviceCommand::DeviceCommand() {
     this->desc[this->sharded_buffer_num_cores_idx] = 1;
 }
 
-void DeviceCommand::wrap() { this->desc[this->wrap_idx] = 1; }
+void DeviceCommand::wrap(WrapRegion wrap_region) { this->desc[this->wrap_idx] = (uint32_t)wrap_region; }
 
 void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
 
@@ -75,14 +75,17 @@ void DeviceCommand::add_buffer_transfer_instruction(
     const uint32_t num_pages,
     const uint32_t padded_page_size,
     const uint32_t src_buf_type,
-    const uint32_t dst_buf_type
-    ) {
+    const uint32_t dst_buf_type,
+    const uint32_t src_page_index,
+    const uint32_t dst_page_index) {
     this->desc[this->buffer_transfer_idx] = src;
     this->desc[this->buffer_transfer_idx + 1] = dst;
     this->desc[this->buffer_transfer_idx + 2] = num_pages;
     this->desc[this->buffer_transfer_idx + 3] = padded_page_size;
     this->desc[this->buffer_transfer_idx + 4] = src_buf_type;
     this->desc[this->buffer_transfer_idx + 5] = dst_buf_type;
+    this->desc[this->buffer_transfer_idx + 6] = src_page_index;
+    this->desc[this->buffer_transfer_idx + 7] = dst_page_index;
     this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
     this->desc[this->num_buffer_transfers_idx]++;
@@ -100,6 +103,8 @@ void DeviceCommand::add_buffer_transfer_instruction_sharded(
     const uint32_t padded_page_size,
     const uint32_t src_buf_type,
     const uint32_t dst_buf_type,
+    const uint32_t src_page_index,
+    const uint32_t dst_page_index,
     const std::vector<uint32_t> num_pages_in_shard,
     const std::vector<uint32_t> core_id_x,
     const std::vector<uint32_t> core_id_y
@@ -117,6 +122,8 @@ void DeviceCommand::add_buffer_transfer_instruction_sharded(
     this->desc[this->buffer_transfer_idx + idx_offset++] = padded_page_size;
     this->desc[this->buffer_transfer_idx + idx_offset++] = src_buf_type;
     this->desc[this->buffer_transfer_idx + idx_offset++] = dst_buf_type;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = src_page_index;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = dst_page_index;
     for (auto shard_id = 0; shard_id < num_shards; shard_id++) {
         this->desc[this->buffer_transfer_idx + idx_offset++] = num_pages_in_shard[shard_id];
         this->desc[this->buffer_transfer_idx + idx_offset++] = core_id_x[shard_id];

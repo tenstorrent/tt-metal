@@ -63,7 +63,7 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 
 
 # Based on transformers/models/bloom/modeling_bloom.py
-def split_fused_qkv_and_split_heads(
+def split_query_key_value_and_split_heads(
     fused_qkv: torch.Tensor, head_size
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     device = fused_qkv._tensor.device()
@@ -110,7 +110,7 @@ def create_query_key_value(hidden_states, weight, bias, head_size, use_core_grid
     else:
         fused_qkv = hidden_states @ weight
     fused_qkv = fused_qkv + bias
-    return split_fused_qkv_and_split_heads(fused_qkv, head_size)
+    return split_query_key_value_and_split_heads(fused_qkv, head_size)
 
 
 def compute_attention_scores(query_layer, key_layer, alibi, head_size):

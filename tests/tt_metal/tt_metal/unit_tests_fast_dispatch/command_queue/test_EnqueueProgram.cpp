@@ -165,7 +165,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     Finish(cq);
 
     vector<uint32_t> sem_vector;
-    uint32_t sem_buffer_size = program_config.num_sems * SEMAPHORE_ALIGNMENT;
+    uint32_t sem_buffer_size = program_config.num_sems * L1_ALIGNMENT;
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());

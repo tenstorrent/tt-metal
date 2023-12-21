@@ -35,8 +35,6 @@ extern uint8_t noc_index;
  */
 extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
-extern CQReadInterface cq_read_interface;
-
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 4
@@ -1251,7 +1249,7 @@ void noc_async_write_multicast(
  */
 FORCE_INLINE
 void noc_semaphore_set_multicast(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests) {
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false) {
     DEBUG_STATUS('N', 'S', 'M', 'W');
     DEBUG_SANITIZE_NOC_MULTI_ADDR(dst_noc_addr_multicast, 4);
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, 4);
@@ -1263,7 +1261,7 @@ void noc_semaphore_set_multicast(
         4 /*size in bytes*/,
         NOC_MULTICAST_WRITE_VC,
         true,
-        false,
+        linked,
         num_dests);
     DEBUG_STATUS('N', 'S', 'M', 'D');
 }
@@ -1491,43 +1489,6 @@ inline void noc_fast_write_inc_num_dests(uint32_t num_issued) {
     // while (!ncrisc_noc_fast_write_ok(noc_index, NCRISC_WR_CMD_BUF));
     noc_nonposted_writes_num_issued[noc_index] += num_issued;
     noc_nonposted_writes_acked[noc_index] += num_issued;
-}
-
-// Command queue APIs
-FORCE_INLINE
-void cq_wait_front() {
-    DEBUG_STATUS('N', 'Q', 'W');
-    uint32_t write_ptr_and_toggle;
-    uint32_t write_ptr;
-    uint32_t write_toggle;
-    do {
-        write_ptr_and_toggle = *get_cq_write_ptr();
-        write_ptr = write_ptr_and_toggle & 0x7fffffff;
-        write_toggle = write_ptr_and_toggle >> 31;
-    } while (cq_read_interface.fifo_rd_ptr == write_ptr and cq_read_interface.fifo_rd_toggle == write_toggle);
-    DEBUG_STATUS('N', 'Q', 'D');
-}
-
-FORCE_INLINE
-void notify_host_of_cq_read_pointer() {
-    // These are the PCIE core coordinates
-    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_READ_PTR;  // For now, we are writing to host hugepages at offset
-    uint32_t rd_ptr_and_toggle = cq_read_interface.fifo_rd_ptr | (cq_read_interface.fifo_rd_toggle << 31);;
-    volatile tt_l1_ptr uint32_t* rd_ptr_addr = get_cq_read_ptr();
-    rd_ptr_addr[0] = rd_ptr_and_toggle;
-    noc_async_write(CQ_READ_PTR, pcie_address, 4);
-    noc_async_write_barrier();
-}
-
-FORCE_INLINE
-void cq_pop_front(uint32_t cmd_size_B) {
-    // First part of equation aligns to nearest multiple of 32, and then we shift to make it a 16B addr. Both
-    // host and device are consistent in updating their pointers in this way, so they won't get out of sync. The
-    // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
-    uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
-    cq_read_interface.fifo_rd_ptr += cmd_size_16B;
-
-    notify_host_of_cq_read_pointer();
 }
 
 enum class BufferType: uint8_t {

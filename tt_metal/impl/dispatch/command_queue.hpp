@@ -73,14 +73,22 @@ class Command {
 class EnqueueReadBufferCommand : public Command {
    private:
     Device* device;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     void* dst;
+    uint32_t src_page_index;
+    uint32_t pages_to_read;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
 
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
-    EnqueueReadBufferCommand(Device* device, Buffer& buffer, void* dst, SystemMemoryWriter& writer);
+    EnqueueReadBufferCommand(
+        Device* device,
+        Buffer& buffer,
+        void* dst,
+        SystemMemoryManager& manager,
+        uint32_t src_page_index = 0,
+        std::optional<uint32_t> pages_to_read = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t dst);
 
@@ -94,11 +102,19 @@ class EnqueueWriteBufferCommand : public Command {
     Device* device;
     Buffer& buffer;
 
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     const void* src;
+    uint32_t dst_page_index;
+    uint32_t pages_to_write;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
    public:
-    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer);
+    EnqueueWriteBufferCommand(
+        Device* device,
+        Buffer& buffer,
+        const void* src,
+        SystemMemoryManager& manager,
+        uint32_t dst_page_index = 0,
+        std::optional<uint32_t> pages_to_write = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 
@@ -113,12 +129,12 @@ class EnqueueProgramCommand : public Command {
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
     const Program& program;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     bool stall;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, const Program& program, bool stall);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -133,11 +149,11 @@ class EnqueueProgramCommand : public Command {
 class FinishCommand : public Command {
    private:
     Device* device;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::FINISH;
 
    public:
-    FinishCommand(Device* device, SystemMemoryWriter& writer);
+    FinishCommand(Device* device, SystemMemoryManager& manager);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -149,11 +165,12 @@ class FinishCommand : public Command {
 class EnqueueWrapCommand : public Command {
    private:
     Device* device;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
+    DeviceCommand::WrapRegion wrap_region;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::WRAP;
 
    public:
-    EnqueueWrapCommand(Device* device, SystemMemoryWriter& writer);
+    EnqueueWrapCommand(Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -175,7 +192,6 @@ class CommandQueue {
 
    private:
     Device* device;
-
     // thread processing_thread;
     map<uint64_t, unique_ptr<Buffer>>
         program_to_buffer;
@@ -192,7 +208,7 @@ class CommandQueue {
 
     void finish();
 
-    void wrap();
+    void wrap(DeviceCommand::WrapRegion wrap_region = DeviceCommand::WrapRegion::ISSUE, bool blocking = false);
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);
@@ -203,5 +219,7 @@ class CommandQueue {
     friend void ClearProgramCache(CommandQueue& cq);
     friend CommandQueue &detail::GetCommandQueue(Device *device);
 };
+
+inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 } // namespace tt::tt_metal

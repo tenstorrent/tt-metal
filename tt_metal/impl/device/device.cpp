@@ -294,20 +294,21 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e. hugepage)
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->sysmem_writer = std::make_unique<SystemMemoryWriter>(
+        this->sysmem_manager = std::make_unique<SystemMemoryManager>(
             this->id_,
             this->dispatch_cores(),
             [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
         );
 
         std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
-        pointers[0] = CQ_START >> 4;
+        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = CQ_START >> 4; // HOST_CQ_ISSUE_READ_PTR
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = this->sysmem_manager->cq_interface.command_issue_region_size >> 4; // HOST_CQ_COMPLETION_WRITE_PTR
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, mmio_device_id, channel);
 
-        detail::SendDispatchKernelToDevice(this);
+        detail::SendDispatchKernelToDevice(this, this->sysmem_manager->cq_interface.command_issue_region_size, this->sysmem_manager->cq_interface.command_completion_region_size);
     }
 
     return true;
@@ -339,7 +340,7 @@ bool Device::close() {
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->sysmem_writer.reset(nullptr);
+        this->sysmem_manager.reset(nullptr);
     }
 
     this->active_devices_.deactivate_device(this->id_);
