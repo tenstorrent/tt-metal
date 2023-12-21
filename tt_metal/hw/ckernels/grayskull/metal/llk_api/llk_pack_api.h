@@ -222,7 +222,6 @@ inline void llk_pack_reduce_mask_clear() {
     _llk_pack_reduce_mask_clear_();
 }
 
-//TODO: review the following 2 functions
 template <ReduceDim dim, bool at_kernel_start = false, bool revert=false>
 inline void llk_pack_reduce_config_v2(uint32_t operand) {
 
@@ -246,34 +245,6 @@ inline void llk_pack_reduce_config_v2(uint32_t operand) {
     } else {
         _llk_pack_reduce_mask_config_<untilize, dim>();
     }
-
-//The snippet below is the GS implementation of reduce_config_v2
-    // if constexpr (at_kernel_start)
-    //     configure_pack(get_output_id(icb_out), false);
-    // else {
-    //     TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-    //     tensix_sync();
-    // }
-
-    // volatile uint *cfg = get_cfg_pointer();
-    // if constexpr (dim == ReduceDim::REDUCE_ROW) {
-    //     for (uint i = 0; i < 4; i++)
-    //         //TTI_WRCFG(revert ? 0xFFFFffff : 0x1, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+i);
-    //         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + i] = revert ? 0xFFFFffff : 0x1;
-    // } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
-    //     //TTI_WRCFG(revert ? 0xFFFFffff : 0x0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0);
-    //     //TTI_WRCFG(revert ? 0xFFFFffff : 0x1, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1);
-    //     //TTI_WRCFG(revert ? 0xFFFFffff : 0x1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
-    //     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = revert ? 0xFFFFffff : 0x0;
-    //     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = revert ? 0xFFFFffff : 0x1;
-    //     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = revert ? 0xF : 0x1;
-    // } else {
-    //     //TTI_WRCFG(revert ? 0xFFFFffff : 0x0,    p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0);
-    //     //TTI_WRCFG(revert ? 0xFFFFffff : 0xFFFF, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1);
-    //     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = revert ? 0xFFFFffff : 0x0;
-    //     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = revert ? 0xFFFFffff : 0x0000ffff;
-    //     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = revert ? 0xF : 0x1;
-    // }
 }
 
 template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>

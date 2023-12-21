@@ -221,9 +221,6 @@ namespace ckernel::unpacker
       }
       config.f.out_data_format = unpA_dst_format;
       config.f.throttle_mode   = 2;
-      //config.f.upsample_rate   = 0;
-      //config.f.upsamle_and_interlave  = 0;
-      //config.f.shift_amount = 0;
       config.f.uncompress_cntx0_3 = 0xf;
       config.f.uncompress_cntx4_7 = 0xf;
       //config.f.limit_addr = 0; // Set dynamically
