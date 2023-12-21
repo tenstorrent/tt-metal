@@ -225,6 +225,10 @@ inline void _llk_pack_reduce_mask_config_() {
         }
         TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
         TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+    } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
+        edge_offset_sec1_mask = 0x0001;
+        TTI_SETDMAREG(0, 0x0001, 0, LO_16(p_gpr_pack::TMP_LO));
+        TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
     }
 
     // Initialize TMP registers with values we need to write in PCK_EDGE_OFFSET_SEC[0:1] registers
