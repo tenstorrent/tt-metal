@@ -405,7 +405,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
 
     // Create compute kernel
-    bool fp32_dest_acc_en = false;
+    bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
