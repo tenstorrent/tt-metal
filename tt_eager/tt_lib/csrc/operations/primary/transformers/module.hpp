@@ -19,7 +19,7 @@ namespace transformers {
 
 
 void py_module(py::module& m_transformers) {
-    m_transformers.def("split_fused_qkv_and_split_heads", &split_fused_qkv_and_split_heads,
+    m_transformers.def("split_query_key_value_and_split_heads", &split_query_key_value_and_split_heads,
         py::arg().noconvert(),
         py::arg("compute_with_storage_grid_size"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

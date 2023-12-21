@@ -8,6 +8,8 @@ from typing import Optional, Union, Tuple
 
 import tt_lib as ttl
 
+from ttnn.decorators import debug_decorator
+
 
 Device = ttl.device.Device
 
@@ -29,6 +31,10 @@ L1_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.INTERLEAVED, BufferType.L1)
 Layout = ttl.tensor.Layout
 ROW_MAJOR_LAYOUT = Layout.ROW_MAJOR
 TILE_LAYOUT = Layout.TILE
+
+
+StorageType = ttl.tensor.StorageType
+DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
 
 TILE_SIZE = 32
@@ -112,6 +118,7 @@ class Tensor:
         else:
             raise RuntimeError("Tensor is not on device!")
 
+    @debug_decorator()
     def __getitem__(self: "Tensor", slices) -> "Tensor":
         if self.layout != ROW_MAJOR_LAYOUT:
             raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
@@ -150,6 +157,7 @@ def has_storage_type_of(tensor: Tensor, storage_type) -> bool:
     return tensor._tensor.storage_type() == storage_type
 
 
+@debug_decorator()
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[DataType] = None,
@@ -177,6 +185,7 @@ def from_torch(
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype)
 
 
+@debug_decorator()
 def to_torch(tensor: Tensor) -> "torch.Tensor":
     def impl(tensor):
         ttl_tensor = tensor._tensor
@@ -191,6 +200,7 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
 
 
+@debug_decorator()
 def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG):
     """
     to_device(tensor: ttnn.Tensor, device: tt_lib.device.Device, dtype: Optional[DataType] = None) -> Tensor
@@ -221,6 +231,7 @@ def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFI
     )
 
 
+@debug_decorator()
 def from_device(tensor):
     """
     from_device(tensor: ttnn.Tensor) -> Tensor
@@ -246,6 +257,7 @@ def from_device(tensor):
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)
 
 
+@debug_decorator()
 def to_layout(tensor, layout: Layout):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> Tensor
@@ -283,6 +295,7 @@ def to_layout(tensor, layout: Layout):
     return Tensor(ttl_tensor)
 
 
+@debug_decorator()
 def deallocate(tensor: Tensor) -> None:
     """
     deallocate(tensor: ttnn.Tensor) -> None
@@ -306,12 +319,14 @@ def deallocate(tensor: Tensor) -> None:
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
 
 
+@debug_decorator()
 def reallocate(input_tensor: Tensor) -> Tensor:
     ttl_input_tensor = input_tensor._tensor
     ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
     return Tensor(ttl_output_tensor)
 
 
+@debug_decorator()
 def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     def impl(file_name):
         return Tensor(ttl.tensor.load_tensor(str(file_name)))
@@ -319,6 +334,7 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
 
 
+@debug_decorator()
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: Tensor) -> None:
     def impl(file_name, tensor):
         ttl_tensor = tensor._tensor

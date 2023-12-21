@@ -26,6 +26,7 @@ from ttnn.tensor import (
     TILE_SIZE,
     has_storage_type_of,
 )
+from ttnn.decorators import debug_decorator
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
@@ -96,6 +97,19 @@ def _reshape_to_4D(tensor):
 # Math Operations
 
 
+def _torch_matmul(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+
+    input_tensor_b = from_device(input_tensor_b)
+    input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+    input_tensor_b = to_torch(input_tensor_b)
+
+    return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
+
+
+@debug_decorator(_torch_matmul)
 def matmul(
     input_tensor_a: Tensor,
     input_tensor_b: Tensor,
@@ -387,6 +401,29 @@ def matmul(
     return output_tensor
 
 
+def _torch_linear(input_tensor_a: Tensor, input_tensor_b: Tensor, *, bias=None, **_):
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+
+    input_tensor_b = from_device(input_tensor_b)
+    input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+    input_tensor_b = to_torch(input_tensor_b)
+
+    output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
+
+    if bias is not None:
+        bias = from_device(bias)
+        bias = to_layout(bias, ROW_MAJOR_LAYOUT)
+        bias = to_torch(bias)
+        if len(bias.shape) == 2:
+            bias = bias[0]
+        output_tensor += bias
+
+    return output_tensor
+
+
+@debug_decorator(_torch_linear)
 def linear(
     input_tensor_a: Tensor,
     input_tensor_b: Tensor,
@@ -616,6 +653,24 @@ def linear(
     return output_tensor
 
 
+def _torch_add(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a + input_tensor_b
+
+
+@debug_decorator(_torch_add)
 def add(
     input_tensor_a: Tensor,
     input_tensor_b: Union[Tensor, int, float],
@@ -744,6 +799,24 @@ def add(
     return output_tensor
 
 
+def _torch_sub(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a - input_tensor_b
+
+
+@debug_decorator(_torch_sub)
 def sub(
     input_tensor_a: Tensor,
     input_tensor_b: Union[Tensor, int, float],
@@ -863,6 +936,24 @@ def sub(
     return output_tensor
 
 
+def _torch_mul(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a * input_tensor_b
+
+
+@debug_decorator(_torch_mul)
 def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
     mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
@@ -984,6 +1075,21 @@ Tensor.__rmul__ = mul
 
 
 # Data Transformations
+def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], **_):
+    import torch
+    import ttnn
+
+    input_tensor = from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = to_torch(input_tensor)
+
+    if isinstance(shape, Shape):
+        shape = tuple(shape.padded())
+
+    return torch.reshape(input_tensor, shape).contiguous().clone()
+
+
+@debug_decorator(_torch_reshape)
 def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
     r"""
     reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor
@@ -1075,6 +1181,18 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
         return tensor
 
 
+def _torch_permute(input_tensor: Tensor, order: Tuple[int, ...], **_):
+    import torch
+    import ttnn
+
+    input_tensor = from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = to_torch(input_tensor)
+
+    return torch.permute(input_tensor, order).contiguous().clone()
+
+
+@debug_decorator(_torch_permute)
 def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
     r"""
     permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor
@@ -1119,6 +1237,21 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         return tensor
 
 
+def _torch_embedding(input_tensor: Tensor, weight: Tensor, **_):
+    import torch
+
+    input_tensor = from_device(input_tensor)
+    input_tensor = to_torch(input_tensor)
+
+    weight = from_device(weight)
+    weight = to_torch(weight)
+
+    output_tensor = torch.nn.functional.embedding(input_tensor, weight)
+
+    return output_tensor
+
+
+@debug_decorator(_torch_embedding)
 def embedding(
     input_tensor: Tensor,
     weight: Tensor,
@@ -1173,6 +1306,17 @@ def embedding(
     return embeddings
 
 
+def _torch_softmax(input_tensor: Tensor, dim: int, **_):
+    import torch
+
+    input_tensor = from_device(input_tensor)
+    input_tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
+    input_tensor = to_torch(input_tensor)
+
+    return torch.softmax(input_tensor, dim)
+
+
+@debug_decorator(_torch_softmax, pcc=0.75)
 def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
     softmax(input_tensor: Tensor, dim: int) -> Tensor
@@ -1212,11 +1356,42 @@ def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_M
     return output_tensor
 
 
+def _torch_layer_norm(input_tensor: Tensor, *, epsilon=1e-12, residual_input_tensor=None, weight=None, bias=None, **_):
+    import torch
+
+    input_tensor = from_device(input_tensor)
+    input_tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
+    input_tensor = to_torch(input_tensor)
+
+    if residual_input_tensor is not None:
+        residual_input_tensor = from_device(residual_input_tensor)
+        residual_input_tensor = to_layout(residual_input_tensor, ROW_MAJOR_LAYOUT)
+        residual_input_tensor = to_torch(residual_input_tensor)
+        input_tensor += residual_input_tensor
+
+    if weight is not None:
+        weight = from_device(weight)
+        weight = to_layout(weight, ROW_MAJOR_LAYOUT)
+        weight = to_torch(weight)
+        if len(weight.shape) == 2:
+            weight = weight[0]
+
+    if bias is not None:
+        bias = from_device(bias)
+        bias = to_layout(bias, ROW_MAJOR_LAYOUT)
+        bias = to_torch(bias)
+        if len(bias.shape) == 2:
+            bias = bias[0]
+
+    return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
+
+
+@debug_decorator(_torch_layer_norm)
 def layer_norm(
     input_tensor: Tensor,
     *,
     epsilon: float = 1e-12,
-    residual_input: Optional[Tensor] = None,
+    residual_input_tensor: Optional[Tensor] = None,
     weight: Optional[Tensor] = None,
     bias: Optional[Tensor] = None,
     memory_config: Optional[MemoryConfig] = DRAM_MEMORY_CONFIG,
@@ -1230,21 +1405,21 @@ def layer_norm(
 
     original_shape = input_tensor.shape
     input_tensor = _reshape_to_4D(input_tensor)
-    if residual_input is not None:
-        residual_input = _reshape_to_4D(residual_input)
+    if residual_input_tensor is not None:
+        residual_input_tensor = _reshape_to_4D(residual_input_tensor)
     if weight is not None:
         weight = _reshape_to_4D(weight)
     if bias is not None:
         bias = _reshape_to_4D(bias)
 
     ttl_input_tensor = input_tensor._tensor
-    residual_input = residual_input._tensor if residual_input is not None else None
+    residual_input_tensor = residual_input_tensor._tensor if residual_input_tensor is not None else None
     ttl_weight = weight._tensor if weight is not None else None
     ttl_bias = bias._tensor if bias is not None else None
 
-    if residual_input is not None:
+    if residual_input_tensor is not None:
         output_tensor = ttl.tensor.add_layernorm(
-            ttl_input_tensor, residual_input, epsilon, ttl_weight, ttl_bias, output_mem_config=memory_config
+            ttl_input_tensor, residual_input_tensor, epsilon, ttl_weight, ttl_bias, output_mem_config=memory_config
         )
     else:
         output_tensor = ttl.tensor.layernorm(
@@ -1256,6 +1431,17 @@ def layer_norm(
     return output_tensor
 
 
+def _torch_mean(input_tensor: Tensor, dim: int, keepdim=False, **_):
+    import torch
+
+    input_tensor = from_device(input_tensor)
+    input_tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
+    input_tensor = to_torch(input_tensor)
+
+    return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
+
+
+@debug_decorator()
 def mean(input_tensor: Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> Tensor:
     input_shape = tuple(input_tensor.shape)
     rank = len(input_shape)

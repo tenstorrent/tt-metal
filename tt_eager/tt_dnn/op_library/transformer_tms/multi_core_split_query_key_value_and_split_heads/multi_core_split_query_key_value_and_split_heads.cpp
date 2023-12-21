@@ -15,7 +15,7 @@ namespace operations {
 namespace primary {
 namespace transformers {
 
-operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
     const auto& ashape = a.shape();
 
@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads_sharded(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
