@@ -1,10 +1,5 @@
 name: "[stress] Fast Dispatch post-commit on WH VM"
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 4 * * *"
-
 jobs:
   stress-build-and-unit-tests:
     timeout-minutes: 1440
