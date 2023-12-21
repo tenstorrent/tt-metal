@@ -10,7 +10,7 @@
  * LLK MATMUL
  *************************************************************************/
 
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
+template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA /*not used*/,
     const std::uint32_t operandB /*not used*/,
@@ -31,18 +31,12 @@ template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLay
 inline void llk_math_matmul(
     uint dst_index,
     const bool transpose = false,
-    const std::uint32_t ct_dim = 1 /*not used*/,
-    const std::uint32_t rt_dim = 1 /*not used*/,
-    const std::uint32_t kt_dim = 1 /*not used*/) {
-    _llk_math_matmul_<NUM_FIDELITY_PHASES, FaceLayout>(dst_index, transpose);
-}
-
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_block(
-    uint dst_index,
-    const bool transpose = false,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
-    _llk_math_matmul_block_<NUM_FIDELITY_PHASES, FaceLayout>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
+    for (std::uint32_t rt=0; rt<rt_dim; rt++) {
+        for (std::uint32_t ct=0; ct<ct_dim; ct++) {
+            _llk_math_matmul_<NUM_FIDELITY_PHASES, FaceLayout>(dst_index+rt*ct_dim+ct, transpose);
+        }
+    }
 }

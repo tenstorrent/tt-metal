@@ -74,38 +74,22 @@ inline void llk_unpack_AB_matmul(
 
     std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
     std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
-
-    _llk_unpack_AB_matmul_(
-        base_address_a,
-        base_address_b);
-}
-
-inline void llk_unpack_AB_matmul_block(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t tile_index_a,
-    const std::uint32_t tile_index_b,
-    const std::uint32_t ct_dim = 1,
-    const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
-
-    std::uint32_t inputA = get_operand_id(operandA);
-    std::uint32_t inputB = get_operand_id(operandB);
-
-    std::uint32_t base_address_a = cb_interface[inputA].fifo_rd_ptr - 1;
-    std::uint32_t base_address_b = cb_interface[inputB].fifo_rd_ptr - 1;
+    std::uint32_t unpA_src_format = (std::uint32_t)unpack_src_format[operandA_id];
+    std::uint32_t unpB_src_format = (std::uint32_t)unpack_src_format[operandB_id];
 
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
-        std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX<true>((uint)unpack_src_format[inputA], (tile_index_a + rt*kt_dim));
+        std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX<true>(unpA_src_format, (tile_index_a + rt*kt_dim));
         std::uint32_t address_a = base_address_a + offset_address_a;
+
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
 
-            std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX<true>((uint)unpack_src_format[inputB], (tile_index_b+ct));
+            std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX<true>(unpB_src_format, (tile_index_b+ct));
             std::uint32_t address_b = base_address_b + offset_address_b;
 
             _llk_unpack_AB_matmul_(
                 address_a,
-                address_b);
+                address_b
+            );
         }
     }
 }
