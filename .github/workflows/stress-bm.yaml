@@ -5,9 +5,10 @@ on:
   schedule:
     - cron: "0 4 * * *"
 
-stress-gs-fd:
-  uses: ./.github/workflows/stress-bm-gs-fd.yaml
-  secrets: inherit
-stress-wh-fd:
-  uses: ./.github/workflows/stress-bm-wh-fd.yaml
-  secrets: inherit
+jobs:
+  stress-gs-fd:
+    uses: ./.github/workflows/stress-bm-gs-fd.yaml
+    secrets: inherit
+  stress-wh-fd:
+    uses: ./.github/workflows/stress-bm-wh-fd.yaml
+    secrets: inherit
