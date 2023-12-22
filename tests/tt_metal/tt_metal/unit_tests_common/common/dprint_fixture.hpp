@@ -58,16 +58,15 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+        // An extra flag for if we have remote devices, as some tests are disabled for fast
+        // dispatch + remote devices.
+        this->has_remote_devices_ = num_devices > num_pci_devices;
         for (unsigned int id = 0; id < num_devices; id++) {
             if (SkipTest(id))
                 continue;
             auto* device = tt::tt_metal::CreateDevice(id);
             devices_.push_back(device);
         }
-
-        // An extra flag for if we have remote devices, as some tests are disabled for fast
-        // dispatch + remote devices.
-        this->has_remote_devices_ = num_devices > num_pci_devices;
     }
 
     void TearDown() override {
