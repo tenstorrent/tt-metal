@@ -26,8 +26,8 @@ def t5_layer_norm(config, hidden_states, *, weight):
     hidden_states = ttnn.core._reshape_to_4D(hidden_states)
     weight = ttnn.core._reshape_to_4D(weight)
 
-    ttl_hidden_states = hidden_states._tensor
-    ttl_weight = weight._tensor
+    ttl_hidden_states = hidden_states.value
+    ttl_weight = weight.value
     ttl_hidden_states = ttl.tensor.rmsnorm(ttl_hidden_states, config.layer_norm_epsilon, ttl_weight)
 
     hidden_states = ttnn.Tensor(ttl_hidden_states)

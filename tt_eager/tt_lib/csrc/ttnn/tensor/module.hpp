@@ -49,6 +49,13 @@ std::ostream& operator<<(std::ostream& os, const Shape& self) {
     return os;
 }
 
+struct Tensor {
+    const tt::tt_metal::Tensor value;
+
+    explicit Tensor(tt::tt_metal::Tensor&& tensor) : value{tensor} {}
+    explicit Tensor(const tt::tt_metal::Tensor& tensor) : value{tensor} {}
+};
+
 void py_module(py::module& m_tensor) {
     py::class_<Shape>(m_tensor, "Shape")
         .def(py::init<tt::tt_metal::Shape>())
@@ -108,6 +115,14 @@ void py_module(py::module& m_tensor) {
             })
         .def_property_readonly("rank", [](const Shape& self) { return self.rank; })
         .def("padded", [](const Shape& self) { return self.padded(); });
+
+    py::class_<Tensor>(m_tensor, "Tensor")
+        .def(py::init<tt::tt_metal::Tensor>())
+        .def_property_readonly("value", [](const Tensor& self) -> auto& { return self.value; })
+        .def("__repr__", [](const Tensor& self) { return self.value.write_to_string(Layout::ROW_MAJOR, true); })
+        .def_property_readonly("shape", [](const Tensor& self) { return py::cast(Shape{self.value.shape()}); })
+        .def_property_readonly("dtype", [](const Tensor& self) { return self.value.dtype(); })
+        .def_property_readonly("layout", [](const Tensor& self) { return self.value.layout(); });
 }
 
 }  // namespace tensor
