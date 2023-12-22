@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
 
 
 @pytest.mark.parametrize(
@@ -36,10 +36,7 @@ def test_bw_addcdiv(input_shapes, value, device):
 
     pyt_y.backward(gradient=grad_data)
 
-    golden_tensor = list()
-    golden_tensor.append(in_data.grad)
-    golden_tensor.append(tensor1_data.grad)
-    golden_tensor.append(tensor2_data.grad)
+    golden_tensor = [in_data.grad, tensor1_data.grad, tensor2_data.grad]
 
     status = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert status
