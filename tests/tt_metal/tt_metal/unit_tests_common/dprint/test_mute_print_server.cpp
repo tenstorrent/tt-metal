@@ -18,10 +18,7 @@ const std::string golden_output =
 R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
-TEST_F(DPrintFixture, TestPrintMuting) {
-    // Device already set up by gtest fixture.
-    Device *device = this->device_;
-
+static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program
     Program program = Program();
 
@@ -42,7 +39,7 @@ TEST_F(DPrintFixture, TestPrintMuting) {
             core,
             {test_number}
         );
-        RunProgram(program);
+        fixture->RunProgram(device, program);
     };
 
     // Run the program, prints should be enabled.
@@ -63,4 +60,10 @@ TEST_F(DPrintFixture, TestPrintMuting) {
             golden_output
         )
     );
+}
+
+TEST_F(DPrintFixture, TestPrintMuting) {
+    for (Device* device : this->devices_) {
+        this->RunTestOnDevice(RunTest, device);
+    }
 }

@@ -144,10 +144,7 @@ TILE: (
 
   ptr=122880))";
 
-TEST_F(DPrintFixture, TestPrintFromAllHarts) {
-    // Device already set up by gtest fixture.
-    Device *device = this->device_;
-
+static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     Program program = Program();
@@ -183,7 +180,7 @@ TEST_F(DPrintFixture, TestPrintFromAllHarts) {
     );
 
     // Run the program
-    RunProgram(program);
+    fixture->RunProgram(device, program);
 
     // Check that the expected print messages are in the log file
     EXPECT_TRUE(
@@ -192,4 +189,10 @@ TEST_F(DPrintFixture, TestPrintFromAllHarts) {
             golden_output
         )
     );
+}
+
+TEST_F(DPrintFixture, TestPrintFromAllHarts) {
+    for (Device* device : this->devices_) {
+        this->RunTestOnDevice(RunTest, device);
+    }
 }

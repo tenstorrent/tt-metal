@@ -86,4 +86,14 @@ return true and the print server will be terminated.
 */
 bool DPrintServerHangDetected();
 
+/**
+@brief Clears the print server log file.
+*/
+void DPrintServerClearLogFile();
+
+/**
+@brief Clears any RAISE signals in the print server, so they can be used again in a later run.
+*/
+void DPrintServerClearSignals();
+
 } // namespace tt
