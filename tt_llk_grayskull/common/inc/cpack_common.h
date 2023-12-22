@@ -78,44 +78,6 @@ namespace ckernel::packer
       config.f.in_data_format    = (uint)tile_desc_pack_src_format;
       config.f.pack_per_xy_plane = 1;
 
-      // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
-      // cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
-      // cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      // cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+2]=config.val[2];
-      // cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+2]=config.val[2];
-      // cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+2]=config.val[2];
-      // cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+2]=config.val[2];
-
-      // if ((uint)(pack_dst_format&0x2) != 0) {
-      //    // Override exp section size for packers 1,2,3
-      //    // Tile header + exp size + datum size
-      //    if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
-      //       config.f.exp_section_size = 1 + 2 + 16;
-      //       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      //       config.f.exp_section_size = 1 + 1 + 32;
-      //       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
-      //       config.f.exp_section_size = 1 + 0 + 48;
-      //       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      //    } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4_b) {
-      //       config.f.exp_section_size = 1 + 2 + 8;
-      //       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      //       config.f.exp_section_size = 1 + 1 + 16;
-      //       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
-      //       config.f.exp_section_size = 1 + 0 + 24;
-      //       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      //    } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2_b) {
-      //       config.f.exp_section_size = 1 + 2 + 4;
-      //       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      //       config.f.exp_section_size = 1 + 1 + 8;
-      //       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
-      //       config.f.exp_section_size = 1 + 0 + 12;
-      //       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-      //    } else {
-      //       FWASSERT("Other data formats not supported", false);
-      //    }
-      // }
-
       TT_SETDMAREG(0, (config.val[2] & 0xffff), 0, LO_16(p_gpr_pack::TMP0));
       TT_SETDMAREG(0, ((config.val[2]>>16) & 0xffff), 0, HI_16(p_gpr_pack::TMP0));
       TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32+2);

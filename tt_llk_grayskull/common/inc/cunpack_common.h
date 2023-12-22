@@ -221,9 +221,6 @@ namespace ckernel::unpacker
       }
       config.f.out_data_format = unpA_dst_format;
       config.f.throttle_mode   = 2;
-      //config.f.upsample_rate   = 0;
-      //config.f.upsamle_and_interlave  = 0;
-      //config.f.shift_amount = 0;
       config.f.uncompress_cntx0_3 = 0xf;
       config.f.uncompress_cntx4_7 = 0xf;
       //config.f.limit_addr = 0; // Set dynamically
@@ -249,7 +246,8 @@ namespace ckernel::unpacker
 
       // Store config used by tilizer
       regfile[p_gpr_unpack::FACE_DIM_1x16] = (Tile_x_dim/16) | ((Tile_x_dim/16)<<16);
-      sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
+      regfile[p_gpr_unpack::FACE_DIM_16x16] = Tile_x_dim | (Tile_x_dim << 16);
+      sync_regfile_write(p_gpr_unpack::FACE_DIM_16x16);
 
       if (!skip_alu_format_set) {
          wait_for_pack_config_done();
