@@ -13,6 +13,7 @@
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
+#include "llk_unpack_A_api.h"
 #endif
 
 
@@ -55,6 +56,19 @@ ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
 }
 
+ALWI void reduce_init_delta_no_pack()
+{
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<>(0, 1) ));
+
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+}
+
+ALWI void reduce_init_delta_math()
+{
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+}
+
 ALWI void reduce_revert_delta(uint32_t ocb = 16)
 {
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(ocb) ));
@@ -86,6 +100,12 @@ ALWI void reduce_tile(PoolType reduce_op, ReduceDim dim, uint32_t icb0, uint32_t
 {
     MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1) ));
+}
+
+ALWI void reduce_tile_math(uint32_t in_scalar_cb_id, uint32_t idst)
+{
+    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
+    UNPACK(( llk_unpack_A(in_scalar_cb_id, 0) ));
 }
 #endif
 

@@ -7,6 +7,7 @@
 // #include "compute_kernel_api.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/pack_untilize.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0
@@ -61,7 +62,7 @@ inline void tilize(uint32_t out_nelems,
     tilize_uninit();
 }
 
-inline void reduce_h(uint32_t out_nelems,
+inline void reduce_h_orig(uint32_t out_nelems,
                      uint32_t in_cb_id,
                      uint32_t in_scalar_cb_id,
                      uint32_t in_ntiles_hw,
@@ -90,6 +91,64 @@ inline void reduce_h(uint32_t out_nelems,
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c>
+inline void reduce_h(uint32_t out_nelems,
+                     uint32_t in_cb_id,
+                     uint32_t in_scalar_cb_id,
+                     uint32_t in_ntiles_hwc,
+                     uint32_t out_ntiles_c,
+                     uint32_t out_cb_id) {
+    cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
+    reduce_init_delta_no_pack();
+    pack_untilize_dst_init_short<in_ntiles_c>();
+    cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
+    tile_regs_acquire();
+    for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
+        // add to accumulator all the in_ntiles_hw in a column of tiles
+        reduce_tile(PoolType::MAX, ReduceDim::REDUCE_COL, in_cb_id, in_scalar_cb_id, c_i, 0, c_i);
+    }
+    tile_regs_wait();
+    tile_regs_commit();
+    pack_untilize_dst<in_ntiles_c>(out_cb_id);
+    tile_regs_release();
+    pack_untilize_uninit();
+    cb_push_back(out_cb_id, out_ntiles_c * out_nelems);
+    cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
+}
+
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c>
+inline void reduce_h_fused(uint32_t out_nelems,
+                     uint32_t in_cb_id,
+                     uint32_t in_scalar_cb_id,
+                     uint32_t in_ntiles_hwc,
+                     uint32_t out_ntiles_c,
+                     uint32_t out_cb_id) {
+
+    tilizeA_B_init_unpack(in_cb_id, in_scalar_cb_id, in_ntiles_hwc);        // <-- UNPACK next iter
+    cb_wait_front(in_cb_id, 1);
+    unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc);
+    cb_pop_front(in_cb_id, 1);
+    tilize_uninit();
+
+    // UNPACK(( llk_unpack_B_init() ));
+    // UNPACK(( llk_unpack_A(in_scalar_cb_id, 0) ));
+
+    cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
+    tile_regs_acquire();
+
+    for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
+        // add to accumulator all the in_ntiles_hw in a column of tiles
+        reduce_tile_math(in_scalar_cb_id, c_i);      // <-- MATH
+    }
+
+    tile_regs_wait();
+    tile_regs_commit();
+    pack_untilize_dst<in_ntiles_c>(out_cb_id);  // <-- PACK
+    tile_regs_release();
+
+    cb_push_back(out_cb_id, out_ntiles_c * out_nelems);
+}
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -111,6 +170,7 @@ void MAIN {
     const uint32_t out_h_per_core = get_compile_time_arg_val(11);
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
+    // tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
     #if DEBUG_PRINT == 1
         print_cb_details(in_cb_id);
@@ -125,14 +185,13 @@ void MAIN {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++out_w_i) {
                 // NOTE: Assuming in_ntiles_hw < 8 for now.
                 // TODO: subblocking to support this.
-                // kernel_profiler::mark_time(11);
-                // UDPRINT('T' << out_w_i);
                 // tilize
                 tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
-                // UDPRINT('R' << out_w_i);
                 // Reduce H
-                reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
-                // kernel_profiler::mark_time(12);
+                // reduce_h_orig(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+                reduce_h<in_ntiles_hw, in_ntiles_c>(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+
+                // reduce_h_fused<in_ntiles_hw, in_ntiles_c>(out_nelems, in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
             }
         }
     }

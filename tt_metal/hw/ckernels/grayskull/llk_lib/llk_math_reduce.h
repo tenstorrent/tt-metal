@@ -10,6 +10,8 @@
 #include "llk_math_common.h"
 #include "ckernel_globals.h"
 
+#include "debug/dprint.h"
+
 using namespace ckernel;
 
 // local function declarations
@@ -27,6 +29,7 @@ inline void _llk_math_reduce_(uint dst_index) {
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         // Transpose and pool
+        DPRINT << "SW-1" << ENDL();
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_TRNSPSRCA;
         if constexpr (type == PoolType::MAX) {
@@ -39,6 +42,7 @@ inline void _llk_math_reduce_(uint dst_index) {
                 TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
             }
         }
+        DPRINT << "SW-2" << ENDL();
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_TRNSPSRCA;
         if constexpr (type == PoolType::MAX) {
@@ -132,8 +136,10 @@ inline void _llk_math_reduce_(uint dst_index) {
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
     } else if constexpr (dim == ReduceDim::REDUCE_COL) {
         for (int row_tile = 0; row_tile < 2; row_tile++) {
+            DPRINT << "SW-0" << ENDL();
             // Transpose and pool
             TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+            DPRINT << "SW-1" << ENDL();
 
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
@@ -148,6 +154,7 @@ inline void _llk_math_reduce_(uint dst_index) {
             TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
             TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+            DPRINT << "SW-2" << ENDL();
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
             } else {
@@ -157,9 +164,12 @@ inline void _llk_math_reduce_(uint dst_index) {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
                 }
             }
+            DPRINT << "SW-3" << ENDL();
             // Reset Dest Counter
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
+            DPRINT << "SW-4" << ENDL();
         }
+        DPRINT << "SW-5" << ENDL();
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
         for (int tile = 0; tile < 3; tile++) {
             // Wait and pool
@@ -202,6 +212,7 @@ inline void _llk_math_reduce_(uint dst_index) {
             TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
         }
     }
+    DPRINT << "HI" << ENDL();
 }
 
 template <PoolType type, int MATH_FIDELITY_DESC>

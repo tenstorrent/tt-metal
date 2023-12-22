@@ -13,9 +13,9 @@ namespace ckernel {
 /**
  * Copies a single tile from the DST register buffer at a specified index to a
  * specified CB at a given index. For the out_tile_index to be valid for this
- * call, cb_reserve_back(n) had to be called first to reserve at least some
- * number n>0 of tiles in the output CB. The out_tile_index = 0 then references
- * the first tile in the reserved section of the CB, up to index n-1 that will
+ * call, cb_reserve_back(n) has to be called first to reserve at least some
+ * number n > 0 of tiles in the output CB. out_tile_index = 0 then references
+ * the first tile in the reserved section of the CB, up to index n - 1, which will
  * then be visible to the consumer in the same order after a cb_push_back call.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
