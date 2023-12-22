@@ -3,38 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import torch.nn.functional as F
+
+from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
-def torch_multi_head_attention(
+def bert_attention(
+    config,
     hidden_states,
     attention_mask,
-    query_weight,
-    query_bias,
-    key_weight,
-    key_bias,
-    value_weight,
-    value_bias,
-    output_weight,
-    output_bias,
     *,
-    num_heads,
+    parameters,
 ):
+    num_heads = config.num_attention_heads
     batch_size, sequence_size, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
-    query = hidden_states @ query_weight
-    query = query + query_bias
+    query = hidden_states @ parameters.self.query.weight
+    query = query + parameters.self.query.bias
     query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
     query = torch.permute(query, (0, 2, 1, 3))
 
-    key = hidden_states @ key_weight
-    key = key + key_bias
+    key = hidden_states @ parameters.self.key.weight
+    key = key + parameters.self.key.bias
     key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
     key = torch.permute(key, (0, 2, 3, 1))
 
-    value = hidden_states @ value_weight
-    value = value + value_bias
+    value = hidden_states @ parameters.self.value.weight
+    value = value + parameters.self.value.bias
     value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
     value = torch.permute(value, (0, 2, 1, 3))
 
@@ -43,121 +38,155 @@ def torch_multi_head_attention(
     if attention_mask is not None:
         attention_scores = attention_scores + attention_mask
 
-    attention_probs = F.softmax(attention_scores, dim=-1)
+    attention_probs = torch.nn.functional.softmax(attention_scores, dim=-1)
 
     context_layer = attention_probs @ value
     context_layer = torch.permute(context_layer, (0, 2, 1, 3))
     context_layer = torch.reshape(context_layer, (batch_size, sequence_size, hidden_size))
 
     self_output = context_layer
-    self_output = self_output @ output_weight
-    self_output = self_output + output_bias
+    self_output = self_output @ parameters.output.dense.weight
+    self_output = self_output + parameters.output.dense.bias
 
-    return self_output
-
-
-def torch_feedforward(hidden_states, intermediate_weight, intermediate_bias, output_weight, output_bias):
-    hidden_states = hidden_states @ intermediate_weight
-    hidden_states = hidden_states + intermediate_bias
-    hidden_states = F.gelu(hidden_states)
-    hidden_states = hidden_states @ output_weight
-    hidden_states = hidden_states + output_bias
-    return hidden_states
-
-
-def torch_bert_encoder(
-    hidden_states,
-    attention_mask,
-    parameters,
-    *,
-    num_heads,
-):
-    *_, hidden_size = hidden_states.shape
-    multi_head_attention_output = torch_multi_head_attention(
-        hidden_states,
-        attention_mask,
-        parameters.attention.self.query.weight,
-        parameters.attention.self.query.bias,
-        parameters.attention.self.key.weight,
-        parameters.attention.self.key.bias,
-        parameters.attention.self.value.weight,
-        parameters.attention.self.value.bias,
-        parameters.attention.output.dense.weight,
-        parameters.attention.output.dense.bias,
-        num_heads=num_heads,
-    )
-
-    multi_head_attention_add_and_layer_norm_output = F.layer_norm(
-        hidden_states + multi_head_attention_output,
-        (hidden_size,),
-        parameters.attention.output.LayerNorm.weight,
-        parameters.attention.output.LayerNorm.bias,
-    )
-
-    feedforward_output = torch_feedforward(
-        multi_head_attention_add_and_layer_norm_output,
-        parameters.intermediate.dense.weight,
-        parameters.intermediate.dense.bias,
-        parameters.output.dense.weight,
-        parameters.output.dense.bias,
-    )
-
-    feedforward_add_and_layer_norm_output = F.layer_norm(
-        multi_head_attention_add_and_layer_norm_output + feedforward_output,
+    attention_output = torch.nn.functional.layer_norm(
+        hidden_states + self_output,
         (hidden_size,),
         parameters.output.LayerNorm.weight,
         parameters.output.LayerNorm.bias,
+        eps=config.layer_norm_eps,
     )
 
-    return feedforward_add_and_layer_norm_output
+    return attention_output
 
 
-def torch_bert(
-    input_ids,
-    token_type_ids,
-    attention_mask,
-    parameters,
-    *,
-    num_heads,
-):
-    word_embeddings = F.embedding(input_ids, parameters.bert.embeddings.word_embeddings.weight)
-    token_type_embeddings = F.embedding(token_type_ids, parameters.bert.embeddings.token_type_embeddings.weight)
-    encoder_input = word_embeddings + token_type_embeddings
+def bert_intermediate(hidden_states, *, parameters):
+    hidden_states = hidden_states @ parameters.dense.weight
+    hidden_states = hidden_states + parameters.dense.bias
+    hidden_states = torch.nn.functional.gelu(hidden_states)
+    return hidden_states
 
-    *_, hidden_size = encoder_input.shape
-    encoder_input = F.layer_norm(
-        encoder_input,
+
+def bert_output(config, hidden_states, residual, *, parameters):
+    output = hidden_states @ parameters.dense.weight
+    output = output + parameters.dense.bias
+
+    *_, hidden_size = residual.shape
+    output = torch.nn.functional.layer_norm(
+        output + residual,
         (hidden_size,),
-        parameters.bert.embeddings.LayerNorm.weight,
-        parameters.bert.embeddings.LayerNorm.bias,
+        parameters.LayerNorm.weight,
+        parameters.LayerNorm.bias,
+        eps=config.layer_norm_eps,
     )
 
+    return output
+
+
+def bert_feedforward(
+    config,
+    hidden_states,
+    *,
+    parameters,
+):
+    intermediate = bert_intermediate(hidden_states, parameters=parameters.intermediate)
+    hidden_states = bert_output(config, intermediate, hidden_states, parameters=parameters.output)
+    return hidden_states
+
+
+def bert_layer(
+    config,
+    hidden_states,
+    attention_mask,
+    *,
+    parameters,
+):
+    attention_output = bert_attention(
+        config,
+        hidden_states,
+        attention_mask,
+        parameters=parameters.attention,
+    )
+
+    feedforward_output = bert_feedforward(
+        config,
+        attention_output,
+        parameters=parameters,
+    )
+
+    return feedforward_output
+
+
+def bert_encoder(
+    config,
+    hidden_states,
+    attention_mask,
+    *,
+    parameters,
+):
+    encoder_input = hidden_states
     encoder_output = None
-    for encoder_parameters in parameters.bert.encoder.layer:
-        encoder_output = torch_bert_encoder(
+    for encoder_parameters in parameters.layer:
+        encoder_output = bert_layer(
+            config,
             encoder_input,
             attention_mask,
-            encoder_parameters,
-            num_heads=num_heads,
+            parameters=encoder_parameters,
         )
         encoder_input = encoder_output
     return encoder_output
 
 
-def torch_bert_for_question_answering(
+def bert(
+    config,
     input_ids,
     token_type_ids,
     attention_mask,
-    parameters,
     *,
-    num_heads,
+    parameters,
 ):
-    bert_output = torch_bert(
+    input_shape = input_ids.size()
+    if attention_mask is not None:
+        attention_mask = get_extended_attention_mask(attention_mask, input_shape)
+
+    word_embeddings = torch.nn.functional.embedding(input_ids, parameters.embeddings.word_embeddings.weight)
+    token_type_embeddings = torch.nn.functional.embedding(
+        token_type_ids, parameters.embeddings.token_type_embeddings.weight
+    )
+    hidden_states = word_embeddings + token_type_embeddings
+
+    *_, hidden_size = hidden_states.shape
+    hidden_states = torch.nn.functional.layer_norm(
+        hidden_states,
+        (hidden_size,),
+        parameters.embeddings.LayerNorm.weight,
+        parameters.embeddings.LayerNorm.bias,
+        eps=config.layer_norm_eps,
+    )
+
+    hidden_states = bert_encoder(
+        config,
+        hidden_states,
+        attention_mask,
+        parameters=parameters.encoder,
+    )
+
+    return hidden_states
+
+
+def bert_for_question_answering(
+    config,
+    input_ids,
+    token_type_ids,
+    attention_mask,
+    *,
+    parameters,
+):
+    bert_output = bert(
+        config,
         input_ids,
         token_type_ids,
         attention_mask,
-        parameters,
-        num_heads=num_heads,
+        parameters=parameters.bert,
     )
 
     qa_outputs = bert_output

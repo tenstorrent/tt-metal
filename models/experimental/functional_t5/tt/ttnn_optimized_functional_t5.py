@@ -9,7 +9,10 @@ import torch
 
 import ttnn
 
-from ..common.attention_mask_functions import get_extended_attention_mask, invert_attention_mask
+from models.experimental.functional_common.attention_mask_functions import (
+    get_extended_attention_mask,
+    invert_attention_mask,
+)
 
 
 def t5_layer_norm(config, hidden_states, *, weight):
@@ -341,7 +344,9 @@ def create_attention_mask(input_shape, device, is_decoder):
 
     attention_mask = torch.ones(batch_size, seq_length)
 
-    extended_attention_mask = get_extended_attention_mask(attention_mask, input_shape, is_decoder=is_decoder)
+    extended_attention_mask = get_extended_attention_mask(
+        attention_mask, input_shape, is_decoder=is_decoder, dtype=torch.bfloat16
+    )
 
     extended_attention_mask = extended_attention_mask.expand((-1, -1, seq_length, -1))
     extended_attention_mask = ttnn.from_torch(extended_attention_mask)

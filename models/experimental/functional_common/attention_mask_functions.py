@@ -31,7 +31,7 @@ def create_extended_attention_mask_for_decoder(input_shape, attention_mask):
 
 
 def get_extended_attention_mask(
-    attention_mask: torch.Tensor, input_shape: Tuple[int], dtype: torch.float = torch.bfloat16, *, is_decoder
+    attention_mask: torch.Tensor, input_shape: Tuple[int], dtype=None, *, is_decoder: bool = False
 ) -> torch.Tensor:
     """
     Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
@@ -45,6 +45,9 @@ def get_extended_attention_mask(
     Returns:
         `torch.Tensor` The extended attention mask, with a the same dtype as `attention_mask.dtype`.
     """
+
+    if dtype is None:
+        dtype = attention_mask.dtype
 
     # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
     # ourselves in which case we just need to make it broadcastable to all heads.
