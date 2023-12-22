@@ -32,7 +32,7 @@ def test_reshape_negative_1(h, w):
     torch_output_tensor = torch_input_tensor.reshape(-1)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
-    output_tensor = ttnn.reshape(input_tensor, (-1,))  # TODO: allow passing in -1
+    output_tensor = ttnn.reshape(input_tensor, (-1,))
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

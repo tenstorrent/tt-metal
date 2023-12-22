@@ -5,7 +5,8 @@
 import ttnn
 
 
-def ttnn_optimized_multi_head_attention(
+def bert_attention(
+    config,
     hidden_states,
     attention_mask,
     query_key_value_weight,
@@ -13,9 +14,9 @@ def ttnn_optimized_multi_head_attention(
     self_output_weight,
     self_output_bias,
     *,
-    num_heads,
     num_cores_x=12,
 ):
+    num_heads = config.num_attention_heads
     batch_size, _, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
@@ -80,7 +81,7 @@ def ttnn_optimized_multi_head_attention(
     return self_output
 
 
-def ttnn_optimized_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, ff2_bias, num_cores_x=12):
+def bert_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, ff2_bias, num_cores_x=12):
     batch_size, *_ = hidden_states.shape
 
     num_cores_x = 12
@@ -107,21 +108,20 @@ def ttnn_optimized_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, 
     return ff2_output
 
 
-def ttnn_optimized_bert_encoder(
+def bert_encoder(
+    config,
     hidden_states,
     attention_mask,
     parameters,
-    *,
-    num_heads,
 ):
-    multi_head_attention_output = ttnn_optimized_multi_head_attention(
+    multi_head_attention_output = bert_attention(
+        config,
         hidden_states,
         attention_mask,
         parameters.attention.self.query_key_value.weight,
         parameters.attention.self.query_key_value.bias,
         parameters.attention.output.dense.weight,
         parameters.attention.output.dense.bias,
-        num_heads=num_heads,
     )
 
     multi_head_attention_add_and_layer_norm_output = ttnn.layer_norm(
@@ -134,7 +134,7 @@ def ttnn_optimized_bert_encoder(
     ttnn.deallocate(hidden_states)
     ttnn.deallocate(multi_head_attention_output)
 
-    feedforward_output = ttnn_optimized_feedforward(
+    feedforward_output = bert_feedforward(
         multi_head_attention_add_and_layer_norm_output,
         parameters.intermediate.dense.weight,
         parameters.intermediate.dense.bias,
@@ -155,24 +155,23 @@ def ttnn_optimized_bert_encoder(
     return feedforward_add_and_layer_norm_output
 
 
-def ttnn_optimized_bert(
+def bert(
+    config,
     input_ids,
     token_type_ids,
     attention_mask,
     parameters,
-    *,
-    num_heads,
 ):
     word_embeddings = ttnn.embedding(
         input_ids,
-        parameters.bert.embeddings.word_embeddings.weight,
+        parameters.embeddings.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.deallocate(input_ids)
 
     token_type_embeddings = ttnn.embedding(
         token_type_ids,
-        parameters.bert.embeddings.token_type_embeddings.weight,
+        parameters.embeddings.token_type_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.deallocate(token_type_ids)
@@ -183,19 +182,19 @@ def ttnn_optimized_bert(
 
     encoder_input = ttnn.layer_norm(
         embeddings,
-        weight=parameters.bert.embeddings.LayerNorm.weight,
-        bias=parameters.bert.embeddings.LayerNorm.bias,
+        weight=parameters.embeddings.LayerNorm.weight,
+        bias=parameters.embeddings.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(embeddings)
 
     encoder_output = None
-    for encoder_parameters in parameters.bert.encoder.layer:
-        encoder_output = ttnn_optimized_bert_encoder(
+    for encoder_parameters in parameters.encoder.layer:
+        encoder_output = bert_encoder(
+            config,
             encoder_input,
             attention_mask,
             encoder_parameters,
-            num_heads=num_heads,
         )
         encoder_output = ttnn.reallocate(encoder_output)
         encoder_input = encoder_output
@@ -203,20 +202,19 @@ def ttnn_optimized_bert(
     return encoder_output
 
 
-def ttnn_optimized_bert_for_question_answering(
+def bert_for_question_answering(
+    config,
     input_ids,
     token_type_ids,
     attention_mask,
     parameters,
-    *,
-    num_heads,
 ):
-    bert_output = ttnn_optimized_bert(
+    bert_output = bert(
+        config,
         input_ids,
         token_type_ids,
         attention_mask,
-        parameters,
-        num_heads=num_heads,
+        parameters.bert,
     )
 
     qa_outputs = ttnn.linear(
@@ -227,3 +225,58 @@ def ttnn_optimized_bert_for_question_answering(
     )
 
     return qa_outputs
+
+
+def preprocess_inputs(
+    input_ids,
+    token_type_ids,
+    attention_mask,
+    device,
+):
+    import torch
+
+    batch_size, _ = input_ids.shape
+
+    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32)
+    input_ids = ttnn.to_device(input_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    token_type_ids = ttnn.from_torch(token_type_ids, dtype=ttnn.uint32)
+    token_type_ids = ttnn.to_device(token_type_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    if attention_mask is not None:
+        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 31, 0, 0, 0, batch_size - 1))
+        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
+        attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
+        attention_mask = ttnn.to_device(attention_mask, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    return input_ids, token_type_ids, attention_mask
+
+
+def custom_preprocessor(torch_model, name):
+    import torch
+    import transformers
+    from ttnn.model_preprocessing import (
+        preprocess_linear_bias,
+        preprocess_linear_weight,
+    )
+
+    parameters = {}
+    if isinstance(torch_model, transformers.models.bert.modeling_bert.BertSelfAttention):
+        qkv_weight = torch.cat(
+            [
+                torch_model.query.weight,
+                torch_model.key.weight,
+                torch_model.value.weight,
+            ],
+            dim=0,
+        )
+        qkv_bias = torch.cat(
+            [torch_model.query.bias, torch_model.key.bias, torch_model.value.bias],
+            dim=0,
+        )
+
+        parameters = {"query_key_value": {}}
+        parameters["query_key_value"]["weight"] = preprocess_linear_weight(qkv_weight, dtype=ttnn.bfloat16)
+        parameters["query_key_value"]["bias"] = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat16)
+    return parameters

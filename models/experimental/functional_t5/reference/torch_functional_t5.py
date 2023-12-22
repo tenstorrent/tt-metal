@@ -7,7 +7,10 @@ from typing import Optional
 import torch
 import transformers
 
-from ..common.attention_mask_functions import get_extended_attention_mask, invert_attention_mask
+from models.experimental.functional_common.attention_mask_functions import (
+    get_extended_attention_mask,
+    invert_attention_mask,
+)
 
 
 def t5_layer_norm(config, hidden_states, *, weight):
