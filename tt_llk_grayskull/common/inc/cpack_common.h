@@ -306,17 +306,17 @@ namespace ckernel::packer
 
    inline uint8_t get_packer_dest_offset_index()
    {
-           return (dest_offset_id ? p_gpr_pack::DEST_OFFSET_HI : p_gpr_pack::DEST_OFFSET_LO);
+      return (dest_offset_id ? p_gpr_pack::DEST_OFFSET_HI : p_gpr_pack::DEST_OFFSET_LO);
    }
 
    inline uint32_t get_packer_dest_offset()
    {
-           return (dest_offset_id ? 0x200 : 0x0);
+      return (dest_offset_id ? 0x200 : 0x0);
    }
 
    inline void flip_packer_dest_offset_id()
    {
-           dest_offset_id = 1 - dest_offset_id;
+      dest_offset_id = 1 - dest_offset_id;
    }
 
    // Flip packer dest register offset to 0 or 0x200
@@ -324,12 +324,12 @@ namespace ckernel::packer
    template <DstSync Dst>
    inline void select_packer_dest_registers()
    {
-           if constexpr (Dst == DstSync::SyncFull)
-           {
-                   TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO,     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
-           } else {
-                   TT_WRCFG(get_packer_dest_offset_index(),     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
-           }
+      if constexpr (Dst == DstSync::SyncFull)
+      {
+         TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO,     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+      } else {
+         TT_WRCFG(get_packer_dest_offset_index(),     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+      }
    }
 
    // Program packer destination addresses from GPRs
@@ -348,7 +348,7 @@ namespace ckernel::packer
          TT_SETDMAREG_SHFT(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
          TT_SETDMAREG_SHFT(0, addr+offset2, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
          TT_SETDMAREG_SHFT(0, addr+offset3, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
-	 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
+	      TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
          TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR,     p_cfg::WRCFG_32b, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
          TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1,   p_cfg::WRCFG_32b, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
          TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK2 | p_stall::PACK3);
