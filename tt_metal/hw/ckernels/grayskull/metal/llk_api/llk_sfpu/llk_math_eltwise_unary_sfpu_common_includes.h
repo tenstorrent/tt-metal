@@ -44,10 +44,7 @@ inline void llk_math_calculate_sfpu(
         _calculate_tanh_<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::hardtanh) {
         _calculate_hardtanh_<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
-    } else if constexpr (operation == SfpuType::signbit) {
-        calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
-    }
-    else if constexpr (operation == SfpuType::rsqrt) {
+    } else if constexpr (operation == SfpuType::rsqrt) {
         //param0 = true -> approximate fast mode
         //         false -> high precision mode
         // The algorithm uses Newton's method based on no.of iteration better approximation can be calculated
@@ -85,7 +82,7 @@ inline void llk_math_calculate_sfpu(
     } else if constexpr (operation == SfpuType::abs) {
         _calculate_abs_<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::sign) {
-        _calculate_sign_<APPROXIMATION_MODE, ITERATIONS>(param5);
+        calculate_sign<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::max) {
         _calculate_max_<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::min) {
