@@ -251,11 +251,12 @@ inline void _llk_pack_reduce_mask_clear_() {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
     TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP_LO,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1);
 
     // Clear out TILE_ROW_SET_MAPPING registers
-    for (uint i = 0; i < 4; i++) {
-        TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32 + i); // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
-    }
+    //for (uint i = 0; i < 4; i++) {
+    //    TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32 + i); // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
+    //}
 
     TTI_NOP; TTI_NOP;
 }
