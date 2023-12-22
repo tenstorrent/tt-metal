@@ -131,12 +131,14 @@ class Tensor:
 
         if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
             tensor = self
+            device = tensor.device
             tensor = from_device(tensor)
             tensor = to_torch(tensor)
             tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
                 tensor, slices
             )
             tensor = from_torch(tensor, dtype=self.dtype)
+            tensor = to_device(tensor, device)
         else:
             tensor = self
             tensor = to_torch(tensor)

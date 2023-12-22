@@ -1236,8 +1236,23 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
 
     ttl_input_tensor = input_tensor._tensor
 
-    if len(input_tensor.shape) == 4:
+    if len(input_tensor.shape) != len(order):
+        raise RuntimeError(
+            "The number of dimensions in the tensor input does not match the length of the desired ordering"
+        )
+
+    if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
         return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
+    elif len(input_tensor.shape) < 4:
+        original_shape = tuple(input_tensor.shape)
+        desired_shape = tuple([original_shape[i] for i in order])
+        input_tensor = _reshape_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor._tensor
+        new_order = order
+        while len(new_order) < 4:
+            new_order = (0,) + tuple(x + 1 for x in new_order)
+        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, new_order))
+        return reshape(output_tensor, desired_shape)
     else:
 
         def torch_permute(tensor, order):

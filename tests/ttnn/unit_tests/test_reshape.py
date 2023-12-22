@@ -89,5 +89,23 @@ def test_permute_reshape(device):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    assert torch.allclose(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+def test_reshape_with_negative_dim(device):
+    input_shape = (1, 4, 64, 32)
+    output_shape = (1, -1, 64, 2)
+    expected_output_shape = (1, 64, 64, 2)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_output = torch.reshape(torch_input, output_shape)
+
+    tt_input = ttnn.from_torch(torch_input)
+    tt_input = ttnn.to_device(tt_input, device)
+    tt_output = ttnn.reshape(tt_input, output_shape)
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert list(expected_output_shape) == list(torch_output.shape)
+    assert list(expected_output_shape) == list(tt_output.shape)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
