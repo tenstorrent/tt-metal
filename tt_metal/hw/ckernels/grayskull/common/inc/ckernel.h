@@ -86,7 +86,6 @@ extern volatile uint tt_reg_ptr *instrn_buffer;
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
 extern volatile uint tt_reg_ptr *trisc_l1_mailbox;
-extern volatile uint local_mem_barrier;
 extern volatile uint8_t tt_l1_ptr *debug_buffer;
 
 extern uint32_t cfg_state_id;
@@ -250,11 +249,6 @@ inline void reset_dest_offset_id()
 inline void mop_run(const uint8_t type, const uint8_t count)
 {
     TTI_MOP(type, count - 1, 0); // Run the MOP
-}
-
-inline void mem_barrier(uint32_t data)
-{
-    local_mem_barrier = data;
 }
 
 // Register read (workaround for bug
