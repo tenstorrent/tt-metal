@@ -27,7 +27,7 @@ def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
         padded_width = int(np.ceil(width / width_multiple)) * width_multiple
         tensor = ttnn.core._reshape_to_4D(tensor)
         *batch_sizes, _, _ = tensor.shape
-        tensor = ttnn.Tensor(tensor._tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0.0))
+        tensor = ttnn.Tensor(tensor.value.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0.0))
         tensor = ttnn.reshape(
             tensor,
             ttnn.Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
@@ -40,7 +40,7 @@ def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
         padded_width = int(np.ceil(width / width_multiple)) * width_multiple
         tensor = ttnn.core._reshape_to_4D(tensor)
         *batch_sizes, height, _ = tensor.shape
-        tensor = ttnn.Tensor(tensor._tensor.pad(batch_sizes + [height, padded_width], [0, 0, 0, 0], 0.0))
+        tensor = ttnn.Tensor(tensor.value.pad(batch_sizes + [height, padded_width], [0, 0, 0, 0], 0.0))
         tensor = ttnn.reshape(tensor, ttnn.Shape([width], [padded_width]))
     return tensor
 

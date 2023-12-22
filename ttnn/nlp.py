@@ -55,7 +55,7 @@ def split_heads(input_tensor: Tensor, *, num_heads: int, order: Tuple[int]) -> T
 
     impl = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.nlp.split_heads")
 
-    device = input_tensor._tensor.device()
+    device = input_tensor.value.device()
     input_dtype = input_tensor.dtype
 
     batch_size, sequence_size, hidden_size = input_tensor.shape
@@ -138,7 +138,7 @@ def split_query_key_value_and_split_heads(
     if input_tensor.shape == (batch_size, 384, 1024 * 3):
         input_tensor = reshape(input_tensor, (batch_size, 1, sequence_size, three_times_hidden_size))
 
-        ttl_input_tensor = input_tensor._tensor
+        ttl_input_tensor = input_tensor.value
 
         core_y, core_x = core_grid
         query_key_value = ttl.operations.primary.transformers.split_query_key_value_and_split_heads(
@@ -153,7 +153,7 @@ def split_query_key_value_and_split_heads(
         import ttnn
         import torch
 
-        device = input_tensor._tensor.device()
+        device = input_tensor.value.device()
         input_dtype = input_tensor.dtype
 
         def impl(tensor):
@@ -258,7 +258,7 @@ def split_key_value_and_split_heads(
     import ttnn
     import torch
 
-    device = input_tensor._tensor.device()
+    device = input_tensor.value.device()
     input_dtype = input_tensor.dtype
 
     def impl(tensor):
@@ -354,12 +354,12 @@ def attention_softmax(
 
     if attention_mask is not None:
         output_tensor = ttl.tensor.scale_mask_softmax(
-            input_tensor._tensor, scaler, attention_mask._tensor, output_mem_config=memory_config
+            input_tensor.value, scaler, attention_mask.value, output_mem_config=memory_config
         )
         return Tensor(output_tensor)
     else:
         scaled_input_tensor = input_tensor * scaler
-        ttl_scaled_input_tensor = scaled_input_tensor._tensor
+        ttl_scaled_input_tensor = scaled_input_tensor.value
         ttl_output_tensor = ttl.tensor.softmax(ttl_scaled_input_tensor, output_mem_config=memory_config)
         return Tensor(ttl_output_tensor)
 
@@ -395,7 +395,7 @@ def attention_softmax_(
 
     if attention_mask is not None:
         ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            input_tensor._tensor, scaler, attention_mask._tensor
+            input_tensor.value, scaler, attention_mask.value
         )
         return input_tensor
     else:
@@ -443,7 +443,7 @@ def concatenate_heads(
 
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
 
-    ttl_input_tensor = input_tensor._tensor
+    ttl_input_tensor = input_tensor.value
     ttl_output_tensor = ttl.tensor.nlp_concat_heads(
         ttl_input_tensor,
         memory_config,

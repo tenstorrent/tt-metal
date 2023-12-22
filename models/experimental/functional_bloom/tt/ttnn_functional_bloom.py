@@ -66,7 +66,7 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 def split_query_key_value_and_split_heads(
     query_key_value: torch.Tensor, num_heads
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    device = query_key_value._tensor.device()
+    device = query_key_value.device
 
     batch_size, seq_length, three_times_hidden_size = query_key_value.shape
     hidden_size = three_times_hidden_size // 3
