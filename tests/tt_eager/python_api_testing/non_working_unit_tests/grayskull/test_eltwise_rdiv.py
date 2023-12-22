@@ -101,7 +101,7 @@ test_sweep_args = [
         "",
     ),
     (
-        (9, 20, 214, 424),
+        (9, 18, 214, 424),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),
