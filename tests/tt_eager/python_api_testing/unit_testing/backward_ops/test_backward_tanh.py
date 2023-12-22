@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import compare_results, data_gen_pt_tt
 
 
 @pytest.mark.parametrize(
@@ -27,8 +27,7 @@ def test_bw_tanh(input_shapes, device):
 
     pyt_y.backward(gradient=grad_data)
 
-    golden_tensor = list()
-    golden_tensor.append(in_data.grad)
+    golden_tensor = [in_data.grad]
 
     status = compare_results(tt_output_tensor_on_device, golden_tensor, 0.95)
     assert status

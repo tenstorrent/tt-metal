@@ -5,7 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import *
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
 
 
 @pytest.mark.parametrize(
@@ -22,8 +22,6 @@ def test_bw_binary_le(input_shapes, device):
 
     tt_output_tensor_on_device = tt_lib.tensor.binary_le_bw(grad_tensor, input_tensor)
     pt_y = torch.zeros_like(grad_data)
-    golden_tensor = list()
-    golden_tensor.append(pt_y)
-    golden_tensor.append(pt_y)
+    golden_tensor = [pt_y, pt_y]
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

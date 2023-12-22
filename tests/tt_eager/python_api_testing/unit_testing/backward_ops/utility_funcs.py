@@ -12,6 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 
 
 def data_gen_pt_tt(input_shapes, device, required_grad=False):
+    torch.manual_seed(213919)
     pt_tensor = torch.randn(input_shapes, requires_grad=required_grad).bfloat16()
     tt_tensor = (
         tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
