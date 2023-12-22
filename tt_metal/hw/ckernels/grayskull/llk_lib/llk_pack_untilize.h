@@ -79,12 +79,24 @@ inline void llk_pack_untilize_init() {
     _llk_pack_untilize_init_<block_ct_dim>();
 }
 
+template<uint32_t block_ct_dim = 8>
+inline std::uint16_t get_output_tile_address(std::uint8_t output_id) {
+    std::uint16_t pack_tile_addr;
+    pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+    // cb_interface[output_id].fifo_wr_tile_ptr += block_ct_dim * GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
+    return pack_tile_addr;
+}
+
 template <std::uint32_t block_ct_dim = 8>
 inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
     // TT_LLK_DUMP("llk_pack_untilize<{}>({}, {})", block_ct_dim, num_blocks, output);
 
     const std::uint32_t output_id = get_output_id(output);
-    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
+
+    // std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+    std::uint32_t pack_tile_addr = get_output_tile_address<block_ct_dim>(output_id);
+
+    // std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
 
     for (std::uint32_t block=0; block<num_blocks; block++) {
 
@@ -93,6 +105,8 @@ inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
             pack_dst_format[output_id]
         );
 
-        pack_tile_addr += block_ct_dim*(std::uint32_t)(GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format[output_id]));
+        uint32_t offset = block_ct_dim * (std::uint32_t)(GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format[output_id]));
+        pack_tile_addr += offset;
+        // cb_interface[output_id].fifo_wr_tile_ptr += offset;
     }
 }

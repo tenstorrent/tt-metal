@@ -183,6 +183,8 @@ inline std::uint16_t get_output_tile_address(std::uint8_t output_id, std::uint32
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
+            // assert(false && "untilize is not yet supported!");
+            DPRINT << "OH NO!!" << ENDL();
         } else {
             pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr;
             cb_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
