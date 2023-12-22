@@ -58,7 +58,6 @@ TEST_F(DPrintFixture, TestPrintHanging) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
-    for (Device* device : this->devices_) {
-        this->RunTestOnDevice(RunTest, device);
-    }
+    // Since the dprint server gets killed from a timeout, only run on one device.
+    this->RunTestOnDevice(RunTest, this->devices_[0]);
 }
