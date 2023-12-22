@@ -4,19 +4,17 @@
 
 #pragma once
 
-#include "tensor/borrowed_buffer.hpp"
-#include "tensor/owned_buffer.hpp"
-
-#include "common/bfloat16.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-
-#include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
+#include "common/bfloat16.hpp"
+#include "tensor/borrowed_buffer.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/tt_stl/concepts.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
 
@@ -105,12 +103,33 @@ class Shape {
     ~Shape() = default;
 
     Shape(const std::initializer_list<uint32_t>);
-    Shape(const std::array<uint32_t, 4>&);
     Shape(const std::vector<uint32_t>&);
-
     Shape(const std::initializer_list<uint32_t>, const Padding&);
     Shape(const std::vector<uint32_t>&, const Padding&);
+
     explicit Shape(const Shape&, const Padding&);
+
+    template <std::size_t Rank>
+    explicit Shape(
+        const std::array<uint32_t, Rank>& shape,
+        const std::optional<std::array<uint32_t, Rank>>& padded_shape = std::nullopt) :
+        rank_(Rank), dimensions_{}, padding_{Rank} {
+        if (padded_shape.has_value()) {
+            TT_ASSERT(shape.size() == padded_shape.value().size());
+            for (auto index = 0; index < Rank; index++) {
+                auto padded_dimension = padded_shape.value()[index];
+                this->dimensions_[index] = padded_dimension;
+                this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+            }
+        } else {
+            for (auto index = 0; index < Rank; index++) {
+                this->dimensions_[index] = shape[index];
+            }
+        }
+    }
+
+    // Add an implicit constructor from 4D array due to legacy code
+    Shape(const std::array<uint32_t, 4>& shape) : Shape(shape, std::optional<std::array<uint32_t, 4>>{std::nullopt}) {}
 
     std::size_t rank() const;
 

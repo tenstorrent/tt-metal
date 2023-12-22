@@ -91,7 +91,7 @@ def _reshape_to_4D(tensor):
     full_shape = tuple(tensor.shape.padded())
     shape = (1,) * num_missing_dims + shape
     full_shape = (1,) * num_missing_dims + full_shape
-    return reshape(tensor, shape=Shape.from_tuple(shape, full_shape))
+    return reshape(tensor, shape=Shape(shape, full_shape))
 
 
 # Math Operations
@@ -202,7 +202,7 @@ def matmul(
         padded_output_shape_list.append(input_shape_a.padded()[index])
     output_shape_list.append(input_shape_b[-1])
     padded_output_shape_list.append(input_shape_b.padded()[-1])
-    output_shape = Shape.from_tuple(output_shape_list, padded_output_shape_list)
+    output_shape = Shape(output_shape_list, padded_output_shape_list)
 
     if not isinstance(input_tensor_a, Tensor):
         raise RuntimeError("Expected first argument to be a ttnn.Tensor")
@@ -244,15 +244,11 @@ def matmul(
 
     input_tensor_a = reshape(
         input_tensor_a,
-        Shape.from_tuple(
-            tuple(batch_shape_a + [height_a, width_a]), tuple(batch_shape_a + [padded_height_a, padded_width_a])
-        ),
+        Shape(tuple(batch_shape_a + [height_a, width_a]), tuple(batch_shape_a + [padded_height_a, padded_width_a])),
     )
     input_tensor_b = reshape(
         input_tensor_b,
-        Shape.from_tuple(
-            tuple(batch_shape_b + [height_b, width_b]), tuple(batch_shape_b + [padded_height_b, padded_width_b])
-        ),
+        Shape(tuple(batch_shape_b + [height_b, width_b]), tuple(batch_shape_b + [padded_height_b, padded_width_b])),
     )
 
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -475,7 +471,7 @@ def linear(
         padded_output_shape_list.append(input_shape_a.padded()[index])
     output_shape_list.append(input_shape_b[-1])
     padded_output_shape_list.append(input_shape_b.padded()[-1])
-    output_shape = Shape.from_tuple(output_shape_list, padded_output_shape_list)
+    output_shape = Shape(output_shape_list, padded_output_shape_list)
 
     if not isinstance(input_tensor_a, Tensor):
         raise RuntimeError("Expected first argument to be a ttnn.Tensor")
@@ -517,15 +513,11 @@ def linear(
 
     input_tensor_a = reshape(
         input_tensor_a,
-        Shape.from_tuple(
-            tuple(batch_shape_a + [height_a, width_a]), tuple(batch_shape_a + [padded_height_a, padded_width_a])
-        ),
+        Shape(tuple(batch_shape_a + [height_a, width_a]), tuple(batch_shape_a + [padded_height_a, padded_width_a])),
     )
     input_tensor_b = reshape(
         input_tensor_b,
-        Shape.from_tuple(
-            tuple(batch_shape_b + [height_b, width_b]), tuple(batch_shape_b + [padded_height_b, padded_width_b])
-        ),
+        Shape(tuple(batch_shape_b + [height_b, width_b]), tuple(batch_shape_b + [padded_height_b, padded_width_b])),
     )
 
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -1137,7 +1129,7 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
             shape = list(shape)
             shape[index_of_negative_1] = volume // (-new_volume)
             shape = tuple(shape)
-        shape = Shape.from_tuple(shape)
+        shape = Shape(shape)
 
     if not isinstance(shape, Shape):
         raise RuntimeError("Shape must be of type Shape")
@@ -1147,7 +1139,7 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
 
     def ttnn_reshape(tensor, shape):
         ttl_input_tensor = tensor._tensor
-        return Tensor(ttl_input_tensor.reshape(shape._value))
+        return Tensor(ttl_input_tensor.reshape(shape.value))
 
     ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
 
@@ -1517,7 +1509,7 @@ def mean(input_tensor: Tensor, dim: Union[int, Tuple[int]], keepdim: bool = Fals
     )
 
     output_tensor = Tensor(ttl_output_tensor)
-    output_tensor = reshape(output_tensor, Shape.from_tuple(output_shape, padded_output_shape))
+    output_tensor = reshape(output_tensor, Shape(output_shape, padded_output_shape))
 
     return output_tensor
 

@@ -87,7 +87,7 @@ def custom_preprocessor(torch_model, name):
 def get_expected_times(use_optimized_version):
     if use_optimized_version:
         expected_compile_time = 12
-        expected_inference_time = 0.12
+        expected_inference_time = 0.07
     else:
         expected_compile_time = 10
         expected_inference_time = 17

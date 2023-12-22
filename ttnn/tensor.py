@@ -4,7 +4,7 @@
 
 import io
 import pathlib
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, List
 
 import tt_lib as ttl
 
@@ -35,67 +35,10 @@ TILE_LAYOUT = Layout.TILE
 StorageType = ttl.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
-StorageType = ttl.tensor.StorageType
-DEVICE_STORAGE_TYPE = StorageType.DEVICE
-
 
 TILE_SIZE = 32
 
-
-class Shape:
-    __slots__ = ["_value"]
-
-    def __init__(self: "Shape", value: ttl.tensor.Shape):
-        if not isinstance(value, ttl.tensor.Shape):
-            raise TypeError(f"Expected ttl.tensor.Shape, got {type(value)}")
-        self._value = value
-
-    @classmethod
-    def from_tuple(self: "Shape", shape: Tuple[int], full_shape: Optional[Tuple[int]] = None):
-        value = ttl.tensor.Shape(shape, full_shape)
-        return Shape(value)
-
-    @property
-    def rank(self: "Shape") -> int:
-        return len(self._value)
-
-    def __iter__(self: "Shape"):
-        return iter(self._value.without_padding())
-
-    def __getitem__(self: "Shape", index):
-        shape = self._value.without_padding()
-        return shape[index]
-
-    def padded(self: "Shape") -> "Shape":
-        return Shape.from_tuple(tuple(self._value))
-
-    def __len__(self: "Shape") -> int:
-        return self.rank
-
-    def __repr__(self: "Shape") -> str:
-        file = io.StringIO()
-        file.write("ttnn.Shape([")
-        for dim in range(self.rank - 1):
-            padding = self.padded()[dim] - self[dim]
-            if padding == 0:
-                file.write(f"{self[dim]}, ")
-            else:
-                file.write(f"{self[dim]} + {padding}, ")
-
-        padding = self.padded()[self.rank - 1] - self[self.rank - 1]
-        if padding == 0:
-            file.write(f"{self[self.rank - 1]}")
-        else:
-            file.write(f"{self[self.rank - 1]} + {padding}")
-        file.write("])")
-        return file.getvalue()
-
-    def __eq__(self: "Shape", other: "Shape") -> bool:
-        if isinstance(other, Shape):
-            return self._value == other._value
-        elif isinstance(other, (tuple, list)):
-            return tuple(self) == tuple(other)
-        raise RuntimeError(f"Cannot compare Shape with {type(other)}")
+Shape = ttl.ttnn.tensor.Shape
 
 
 class Tensor:
@@ -103,7 +46,7 @@ class Tensor:
         self._tensor: ttl.tensor.Tensor = ttl_tensor
 
     @property
-    def shape(self: "Tensor") -> tuple:
+    def shape(self: "Tensor") -> Shape:
         return Shape(self._tensor.shape())
 
     @property
@@ -192,17 +135,15 @@ def from_torch(
 
 @decorate_operation()
 def to_torch(tensor: Tensor) -> "torch.Tensor":
-    def impl(tensor):
-        ttl_tensor = tensor._tensor
-
+    def impl(ttl_tensor):
         if ttl_tensor.storage_type() == DEVICE_STORAGE_TYPE:
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
+        return ttl_tensor.to_torch()
 
-        return ttl_tensor.to_torch().clone()  # TODO(arakhmati): remove clone
+    ttl_tensor = tensor._tensor
+    tensor = Tensor(ttl_tensor.reshape(tensor.shape.padded().value))
 
-    tensor._tensor = tensor._tensor.reshape(tensor.shape.padded()._value)
-
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
+    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(ttl_tensor)
 
 
 @decorate_operation()
