@@ -49,6 +49,3 @@ def update_process_id():
 
     with open(launch_json_path, "w") as f:
         json.dump(launch_data, f, indent=4)
-
-
-#    input("Press Enter to continue once the debugger is attached...")

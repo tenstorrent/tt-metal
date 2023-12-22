@@ -44,3 +44,35 @@ def test_to_and_from_device(device, torch_dtype, ttnn_dtype):
     tensor = ttnn.from_device(tensor)
     torch_output_tensor = ttnn.to_torch(tensor).to(torch_dtype)
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.skip(reason="4359: from_device is hanging")
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("c", [8])
+@pytest.mark.parametrize("h", [1500])
+@pytest.mark.parametrize("w", [64])
+def test_from_device_hang(device, b, c, h, w):
+    torch_input_tensor = torch.rand((b, c, h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+    output_tensor = ttnn.from_device(output_tensor)
+
+
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("c", [8])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+def test_to_and_from_multiple_times(device, b, c, h, w):
+    tensor = torch.rand((b, c, h, w), dtype=torch.bfloat16)
+    original_tensor = tensor
+    for i in range(0, 50):
+        tensor = ttnn.from_torch(tensor)
+        tensor = ttnn.to_device(tensor, device)
+        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+        tensor = ttnn.from_device(tensor)
+        tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        tensor = ttnn.to_torch(tensor)
+
+    assert torch.allclose(original_tensor, tensor)

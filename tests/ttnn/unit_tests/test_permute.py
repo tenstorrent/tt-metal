@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.model_preprocessing import pad_tensor
 
 
 @pytest.mark.parametrize("h", [32])
@@ -40,4 +41,54 @@ def test_transpose(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [2 * 32])
+def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w):
+    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    with pytest.raises(RuntimeError) as exception:
+        ttnn.permute(input_tensor, (0, 1, 2))
+    assert "The number of dimensions in the tensor input does not match the length of the desired ordering" in str(
+        exception.value
+    )
+
+
+@pytest.mark.parametrize(
+    "perm", [(0,), (0, 1), (1, 0), (0, 1, 2), (0, 2, 1), (1, 2, 0), (1, 0, 2), (2, 0, 1), (2, 1, 0)]
+)
+def test_permute_on_less_than_4D(device, perm):
+    tuple_shape = tuple([32 * (value + 1) for value in perm])
+    torch_input_tensor = torch.rand(tuple_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.permute(torch_input_tensor, perm)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+@pytest.mark.skip(reason="4360: permute is incorrect")
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("s", [8])
+@pytest.mark.parametrize("h", [1500])
+@pytest.mark.parametrize("w", [64])
+def test_permute_for_specific_case(device, b, s, h, w):
+    torch_input_tensor = torch.rand((b, s, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = pad_tensor(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)

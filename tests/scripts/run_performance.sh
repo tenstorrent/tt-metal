@@ -40,6 +40,8 @@ run_perf_models() {
 
     env pytest models/experimental/bloom/tests -m $pipeline_type
 
+    env pytest "tests/ttnn/integration_tests/whisper/test_performance.py::test_performance" -m $pipeline_type
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
