@@ -8,6 +8,7 @@ import pytest
 
 from loguru import logger
 import torch
+import torch.nn.functional as F
 import transformers
 
 
@@ -16,7 +17,11 @@ import ttnn
 from models.experimental.functional_bert.tt import ttnn_functional_bert
 from models.experimental.functional_bert.tt import ttnn_optimized_functional_bert
 
-from ttnn.model_preprocessing import preprocess_model_parameters
+from ttnn.model_preprocessing import (
+    preprocess_model_parameters,
+    preprocess_linear_bias,
+    preprocess_linear_weight,
+)
 
 from models.utility_functions import (
     skip_for_wormhole_b0,
@@ -26,24 +31,75 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 
 
-def get_expected_times(functional_bert):
-    return {
-        ttnn_functional_bert: (10, 17),
-        ttnn_optimized_functional_bert: (12, 0.07),
-    }[functional_bert]
+def ttnn_bert_preprocess_inputs(
+    input_ids,
+    token_type_ids,
+    attention_mask,
+    **kwargs,
+):
+    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32)
+    input_ids = ttnn.to_device(input_ids, kwargs["device"], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    token_type_ids = ttnn.from_torch(token_type_ids, dtype=ttnn.uint32)
+    token_type_ids = ttnn.to_device(token_type_ids, kwargs["device"], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    if attention_mask is not None:
+        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+        attention_mask = F.pad(attention_mask, (0, 0, 0, 31, 0, 0, 0, kwargs["batch_size"] - 1))
+        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
+        attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
+        attention_mask = ttnn.to_device(attention_mask, kwargs["device"], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    return input_ids, token_type_ids, attention_mask
+
+
+def convert_to_ttnn(torch_model, full_name):
+    return True
+
+
+def custom_preprocessor(torch_model, name):
+    parameters = {}
+    if isinstance(torch_model, transformers.models.roberta.modeling_roberta.RobertaSelfAttention):
+        qkv_weight = torch.cat(
+            [
+                torch_model.query.weight,
+                torch_model.key.weight,
+                torch_model.value.weight,
+            ],
+            dim=0,
+        )
+        qkv_bias = torch.cat(
+            [torch_model.query.bias, torch_model.key.bias, torch_model.value.bias],
+            dim=0,
+        )
+
+        parameters = {"query_key_value": {}}
+        parameters["query_key_value"]["weight"] = preprocess_linear_weight(qkv_weight, dtype=ttnn.bfloat16)
+        parameters["query_key_value"]["bias"] = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat16)
+    return parameters
+
+
+def get_expected_times(use_optimized_version):
+    if use_optimized_version:
+        expected_compile_time = 12
+        expected_inference_time = 0.07
+    else:
+        expected_compile_time = 10
+        expected_inference_time = 17
+    return expected_compile_time, expected_inference_time
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
+@pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("functional_bert", [ttnn_functional_bert, ttnn_optimized_functional_bert])
 def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, functional_bert):
     disable_persistent_kernel_cache()
 
-    config = transformers.BertConfig.from_pretrained(model_name)
+    config = transformers.RobertaConfig.from_pretrained(model_name)
 
     input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
@@ -54,11 +110,11 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
     elif functional_bert == ttnn_optimized_functional_bert:
         tt_model_name = f"ttnn_optimized_{model_name}"
     else:
-        raise ValueError(f"Unknown functional_bert: {functional_bert}")
+        raise ValueError(f"Unknown functional_roberta: {functional_bert}")
 
     parameters = preprocess_model_parameters(
         tt_model_name,
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
+        initialize_model=lambda: transformers.RobertaForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
         custom_preprocessor=functional_bert.custom_preprocessor,
@@ -79,6 +135,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
             config,
             *ttnn_bert_inputs,
             parameters=parameters,
+            name="roberta",
         )
         tt_output = ttnn.from_device(tt_output)
         end = time.time()

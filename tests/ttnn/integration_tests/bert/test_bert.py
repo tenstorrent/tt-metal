@@ -55,7 +55,7 @@ def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, 
     elif functional_bert == ttnn_optimized_functional_bert:
         tt_model_name = f"ttnn_optimized_{model_name}"
     else:
-        raise ValueError(f"Unknown functional_t5: {functional_bert}")
+        raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
     parameters = preprocess_model_parameters(
         tt_model_name,
