@@ -207,14 +207,16 @@ def bert_for_question_answering(
     input_ids,
     token_type_ids,
     attention_mask,
+    *,
     parameters,
+    name="bert",
 ):
     bert_output = bert(
         config,
         input_ids,
         token_type_ids,
         attention_mask,
-        parameters.bert,
+        parameters[name],
     )
 
     qa_outputs = ttnn.linear(
@@ -262,7 +264,7 @@ def custom_preprocessor(torch_model, name):
     )
 
     parameters = {}
-    if isinstance(torch_model, transformers.models.bert.modeling_bert.BertSelfAttention):
+    if hasattr(torch_model, "query") and hasattr(torch_model, "key") and hasattr(torch_model, "value"):
         qkv_weight = torch.cat(
             [
                 torch_model.query.weight,

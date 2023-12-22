@@ -48,7 +48,13 @@ def test_performance_of_bloom_for_question_answering(
     context = "My name is John."
     inputs = tokenizer.encode_plus(question, context, return_tensors="pt")
 
-    tt_model_name = "ttnn_functional_bloom_for_question_answering_performance"
+    if functional_bloom == ttnn_functional_bloom:
+        tt_model_name = "ttnn_functional_bloom_for_question_answering"
+    elif functional_bloom == ttnn_optimized_functional_bloom:
+        tt_model_name = "ttnn_optimized_functional_bloom_for_question_answering"
+    else:
+        raise ValueError(f"Unknown functional_bloom: {functional_bloom}")
+
     parameters = preprocess_model_parameters(
         tt_model_name,
         initialize_model=lambda: BloomForQuestionAnswering.from_pretrained(model_name).eval(),

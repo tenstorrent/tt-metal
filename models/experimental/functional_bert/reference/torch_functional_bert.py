@@ -180,13 +180,14 @@ def bert_for_question_answering(
     attention_mask,
     *,
     parameters,
+    name="bert",
 ):
     bert_output = bert(
         config,
         input_ids,
         token_type_ids,
         attention_mask,
-        parameters=parameters.bert,
+        parameters=parameters[name],
     )
 
     qa_outputs = bert_output
