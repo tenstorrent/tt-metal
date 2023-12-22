@@ -46,6 +46,11 @@ ALWI void tilize_init_short(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
+ALWI void tilize_init_unpack(uint32_t icb, uint32_t block)
+{
+    UNPACK(( llk_unpack_tilize_init(icb, block) ));
+}
+
 /**
  * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
  */
@@ -76,6 +81,11 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
         MATH(( llk_math_dest_section_done<SYNC>() ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
+}
+
+ALWI void unpack_tilize_block(uint32_t icb, uint32_t block)
+{
+    UNPACK(( llk_unpack_tilize_block(icb, block) ));
 }
 
 /**

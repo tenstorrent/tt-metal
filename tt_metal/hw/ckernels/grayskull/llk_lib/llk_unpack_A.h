@@ -9,6 +9,8 @@
 #include "cunpack_common.h"
 #include "ckernel_globals.h"
 
+#include "debug/dprint.h"
+
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
@@ -234,4 +236,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const int transpose_of_f
     #ifdef PERF_DUMP
         first_unpack_recorded = true;
     #endif
+
+    DPRINT << "UNPA" << ENDL();
 }

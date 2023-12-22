@@ -65,9 +65,22 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
 /**
  * Uninitialize untilize operation, to allow initializing another operation.
  */
-ALWI void pack_untilize_uninit(uint32_t icb) {
+ALWI void pack_untilize_uninit() {
     PACK(( llk_pack_init() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
+}
+
+template <uint32_t block_ct_dim = 8>
+ALWI void pack_untilize_dst_init_short()
+{
+    PACK(( llk_pack_untilize_init<block_ct_dim>() ));
+    // PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, true>() ));
+    PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, true>() ));
+}
+
+template <uint32_t block_ct_dim = 8>
+ALWI void pack_untilize_dst(uint32_t ocb) {
+    PACK(( llk_pack_untilize<block_ct_dim>(1, ocb) ));
 }
 
 }
