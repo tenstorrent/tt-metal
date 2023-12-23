@@ -967,6 +967,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
     uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
 
+    TT_ASSERT(in_ntiles_hw == 1, "In the compute kernel, it is assumed that in_ntiles_hw == 1.");
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
     uint32_t out_nelems = nblocks;  // TODO [AS]: Remove hard coding after identifying optimal param val
@@ -1052,36 +1053,40 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
-    uint32_t out_cb_pagesize = tile_size(out_df);
-    uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
+    uint32_t out_cb_pagesize = out_nelems * in_ntiles_c * tile_size(out_df);
+    uint32_t out_cb_npages = multi_buffering_factor;    // there is just one row of channels after reduction
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
 		.set_page_size(out_cb_id, out_cb_pagesize);
-    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    // uint32_t out_cb_id = CB::c_out0;            // output rows in RM
+    // uint32_t out_cb_pagesize = tile_size(out_df);
+    // uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
+    // CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
+	// 	.set_page_size(out_cb_id, out_cb_pagesize);
+    // auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-    CBHandle cb_sharded_out = 0;
     TT_FATAL(output.memory_config().is_sharded());
 
-    uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
-
     auto shard_shape = output.shard_spec().value().shard_shape;
-    uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
 
-    uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
-    CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
-        .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
-    cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
+    uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
+    uint32_t sharded_out_cb_pagesize = shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
+    uint32_t sharded_out_cb_npages = shard_shape[0];
+    CircularBufferConfig sharded_out_cb_config = CircularBufferConfig(sharded_out_cb_npages * sharded_out_cb_pagesize, {{sharded_out_cb_id, out_df}})
+        .set_page_size(sharded_out_cb_id, sharded_out_cb_pagesize).set_globally_allocated_address(*output.buffer());
+    auto sharded_out_cb = tt_metal::CreateCircularBuffer(program, all_cores, sharded_out_cb_config);
 
-    // Construct const buffer with -INF
-    // uint32_t const_buffer_size = 32;
-    uint32_t const_buffer_size = input_shape[3];    // set it equal to 1 row
-    auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
-    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer},
-                                                 Shape({1, 1, 1, const_buffer_size}),
-                                                 DataType::BFLOAT16,
-                                                 Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
-                                                                     .buffer_type = BufferType::L1});
-    auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
+    // // Construct const buffer with -INF
+    // // uint32_t const_buffer_size = 32;
+    // uint32_t const_buffer_size = input_shape[3];    // set it equal to 1 row
+    // auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
+    // const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer},
+    //                                              Shape({1, 1, 1, const_buffer_size}),
+    //                                              DataType::BFLOAT16,
+    //                                              Layout::ROW_MAJOR)
+    //                                         .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
+    //                                                                  .buffer_type = BufferType::L1});
+    // auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 
     #if 0
     {   // debug
@@ -1232,7 +1237,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     }
 
     auto override_runtime_arguments_callback = [
-            reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, cb_sharded_out, ncores, ncores_w
+            reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, sharded_out_cb, ncores, ncores_w
         ]
     (
         const void* operation,
@@ -1260,7 +1265,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
             UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb, *reader_indices_buffer);
         }
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, sharded_out_cb, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

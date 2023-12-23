@@ -49,7 +49,8 @@ void kernel_main() {
     for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
         // DPRINT << "W ait: " << stick << ENDL();
 
-        cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
+        // cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
+        cb_wait_front(out_cb_id, 1);
         uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
 
         // print_pages(out_l1_read_addr, 32, 2);
@@ -93,7 +94,8 @@ void kernel_main() {
         noc_async_write_barrier();
 
         // kernel_profiler::mark_time(14);
-        cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
+        // cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
+        cb_pop_front(out_cb_id, 1);
 
         // DPRINT << "W ritten: " << stick << ENDL();
     }

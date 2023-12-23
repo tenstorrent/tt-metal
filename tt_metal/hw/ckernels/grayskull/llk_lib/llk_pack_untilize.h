@@ -93,10 +93,8 @@ inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
 
     const std::uint32_t output_id = get_output_id(output);
 
-    // std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
-    std::uint32_t pack_tile_addr = get_output_tile_address<block_ct_dim>(output_id);
-
-    // std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
+    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
+    // std::uint32_t pack_tile_addr = get_output_tile_address<block_ct_dim>(output_id);
 
     for (std::uint32_t block=0; block<num_blocks; block++) {
 

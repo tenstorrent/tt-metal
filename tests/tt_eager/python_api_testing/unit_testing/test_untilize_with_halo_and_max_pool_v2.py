@@ -116,8 +116,8 @@ def test_run_max_pool(
     ## construct the tensor in NCHW shape
     # act = torch.randn(act_shape, dtype=torch.bfloat16)
     act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    act = torch.ones(act_shape, dtype=torch.bfloat16)
-    act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
+    # act = torch.ones(act_shape, dtype=torch.bfloat16)
+    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
     for n in range(act_shape[0]):
         for c in range(act_shape[1]):
             for h in range(act_shape[2]):
@@ -253,7 +253,12 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
+    print(f"{out_pytorch[0][0]}")
+    print(f"{out_pytorch[0][1]}")
+    print(f"{out_pytorch[0][2]}")
+    print(f"{out_pytorch[0][3]}")
     print(f"{out_pytorch[0][32]}")
+    print(f"{golden_pytorch[0][0]}")
     print(f"{golden_pytorch[0][32]}")
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")

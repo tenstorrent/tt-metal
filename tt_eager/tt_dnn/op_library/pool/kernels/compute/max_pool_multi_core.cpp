@@ -63,9 +63,10 @@ inline void tilize(uint32_t out_nelems,
         cb_wait_front(in_cb_id, 1);
         cb_reserve_back(out_cb_id, in_ntiles_hwc);
         tilize_block(in_cb_id, in_ntiles_hwc, out_cb_id);  // TODO: need to ensure the ordering for reduction when in_ntiles_hw > 1
-        // print_full_tile(in_cb_id, 0, false);
-        // PDPRINT("OUT TILE :: " << TileSlice(out_cb_id, 0, srr, true, true));
-        // print_cb_details(in_cb_id);
+        UNPACK(( DPRINT << "IN 0" << ENDL() ));
+        print_tile_rows(out_cb_id, 10, 0, true);
+        UNPACK(( DPRINT << "IN 1" << ENDL() ));
+        print_tile_rows(out_cb_id, 10, 1, true);
         cb_push_back(out_cb_id, in_ntiles_hwc);
         cb_pop_front(in_cb_id, 1);
     }
@@ -81,8 +82,10 @@ inline void reduce_h_orig(uint32_t out_nelems,
                      uint32_t out_ntiles_c,
                      uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
-    UNPACK(( DPRINT << "IN:" << ENDL() ));
-    print_tile_rows(in_cb_id, 10, 0, true);
+    // UNPACK(( DPRINT << "IN 0" << ENDL() ));
+    // print_tile_rows(in_cb_id, 10, 0, true);
+    // UNPACK(( DPRINT << "IN 1" << ENDL() ));
+    // print_tile_rows(in_cb_id, 10, 1, true);
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
     reduce_init_delta<false>(PoolType::MAX, ReduceDim::REDUCE_COL, out_cb_id);
     uint32_t base_tile_id = 0;
@@ -105,43 +108,36 @@ inline void reduce_h_orig(uint32_t out_nelems,
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
-template<uint32_t in_ntiles_hw>
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c>
 inline void reduce_h(uint32_t out_nelems,
                      uint32_t in_cb_id,
                      uint32_t in_scalar_cb_id,
-                    //  constexpr uint32_t in_ntiles_hw,
-                     uint32_t in_ntiles_c,
                      uint32_t in_ntiles_hwc,
                      uint32_t out_ntiles_c,
                      uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
-    // UNPACK(( DPRINT << "IN:" << ENDL() ));
+    // UNPACK(( DPRINT << "IN 0" << ENDL() ));
     // print_tile_rows(in_cb_id, 10, 0, true);
-    cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
-    uint32_t base_tile_id = 0;
+    // UNPACK(( DPRINT << "IN 1" << ENDL() ));
+    // print_tile_rows(in_cb_id, 10, 1, true);
     reduce_init_delta_no_pack<false>(PoolType::MAX, ReduceDim::REDUCE_COL);
-    // reduce_init_delta<false>(PoolType::MAX, ReduceDim::REDUCE_COL, out_cb_id);
-    pack_untilize_dst_init_short<in_ntiles_hw>();
+    pack_untilize_dst_init_short<in_ntiles_c>();
+    cb_reserve_back(out_cb_id, 1);
+    tile_regs_acquire();
     for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
         // add to accumulator all the in_ntiles_hw in a column of tiles
-        tile_regs_acquire();
-        uint32_t dst_i = 0;
-        for (uint32_t hw_i = 0; hw_i < in_ntiles_hw; ++hw_i) {
-            uint32_t tile_i = base_tile_id + hw_i;
-            reduce_tile(PoolType::MAX, ReduceDim::REDUCE_COL, in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i + hw_i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_untilize_dst<in_ntiles_hw>(out_cb_id);
-        UNPACK(( DPRINT << "OUT" << c_i << ENDL() ));
-        print_tile_rows(out_cb_id, 32, 0, false);
-        tile_regs_release();
-        base_tile_id += in_ntiles_hw;
+        reduce_tile(PoolType::MAX, ReduceDim::REDUCE_COL, in_cb_id, in_scalar_cb_id, c_i, 0, c_i);
     }
+    tile_regs_wait();
+    tile_regs_commit();
+    pack_untilize_dst<in_ntiles_c>(out_cb_id);
+    tile_regs_release();
     pack_untilize_uninit();
-    // UNPACK(( DPRINT << "OUT:" << ENDL() ));
-    // print_tile_rows(out_cb_id, 10, 0, false);
-    cb_push_back(out_cb_id, out_ntiles_c * out_nelems);
+    UNPACK(( DPRINT << "OUT 0" << ENDL() ));
+    print_tile_rows(out_cb_id, 32, 0, false);
+    // UNPACK(( DPRINT << "OUT 1" << ENDL() ));
+    // print_tile_rows(out_cb_id, 32, 1, false);
+    cb_push_back(out_cb_id, 1);
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
@@ -154,7 +150,8 @@ void MAIN {
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
 
     constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
-    const uint32_t in_ntiles_c = get_compile_time_arg_val(1);
+    // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet.
+    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
     const uint32_t in_ntiles_hwc = get_compile_time_arg_val(2);
     const uint32_t window_hw_padded = get_compile_time_arg_val(3);
     const uint32_t out_h = get_compile_time_arg_val(4);
@@ -185,7 +182,7 @@ void MAIN {
         tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
         // Reduce H
         // reduce_h_orig(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
-        reduce_h<in_ntiles_hw>(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+        reduce_h<in_ntiles_hw, in_ntiles_c>(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
         // kernel_profiler::mark_time(12);
     }
     cb_pop_front(in_scalar_cb_id, 1);

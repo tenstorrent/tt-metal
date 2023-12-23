@@ -71,8 +71,8 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
  */
 ALWI void pack_untilize_uninit() {
     PACK(( llk_pack_init() ));
-    // PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
-    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
+    PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
+    // PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 }
 
 template <uint32_t block_ct_dim = 8>
