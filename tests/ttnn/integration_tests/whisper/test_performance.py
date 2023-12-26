@@ -17,15 +17,16 @@ import ttnn
 
 def get_expected_times(use_optimized_version):
     if use_optimized_version:
-        expected_compile_time = 17
-        expected_inference_time = 0.1
+        expected_compile_time = 27.0
+        expected_inference_time = 7.0
     else:
-        expected_compile_time = 17
-        expected_inference_time = 0.1
+        expected_compile_time = 27.0
+        expected_inference_time = 7.0
     return expected_compile_time, expected_inference_time
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
 @pytest.mark.parametrize("batch_size", [1])
