@@ -24,7 +24,6 @@ from ttnn.tensor import (
     to_torch,
     to_device,
     from_device,
-    to_layout,
     deallocate,
     reallocate,
     load_tensor,
@@ -51,6 +50,9 @@ from ttnn.core import (
     reshape,
     permute,
     embedding,
+    pad_to_tile,
+    unpad_from_tile,
+    to_layout,
     # fused operations
     softmax,
     layer_norm,

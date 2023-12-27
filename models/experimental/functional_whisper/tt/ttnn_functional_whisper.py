@@ -37,7 +37,9 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
-def split_fused_qkv_and_split_heads(config, fused_qkv: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+def split_query_key_value_and_split_heads(
+    config, fused_qkv: ttnn.Tensor
+) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     head_size = config.d_model // config.encoder_attention_heads
     batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
     hidden_size = three_times_hidden_size // 3
@@ -60,7 +62,7 @@ def split_fused_qkv_and_split_heads(config, fused_qkv: ttnn.Tensor) -> Tuple[ttn
 
 def calculate_query_key_values(config, hidden_states, *, parameters):
     fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
-    return split_fused_qkv_and_split_heads(config, fused_qkv)
+    return split_query_key_value_and_split_heads(config, fused_qkv)
 
 
 def whisper_attention(config, hidden_states, attention_mask, key_value_states=None, *, parameters):
@@ -78,7 +80,7 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
         query_states, key_states, value_states = calculate_query_key_values(
             config, hidden_states, parameters=parameters
         )
-        query_states *= scaling
+    query_states *= scaling
 
     proj_shape = (bsz * config.encoder_attention_heads, -1, head_size)
     query_states = ttnn.reshape(query_states, shape=proj_shape)
@@ -138,8 +140,7 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, inputs_embeds, *, parameters):
-    hidden_states = inputs_embeds + parameters.embed_positions.weight
+def encoder(config, hidden_states, *, parameters):
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
@@ -269,7 +270,13 @@ def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states
 
 
 def convert_to_ttnn(model, name):
-    return name not in ["encoder.conv1", "encoder.conv2", "decoder.embed_tokens", "decoder.embed_positions"]
+    return name not in [
+        "encoder.conv1",
+        "encoder.conv2",
+        "decoder.embed_tokens",
+        "encoder.embed_positions",
+        "decoder.embed_positions",
+    ]
 
 
 def preprocess_encoder_inputs(input_features, *, parameters, device):
@@ -294,10 +301,11 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
         )
     )
     input_embeds = input_embeds.permute(0, 2, 1)
-    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16)
-    input_embeds = ttnn.to_device(input_embeds, device)
+    hidden_states = input_embeds + parameters.embed_positions.weight
+    hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16)
+    hidden_states = ttnn.to_device(hidden_states, device)
 
-    return input_embeds
+    return hidden_states
 
 
 def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, device):
@@ -328,15 +336,15 @@ def preprocess_inputs(
     parameters,
     device,
 ):
-    input_embeds = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
+    encoder_hidden_states = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
         config, input_ids, attention_mask, parameters=parameters.decoder, device=device
     )
-    return input_embeds, decoder_hidden_states, attention_mask
+    return encoder_hidden_states, decoder_hidden_states, attention_mask
 
 
-def whisper(config, inputs_embeds, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, inputs_embeds, parameters=parameters.encoder)
+def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
+    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
     return decoder(
         config,
         decoder_hidden_states,

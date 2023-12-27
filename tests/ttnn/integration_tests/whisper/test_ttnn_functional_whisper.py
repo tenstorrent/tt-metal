@@ -4,7 +4,7 @@
 
 import pytest
 from models.experimental.functional_whisper.reference import torch_functional_whisper
-from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
+from models.experimental.functional_whisper.tt import ttnn_functional_whisper
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
@@ -14,12 +14,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.utility_functions import skip_for_wormhole_b0
+from loguru import logger
 
-MODEL_NAME = "openai/whisper-base"
+# MODEL_NAME = "openai/whisper-base"
+MODEL_NAME = "openai/whisper-tiny.en"
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
@@ -94,7 +96,7 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
@@ -134,7 +136,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("feature_size", [80])
@@ -188,7 +190,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
@@ -205,7 +207,7 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     torch_encoder_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.bfloat16)
 
     attention_mask = torch_random((batch_size, 1, 2, 2), -0.1, 0.1, dtype=torch.bfloat16)
-    # Putting num_heads in the channel because the add does not support broadcasting outside of the h and w dimensions.
+    # Putting 8 in the channel because the add does not support broadcasting outside of the h and w dimensions.
     attention_mask = attention_mask.expand(-1, num_heads, -1, -1)
 
     parameters = preprocess_model_parameters(
@@ -248,7 +250,7 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
@@ -323,7 +325,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 def test_ttnn_whisper(device, ttnn_model):
     torch.manual_seed(0)
     model_name = "openai/whisper-base"
@@ -346,7 +348,7 @@ def test_ttnn_whisper(device, ttnn_model):
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
+    (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
         input_features=input_features,
         input_ids=decoder_input_ids,
         attention_mask=attention_mask,
@@ -355,7 +357,7 @@ def test_ttnn_whisper(device, ttnn_model):
 
     expected_last_hidden_state = torch_functional_whisper.whisper(
         config,
-        input_embeds,
+        encoder_hidden_states,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         parameters=parameters,

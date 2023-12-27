@@ -90,3 +90,44 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("h", [2])
+@pytest.mark.parametrize("w", [512])
+def test_layer_norm_with_tile_layout(device, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((1, h, w), dtype=torch.bfloat16)
+    torch_weights = torch.ones(w, dtype=torch.bfloat16)
+    torch_bias = torch.zeros(w, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor,
+        (w,),
+        torch_weights,
+        torch_bias,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+
+    weights = ttnn.from_torch(torch_weights)
+    weights = ttnn.to_layout(weights, ttnn.TILE_LAYOUT)
+    weights = ttnn.to_device(weights, device)
+
+    bias = ttnn.from_torch(torch_bias)
+    bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
+    bias = ttnn.to_device(bias, device)
+
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        weight=weights,
+        bias=bias,
+    )
+
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
