@@ -89,7 +89,7 @@ def test_permute_reshape(device):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 def test_reshape_with_negative_dim(device):
