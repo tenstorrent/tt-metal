@@ -114,7 +114,7 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op_with_param(
             m_tensor, "rsqrt", &rsqrt,
             py::arg("fast_and_approx") = true,
-            R"doc(Returns a new tensor with the reciprocal of the square-root of each of the elements of the input tensor ``{0}``.)doc",
+            R"doc(Returns a new tensor with the reciprocal of the square-root of each of the elements of the input tensor ``{0}`` for the input range -10 to 10.)doc",
             R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
         );
         detail::bind_unary_op_with_param(

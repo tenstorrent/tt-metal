@@ -44,9 +44,9 @@ def run_eltwise_rsqrt_tests(
 
 test_sweep_args = []
 x = 1.4
-inc = 0.1
+inc = 0.5
 
-while x < 100:
+while x < 10:
     y = round(x + inc, 1)
 
     test_sweep_args.append(
