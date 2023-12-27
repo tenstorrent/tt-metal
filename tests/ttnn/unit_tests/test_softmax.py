@@ -53,3 +53,19 @@ def test_softmax_with_3D(device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@skip_for_wormhole_b0()
+def test_softmax_with_padded_tile_layout(device):
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random((8, 2, 2), -10, 10, dtype=torch.bfloat16)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.softmax(input_tensor, dim=-1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)

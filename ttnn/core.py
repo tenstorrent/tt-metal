@@ -12,11 +12,11 @@ import tt_lib as ttl
 from ttnn.tensor import (
     Shape,
     Tensor,
+    to_layout,
     from_torch,
     to_torch,
     to_device,
     from_device,
-    to_layout,
     DataType,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
@@ -25,6 +25,8 @@ from ttnn.tensor import (
     TILE_LAYOUT,
     TILE_SIZE,
     has_storage_type_of,
+    _reshape_to_4D,
+    _reshape,
 )
 from ttnn.decorators import decorate_operation
 
@@ -78,20 +80,6 @@ def _shape_is_broadcastable(input_shape_a, input_shape_b):
         batch_shape_a = [1] * -len_diff + batch_shape_a
 
     return all(x == y or (x == 1 and y != 1) or (x != 1 and y == 1) for x, y in zip(batch_shape_a, batch_shape_b))
-
-
-# TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-def _reshape_to_4D(tensor):
-    if len(tensor.shape) == 4:
-        return tensor
-    if len(tensor.shape) > 4:
-        raise RuntimeError("Tensor cannot have more than 4 dimensions!")
-    num_missing_dims = 4 - len(tensor.shape)
-    shape = tuple(tensor.shape)
-    full_shape = tuple(tensor.shape.padded())
-    shape = (1,) * num_missing_dims + shape
-    full_shape = (1,) * num_missing_dims + full_shape
-    return reshape(tensor, shape=Shape(shape, full_shape))
 
 
 # Math Operations
@@ -436,7 +424,7 @@ def linear(
         >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
         >>> weight = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
         >>> bias = ttnn.to_device(ttnn.from_torch(torch.randn((128,), dtype=torch.bfloat16)), device)
-        >>> output = torch.linear(activations, weight, bias=bias)
+        >>> output = ttnn.linear(activations, weight, bias=bias)
         >>> print(output.shape)
         [10, 64, 128]
     """
@@ -1084,79 +1072,147 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
         ttnn.Shape([32, 64])
 
     """
+    return _reshape(input_tensor, shape)
 
-    if isinstance(shape, tuple):
-        if not (0 <= shape.count(-1) <= 1):
-            raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
 
-        volume = math.prod(input_tensor.shape)
-        new_volume = math.prod(shape)
-        if new_volume < 0:
-            index_of_negative_1 = shape.index(-1)
-            shape = list(shape)
-            shape[index_of_negative_1] = volume // (-new_volume)
-            shape = tuple(shape)
-        shape = Shape(shape)
+def _torch_pad_to_tile(padded_tensor: Tensor):
+    import torch
 
-    if not isinstance(shape, Shape):
-        raise RuntimeError("Shape must be of type Shape")
+    padded_tensor = from_device(padded_tensor)
+    padded_tensor = to_layout(padded_tensor, ROW_MAJOR_LAYOUT)
+    shape = padded_tensor.shape
+    padded_tensor = to_torch(padded_tensor)
+    output_tensor = torch.narrow(padded_tensor, shape)
+    return output_tensor
 
-    if input_tensor.shape == shape:
-        return input_tensor
 
-    def ttnn_reshape(tensor, shape):
-        ttl_input_tensor = tensor.value
-        return Tensor(ttl_input_tensor.reshape(shape.value))
+@decorate_operation(torch_function=_torch_pad_to_tile)
+def pad_to_tile(input_tensor: Tensor) -> Tensor:
+    r"""
+    pad(input_tensor: Tensor) -> Tensor
 
-    ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
+    Pad :attr:`input_tensor` so that the last two dimensions are multiples of 32.
 
-    if input_tensor.is_contiguous():
-        if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            # Page size depends on the width, so only modify the shape if the width is the same
-            if input_tensor.shape[-1] == shape[-1]:
-                return ttnn_reshape(input_tensor, shape)
+    Args:
+        * :attr:`input_tensor`: the input tensor off of device
+
+    Example::
+
+        >>> tensor = ttnn.from_torch(torch.zeros((62, 30), dtype=torch.bfloat16))
+        >>> output = ttnn.pad_to_tile(tensor)
+        >>> print(tensor.shape)
+        >>> print(tensor.shape.padded())
+
+    """
+    height_multiple = 32
+    width_multiple = 32
+
+    # if len(input_tensor.shape) < 2:
+    #     input_tensor = _reshape_to_2D(input_tensor)
+
+    # *_, height, width = input_tensor.shape
+
+    def ttnn_pad(tensor):
+        if len(tensor.shape) > 1:
+            *original_batch_sizes, height, width = tensor.shape
+            pad_h = (height_multiple - height % height_multiple) % height_multiple
+            pad_w = (width_multiple - width % width_multiple) % width_multiple
+
+            padded_height = height + pad_h
+            padded_width = width + pad_w
+            tensor = _reshape_to_4D(tensor)
+            *batch_sizes, _, _ = tensor.shape
+            ttl_input_tensor = tensor.value
+            if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+                tensor = Tensor(
+                    ttl.tensor.tilize_with_val_padding(
+                        ttl_input_tensor,
+                        batch_sizes + [padded_height, padded_width],
+                        [0, 0, 0, 0],
+                        0,
+                    )
+                )
+            else:
+                tensor = Tensor(ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0.0))
+                tensor = to_layout(tensor, TILE_LAYOUT)
+            tensor = reshape(
+                tensor,
+                Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
+            )
+            return tensor
         else:
-            return ttnn_reshape(input_tensor, shape)
+            (width,) = tensor.shape
+            if width % width_multiple == 0:
+                return tensor
 
-    if input_tensor.layout == TILE_LAYOUT:
-        *_, new_height, new_width = tuple(shape.padded())
-        if new_height % TILE_SIZE == 0 and new_width % TILE_SIZE == 0:
-            return ttnn_reshape(input_tensor, shape)
+            pad_w = (width_multiple - width % width_multiple) % width_multiple
+            padded_width = width + pad_w
+            tensor = _reshape_to_4D(tensor)
+            *batch_sizes, height, _ = tensor.shape
+            tensor = Tensor(tensor.value(batch_sizes + [height, padded_width], [0, 0, 0, 0], 0.0))
+            tensor = reshape(tensor, Shape([width], [padded_width]))
+            return tensor
 
-    if (
-        has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE)
-        and len(input_tensor.shape) == 4
-        and len(shape) == 4
-    ):
+    return ttl.tensor.decorate_external_operation(ttnn_pad, function_name="ttnn.pad_to_tile")(input_tensor)
+
+
+def _torch_unpad_from_tile(padded_tensor: Tensor):
+    import torch
+
+    padded_tensor = from_device(padded_tensor)
+    padded_tensor = to_layout(padded_tensor, ROW_MAJOR_LAYOUT)
+    shape = padded_tensor.shape
+    padded_tensor = to_torch(padded_tensor)
+    output_tensor = torch.narrow(padded_tensor, shape)
+    return output_tensor
+
+
+@decorate_operation(torch_function=_torch_unpad_from_tile)
+def unpad_from_tile(input_tensor: Tensor) -> Tensor:
+    r"""
+    unpad(input_tensor: Tensor) -> Tensor
+
+    Unpad :attr:`input_tensor`.
+
+    Args:
+        * :attr:`input_tensor`: the input tensor off of device
+
+    Example::
+
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((62, 30), dtype=torch.bfloat16)), device)
+        >>> tensor = ttnn.pad_to_tile(tensor)
+        >>> print(tensor.shape)
+        >>> print(tensor.shape.padded())
+        >>> tensor = ttnn.from_device(tensor)
+        >>> output = ttnn.unpad_from_tile(tensor)
+        >>> print(output.shape)
+        >>> print(output.shape.padded())
+
+    """
+
+    def ttnn_unpad(tensor):
+        nonlocal input_tensor
+        if input_tensor.layout != TILE_LAYOUT:
+            raise RuntimeError("input tensor must be in TILE_LAYOUT")
+        # input_tensor = to_layout(input_tensor, TILE_LAYOUT)
+        intended_shape = tuple(tensor.shape)
+        input_tensor = _reshape_to_4D(input_tensor)
+        intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
         ttl_input_tensor = input_tensor.value
-        w, z, y, x = shape
-        ttl_output_tensor = ttl.tensor.reshape(ttl_input_tensor, w, z, y, x)
-        output_tensor = Tensor(ttl_output_tensor)
-        output_tensor = ttnn_reshape(output_tensor, shape)
-        return output_tensor
-    else:
-
-        def torch_reshape(tensor, shape):
-            return tensor.reshape(tuple(shape.padded())).contiguous().clone()
-
         if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            ttl_input_tensor = input_tensor.value
-            device = ttl_input_tensor.device()
-            tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
-            tensor = from_device(tensor)
-            tensor = to_torch(tensor)
-            tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-            tensor = from_torch(tensor, input_tensor.dtype)
-            tensor = to_device(tensor, device)
-            tensor = ttnn_reshape(tensor, shape)
+            output_tensor = Tensor(
+                ttl.tensor.untilize_with_unpadding(
+                    ttl_input_tensor,
+                    (0, 0, 0, 0),
+                    intended_4D_shape,
+                )
+            )
         else:
-            tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
-            tensor = to_torch(tensor)
-            tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-            tensor = from_torch(tensor, input_tensor.dtype)
-            tensor = ttnn_reshape(tensor, shape)
+            output_tensor = Tensor(ttl_input_tensor.to(ROW_MAJOR_LAYOUT).unpad_from_tile(list(input_tensor.shape)))
+        output_tensor = reshape(output_tensor, intended_shape)
+        return output_tensor
 
-        return tensor
+    return ttl.tensor.decorate_external_operation(ttnn_unpad, function_name="ttnn.unpad_from_tile")(input_tensor)
 
 
 def _torch_permute(input_tensor: Tensor, order: Tuple[int, ...], **_):
@@ -1203,17 +1259,20 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
             "The number of dimensions in the tensor input does not match the length of the desired ordering"
         )
 
+    original_shape = tuple(input_tensor.shape)
+    original_shape_padded = tuple(input_tensor.shape.padded())
+    desired_shape = Shape(list([original_shape[i] for i in order]), list([original_shape_padded[i] for i in order]))
     if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
-        return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
+        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, order))
+        # permute is not currently keeping the original padding
+        return reshape(output_tensor, desired_shape)
     elif len(input_tensor.shape) < 4:
-        original_shape = tuple(input_tensor.shape)
-        desired_shape = tuple([original_shape[i] for i in order])
         input_tensor = _reshape_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
-        new_order = order
-        while len(new_order) < 4:
-            new_order = (0,) + tuple(x + 1 for x in new_order)
-        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, new_order))
+        adjusted_order_for_4D_tensor = order
+        while len(adjusted_order_for_4D_tensor) < 4:
+            adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
+        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, adjusted_order_for_4D_tensor))
         return reshape(output_tensor, desired_shape)
     else:
 
@@ -1337,7 +1396,11 @@ def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_M
     input_tensor = _reshape_to_4D(input_tensor)
 
     ttl_input_tensor = input_tensor.value
-    if dim == rank - 1:
+    is_padded_and_using_tile = (
+        input_tensor.layout == TILE_LAYOUT and list(input_tensor.shape)[-2:] != list(input_tensor.shape.padded())[-2:]
+    )
+    if not is_padded_and_using_tile and dim == rank - 1:
+        # TODO: #4599 Research why softmax appears to not be stable when using a padded TILE_LAYOUT
         ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
     else:
         dim_4D = dim + 4 - rank
@@ -1520,4 +1583,6 @@ __all__ = [
     "layer_norm",
     "rms_norm",
     "mean",
+    "pad_to_tile",
+    "unpad_from_tile",
 ]

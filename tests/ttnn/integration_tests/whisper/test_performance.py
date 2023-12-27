@@ -54,14 +54,14 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         ttnn_model = ttnn_functional_whisper
 
     parameters = preprocess_model_parameters(
-        "ttnn-functional-whisper",
+        tt_model_name,
         initialize_model=lambda: WhisperModel.from_pretrained(model_name).to(dtype_to_use).eval(),
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
     )
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+    (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
         config=config,
         input_features=input_features,
         input_ids=decoder_input_ids,
@@ -75,7 +75,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         start = time.time()
         tt_output = ttnn_model.whisper(
             config,
-            input_embeds,
+            encoder_hidden_states,
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
             parameters=parameters,

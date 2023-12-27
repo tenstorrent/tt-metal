@@ -9,7 +9,6 @@ import ttnn
 from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
-    pad_tensor,
 )
 from models.experimental.functional_bloom.reference import torch_functional_bloom
 from models.experimental.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
@@ -428,7 +427,6 @@ def test_optimized_multi_head_attention(device):
     output_weight = preprocess_linear_weight(output_weight.T, dtype=ttnn.bfloat16)
     output_bias = preprocess_linear_bias(output_bias, dtype=ttnn.bfloat16)
     alibi = ttnn.from_torch(alibi, dtype=ttnn.bfloat16)
-    alibi = pad_tensor(alibi)
 
     hidden_states = ttnn.to_device(hidden_states, device)
     hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)

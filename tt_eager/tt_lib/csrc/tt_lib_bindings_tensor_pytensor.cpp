@@ -269,7 +269,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 auto tensor = py::cast<Tensor>(value);
                 input_tensors.push_back(tensor);
             } else if (py::isinstance(value, ttnn.attr("Tensor"))) {
-                auto tensor = py::cast<Tensor>(value.attr("_tensor"));
+                auto tensor = py::cast<Tensor>(value.attr("value"));
                 input_tensors.push_back(tensor);
             } else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
                 // do nothing
