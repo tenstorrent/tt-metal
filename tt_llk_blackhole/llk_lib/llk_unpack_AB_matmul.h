@@ -19,58 +19,68 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
     // in1 - loaded to SrcA
 
     const bool reuse_a = ct_dim >= rt_dim;
-    const std::uint32_t replay_buf_prog_len = (!reuse_a && partial_face) ? 14 : 10;
+    const std::uint32_t replay_buf_prog_len = (!reuse_a && partial_face) ? 16 : 12;
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len/2;
 
     if (reuse_a) {
-        #if SKIP_UNP == 1
-            TTI_REPLAY(0, 1, 0, 1);
-            TTI_NOP;
+        #if SKIP_UNP == 1`
+            load_replay_buf<0, 1>([] {
+                TTI_NOP;
+            });
         #else
-            TT_REPLAY(0, replay_buf_prog_len, 0, 1);
-            TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-            TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
-            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-            //TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG7_Offset_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
-            TTI_NOP;
-            TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-            TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
-            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-            //TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG7_Offset_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
-            TTI_NOP;
+            load_replay_buf(0, replay_buf_prog_len, false, 
+                // Lambda function to set up replay buffer
+                [] {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC0_REG3_Base_address_ADDR32);
+                    TTI_NOP;
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    TTI_NOP;
+                }
+            );
         #endif
     } else {
         #if SKIP_UNP == 1
-            TTI_REPLAY(0, 1, 0, 1);
-            TTI_NOP;
+            load_replay_buf<0, 1>([] {
+                TTI_NOP;
+            });
         #else
-            TT_REPLAY(0, replay_buf_prog_len, 0, 1);
-            if (partial_face) {
-                TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-            } else {
-                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-            }
-            TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
-            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-            //TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG7_Offset_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
-            TTI_NOP;
-            if (partial_face) {
-                TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-            } else {
-                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-            }
-            TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-            TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-            //TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG7_Offset_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
-            TTI_NOP;
+            load_replay_buf(0, replay_buf_prog_len, false, 
+                // Lambda function to set up replay buffer
+                [partial_face] {
+                    if (partial_face) {
+                        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                    } else {
+                        TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    }    
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC1_REG3_Base_address_ADDR32);
+                    TTI_NOP;
+                    if (partial_face) {
+                        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                    } else {
+                        TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    }    
+                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                    TTI_NOP;
+                }
+            );
         #endif
 
     }
@@ -169,14 +179,10 @@ inline void _llk_unpack_AB_matmul_(
 
     for (uint t = 0; t < t_dim; t++) {
 
-        std::uint32_t offset_address_a =tile_size_a*(tile_index_a + (reuse_a ? (t*kt_dim) : (0)));
-        std::uint32_t next_offset_address_a = tile_size_a*(tile_index_a + (reuse_a ? ((t+1)*kt_dim) : (0)));
-        std::uint32_t offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : (t)));
-        std::uint32_t next_offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : (t+1)));
+        std::uint32_t offset_address_a = operands[inputA].f.tile_size_words*(tile_index_a + (reuse_a ? (t*kt_dim) : (0)));
+        std::uint32_t offset_address_b = operands[inputB].f.tile_size_words*(tile_index_b + (reuse_a ? (0       ) : (t)));
         std::uint32_t address_a = base_address_a + offset_address_a;
-        std::uint32_t next_address_a = base_address_a + next_offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;
-        std::uint32_t next_address_b = base_address_b + next_offset_address_b;
 
         // Wait for free context
         wait_for_next_context(2);
@@ -204,45 +210,12 @@ inline void _llk_unpack_AB_matmul_(
                 } else {
                     TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 }
-                if ((t+1)<t_dim) {
-                    // Let's load one more tile into srcB
-                    TT_SETDMAREG(0, LOWER_HALFWORD(next_address_a), 0, LO_16(p_gpr_unpack::TMP0));
-                    TT_SETDMAREG(0, UPPER_HALFWORD(next_address_a), 0, HI_16(p_gpr_unpack::TMP0));
-                    if (0 == unp_cfg_context) {
-                        TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-                    } else {
-                        TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-                    }
-                    TTI_DMANOP;
-                    if (partial_face) {
-                        // Do face by face unpacking
-                        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                        TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-                    } else {
-                        TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    }
-                    t++;
-                }
             #endif
         } else {
             #if SKIP_UNP == 1
                 TTI_NOP;
             #else
                 TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                if ((t+1)<t_dim) {
-                    // Let's load one more tile into srcB
-                    TT_SETDMAREG(0, LOWER_HALFWORD(next_address_b), 0, LO_16(p_gpr_unpack::TMP0));
-                    TT_SETDMAREG(0, UPPER_HALFWORD(next_address_b), 0, HI_16(p_gpr_unpack::TMP0));
-                    if (0 == unp_cfg_context) {
-                        TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-                    } else {
-                        TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-                    }
-                    TTI_DMANOP;
-                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    t++;
-                }
             #endif
         }
 
@@ -255,7 +228,7 @@ inline void _llk_unpack_AB_matmul_(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
     }
-
+    
 
     #ifdef PERF_DUMP
         first_unpack_recorded = true;

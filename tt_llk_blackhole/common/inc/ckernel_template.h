@@ -113,9 +113,9 @@ public:
 
 public:
     // Default ZeroSrcA UNPACR_NOP
-    static constexpr uint DEF_ZEROSRCA = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr uint DEF_NINFSRCA = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_NEGINFSRC);
-    static constexpr uint DEF_UNPACR_NOP = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_NOP);
+    static constexpr uint DEF_ZEROSRCA = TT_OP_UNPACR_NOP(0,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    static constexpr uint DEF_NINFSRCA = TT_OP_UNPACR_NOP(0,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+    static constexpr uint DEF_UNPACR_NOP = TT_OP_UNPACR_NOP(0,0,0,0,0,0,0,0,p_unpacr::UNP_NOP);
 
     // Default skip A/B instructions that increment Z counters by 1
     static constexpr uint DEF_SKIP_A = TT_OP_INCADCZW(0b001, 0, 0, 0, 1);

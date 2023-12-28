@@ -81,17 +81,33 @@ struct p_unpacr
     constexpr static uint TILE2_CFG_CONTEXT     = (0);   // Config context for tile 2
     constexpr static uint TILE3_CFG_CONTEXT     = (0);   // Config context for tile 3
     constexpr static uint AUTO_INC_CONTEXT      = (1);    // Auto increment config context (max value set through unpacker config command)
+
+    constexpr static uint UNP_POP           = 0x0;
+    constexpr static uint UNP_CLRSRC        = 0x1;
+    constexpr static uint UNP_NOP           = 0x2;
+    constexpr static uint UNP_POP_STREAM    = 0x3;
+    constexpr static uint UNP_CLRSRC_ZERO   = 0x0;
+    constexpr static uint UNP_CLRSRC_NEGINF = 0x1;
+    constexpr static uint UNP_CLRSRC_ONE    = 0x2;
+    constexpr static uint UNP_CLRSRC_IMM    = 0x3;
+
+    constexpr static uint UNP_CLRSRC_RESET_ALL_BANKS  =  0x1;
+    constexpr static uint UNP_CLRSRC_ONE_FP16A =  0x0;
+    constexpr static uint UNP_CLRSRC_ONE_FP16B =  0x1;
+    constexpr static uint UNP_CLRSRC_ONE_TF32  =  0x1;
+    constexpr static uint UNP_CLRSRC_ONE_INT8  =  0x2;
 };
 
 struct p_unpacr_nop
 {
     constexpr static uint UNP_POP                = 0b000;
+    constexpr static uint CLR_SRC                = 0b01;
     constexpr static uint UNP_NOP                = 0b010;
 
     constexpr static uint UNP_ZEROSRC            = 0b001;
     constexpr static uint UNP_NEGINFSRC          = 0b101;
 
-    constexpr static uint UNP_SET_DVALID         = 0b111;
+    constexpr static uint SET_DVALID         = 0x1;
 
     constexpr static uint UNP_ZEROSRC_RESET_ALL_BANKS    = 0b1001; //default is clear current bank
     constexpr static uint UNP_ZEROSRC_STALL_RESET_WR_RDY = 0b10001;
@@ -99,6 +115,11 @@ struct p_unpacr_nop
 
     constexpr static uint UNP0                  = 0x0;
     constexpr static uint UNP1                  = 0x1;
+
+    constexpr static uint CLR_SRC_0         = 0b00;
+    constexpr static uint CLR_SRC_NEGINF    = 0b01;
+    constexpr static uint CLR_SRC_1         = 0b10;
+    constexpr static uint CLR_SRC_IMM       = 0b11;
 };
 
 struct p_srcb
@@ -125,10 +146,45 @@ struct p_setadc
     constexpr static uint CH_1  = 1;
 };
 
-struct p_pacr
-{
-    constexpr static uint P_ZERO_OUTPUT_DISABLED = 0x0;
-    constexpr static uint P_ZERO_OUTPUT_ENABLED  = 0x1;
+struct p_pacr {
+  constexpr static uint P_ZERO_OUTPUT_DISABLED = 0x0;
+  constexpr static uint P_ZERO_OUTPUT_ENABLED  = 0x1;
+  
+  constexpr static uint DST_ACCESS_NORMAL_MODE   = 0b0;
+  constexpr static uint DST_ACCESS_STRIDED_MODE  = 0b1;
+
+  constexpr static uint NO_ROW_PAD_ZERO                           = 0b000;
+  constexpr static uint ROW_PAD_ZERO_ALL_PACR                     = 0b001;
+  constexpr static uint ROW_PAD_ZERO_ALL_PACR_16DATUM_ALGN        = 0b101;
+  constexpr static uint ROW_PAD_ZERO_NO_CONCAT_PACR               = 0b010;
+  constexpr static uint ROW_PAD_ZERO_NO_CONCAT_PACR_16DATUM_ALGN  = 0b110;
+  constexpr static uint ROW_PAD_ZERO_LAST_PACR                    = 0b011;
+  constexpr static uint ROW_PAD_ZERO_LAST_PACR_16DATUM_ALGN       = 0b111;
+
+  constexpr static uint CFG_CTXT_0  = 0b00;
+  constexpr static uint CFG_CTXT_1  = 0b01;
+  constexpr static uint CFG_CTXT_2  = 0b10;
+  constexpr static uint CFG_CTXT_3  = 0b11;
+
+  constexpr static uint ADDR_CNT_CTXT_0  = 0b00;
+  constexpr static uint ADDR_CNT_CTXT_1  = 0b01;
+  constexpr static uint ADDR_CNT_CTXT_2  = 0b10;
+
+  constexpr static uint ALL_INTF_ACTIVE          = 0b0000;
+  constexpr static uint ALL_INTF_ACTIVE_ONES     = 0b1111;
+  constexpr static uint SINGLE_INTF_ACTIVE       = 0b0001;
+  constexpr static uint TWO_INTFS_ACTIVE         = 0b0011;
+  constexpr static uint THREE_INTFS_ACTIVE       = 0b0111;
+  constexpr static uint _0th_AND_2nd_INTF_ACTIVE = 0b0101;
+  constexpr static uint _1st_AND_3rd_INTF_ACTIVE = 0b1010;
+
+  constexpr static uint ZERO_WRITE = 0b1;
+  constexpr static uint NO_ZERO_WRITE = 0b0;
+
+  constexpr static uint NO_CTXT_CTRL               = 0b00;
+  constexpr static uint RTL_FLOPS_CTXT_SEL         = 0b01;
+  constexpr static uint RTL_FLOPS_CTXT_RST_AND_NOP = 0b10;
+  constexpr static uint RTL_FLOPS_CTXT_SEL_NO_RST  = 0b11;
 };
 
 struct p_ind
@@ -196,24 +252,23 @@ struct p_stall
     constexpr static uint THCON         = 0x1;
     constexpr static uint UNPACK0       = 0x2;
     constexpr static uint UNPACK1       = 0x4;
-    constexpr static uint UNPACK        = UNPACK0 | UNPACK1;
+    constexpr static uint UNPACK        = UNPACK0 | UNPACK1; //Added to satisfy the LLK code
     constexpr static uint PACK0         = 0x8;
-    constexpr static uint PACK1         = 0x10;
-    constexpr static uint PACK2         = 0x20;
-    constexpr static uint PACK3         = 0x40;
-    constexpr static uint PACK          = PACK0 | PACK1 | PACK2 | PACK3;
-    constexpr static uint MATH          = 0x80;
-    //constexpr static uint SEM_ZERO    = 0x20;
-    //constexpr static uint SEM_MAX     = 0x40;
-    constexpr static uint SRCA_CLR      = 0x100;
-    constexpr static uint SRCB_CLR      = 0x200;
-    constexpr static uint SRCA_VLD      = 0x400;
-    constexpr static uint SRCB_VLD      = 0x800;
-    constexpr static uint XMOV          = 0x1000;
-    constexpr static uint TRISC_CFG     = 0x2000;
-    constexpr static uint SFPU1         = 0x4000;
-    constexpr static uint WAIT_SFPU     = 0x4000;
-    constexpr static uint ALL_THREAD_RES = THCON | UNPACK | PACK | MATH | XMOV;
+    constexpr static uint PACK          = PACK0;
+    constexpr static uint MATH          = 0x10;
+    //constexpr static uint SEM_ZERO   = 0x20;
+    //constexpr static uint SEM_MAX    = 0x40;
+    constexpr static uint SRCA_CLR      = 0x20;
+    constexpr static uint SRCB_CLR      = 0x40;
+    constexpr static uint SRCA_VLD      = 0x80;
+    constexpr static uint SRCB_VLD      = 0x100;
+    constexpr static uint XMOV          = 0x200;
+    constexpr static uint TRISC_CFG     = 0x400;
+    constexpr static uint SFPU1         = 0x800;
+    constexpr static uint WAIT_SFPU     = 0x800;
+    constexpr static uint CFGEXU        = 0x1000;
+
+    constexpr static uint ALL_THREAD_RES = THCON | UNPACK0 | UNPACK1 | PACK0 | PACK | MATH | XMOV;
 
     // What to stall
     constexpr static uint STALL_TDMA    = 0x1;
@@ -231,14 +286,14 @@ struct p_stall
     constexpr static uint STALL_ON_ZERO = 0x1;
     constexpr static uint STALL_ON_MAX  = 0x2;
 
-    constexpr static uint SEMAPHORE_0    = 0x1;
-    constexpr static uint SEMAPHORE_1    = 0x2;
-    constexpr static uint SEMAPHORE_2    = 0x4;
-    constexpr static uint SEMAPHORE_3    = 0x8;
-    constexpr static uint SEMAPHORE_4    = 0x10;
-    constexpr static uint SEMAPHORE_5    = 0x20;
-    constexpr static uint SEMAPHORE_6    = 0x40;
-    constexpr static uint SEMAPHORE_7    = 0x80;
+    constexpr static uint SEMAPHORE_0   = 0x1;
+    constexpr static uint SEMAPHORE_1   = 0x2;
+    constexpr static uint SEMAPHORE_2   = 0x4;
+    constexpr static uint SEMAPHORE_3   = 0x8;
+    constexpr static uint SEMAPHORE_4   = 0x10;
+    constexpr static uint SEMAPHORE_5   = 0x20;
+    constexpr static uint SEMAPHORE_6   = 0x40;
+    constexpr static uint SEMAPHORE_7   = 0x80;
     constexpr static uint SEMAPHORE_BIAS = SEMAPHORE_4;
 };
 

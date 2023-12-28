@@ -35,16 +35,16 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
         static constexpr uint srcb_set_z_2 = TT_OP_NOP;
         static constexpr uint srcb_clear_z = TT_OP_NOP;
         constexpr uint replay_buf_len = 1;
-        TTI_REPLAY(0, 1, 0, 1);
-        TTI_NOP;
+        load_replay_buf<0, 1>([] {
+            TTI_NOP;
+        });
     #else
         static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         static constexpr uint unpack_srca_to_dest = TT_OP_UNPACR(SrcA, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
-        static constexpr uint unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID);
+        static constexpr uint unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         static constexpr uint unpack_srcb_inc_z_0 = TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        static constexpr uint unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
-        static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); //WA for tenstorrent/budabackend#1230
+        static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         static constexpr uint srca_set_z_1 = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
         static constexpr uint srcb_set_z_2 = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
         static constexpr uint srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
@@ -93,15 +93,15 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
     } else {
         if (transpose_of_faces) {
             #if SKIP_UNP == 0
-                constexpr uint replay_buf_len = 3;
-                TTI_REPLAY(0, replay_buf_len, 0, 1);
-                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
-                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
-                if (num_faces>2) {
-                    TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=2
-                } else {
-                    TTI_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=1
-                }
+                constexpr uint replay_buf_len = 2;
+                load_replay_buf<0, replay_buf_len>([num_faces] {
+                    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    if (num_faces>2) {
+                        TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=2
+                    } else {
+                        TTI_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=1
+                    }
+                });
             #endif
             const uint32_t outerloop = num_faces < 4 ? 1 : 2;
             const uint32_t innerloop = num_faces < 2 ? 1 : 2;
@@ -117,19 +117,16 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
                     unpack_srca_set_dvalid : unpack_srca;
 
                 static constexpr uint unpack_srcb_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ?
-                    unpack_srcb_zerosrc  : unpack_srcb;
+                    unpack_srcb_set_dvalid : unpack_srcb;
 
                 const uint32_t outerloop = num_faces;
                 constexpr uint32_t innerloop = 1;
                 ckernel_template tmp(outerloop, innerloop, unpack_srca_reuse, unpack_srcb_reuse);
-                if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) {
-                    tmp.set_end_op(unpack_srcb_set_dvalid);
-                }
                 tmp.program(instrn_buffer);
             } else {
                 const uint32_t outerloop = num_faces;
                 constexpr uint32_t innerloop = 1;
-                ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
+                ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
                 tmp.program(instrn_buffer);
             }

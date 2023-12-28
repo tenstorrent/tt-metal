@@ -495,7 +495,7 @@ inline void _calculate_gelu_(const int iterations)
         ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
         //TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
         //TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
-        //TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
+        //TTI_SFPSTORE(3, 0, 7/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
     }
 
     l_reg[LRegs::LReg0] = l0;

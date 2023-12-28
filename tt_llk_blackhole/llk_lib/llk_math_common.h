@@ -14,6 +14,14 @@
 
 using namespace ckernel::math;
 
+template <bool untilize_en>
+inline void _llk_math_hw_configure() {
+    //Untilize mode needs dest read access with a stride of 16
+    //Following bits are needed for enabling stride of 16
+    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(untilize_en);
+    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(untilize_en);
+}
+
 template <DstSync Dst>
 inline void _llk_math_wait_for_dest_available_() {
     // These liteweight functions for sync with packer imply
@@ -110,17 +118,12 @@ inline void _llk_math_debug_dump_seek_(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
+//Following functions not needed for blackhole since ALU format is inferred
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format) {
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
 }
 
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format) {
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(srcb_data_format);
 }
 
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format) {
-
-    uint config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
-    constexpr uint config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
 }

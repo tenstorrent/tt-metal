@@ -21,7 +21,7 @@ inline void _llk_unpack_reduce_mop_config_() {
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
-    static constexpr uint unpack_zerosrca = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr uint unpack_zerosrca = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
 #if SKIP_UNP == 1
     static constexpr uint unpack_srcb = TT_OP_NOP;
 #else

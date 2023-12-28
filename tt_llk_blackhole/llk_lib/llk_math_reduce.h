@@ -229,7 +229,7 @@ inline void _llk_math_reduce_(const uint dst_index) {
         // gate math instructions until src A has been updated by MOV instructions
         TTI_GATESRCRST(0b1,0b1);
         // zero out scratch in dest
-        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, 4);
+        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 4);
 
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);

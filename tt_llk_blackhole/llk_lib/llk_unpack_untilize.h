@@ -20,20 +20,29 @@ using namespace ckernel::unpacker;
 inline void _llk_unpack_untilize_mop_config_() {
 
     constexpr uint replay_buf_len = (SKIP_UNP == 1) ? 1 : 5;
-    TTI_REPLAY(0, replay_buf_len, 0, 1);
+    // TTI_REPLAY(0, replay_buf_len, 0, 1);
+    load_replay_buf(0, replay_buf_len, false, 
+        // Lambda function to set up replay buffer
+        [] {
+        #if SKIP_UNP == 1
+            TTI_NOP;
+        #else
+            TTI_DMANOP; // REG2FLOP that sets offset in previous loop needs additional cycle to complete
+            TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_ADDDMAREG(0, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_SIZE);
+            TTI_ADDRCRZW(0b001, 0, 0, 0, 0, 0b0001);
+        #endif
+        });
+
 #if SKIP_UNP == 1
-    TTI_NOP;
     static constexpr uint load_offset_addr_cntx0 = TT_OP_NOP;
     static constexpr uint load_offset_addr_cntx1 = TT_OP_NOP;
 #else
-    TTI_DMANOP; // REG2FLOP that sets offset in previous loop needs additional cycle to complete
-    TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    TTI_ADDDMAREG(0, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_SIZE);
-    TTI_ADDRCRZW(0b001, 0, 0, 0, 0, 0b0001);
-
-    static constexpr uint load_offset_addr_cntx0 = TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
-    static constexpr uint load_offset_addr_cntx1 = TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
+    // static constexpr uint load_offset_addr_cntx0 = TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
+    // static constexpr uint load_offset_addr_cntx1 = TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
+    static constexpr uint load_offset_addr_cntx0 = TT_OP_WRCFG(p_gpr_unpack::TILE_OFFSET, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
+    static constexpr uint load_offset_addr_cntx1 = TT_OP_WRCFG(p_gpr_unpack::TILE_OFFSET, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
 #endif
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -78,7 +87,8 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 0, 0xFFFF>(FACE_C_DIM);
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
+    // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
+    TTI_WRCFG(p_gpr_unpack::FACE_DIM_1x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);  //GPR preloaded with  16 | (16 << 16)
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_size), 0, HI_16(p_gpr_unpack::TILE_SIZE));
@@ -146,22 +156,25 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
         } while (rem_blocks_in_row > 0);
 
         TTI_MULDMAREG(0, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_OFFSET, p_gpr::ZERO); // TILE_OFFSET=TILE_OFFSET*0
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
         if (0 == unp_cfg_context) {
-            TTI_REG2FLOP(
-                1,
-                0,
-                0,
-                0,
-                THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32,
-                p_gpr::ZERO);                 // Clear offset register
+            // TTI_REG2FLOP(
+            //     1,
+            //     0,
+            //     0,
+            //     0,
+            //     THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32,
+            //     p_gpr::ZERO);                 // Clear offset register
+            TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
         } else {
-            TTI_REG2FLOP(
-                1,
-                0,
-                0,
-                0,
-                THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32,
-                p_gpr::ZERO);                 // Clear offset register
+            // TTI_REG2FLOP(
+                // 1,
+                // 0,
+                // 0,
+                // 0,
+                // THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32,
+                // p_gpr::ZERO);                 // Clear offset register
+            TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
         }
         TTI_INCADCXY(0b001, 0, 0, 1, 0);  // inc l1 addr y cnt
     }

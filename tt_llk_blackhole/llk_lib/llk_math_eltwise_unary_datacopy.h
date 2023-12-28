@@ -112,14 +112,14 @@ inline void eltwise_unary_configure_addrmod() {
     }
 }
 
-template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
+template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false>
 inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint num_faces) {
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == A2D) {
         uint addr_mod = (rows_per_inst == p_mova2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         uint innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
-        uint outerloop = num_faces;
+        uint outerloop = tilize ? 1 : num_faces;
 
         //use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode
         ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
@@ -168,14 +168,15 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
     }
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
+template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool tilize = false>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t num_faces = 4) {
 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, num_faces);
+        const uint num_rows = tilize ? 64: 16;
+        eltwise_unary_configure_mop<type, src_b_bcast_type, tilize>(p_mova2d::MOV_8_ROWS, num_rows, num_faces);
     } else if constexpr (type == B2D) {
         eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces);
     } else {

@@ -20,13 +20,14 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile=false) {
         static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
     #else
         static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        static constexpr uint unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
-        static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); //WA for tenstorrent/budabackend#1230
+        // static constexpr uint unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+        static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     #endif
 
     const uint32_t outerloop = narrow_tile ? 1 : 2;
     constexpr uint32_t innerloop = 1;
-    ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
+    // ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
+    ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
     tmp.set_start_op(unpack_srca);
     tmp.program(instrn_buffer);
 }
@@ -68,8 +69,21 @@ inline void _llk_unpack_tilize_init_(const std::uint32_t unpack_src_format=0, co
 
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
+
+    // below is the configuration for 64-row unpack for srca
+    const uint Tile_x_dim = 1024;
+    const uint Tile_z_dim = 1;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
+    //Force x-dim to 1024
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>(0 | (Tile_x_dim<<16));
+    //Force z-dim to CNT_ZDIM/4
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 0, 0xffff0000>(0 | (Tile_z_dim<<16));
+
+    //Force x-end for Unpackers to 1024
+    TTI_SETADCXX(p_setadc::UNP0, 1023, 0x0);
 
     _llk_unpack_tilize_mop_config_(narrow_tile);
 }
@@ -89,36 +103,35 @@ inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uin
         SCALE_DATUM_SIZE(unpack_src_format, face_r_dim*block_c_dim_16B);  //*N rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
-    std::uint32_t num_loops = narrow_tile ? 2 : num_faces/2;
+    // FIXME MT: This should be revisited for narrow tiles
+    // std::uint32_t num_loops = narrow_tile ? 2 : num_faces/2;
 
-    for (std::uint32_t n = 0; n < num_loops; n++) {
-        std::uint32_t address = base_address + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
+    std::uint32_t address = base_address + top_face_offset_address;
 
-        // Clear z/w start counters
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+    // Clear z/w start counters
+    TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
 
-        // Wait for free context
-        wait_for_next_context(2);
+    // Wait for free context
+    wait_for_next_context(2);
 
-        // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
+    // Trisc::SEMPOST for context acquire
+    semaphore_post(semaphore::UNPACK_SYNC);
 
-        // Get tile address
-        if (0 == unp_cfg_context) {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
-        } else {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
-        }
-
-        // Run MOP
-        ckernel::ckernel_template::run(instrn_buffer);
-
-        // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-        // Switch unpacker config context
-        switch_config_context(unp_cfg_context);
+    // Get tile address
+    if (0 == unp_cfg_context) {
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+    } else {
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
     }
+
+    // Run MOP
+    mop_run(0, 1);
+
+    // T6::SEMGET for context release
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    // Switch unpacker config context
+    switch_config_context(unp_cfg_context);
 
 #ifdef PERF_DUMP
     first_unpack_recorded = true;

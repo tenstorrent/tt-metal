@@ -309,7 +309,7 @@ inline void zeroacc() {
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }.set(ADDR_MOD_1);
-    TT_ZEROACC(p_zeroacc::CLR_ALL, ADDR_MOD_1, 0);
+    TT_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, ADDR_MOD_1, 0);
 }
 
 inline void zerosrc() {
@@ -554,4 +554,204 @@ inline void serialize_input_loop_end() {
             }
     #endif
     }
+
+//If the TRACK_x bit is set, then the Tensix hardware will automatically
+//stall TRISC memory accesses and/or Tensix instructions to x in order 
+//to guarantee correct ordering. This should eliminate most cases where 
+//we used to need a tensix_sync() or a sync_regfile_write().
+// 
+//The EN_SUBDIVIDED_CFG_FOR_UNPACR is more subtle. If it is turned off,
+//then the global CFG registers are treated as one big entity, and ANY
+//access from Tensix instructions will be synchronized with ANY access
+//from this TRISC. If it is on, then we distinguish between accesses 
+//target CFG regs for unpacker 0, CFG regs for unpacker 1, and all the
+//others (meaning that no synchronization will happen between, for 
+//example, a TRISC access to an unpacker 1 register and an UNPACR 
+//instruction that targets unpacker 0).
+//
+constexpr static uint TRACK_GLOBAL_CFG             = 1 << 0;
+constexpr static uint EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
+constexpr static uint TRACK_GPR                    = 1 << 2;
+constexpr static uint TRACK_TDMA                   = 1 << 3;
+constexpr static uint TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
+constexpr static uint TRACK_ALL                    = 0x1F;
+
+//Uses a template to guarantee compiletime execution (could probably
+//get away with constexpr but this seems better)
+template <uint bitmask>
+inline void set_ttsync_enables() {
+    static_assert((bitmask & ~TRACK_ALL) == 0, "The given bitmask targets bits outside the allowable range");
+    TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, bitmask);
+}
+
+template <bool add_nops = true>
+inline void disable_gathering() {
+    // Disable gathering: set bit 18
+    asm(R"ASM(
+        .option push
+        li   t1, 0x1
+        slli t1, t1, 18
+        csrrs zero, 0x7c0, t1
+        .option pop
+         )ASM"
+    :::"t1");
+     
+     //Gathering is done early in the pipeline, so we need to make sure
+     //the above csrrw gets processed before the load-replay instructions
+     if constexpr (add_nops) {
+         TTI_NOP;
+         TTI_NOP;
+         TTI_NOP;
+    }
+}
+
+inline void enable_gathering() {
+    // Enable gathering: clear bit 18
+    asm(R"ASM(
+        .option push
+        li   t1, 0x1
+        slli t1, t1, 18
+        csrrc zero, 0x7c0, t1
+        .option pop
+         )ASM"
+    :::"t1");
+}
+
+//Pass a lambda function (or a regular function pointer) that takes void,
+//returns void, and issues the instructions you want to load into the
+//replay buffer. start, len, and exec_while_loading have the same meaning
+//as they do for the REPLAY instruction, as descired in assembly.yaml.
+template <uint start, uint len, bool exec_while_loading = false, typename F>
+inline void load_replay_buf(F fn) {
+    disable_gathering();
+     
+    //Issue instruction to load replay buffer
+    TTI_REPLAY(start, len, exec_while_loading, 1);
+    
+    //Send in the user's desired instructions
+    fn(); 
+    
+    enable_gathering();
+}
+
+//Same as above, but used if start/len/exec_while_loading are not known
+//at compiletime.
+template <typename F>
+inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn) {
+    disable_gathering();
+     
+    //Issue instruction to load replay buffer
+    TT_REPLAY(start, len, exec_while_loading, 1);
+    
+    //Send in the user's desired instructions
+    fn(); 
+    
+    enable_gathering();
+}
+
+enum class CSR : uint16_t {
+    tensix_queue_status = 0xBC0,
+    tensix_busy_status  = 0xBC1,
+    stream_curr_phase_0 = 0xBC2,
+    stream_curr_phase_1 = 0xBC3,
+    stream_curr_phase_2 = 0xBC4,
+    stream_curr_phase_3 = 0xBC5,
+    stream_num_msgs_received_0 = 0xBC6,
+    stream_num_msgs_received_1 = 0xBC7,
+    stream_num_msgs_received_2 = 0xBC8,
+    stream_num_msgs_received_3 = 0xBC9
+};
+
+template <CSR csr_num, bool fence = true>
+inline uint32_t csr_read() {
+    uint32_t ret;
+    
+    if constexpr (fence) asm volatile ("fence");
+    asm volatile (
+      "csrr %[ret], %[csr_num] \n"
+      : [ret] "=r" (ret)
+      : [csr_num] "i" (csr_num)
+    );
+    
+    return ret;
+}
+
+//Use at your own risk :-)
+template <uint16_t csr_num, bool fence = true>
+inline uint32_t csr_read() {
+    static_assert(csr_num < (1<<12), "Given CSR number is out of range");
+    uint32_t ret;
+    
+    if constexpr (fence) asm volatile ("fence");
+    asm volatile (
+      "csrr %[ret], %[csr_num] \n"
+      : [ret] "=r" (ret)
+      : [csr_num] "i" (csr_num)
+    );
+    
+    return ret;
+}
+
+union qstatus_u {
+    uint32_t val;
+    struct {
+        unsigned replay :1;
+        unsigned mop    :1;
+        unsigned thcon  :1;
+        unsigned xmov   :1;
+        unsigned unpack :1;
+        unsigned pack   :1;
+        unsigned cfg    :1;
+        unsigned sync   :1;
+        unsigned tdma   :1;
+        unsigned _sfpu  :1; //ugh.... the "sfpu" and "SFPU" identifiers are already in use...
+        unsigned fpu    :1;
+        unsigned sfpucc :2;
+        
+        unsigned global_replay :1;
+        unsigned global_mop    :1;
+        unsigned global_thcon  :1;
+        unsigned global_xmov   :1;
+        unsigned global_unpack :1;
+        unsigned global_pack   :1;
+        unsigned global_cfg    :1;
+        unsigned global_sync   :1;
+        unsigned global_tdma   :1;
+        unsigned global_sfpu   :1;
+        unsigned global_fpu    :1;
+        unsigned global_sfpucc :2;
+        
+    };
+};
+
+union bstatus_u {
+    uint32_t val;
+    struct {
+        unsigned replay :1;
+        unsigned mop    :1;
+        unsigned thcon  :1;
+        unsigned xmov   :1;
+        unsigned unpack :1;
+        unsigned pack   :1;
+        unsigned cfg    :1;
+        unsigned sync   :1;
+        unsigned tdma   :1;
+        unsigned _sfpu  :1; //ugh.... the "sfpu" and "SFPU" identifiers are already in use...
+        unsigned fpu    :1;
+        
+        unsigned global_replay :1;
+        unsigned global_mop    :1;
+        unsigned global_thcon  :1;
+        unsigned global_xmov   :1;
+        unsigned global_unpack :1;
+        unsigned global_pack   :1;
+        unsigned global_cfg    :1;
+        unsigned global_sync   :1;
+        unsigned global_tdma   :1;
+        unsigned global_sfpu   :1;
+        unsigned global_fpu    :1;
+        
+    };
+};
+
 }

@@ -104,7 +104,8 @@ constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4));
         case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return (1024>>4);
+        case ((uint8_t)DataFormat::Lf8):
+        case ((uint8_t)DataFormat::Fp8_e4m3): return (1024>>4);
         default: return ((1024>>4)+(64>>4));
     };
 }

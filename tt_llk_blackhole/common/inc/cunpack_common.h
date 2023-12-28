@@ -205,14 +205,19 @@ namespace ckernel::unpacker
       // Reset address counters
       unpacker_addr_counter_init();
 
+      const uint unpA_src_format_masked = (uint)unpA_src_format & 0x0F;
+      const uint unpB_src_format_masked = (uint)unpB_src_format & 0x0F;
+      const uint unpA_dst_format_masked = (uint)unpA_dst_format & 0x0F;
+      const uint unpB_dst_format_masked = (uint)unpB_dst_format & 0x0F;
+
       // Get pointer to registers for current state ID
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
-      uint unpA_ch1_x_stride = (uint) (unpA_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpA_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
-      uint unpB_ch1_x_stride = (uint) (unpB_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpB_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpA_ch1_x_stride = (uint) (unpA_dst_format_masked&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpA_dst_format_masked&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpB_ch1_x_stride = (uint) (unpB_dst_format_masked&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpB_dst_format_masked&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
       uint unpA_ch1_z_stride = FACE_C_DIM*FACE_R_DIM*unpA_ch1_x_stride;
       uint unpB_ch1_z_stride = FACE_C_DIM*FACE_R_DIM*unpB_ch1_x_stride;
-      uint exp_width = ((uint)unpA_dst_format>>2)&0x1; //0=5-bit, 1=8-bit
+      uint exp_width = ((uint)unpA_dst_format_masked>>2)&0x1; //0=5-bit, 1=8-bit
 
       // Strides for incrementing ch1 address to srcA and srcB
       cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
@@ -231,14 +236,14 @@ namespace ckernel::unpacker
       alu_config_u alu_payload = {.val = 0};
 
       uint32_t fp32_dest_acc_en = (is_fp32_dest_acc_en) ? (1) : (0);
-      uint32_t int8_math_enabled = ((uint)unpA_dst_format == (uint)DataFormat::Int8) ||
-                                   ((uint)unpB_dst_format == (uint)DataFormat::Int8) ||
-                                   ((uint)unpA_dst_format == (uint)DataFormat::Int32) ||
-                                   ((uint)unpB_dst_format == (uint)DataFormat::Int32);
+      uint32_t int8_math_enabled = ((uint)unpA_dst_format_masked == (uint)DataFormat::Int8) ||
+                                   ((uint)unpB_dst_format_masked == (uint)DataFormat::Int8) ||
+                                   ((uint)unpA_dst_format_masked == (uint)DataFormat::Int32) ||
+                                   ((uint)unpB_dst_format_masked == (uint)DataFormat::Int32);
 
       constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
-      alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpA_dst_format;
-      alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format;
+      alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpA_dst_format_masked;
+      alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format_masked;
 
       // FP32 accumulation and SFPU to read dest as FP32
       // NOTE: This assumes these config fields are adjacent and in same register!!
@@ -257,6 +262,15 @@ namespace ckernel::unpacker
 
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
+      //Set FP8 E4M3 mode, bit is accessible by unpacker/packer 
+      if((unpA_src_format&0x1F) == (uint)DataFormat::Fp8_e4m3) {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(1);
+      }
+
+      if((unpB_src_format&0x1F) == (uint)DataFormat::Fp8_e4m3) {
+        cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(1);
+      }
+
       t6_mutex_release(mutex::REG_RMW);
 
       // Set tile descriptor
@@ -264,7 +278,7 @@ namespace ckernel::unpacker
       for (uint i=0; i<TILE_DESC_SIZE; i++) {
          tile_descriptor.val[i] = 0;
       }
-      tile_descriptor.f.in_data_format  = (uint) unpA_src_format;
+      tile_descriptor.f.in_data_format  = (uint) unpA_src_format_masked;
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
       tile_descriptor.f.x_dim        = 0; // Not used for unpA as value is overriden by per context x_dim set below. Used for unpB
       tile_descriptor.f.y_dim        = 1;
@@ -272,7 +286,7 @@ namespace ckernel::unpacker
       //tile_descriptor.f.blobs_per_xy_plane = 0;
       //tile_descriptor.f.blobs_y_start = 0;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
-      tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpB_src_format;
+      tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpB_src_format_masked;
       tile_descriptor.f.x_dim        = unpB_face_r_dim*FACE_C_DIM;
       tile_descriptor.f.z_dim        = unpB_num_faces;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
@@ -282,7 +296,7 @@ namespace ckernel::unpacker
       for (uint i=0; i<CONFIG_SIZE; i++) {
          config.val[i] = 0;
       }
-      config.f.out_data_format = unpA_dst_format;
+      config.f.out_data_format = unpA_dst_format_masked;
       config.f.throttle_mode   = 2;
       config.f.context_count   = 0;
       config.f.haloize_mode    = transpose_xy_srca_en ? 1 : 0;
@@ -295,7 +309,7 @@ namespace ckernel::unpacker
       //config.f.fifo_size = 0; // Set dynamically
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC0_REG2_Out_data_format_ADDR32+i]=config.val[i];
 
-      config.f.out_data_format = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format;
+      config.f.out_data_format = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format_masked;
       config.f.haloize_mode    = 0;
 
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC1_REG2_Out_data_format_ADDR32+i]=config.val[i];
@@ -376,19 +390,24 @@ namespace ckernel::unpacker
       static_assert(UNP_SEL != p_setadc::UNP_B);
       switch (face_r_dim) {
          case 1:
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
+            // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
+            TTI_WRCFG(p_gpr_unpack::FACE_DIM_1x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
             break;
          case 2:
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
+            // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
+            TTI_WRCFG(p_gpr_unpack::FACE_DIM_2x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
             break;
          case 4:
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
+            // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
+            TTI_WRCFG(p_gpr_unpack::FACE_DIM_4x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
             break;
          case 8:
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
+            // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
+            TTI_WRCFG(p_gpr_unpack::FACE_DIM_8x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
             break;
          default:
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
+            // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
+            TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
             break;
       }
 
