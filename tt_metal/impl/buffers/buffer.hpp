@@ -42,21 +42,21 @@ enum class ShardOrientation {
 
 
 struct ShardSpec {
-    CoreRangeSet shard_grid;
-    std::array<uint32_t, 2> shard_shape;
-    ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
+    CoreRangeSet grid;
+    std::array<uint32_t, 2> shape;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
 
     ShardSpec(const CoreRangeSet & core_sets_,
                     const std::array<uint32_t,2> & shard_shape_,
                     const ShardOrientation & shard_orientation_ = ShardOrientation::ROW_MAJOR,
                     const bool & halo_ = false):
-                    shard_grid(core_sets_), shard_shape(shard_shape_),
-                    shard_orientation(shard_orientation_), halo(halo_)
+                    grid(core_sets_), shape(shard_shape_),
+                    orientation(shard_orientation_), halo(halo_)
                     {;}
 
-    const uint32_t num_cores() const { return this->shard_grid.num_cores(); }
-    const uint32_t numel() const { return this->shard_shape[0] * this->shard_shape[1]; }
+    const uint32_t num_cores() const { return this->grid.num_cores(); }
+    const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
     tt::stl::reflection::Attributes attributes() const;
 
 };
@@ -64,7 +64,7 @@ struct ShardSpec {
 
 struct ShardSpecBuffer:  ShardSpec {
     std::array<uint32_t, 2> page_shape;
-    std::array<uint32_t, 2 > tensor2d_size;
+    std::array<uint32_t, 2 > tensor2d_shape;
     ShardSpecBuffer(const CoreRangeSet & core_sets_,
                 const std::array<uint32_t,2> & shard_shape_,
                 const ShardOrientation & shard_orientation_,
@@ -74,7 +74,7 @@ struct ShardSpecBuffer:  ShardSpec {
                 ): ShardSpec(core_sets_, shard_shape_, shard_orientation_, halo_)
                 {
                     this->page_shape = page_shape;
-                    this-> tensor2d_size = tensor2d_shape;
+                    this->tensor2d_shape = tensor2d_shape;
                 }
     ShardSpecBuffer(
             const ShardSpec & shard_spec,
@@ -83,8 +83,14 @@ struct ShardSpecBuffer:  ShardSpec {
             ): ShardSpec(shard_spec)
             {
                 this->page_shape = page_shape;
-                this-> tensor2d_size = tensor2d_shape;
+                this-> tensor2d_shape = tensor2d_shape;
             }
+    uint32_t size(){
+        auto width_in_pages = this->shape[0] / this->page_shape[0];
+        auto height_in_pages = this->shape[1] / this->page_shape[1];
+        return width_in_pages * height_in_pages;
+
+    }
 };
 
 
@@ -110,6 +116,9 @@ struct ShardedBufferConfig {
 };
 
 bool is_sharded(const TensorMemoryLayout & layout);
+
+
+
 class Buffer {
    public:
     Buffer() : device_(nullptr) {}
@@ -154,44 +163,10 @@ class Buffer {
 
     uint64_t core_address(uint32_t core_id) const;
 
-    CoreRangeSet shard_grid() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return shard_parameters_.value().shard_grid;
+    ShardSpecBuffer shard_spec() const {
+        TT_ASSERT(shard_parameters_.has_value());
+        return this->shard_parameters_.value();
     }
-
-    ShardOrientation shard_orientation() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return shard_parameters_.value().shard_orientation;
-    }
-
-
-    uint32_t shard_size() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto p_shape = this->page_shape();
-        auto width_in_pages = shard_parameters_.value().shard_shape[0] / p_shape[0];
-        auto height_in_pages = shard_parameters_.value().shard_shape[1] / p_shape[1];
-        return width_in_pages * height_in_pages;
-    }
-
-
-    std::array<uint32_t, 2> page_shape() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return {shard_parameters_.value().page_shape[0], shard_parameters_.value().page_shape[1]};
-    }
-
-
-    std::array<uint32_t,2> shard_shape() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto p_shape = page_shape();
-        return {shard_parameters_.value().shard_shape[0],
-                shard_parameters_.value().shard_shape[1]};
-    }
-
-    std::array<uint32_t, 2> tensor2d_size() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return {shard_parameters_.value().tensor2d_size[0], shard_parameters_.value().tensor2d_size[1]};
-    }
-
 
     std::vector<uint32_t> dev_page_to_core_mapping() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
@@ -223,7 +198,7 @@ class Buffer {
             return 1;
         else{
             auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = num_pages/this->shard_size();
+            auto shards_for_compute = num_pages/this->shard_spec().size();
             return shards_for_compute;
         }
     }

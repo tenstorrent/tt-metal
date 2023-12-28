@@ -41,12 +41,12 @@ class test_config {
             return shape;
         }
         ShardSpec get_shard_spec(){
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(0, num_cores_height*num_cores_width - 1))
                                                      }),
-                                     .shard_shape = {page_height * num_pages_per_core_height, num_pages_per_core_width * page_width},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {page_height * num_pages_per_core_height, num_pages_per_core_width * page_width},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             return shard_spec;
         }
@@ -151,12 +151,12 @@ int main(int argc, char **argv) {
 
         {
             Shape shape = {1, 1, 2304, 256};
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(7, 7))
                                                      }),
-                                     .shard_shape = {72, 128},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {72, 128},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             Layout layout = Layout::ROW_MAJOR;
             MemoryConfig mem_config = {.memory_layout=TensorMemoryLayout::BLOCK_SHARDED,
@@ -169,12 +169,12 @@ int main(int argc, char **argv) {
 
         {
             Shape shape = {1, 1, 800, 512};
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(8, 7))
                                                      }),
-                                     .shard_shape = {96, 64},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {96, 64},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             Layout layout = Layout::TILE;
             MemoryConfig mem_config = {.memory_layout=TensorMemoryLayout::BLOCK_SHARDED,
@@ -187,12 +187,12 @@ int main(int argc, char **argv) {
 
         {
             Shape shape = {1, 1, 800, 512};
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(8, 7))
                                                      }),
-                                     .shard_shape = {96, 64},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {96, 64},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             Layout layout = Layout::TILE;
             MemoryConfig mem_config = {.memory_layout=TensorMemoryLayout::BLOCK_SHARDED,

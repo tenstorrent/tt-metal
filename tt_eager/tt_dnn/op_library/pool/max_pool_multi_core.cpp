@@ -250,11 +250,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
     if (input.memory_config().is_sharded()) {
-        all_cores = input.shard_spec().value().shard_grid;
+        all_cores = input.shard_spec().value().grid;
         uint32_t ncores = all_cores.num_cores();
         core_range = all_cores;
         core_range_cliff = CoreRangeSet({});
-        in_nhw_per_core = input.shard_spec().value().shard_shape[0];
+        in_nhw_per_core = input.shard_spec().value().shape[0];
         in_nhw_per_core_cliff = 0;
         out_nhw_per_core = out_nhw / ncores;
         out_nhw_per_core_cliff = 0;
@@ -324,9 +324,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     if (output.memory_config().is_sharded()) {
         uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
-        uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
+        uint32_t sharded_out_num_pages = output.shard_spec().value().shape[0];
 
-        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
+        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shape[1] * out_nbytes;    // there is just one row of channels after reduction
         CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
             .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
         cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
@@ -1043,11 +1043,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
     // auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
-    auto all_cores = input.shard_spec().value().shard_grid;
+    auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet({});
-    uint32_t shard_size_per_core = input.shard_spec().value().shard_shape[0];
+    uint32_t shard_size_per_core = input.shard_spec().value().shape[0];
     uint32_t in_nhw_per_core = in_h * in_w / ncores;
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = out_nhw / ncores;
@@ -1079,7 +1079,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     // this input shard has halo and padding inserted.
     auto raw_in_cb_id = CB::c_in2;
     // uint32_t raw_in_cb_npages = in_nhw_per_core;
-    uint32_t raw_in_cb_npages = input.shard_spec().value().shard_shape[0];
+    uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
     CircularBufferConfig raw_in_cb_config = CircularBufferConfig(
                                                 raw_in_cb_npages * raw_in_cb_pagesize,
@@ -1117,10 +1117,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     if (output.memory_config().is_sharded()) {
         uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
-        auto shard_shape = output.shard_spec().value().shard_shape;
-        uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
+        auto shard_shape = output.shard_spec().value().shape;
+        uint32_t sharded_out_num_pages = output.shard_spec().value().shape[0];
 
-        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
+        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shape[1] * out_nbytes;    // there is just one row of channels after reduction
         CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
             .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
         cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
@@ -1650,11 +1650,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = input.shard_spec().value().shard_grid;
+    auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet({});
-    uint32_t shard_size_per_core = input.shard_spec().value().shard_shape[0];
+    uint32_t shard_size_per_core = input.shard_spec().value().shape[0];
     uint32_t in_nhw_per_core = in_h * in_w / ncores;
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = out_nhw / ncores;
@@ -1685,7 +1685,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     // this input shard has halo and padding inserted.
     auto raw_in_cb_id = CB::c_in2;
     // uint32_t raw_in_cb_npages = in_nhw_per_core;
-    uint32_t raw_in_cb_npages = input.shard_spec().value().shard_shape[0];
+    uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
     CircularBufferConfig raw_in_cb_config = CircularBufferConfig(
                                                 raw_in_cb_npages * raw_in_cb_pagesize,
@@ -1735,10 +1735,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
-    auto shard_shape = output.shard_spec().value().shard_shape;
-    uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
+    auto shard_shape = output.shard_spec().value().shape;
+    uint32_t sharded_out_num_pages = output.shard_spec().value().shape[0];
 
-    uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
+    uint32_t sharded_out_cb_page_size = output.shard_spec().value().shape[1] * out_nbytes;    // there is just one row of channels after reduction
     CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
         .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
     cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);

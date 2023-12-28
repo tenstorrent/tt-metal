@@ -326,7 +326,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
 
     if (is_sharded(this->buffer.buffer_layout())) {
         uint32_t num_cores = this->buffer.num_cores();
-        uint32_t shard_size = this->buffer.shard_size();
+        uint32_t shard_size = this->buffer.shard_spec().size();
         //TODO: for now all shards are same size of pages
         vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
         vector<uint32_t> core_id_x;
@@ -435,7 +435,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     uint32_t src_page_index = 0;
     if (is_sharded(this->buffer.buffer_layout())) {
         uint32_t num_cores = this->buffer.num_cores();
-        uint32_t shard_size = this->buffer.shard_size();
+        uint32_t shard_size = this->buffer.shard_spec().size();
         //TODO: for now all shards are same size of pages
         vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
         vector<uint32_t> core_id_x;

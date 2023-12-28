@@ -32,9 +32,9 @@ void NlpTM::validate(const std::vector<Tensor>& input_tensors) const {
             if (input_tensor.is_sharded()) {
                 TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
                 auto shard_spec = input_tensor.shard_spec().value();
-                TT_FATAL(shard_spec.shard_shape[1] == input_tensor.shape()[-1]);
-                TT_FATAL(shard_spec.shard_shape[0] % input_tensor.shape()[-2] == 0);
-                TT_FATAL(input_tensor.shape()[1] % (shard_spec.shard_shape[0] / input_tensor.shape()[-2]) == 0);
+                TT_FATAL(shard_spec.shape[1] == input_tensor.shape()[-1]);
+                TT_FATAL(shard_spec.shape[0] % input_tensor.shape()[-2] == 0);
+                TT_FATAL(input_tensor.shape()[1] % (shard_spec.shape[0] / input_tensor.shape()[-2]) == 0);
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
             } else {
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
@@ -68,8 +68,8 @@ std::vector<Tensor> NlpTM::create_output_tensors(const std::vector<Tensor>& inpu
         if (this->nlp_tm_op_type == NlpTMOpType::CONCAT_HEADS) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();
             uint32_t num_cores = shard_spec.num_cores();
-            uint32_t heads_per_shard = shard_spec.shard_shape[0] / input_tensor.shape()[-2];
-            shard_spec.shard_shape = {shard_spec.shard_shape[0] / heads_per_shard, shard_spec.shard_shape[1] * heads_per_shard};
+            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.shape()[-2];
+            shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
             return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
         } else {
             TT_ASSERT(false);

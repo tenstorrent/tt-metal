@@ -126,8 +126,8 @@ inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& me
         return input_tensor;
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_shape = shard_spec.shard_shape;
-    auto shard_grid = shard_spec.shard_grid;
+    auto shard_shape = shard_spec.shape;
+    auto shard_grid = shard_spec.grid;
     auto input_shape = input_tensor.shape();
     auto input_dtype = input_tensor.dtype();
     auto input_layout = input_tensor.layout();

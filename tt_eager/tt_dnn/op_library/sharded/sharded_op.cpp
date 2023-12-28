@@ -23,9 +23,9 @@ void Sharded::validate(const std::vector<Tensor>& input_tensors) const {
     } else if (this->sharded_op_type == ShardedOpType::ShardedToInterleaved) {
         TT_FATAL(input_tensor.memory_config().is_sharded());
         if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (input_tensor.shape()[-1] % this->shard_spec.shard_shape[1] != 0 ||
-                ((input_tensor.volume() / input_tensor.shape()[-1]) % this->shard_spec.shard_shape[0]) != 0) {
-                TT_FATAL(input_tensor.shard_spec().value().shard_grid.ranges().size() == 1);
+            if (input_tensor.shape()[-1] % this->shard_spec.shape[1] != 0 ||
+                ((input_tensor.volume() / input_tensor.shape()[-1]) % this->shard_spec.shape[0]) != 0) {
+                TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
             }
         }
     }

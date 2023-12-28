@@ -298,7 +298,7 @@ namespace detail {
 
         int output_page_index = 0;
 
-        auto total_pages = cores.size() * buffer.shard_size();
+        auto total_pages = cores.size() * buffer.shard_spec().size();
         auto dev_page_to_core_mapping = buffer.dev_page_to_core_mapping();
 
 
@@ -391,7 +391,7 @@ namespace detail {
         host_buffer.clear();  // overwrite the data
 
         uint32_t num_entries_per_page = buffer.page_size() / sizeof(uint32_t);
-        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_size();
+        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_spec().size();
         host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
         auto page_ids = buffer.dev_pages_in_shard(core_id);

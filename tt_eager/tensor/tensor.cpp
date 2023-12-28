@@ -255,7 +255,7 @@ bool Tensor::is_allocated() const {
 
 std::vector<uint32_t> Tensor::host_page_ordering(){
     auto cores = buffer()->all_cores();
-    auto shard_size = buffer()->shard_size();
+    auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
     auto dp_map = buffer()->dev_page_to_host_page_mapping();
 
@@ -324,8 +324,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.buffer_type == BufferType::L1);
-    auto& shard_grid = shard_spec.shard_grid;
-    auto& shard_shape = shard_spec.shard_shape;
+    auto& shard_shape = shard_spec.shape;
 
     uint32_t num_cores = shard_spec.num_cores();
 
@@ -354,7 +353,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     }
 
     auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
-    auto page_shape = tensor_impl::get_sharded_page_shape(layout, shape, data_type, shard_spec.num_cores(), shard_spec.shard_shape);
+    auto page_shape = tensor_impl::get_sharded_page_shape(layout, shape, data_type, shard_spec.num_cores(), shard_spec.shape);
     std::array<uint32_t,2> tensor2d_size = {shape[0]*shape[1] * shape[2]/page_shape[0],
                                                 shape[3]/page_shape[1]
                                             };

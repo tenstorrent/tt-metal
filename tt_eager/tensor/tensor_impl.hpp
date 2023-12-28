@@ -458,7 +458,7 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
 
     std::optional<ShardSpecBuffer> shard_spec_buffer = std::nullopt;
     if(shard_spec.has_value()){
-        auto page_shape = get_sharded_page_shape(layout, shape, data_type, shard_spec.value().num_cores(), shard_spec.value().shard_shape);
+        auto page_shape = get_sharded_page_shape(layout, shape, data_type, shard_spec.value().num_cores(), shard_spec.value().shape);
         std::array<uint32_t, 2> tensor2d_size = {shape[0]*shape[1] * shape[2]/ page_shape[0],
                                                 shape[3]/page_shape[1]
                                             };
@@ -872,7 +872,7 @@ template <typename T>
 Tensor extract_shard(const Tensor & tensor, const uint32_t & core_id){
 
     auto buffer= tensor.buffer();
-    auto buffer_shard_shape = buffer->shard_shape();
+    auto buffer_shard_shape = buffer->shard_spec().shape;
     std::array <uint32_t, 4> shard_shape_array = {1,1,buffer_shard_shape[0],buffer_shard_shape[1]};
     Shape shard_shape(shard_shape_array);
     std::vector<uint32_t> device_data;
