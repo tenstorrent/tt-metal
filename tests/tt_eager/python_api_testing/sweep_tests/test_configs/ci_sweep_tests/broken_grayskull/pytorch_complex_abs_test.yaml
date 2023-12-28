@@ -3,7 +3,7 @@ test-list:
   - complex-abs:
       shape:
         start-shape: [1, 1, 32, 64]
-        end-shape: [1, 1, 256, 512]
+        end-shape: [1, 1, 256, 416]
         interval: [1, 1, 32, 64]
         num-shapes: 1
         num-samples: 64
@@ -28,7 +28,7 @@ test-list:
   - complex-abs:
       shape:
         start-shape: [1, 1, 32, 64]
-        end-shape: [1, 1, 256, 512]
+        end-shape: [1, 1, 256, 416]
         interval: [1, 1, 32, 64]
         num-shapes: 1
         num-samples: 64
