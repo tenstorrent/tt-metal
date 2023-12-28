@@ -70,6 +70,7 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to reallocate at lower addresses
     // If the tensor is not allocated in a new address, there is no need to move the data
     if (move_within_same_mem_space and input_address == output_tensor.buffer()->address()) {
+        tt::log_debug(tt::LogOp, "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}", input_address);
         return output_tensor;
     }
 
