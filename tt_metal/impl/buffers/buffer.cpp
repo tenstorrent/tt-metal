@@ -308,7 +308,7 @@ uint64_t Buffer::core_address(uint32_t core_id) const {
 }
 
 void Buffer::deallocate() {
-    if (this->device_ == nullptr or not this->device_->initialized_) {
+    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0) {
         return;
     }
     this->size_ = 0;
