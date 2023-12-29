@@ -111,3 +111,10 @@ static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.ncrisc) == MEM
 static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 #endif
+
+struct routing_info_t {
+    volatile uint32_t routing_enabled;
+    volatile uint32_t routing_mode;
+    volatile uint32_t unused_arg0;
+    volatile uint32_t unused_arg1;
+};

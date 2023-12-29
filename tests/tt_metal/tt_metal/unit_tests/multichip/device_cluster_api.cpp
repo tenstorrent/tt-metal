@@ -37,8 +37,8 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
     // Check connectivity between chips
-    ASSERT_TRUE(device_0->get_ethernet_connected_chip_ids() == std::unordered_set({1}));
-    ASSERT_TRUE(device_1->get_ethernet_connected_chip_ids() == std::unordered_set({0}));
+    ASSERT_TRUE((device_0->get_ethernet_cores_grouped_by_connected_chips() == std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>({{1, {{0, 8}, {0,9}}}})));
+    ASSERT_TRUE((device_1->get_ethernet_cores_grouped_by_connected_chips() == std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>({{0, {{0, 0}, {0,1}}}})));
 
     for (const auto& core : device_0_active_eth_cores) {
         std::tuple<chip_id_t, CoreCoord> core_on_chip_1 = device_0->get_connected_ethernet_core(core);

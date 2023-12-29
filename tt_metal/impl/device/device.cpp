@@ -169,7 +169,6 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
         ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
         uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-        llrt::write_hex_vec_to_core(this->id(), phys_core, {1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE + 8);
         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
         llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
@@ -223,7 +222,6 @@ void Device::initialize_and_launch_firmware() {
     }
 
     // Load erisc app base FW to eth cores
-    // TODO: we can optimize and split send/receive FD modes to two FWs
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         this->initialize_firmware(phys_eth_core, &launch_msg);
@@ -407,8 +405,7 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
 }
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
+    return tt::Cluster::instance().ethernet_core_from_logical_core(id_, logical_core);
 }
 
 std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {

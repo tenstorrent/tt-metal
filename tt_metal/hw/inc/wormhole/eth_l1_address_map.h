@@ -34,10 +34,12 @@ struct address_map {
   //    -  53 * 1024 eth app reserved buffer space
   //    - 106 * 1024 L1 unreserved buffer space
   static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
-  static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 64;
+  static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 16;
+  static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 48;
 
   static constexpr std::int32_t ERISC_BARRIER_BASE = TILE_HEADER_BUFFER_BASE;
-  static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_BARRIER_BASE + ERISC_BARRIER_SIZE;
+  static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = ERISC_BARRIER_BASE + ERISC_BARRIER_SIZE;
+  static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
   static constexpr std::int32_t ERISC_L1_ARG_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
   static constexpr std::int32_t ERISC_APP_RESERVED_BASE = TILE_HEADER_BUFFER_BASE + 1024;
