@@ -124,6 +124,31 @@ class Cluster {
     // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const;
 
+    // Converts logical ethernet core coord to physical ethernet core coord
+    CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
+
+    // Configures routing mapping of ethernet cores
+    void initialize_routing_info_for_ethernet_cores();
+
+    // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
+    // Returns logical eth core that communicates with specified dispatch core
+    tt_cxy_pair get_eth_core_for_dispatch_core(
+        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    // Writes router config to corresponding eth core
+    void configure_eth_core_for_dispatch_core(
+        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
+    // cluster. When using multiple devices in a cluster, this should be the flow:
+    //       CreateDevice(0)
+    //       CreateDevice(1)
+    //       set_internal_routing_info_for_ethernet_cores(true);
+    //       set_internal_routing_info_for_ethernet_cores(false);
+    //       CloseDevice(0)
+    //       CloseDevice(1)
+    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const;
+
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
         return this->device_to_mmio_device_.at(device_id);
@@ -189,6 +214,9 @@ class Cluster {
     //          1 -> 0
     //          3 -> 1
     std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
+
+    // Mapping of each devices' ethernet routing mode
+    std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, routing_info_t>> device_eth_routing_info_;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE

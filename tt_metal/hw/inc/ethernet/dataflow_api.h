@@ -4,21 +4,26 @@
 
 #pragma once
 
+#include "dev_msgs.h"
 #include "eth_l1_address_map.h"
+#include "noc_nonblocking_api.h"
 #include "risc_common.h"
 #include "tt_eth_api.h"
-#include "noc_nonblocking_api.h"
+
 #include "../dataflow_api.h"
+
+#define FORCE_INLINE inline __attribute__((always_inline))
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t *ptr = (volatile uint32_t *)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
 }
+
 struct erisc_info_t {
     volatile uint32_t launch_user_kernel;
-    volatile uint32_t routing_mode;
-    volatile uint32_t routing_enabled;
     volatile uint32_t unused_arg0;
+    volatile uint32_t unused_arg1;
+    volatile uint32_t unused_arg2;
     volatile uint32_t user_buffer_bytes_sent;
     uint32_t reserved_0_;
     uint32_t reserved_1_;
@@ -29,9 +34,16 @@ struct erisc_info_t {
     uint32_t reserved_5_;
 };
 
+// Routing info
+uint32_t relay_src_noc_encoding;
+uint32_t relay_dst_noc_encoding;
+uint32_t eth_router_noc_encoding;
+EthRouterMode my_routing_mode;
+
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
 erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+routing_info_t *routing_info = (routing_info_t *)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
 volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 
 extern uint32_t __erisc_jump_table;
@@ -43,17 +55,14 @@ void (*rtos_context_switch_ptr)();
 FORCE_INLINE
 void reset_erisc_info() { erisc_info->user_buffer_bytes_sent = 0; }
 
-FORCE_INLINE
-void disable_erisc_app() { flag_disable[0] = 0; }
-
 namespace internal_ {
+FORCE_INLINE
 void __attribute__((section("code_l1"))) risc_context_switch() {
     ncrisc_noc_full_sync();
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();
 }
 
-FORCE_INLINE
 void check_and_context_switch() {
     uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t end_time = start_time;
@@ -75,9 +84,65 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     }
     noc_fast_atomic_increment_l1(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
 }
+
+
+FORCE_INLINE
+void disable_erisc_app() { flag_disable[0] = 0; }
+
+FORCE_INLINE
+void send_fd_packets() {
+    eth_send_packet(
+        0,
+        (eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE) >> 4,
+        ((eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE)) >> 4,
+        (eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE) >> 4);
+    routing_info->fd_buffer_msgs_sent = 1;
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
+        ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
+        1);
+    // There should always be a valid cmd here, since eth_db_acquire completed
+    while (routing_info->fd_buffer_msgs_sent != 0) {
+        // TODO: add timer to restrict this
+        risc_context_switch();
+    }
+}
+
+FORCE_INLINE
+void receive_fd_packets() {
+    // There may not be a valid cmd here, since DST router is always polling
+    // This should only happen on cluster close
+    while (routing_info->fd_buffer_msgs_sent != 1 && routing_info->routing_enabled) {
+        // TODO: add timer to restrict this
+        risc_context_switch();
+    }
+    routing_info->fd_buffer_msgs_sent = 0;
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
+        ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
+        1);
+}
+
 }  // namespace internal_
 
-
+void run_routing() {
+    // TODO: maybe split into two FWs? or this may be better to sometimes allow each eth core to do both send and
+    // receive of fd packets
+    if (my_routing_mode == EthRouterMode::FD_SRC) {
+        // TODO: port changes from erisc to here
+        internal_::risc_context_switch();
+    } else if (my_routing_mode == EthRouterMode::FD_DST) {
+        // TODO: port changes from erisc to here
+        internal_::risc_context_switch();
+    } else if (my_routing_mode == EthRouterMode::SD) {
+        // slow dispatch mode
+        internal_::risc_context_switch();
+    } else {
+        internal_::risc_context_switch();
+    }
+}
 /**
  * A blocking call that waits until the value of a local L1 memory address on
  * the Tensix core executing this function becomes equal to a target value.
@@ -94,7 +159,7 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
 FORCE_INLINE
 void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     while ((*sem_addr) != val) {
-        internal_::risc_context_switch();
+        run_routing();
     }
 }
 
@@ -109,7 +174,7 @@ void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 FORCE_INLINE
 void eth_noc_async_read_barrier() {
     while (!ncrisc_noc_reads_flushed(noc_index)) {
-        internal_::risc_context_switch();
+        run_routing();
     }
 }
 
@@ -124,7 +189,7 @@ void eth_noc_async_read_barrier() {
 FORCE_INLINE
 void eth_noc_async_write_barrier() {
     while (!ncrisc_noc_nonposted_writes_flushed(noc_index)) {
-        internal_::risc_context_switch();
+        run_routing();
     }
 }
 
@@ -173,7 +238,7 @@ void eth_wait_for_receiver_done() {
         ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
         1);
     while (erisc_info->user_buffer_bytes_sent != 0) {
-        internal_::risc_context_switch();
+        run_routing();
     }
 }
 
@@ -225,7 +290,7 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
 FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes) {
     while (erisc_info->user_buffer_bytes_sent != num_bytes) {
-        internal_::risc_context_switch();
+        run_routing();
     }
 }
 
