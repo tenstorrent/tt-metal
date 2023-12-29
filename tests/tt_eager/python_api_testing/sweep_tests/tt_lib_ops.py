@@ -109,7 +109,10 @@ def move(
     output_mem_config,
     **kwargs,
 ):
+    dummy_tensor = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    # Free up dummy tensor from memory to make available to move
+    dummy_tensor.deallocate()
     t1 = ttl.tensor.move(t0, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
