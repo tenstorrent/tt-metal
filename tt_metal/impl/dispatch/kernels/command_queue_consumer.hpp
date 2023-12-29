@@ -287,11 +287,19 @@ void write_and_launch_program(
             case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
                 num_pages_in_transfer = header->num_cb_config_pages;
                 break;
-            case (uint32_t) DeviceCommand::TransferType::PROGRAM_PAGES:
-                num_pages_in_transfer = header->num_program_pages;
+            case (uint32_t) DeviceCommand::TransferType::PROGRAM_MULTICAST_PAGES:
+                num_pages_in_transfer = header->num_program_multicast_pages;
                 break;
-            case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS:
-                num_pages_in_transfer = header->num_go_signal_pages;
+            case (uint32_t) DeviceCommand::TransferType::PROGRAM_UNICAST_PAGES:
+                multicast = false;
+                num_pages_in_transfer = header->num_program_unicast_pages;
+                break;
+            case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS_MULTICAST:
+                num_pages_in_transfer = header->num_go_signal_multicast_pages;
+                break;
+            case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS_UNICAST:
+                multicast = false;
+                num_pages_in_transfer = header->num_go_signal_unicast_pages;
                 break;
         }
 

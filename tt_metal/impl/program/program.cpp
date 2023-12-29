@@ -175,6 +175,14 @@ KernelGroup::KernelGroup(
     this->launch_msg.run = RUN_MSG_GO;
 }
 
+CoreType KernelGroup::get_core_type() const {
+    if (this->erisc_id.has_value()) {
+        return CoreType::ETH;
+    } else {
+        return CoreType::WORKER;
+    }
+};
+
 std::vector<KernelGroup>& Program::get_kernel_groups() {
     update_kernel_groups();
     return kernel_groups_;

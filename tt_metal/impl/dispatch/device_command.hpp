@@ -23,8 +23,10 @@ struct CommandHeader {
     uint32_t num_pages = 0;
     uint32_t num_runtime_arg_pages = 0;
     uint32_t num_cb_config_pages = 0;
-    uint32_t num_program_pages = 0;
-    uint32_t num_go_signal_pages = 0;
+    uint32_t num_program_multicast_pages = 0;
+    uint32_t num_program_unicast_pages = 0;
+    uint32_t num_go_signal_multicast_pages = 0;
+    uint32_t num_go_signal_unicast_pages = 0;
     uint32_t data_size = 0;
     uint32_t producer_consumer_transfer_num_pages = 0;
     uint32_t buffer_type = 0;
@@ -38,7 +40,15 @@ class DeviceCommand {
    public:
     DeviceCommand();
 
-    enum class TransferType : uint8_t { RUNTIME_ARGS, CB_CONFIGS, PROGRAM_PAGES, GO_SIGNALS, NUM_TRANSFER_TYPES };
+    enum class TransferType : uint8_t {
+        RUNTIME_ARGS,
+        CB_CONFIGS,
+        PROGRAM_MULTICAST_PAGES,
+        PROGRAM_UNICAST_PAGES,
+        GO_SIGNALS_MULTICAST,
+        GO_SIGNALS_UNICAST,
+        NUM_TRANSFER_TYPES
+    };
 
     // Constants
     //TODO: investigate other num_cores
