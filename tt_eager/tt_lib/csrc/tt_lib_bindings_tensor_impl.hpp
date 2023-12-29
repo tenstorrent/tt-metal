@@ -96,7 +96,7 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
 }
 
 //TODO @tt-aho: Update to handle variable number of params
-template <bool mem_config_arg = true, typename Func>
+template <bool mem_config_arg = true, bool dtype_arg = false, typename Func>
 void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
     const std::string tensor_name = "input";
     op_desc = fmt::format(op_desc, tensor_name);
@@ -114,10 +114,10 @@ void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::stri
         op_desc, tensor_name, op_name
     );
 
-    bind_op_with_mem_config<mem_config_arg>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert());
+    bind_op_with_mem_config_and_dtype<mem_config_arg, dtype_arg>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert());
 }
 
-template <bool mem_config_arg = true, typename Func, typename PyArg, typename std::enable_if<std::is_base_of<py::arg, PyArg>::value, int>::type = 0>
+template <bool mem_config_arg = true, bool dtype_arg = false, typename Func, typename PyArg, typename std::enable_if<std::is_base_of<py::arg, PyArg>::value, int>::type = 0>
 void bind_unary_op_with_param(py::module_ &module, std::string op_name, Func &&f, PyArg param, std::string op_desc, std::string param_desc) {
     const std::string tensor_name = "input";
     std::string param_name = std::string(param.name);
@@ -141,7 +141,7 @@ void bind_unary_op_with_param(py::module_ &module, std::string op_name, Func &&f
             "{0}", {1}, "{2}")doc",
         param_name, param_desc, required_param
     );
-    bind_op_with_mem_config<mem_config_arg>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert(), param);
+    bind_op_with_mem_config_and_dtype<mem_config_arg, dtype_arg>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert(), param);
 }
 
 template <typename E, typename... Extra>
