@@ -34,6 +34,12 @@ using tt::TargetDevice;
 
 namespace tt {
 
+enum EthRouterMode : uint8_t {
+    FD_SRC = 0,
+    FD_DST = 1,
+    SD = 2,
+};
+
 class Cluster {
    public:
     Cluster &operator=(const Cluster &) = delete;
@@ -107,8 +113,8 @@ class Cluster {
     uint64_t get_pcie_base_addr_from_device(chip_id_t chip_id) const;
 
     // Ethernet cluster api
-    // Returns set of connected chip ids
-    std::unordered_set<chip_id_t> get_ethernet_connected_chip_ids(chip_id_t chip_id) const;
+    // Returns map of connected chip ids to active ethernet cores
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id) const;
@@ -118,6 +124,17 @@ class Cluster {
 
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+
+    // Converts logical ethernet core coord to physical ethernet core coord
+    CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
+
+    // Configures routing mapping of ethernet cores
+    void set_routing_config_for_ethernet_cores();
+    void launch_internal_routing_for_ethernet_cores() const;
+
+    std::unordered_map<CoreCoord, tt::EthRouterMode> get_eth_router_config_for_device(chip_id_t device_id) const {
+        return this->device_eth_router_config_.at(device_id);
+    }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
@@ -183,6 +200,9 @@ class Cluster {
     //          1 -> 0
     //          3 -> 1
     std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
+
+    // Mapping of each devices' ethernet routing mode
+    std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, tt::EthRouterMode>> device_eth_router_config_;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE

@@ -80,7 +80,7 @@ std::vector<Device*> get_device_ring(std::vector<tt::tt_metal::Device*> devices)
     std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
     for (uint32_t i = 0; i < devices.size(); ++i) {
         const auto& device = devices[i];
-        for (const auto& connected_device_id : device->get_ethernet_connected_chip_ids()) {
+        for (const auto& [connected_device_id, cores] : device->get_ethernet_cores_grouped_by_connected_chips()) {
             for (uint32_t j = 0; j < devices.size(); ++j) {
                 if (devices[j]->id() == connected_device_id) {
                     adj[i][j] = 1;

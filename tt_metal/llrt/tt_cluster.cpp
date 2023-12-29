@@ -47,6 +47,8 @@ Cluster::Cluster() {
     this->initialize_device_drivers();
 
     this->assert_risc_reset();
+
+    this->set_routing_config_for_ethernet_cores();
 }
 
 void Cluster::detect_arch_and_target() {
@@ -315,6 +317,22 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
 
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
+    // Disable internal ethernet routing
+    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        const routing_info_t routing_info_disabled = {
+            .routing_enabled = 0, .routing_mode = 0, .fd_buffer_msgs_sent = 0};
+        for (const auto &chip_id : devices) {
+            for (const auto &eth_core : this->get_active_ethernet_cores(chip_id)) {
+                tt_cxy_pair this_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                write_core(
+                    (void *)&routing_info_disabled,
+                    sizeof(routing_info_t),
+                    this_phys_core,
+                    eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE,
+                    false);
+            }
+        }
+    }
 
     for (const auto &[mmio_device_id, device_driver] : this->mmio_device_id_to_driver_) {
         device_driver->close_device();
@@ -561,27 +579,36 @@ uint64_t Cluster::get_pcie_base_addr_from_device(chip_id_t chip_id) const {
 }
 
 // Ethernet cluster api
-std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_chip_ids(chip_id_t chip_id) const {
-    std::unordered_set<chip_id_t> connected_chips;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) const {
+    const auto &soc_desc = get_soc_desc(chip_id);
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> connected_chips;
     const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
     if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
         return {};
     }
     for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
-        connected_chips.insert(std::get<0>(connected_chip_chan));
+        const auto &other_chip_id = std::get<0>(connected_chip_chan);
+        if (connected_chips.find(other_chip_id) == connected_chips.end()) {
+          std::unordered_set<CoreCoord> active_ethernet_cores;
+
+          for (const auto &channel_pair :
+               this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
+              ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
+              active_ethernet_cores.insert(get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
+          }
+          connected_chips.insert({other_chip_id, active_ethernet_cores});
+        } else {
+            continue;
+        }
     }
     return connected_chips;
 }
 
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    const auto &connected_chips = this->get_ethernet_connected_chip_ids(chip_id);
-    for (auto &other_chip_id : connected_chips) {
-        for (const auto &channel_pair :
-             this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
-            ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
-            active_ethernet_cores.insert(get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
-        }
+    const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+    for (const auto &[other_chip_id, eth_cores] : connected_chips) {
+            active_ethernet_cores.insert(eth_cores.begin(), eth_cores.end());
     }
     return active_ethernet_cores;
 }
@@ -609,6 +636,105 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
         std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+}
+
+CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const {
+    const auto &eth_cores = this->get_soc_desc(chip_id).get_physical_ethernet_cores();
+    const auto &eth_chan_map = this->get_soc_desc(chip_id).logical_eth_core_to_chan_map;
+    TT_ASSERT(
+        (eth_chan_map.find(logical_core) != eth_chan_map.end()),
+        "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
+        logical_core.str());
+    return eth_cores.at(eth_chan_map.at(logical_core));
+}
+
+void Cluster::set_routing_config_for_ethernet_cores() {
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        for (const auto &chip_id : devices) {
+            if (this->device_eth_router_config_.find(chip_id) == this->device_eth_router_config_.end()) {
+                this->device_eth_router_config_.insert({chip_id, {}});
+            }
+        }
+        for (const auto &chip_id : devices) {
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+                for (const auto &[connected_chip_id, active_eth_cores] :
+                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
+                    TT_ASSERT(
+                        (active_eth_cores.size() % 2 == 0),
+                        "Must have even number of eth links between tow devices for fast dispatch routing.");
+                    bool set_src = true;
+                    for (const auto &eth_core : active_eth_cores) {
+                        const auto connected_eth_core =
+                            std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
+                        if (this->device_eth_router_config_.at(chip_id).find(eth_core) ==
+                            this->device_eth_router_config_.at(chip_id).end()) {
+                            tt_cxy_pair this_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                            tt_cxy_pair connected_phys_core(
+                                connected_chip_id,
+                                ethernet_core_from_logical_core(connected_chip_id, connected_eth_core));
+                            if (devices.find(connected_chip_id) != devices.end()) {
+                                // only setup fd tunneling for devices grouped with same mmio device
+                                if (set_src) {
+                                    this->device_eth_router_config_.at(chip_id).insert(
+                                        {eth_core, tt::EthRouterMode::FD_SRC});
+                                    this->device_eth_router_config_.at(connected_chip_id)
+                                        .insert({connected_eth_core, tt::EthRouterMode::FD_DST});
+                                } else {
+                                    this->device_eth_router_config_.at(chip_id).insert(
+                                        {eth_core, tt::EthRouterMode::FD_DST});
+                                    this->device_eth_router_config_.at(connected_chip_id)
+                                        .insert({connected_eth_core, tt::EthRouterMode::FD_SRC});
+                                }
+                                set_src = !set_src;
+                            } else {
+                                this->device_eth_router_config_.at(chip_id).insert({eth_core, tt::EthRouterMode::SD});
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Slow dispatch mode
+                for (const auto &eth_core : this->get_active_ethernet_cores(chip_id)) {
+                    this->device_eth_router_config_.at(chip_id).insert({eth_core, tt::EthRouterMode::SD});
+                }
+            }
+        }
+    }
+}
+
+void Cluster::launch_internal_routing_for_ethernet_cores() const {
+    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    // TODO: initialize devices if user does not
+    // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
+    // we do not always context switch to base FW
+    std::cout << " launching interal routing " << std::endl;
+    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        for (const auto &chip_id : devices) {
+            if (chip_id == assoc_mmio_device) {
+                continue;
+            } else {
+                for (const auto &[eth_core, mode] : this->device_eth_router_config_.at(chip_id)) {
+                    const routing_info_t routing_info = {
+                        .routing_enabled = 1, .routing_mode = (uint32_t)mode, .fd_buffer_msgs_sent = 0};
+                    tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                    write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+                }
+            }
+        }
+        for (const auto &chip_id : devices) {
+            if (chip_id == assoc_mmio_device) {
+                for (const auto &[eth_core, mode] : this->device_eth_router_config_.at(chip_id)) {
+                    const routing_info_t routing_info = {
+                        .routing_enabled = 1, .routing_mode = (uint32_t)mode, .fd_buffer_msgs_sent = 0};
+                    tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                    write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+                }
+            } else {
+                continue;
+            }
+        }
+    }
 }
 
 uint32_t Cluster::get_tensix_soft_reset_addr() const {
