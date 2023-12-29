@@ -57,11 +57,17 @@ void DeviceCommand::set_num_pages(const DeviceCommand::TransferType transfer_typ
         case DeviceCommand::TransferType::CB_CONFIGS:
             this->packet.header.num_cb_config_pages = num_pages;
             break;
-        case DeviceCommand::TransferType::PROGRAM_PAGES:
-            this->packet.header.num_program_pages = num_pages;
+        case DeviceCommand::TransferType::PROGRAM_MULTICAST_PAGES:
+            this->packet.header.num_program_multicast_pages = num_pages;
             break;
-        case DeviceCommand::TransferType::GO_SIGNALS:
-            this->packet.header.num_go_signal_pages = num_pages;
+        case DeviceCommand::TransferType::PROGRAM_UNICAST_PAGES:
+            this->packet.header.num_program_unicast_pages = num_pages;
+            break;
+        case DeviceCommand::TransferType::GO_SIGNALS_MULTICAST:
+            this->packet.header.num_go_signal_multicast_pages = num_pages;
+            break;
+        case DeviceCommand::TransferType::GO_SIGNALS_UNICAST:
+            this->packet.header.num_go_signal_unicast_pages = num_pages;
             break;
         default:
             TT_ASSERT(false, "Invalid transfer type.");

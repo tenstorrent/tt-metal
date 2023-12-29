@@ -145,8 +145,7 @@ void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg)
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
     if (static_cast<bool>(msg->enable_erisc)) {
-        llrt::write_hex_vec_to_core(chip, core, {123}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-        launch_erisc_app_fw_on_core(chip, core);
+        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     } else {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
@@ -287,7 +286,7 @@ namespace internal_ {
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
     if (is_ethernet_core(core, chip_id)) {
         const auto &readback_vec =
-            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG, sizeof(uint32_t));
+            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE, sizeof(uint32_t));
         return (readback_vec[0] == 0);
     } else {
         std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {

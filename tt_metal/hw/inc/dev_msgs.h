@@ -20,6 +20,9 @@
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
 #endif
 
+#define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
+    ((uint64_t) & (((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO   = 0x80;

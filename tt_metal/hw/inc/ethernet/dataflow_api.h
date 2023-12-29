@@ -15,19 +15,21 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 struct erisc_info_t {
-    volatile uint32_t num_bytes;
-    volatile uint32_t mode;
+    volatile uint32_t launch_user_kernel;
+    volatile uint32_t routing_mode;
+    volatile uint32_t routing_enabled;
     volatile uint32_t unused_arg0;
-    volatile uint32_t unused_arg1;
-    volatile uint32_t bytes_sent;
+    volatile uint32_t user_buffer_bytes_sent;
     uint32_t reserved_0_;
     uint32_t reserved_1_;
     uint32_t reserved_2_;
-    volatile uint32_t bytes_received;
+    volatile uint32_t fast_dispatch_buffer_msgs_sent;
     uint32_t reserved_3_;
     uint32_t reserved_4_;
     uint32_t reserved_5_;
 };
+
+tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
 erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
@@ -38,6 +40,13 @@ volatile uint32_t *RtosTable =
 
 void (*rtos_context_switch_ptr)();
 
+FORCE_INLINE
+void reset_erisc_info() { erisc_info->user_buffer_bytes_sent = 0; }
+
+FORCE_INLINE
+void disable_erisc_app() { flag_disable[0] = 0; }
+
+namespace internal_ {
 void __attribute__((section("code_l1"))) risc_context_switch() {
     ncrisc_noc_full_sync();
     rtos_context_switch_ptr();
@@ -45,25 +54,29 @@ void __attribute__((section("code_l1"))) risc_context_switch() {
 }
 
 FORCE_INLINE
-void reset_erisc_info() {
-    erisc_info->bytes_sent = 0;
-}
-
-FORCE_INLINE
-void disable_erisc_app() { flag_disable[0] = 0; }
-
-FORCE_INLINE
 void check_and_context_switch() {
     uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t end_time = start_time;
     while (end_time - start_time < 100000) {
         RISC_POST_STATUS(0xdeadCAFE);
-        risc_context_switch();
+        internal_::risc_context_switch();
         RISC_POST_STATUS(0xdeadFEAD);
         end_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     }
     // proceed
 }
+
+void notify_dispatch_core_done(uint64_t dispatch_addr) {
+    //  flush both nocs because ethernet kernels could be using different nocs to try to atomically increment semaphore
+    //  in dispatch core
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF))
+            ;
+    }
+    noc_fast_atomic_increment_l1(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
+}
+}  // namespace internal_
+
 
 /**
  * A blocking call that waits until the value of a local L1 memory address on
@@ -81,7 +94,7 @@ void check_and_context_switch() {
 FORCE_INLINE
 void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     while ((*sem_addr) != val) {
-        risc_context_switch();
+        internal_::risc_context_switch();
     }
 }
 
@@ -96,7 +109,7 @@ void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 FORCE_INLINE
 void eth_noc_async_read_barrier() {
     while (!ncrisc_noc_reads_flushed(noc_index)) {
-        risc_context_switch();
+        internal_::risc_context_switch();
     }
 }
 
@@ -111,7 +124,7 @@ void eth_noc_async_read_barrier() {
 FORCE_INLINE
 void eth_noc_async_write_barrier() {
     while (!ncrisc_noc_nonposted_writes_flushed(noc_index)) {
-        risc_context_switch();
+        internal_::risc_context_switch();
     }
 }
 
@@ -140,7 +153,7 @@ void eth_send_bytes(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
-    erisc_info->bytes_sent += num_bytes;
+    erisc_info->user_buffer_bytes_sent += num_bytes;
 }
 
 /**
@@ -154,9 +167,13 @@ void eth_send_bytes(
  */
 FORCE_INLINE
 void eth_wait_for_receiver_done() {
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
-    while (erisc_info->bytes_sent != 0) {
-        risc_context_switch();
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        1);
+    while (erisc_info->user_buffer_bytes_sent != 0) {
+        internal_::risc_context_switch();
     }
 }
 
@@ -183,14 +200,14 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     uint32_t local_eth_l1_curr_src_addr,
     uint32_t size
 ) {
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
+    eth_send_packet(0, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, 1);
     eth_noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
     noc_async_read(receiver_data_noc_addr, local_eth_l1_curr_src_addr, size);
     eth_noc_async_read_barrier();
     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
     noc_semaphore_inc(receiver_semaphore_noc_addr, 1);
-    while (erisc_info->bytes_sent != 0) {
-        risc_context_switch();
+    while (erisc_info->user_buffer_bytes_sent != 0) {
+        internal_::risc_context_switch();
     }
 }
 /**
@@ -207,8 +224,8 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
  */
 FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes) {
-    while (erisc_info->bytes_sent != num_bytes) {
-        risc_context_switch();
+    while (erisc_info->user_buffer_bytes_sent != num_bytes) {
+        internal_::risc_context_switch();
     }
 }
 
@@ -223,6 +240,10 @@ void eth_wait_for_bytes(uint32_t num_bytes) {
  */
 FORCE_INLINE
 void eth_receiver_done() {
-    erisc_info->bytes_sent = 0;
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
+    erisc_info->user_buffer_bytes_sent = 0;
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        1);
 }
