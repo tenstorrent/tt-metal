@@ -15,15 +15,15 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 struct erisc_info_t {
-    volatile uint32_t num_bytes;
-    volatile uint32_t mode;
-    volatile uint32_t unused_arg0;
+    volatile uint32_t launch_sd_kernel;
+    volatile uint32_t routing_mode;
+    volatile uint32_t routing_enabled;
     volatile uint32_t unused_arg1;
-    volatile uint32_t bytes_sent;
+    volatile uint32_t user_buffer_bytes_sent;
     uint32_t reserved_0_;
     uint32_t reserved_1_;
     uint32_t reserved_2_;
-    volatile uint32_t bytes_received;
+    volatile uint32_t fd_buffer_msgs_sent;
     uint32_t reserved_3_;
     uint32_t reserved_4_;
     uint32_t reserved_5_;
@@ -45,9 +45,7 @@ void __attribute__((section("code_l1"))) risc_context_switch() {
 }
 
 FORCE_INLINE
-void reset_erisc_info() {
-    erisc_info->bytes_sent = 0;
-}
+void reset_erisc_info() { erisc_info->user_buffer_bytes_sent = 0; }
 
 FORCE_INLINE
 void disable_erisc_app() { flag_disable[0] = 0; }
@@ -140,7 +138,7 @@ void eth_send_bytes(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
-    erisc_info->bytes_sent += num_bytes;
+    erisc_info->user_buffer_bytes_sent += num_bytes;
 }
 
 /**
@@ -154,8 +152,12 @@ void eth_send_bytes(
  */
 FORCE_INLINE
 void eth_wait_for_receiver_done() {
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
-    while (erisc_info->bytes_sent != 0) {
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        1);
+    while (erisc_info->user_buffer_bytes_sent != 0) {
         risc_context_switch();
     }
 }
@@ -183,14 +185,14 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     uint32_t local_eth_l1_curr_src_addr,
     uint32_t size
 ) {
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
+    eth_send_packet(0, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, 1);
     eth_noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
     noc_async_read(receiver_data_noc_addr, local_eth_l1_curr_src_addr, size);
     eth_noc_async_read_barrier();
     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
     noc_semaphore_inc(receiver_semaphore_noc_addr, 1);
-    while (erisc_info->bytes_sent != 0) {
-        risc_context_switch();
+    while (erisc_info->user_buffer_bytes_sent != 0) {
+        internal_::risc_context_switch();
     }
 }
 /**
@@ -207,7 +209,7 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
  */
 FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes) {
-    while (erisc_info->bytes_sent != num_bytes) {
+    while (erisc_info->user_buffer_bytes_sent != num_bytes) {
         risc_context_switch();
     }
 }
@@ -223,6 +225,64 @@ void eth_wait_for_bytes(uint32_t num_bytes) {
  */
 FORCE_INLINE
 void eth_receiver_done() {
-    erisc_info->bytes_sent = 0;
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
+    erisc_info->user_buffer_bytes_sent = 0;
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        1);
 }
+
+namespace internal_ {
+FORCE_INLINE
+void send_fd_packets() {
+    eth_send_packet(
+        0,
+        (eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE) >> 4,
+        ((eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE)) >> 4,
+        (eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE) >> 4);
+    erisc_info->fd_buffer_msgs_sent += 1;
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->fd_buffer_msgs_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->fd_buffer_msgs_sent))) >> 4,
+        1);
+    while (erisc_info->fd_buffer_msgs_sent != 0) {
+        // TODO: add timer to restrict this
+        risc_context_switch();
+    }
+}
+
+FORCE_INLINE
+void receive_fd_packets() {
+    while (erisc_info->fd_buffer_msgs_sent != 1) {
+        // TODO: add timer to restrict this
+        risc_context_switch();
+    }
+    erisc_info->fd_buffer_msgs_sent = 0;
+    eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->fd_buffer_msgs_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->fd_buffer_msgs_sent))) >> 4,
+        1);
+}
+
+// set mode in host, set enable_fd_tunneling on firmware init and clear on device close?
+//
+void run_routing() {
+    // TODO: maybe split into two FWs? or this may be better to sometimes allow each eth core to do both send and
+    // receive of fd packets
+    if (erisc_info->routing_mode == 0) {
+        internal_::send_fd_packets();
+    } else if (erisc_info->routing_mode == 1) {
+        internal_::receive_fd_packets();
+    } else if (erisc_info->routing_mode == 2) {
+        // slow dispatch mode
+        risc_context_switch();
+    } else {
+        while (true) {
+            RISC_POST_STATUS(0xdeaddead);
+        }
+    }
+}
+}  // namespace internal_

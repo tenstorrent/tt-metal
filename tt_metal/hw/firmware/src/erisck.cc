@@ -36,5 +36,5 @@ void __attribute__((section("erisc_l1_code"))) kernel_launch() {
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
-    erisc_info->num_bytes = 0;
+    erisc_info->launch_sd_kernel = 0;
 }

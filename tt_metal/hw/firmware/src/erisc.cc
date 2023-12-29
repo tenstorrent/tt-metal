@@ -54,10 +54,9 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         noc_local_state_init(n);
     }
     ncrisc_noc_full_sync();
-    while (1) {
-        if (erisc_info->num_bytes == 123) {
+    while (erisc_info->routing_enabled) {
+        if (erisc_info->launch_sd_kernel == 1) {
             kernel_init();
-            break;
         } else {
             risc_context_switch();
         }
