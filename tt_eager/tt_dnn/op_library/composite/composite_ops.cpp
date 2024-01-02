@@ -938,6 +938,34 @@ Tensor normalize_hw(const Tensor& y,const MemoryConfig& output_mem_config) {
    return operation::decorate_as_composite(__func__, _normalize)(y,output_mem_config);
 }
 
+using HWFunctionT = std::function<Tensor (const Tensor& y, const MemoryConfig&)>;
+Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const Shape s_orig = y.shape();
+    TT_FATAL(s_orig.rank() == 4, "Cannot support non-rank 4 Tensor");
+
+    //format to HW
+    Tensor y_hw = reshape(y,1,1,s_orig[2],s_orig[3]*s_orig[1]*s_orig[0],output_mem_config);
+
+    // compute @fn
+    Tensor z_0 = fn(y_hw,output_mem_config);
+    TT_FATAL( y_hw.shape() == z_0.shape(), "shape match" );
+    y_hw.deallocate();
+
+    // reformat
+    Tensor z_1 = reshape(z_0,s_orig[0],s_orig[1],s_orig[2],s_orig[3],output_mem_config);
+    z_0.deallocate();
+
+    return z_1;
+}
+
+//Global Norm
+Tensor _normalize_global(const Tensor& y,const MemoryConfig& output_mem_config) {
+    return _make_global_from_hw_impl( normalize_hw, y, output_mem_config );
+}
+Tensor normalize_global(const Tensor& y,const MemoryConfig& output_mem_config) {
+   return operation::decorate_as_composite(__func__, _normalize_global)(y,output_mem_config);
+}
+
 //TODO: can be a fused binop
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor _hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config) {
