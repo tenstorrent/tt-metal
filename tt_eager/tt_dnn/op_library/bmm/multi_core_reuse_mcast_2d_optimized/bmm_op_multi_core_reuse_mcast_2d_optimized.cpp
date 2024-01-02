@@ -854,6 +854,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
     TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
 
+    if (fp32_dest_acc_en) {
+        TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
