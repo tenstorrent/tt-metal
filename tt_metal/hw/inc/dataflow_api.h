@@ -579,7 +579,7 @@ struct InterleavedAddrGenFast {
         }
 
         DEBUG_STATUS('N', 'R', 'T', 'W');
-        DEBUG_SANITIZE_NOC_ADDR(NOC_XY_ADDR2(src_noc_xy, src_addr), this->page_size);
+        DEBUG_SANITIZE_NOC_ADDR(get_noc_addr_helper(src_noc_xy, src_addr), this->page_size);
         DEBUG_SANITIZE_WORKER_ADDR(dest_addr, this->page_size);
         while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF))
             ;
@@ -627,7 +627,7 @@ struct InterleavedAddrGenFast {
 
         DEBUG_STATUS('N', 'W', 'T', 'W');
         DEBUG_SANITIZE_WORKER_ADDR(src_addr, this->page_size);
-        DEBUG_SANITIZE_NOC_ADDR(NOC_XY_ADDR2(dest_noc_xy, dest_addr), this->page_size);
+        DEBUG_SANITIZE_NOC_ADDR(get_noc_addr_helper(dest_noc_xy, dest_addr), this->page_size);
         while (!ncrisc_noc_fast_write_ok(noc_index, NCRISC_WR_REG_CMD_BUF))
             ;
         DEBUG_STATUS('N', 'W', 'T', 'D');
@@ -684,7 +684,7 @@ struct InterleavedPow2AddrGenFast {
         }
 
         DEBUG_STATUS('N', 'R', 'P', 'W');
-        DEBUG_SANITIZE_NOC_ADDR(NOC_XY_ADDR2(src_noc_xy, src_addr), log_base_2_of_page_size);
+        DEBUG_SANITIZE_NOC_ADDR(get_noc_addr_helper(src_noc_xy, src_addr), log_base_2_of_page_size);
         DEBUG_SANITIZE_WORKER_ADDR(dest_addr, this->log_base_2_of_page_size);
         while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF))
             ;
@@ -769,7 +769,7 @@ struct InterleavedPow2AddrGenFast {
 
         DEBUG_STATUS('N', 'W', 'P', 'W');
         DEBUG_SANITIZE_WORKER_ADDR(src_addr, write_size_bytes);
-        DEBUG_SANITIZE_NOC_ADDR(NOC_XY_ADDR2(dest_noc_xy, dest_addr), write_size_bytes);
+        DEBUG_SANITIZE_NOC_ADDR(get_noc_addr_helper(dest_noc_xy, dest_addr), write_size_bytes);
         while (!ncrisc_noc_fast_write_ok(noc_index, NCRISC_WR_REG_CMD_BUF))
             ;
         DEBUG_STATUS('N', 'W', 'P', 'D');
