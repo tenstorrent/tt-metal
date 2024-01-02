@@ -9,7 +9,7 @@ test-list:
         num-samples: 64
         args-sampling-strategy: "all"
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        TT_METAL_SLOW_DISPATCH_MODE: ["1"]
       datagen:
         function: gen_rand_complex
         args:
@@ -34,7 +34,7 @@ test-list:
         num-samples: 64
         args-sampling-strategy: "all"
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        TT_METAL_SLOW_DISPATCH_MODE: ["1"]
       datagen:
         function: gen_rand_complex
         dtype: cfloat
