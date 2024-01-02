@@ -714,6 +714,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.normalize_hw
 
+.. autofunction:: tt_lib.tensor.normalize_global
+
 .. autofunction:: tt_lib.tensor.glu
 
 .. autofunction:: tt_lib.tensor.geglu

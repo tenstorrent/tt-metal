@@ -64,7 +64,7 @@ op_map = {
         "pytorch_op": pytorch_ops.mean_global,
     },
     "stats-normalize_global": {
-        "tt_lib_op": None,  # tt_lib_ops.normalize_global,
+        "tt_lib_op": tt_lib_ops.normalize_global,
         "pytorch_op": pytorch_ops.normalize_global,
     },
     # Eltwise unary

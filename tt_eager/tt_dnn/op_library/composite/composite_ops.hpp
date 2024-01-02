@@ -272,6 +272,7 @@ Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation
 // Function normalize
 //use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor normalize_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor normalize_global(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor logical_ori(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

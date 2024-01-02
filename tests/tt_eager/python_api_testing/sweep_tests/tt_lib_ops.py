@@ -1840,7 +1840,7 @@ def make_unary_op(ttl_tensor_unop):
 # mean_global = make_unary_op(ttl.tensor.global_mean)
 # var_global = make_unary_op(ttl.tensor.global_var)
 # std_global = make_unary_op(ttl.tensor.global_std)
-# normalize_global = make_unary_op(ttl.tensor.global_normalize)
+normalize_global = make_unary_op(ttl.tensor.normalize_global)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_unary_op(ttl.tensor.cos)
 eltwise_sin = make_unary_op(ttl.tensor.sin)
