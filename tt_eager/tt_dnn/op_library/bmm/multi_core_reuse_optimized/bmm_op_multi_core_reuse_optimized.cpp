@@ -449,6 +449,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
 
+    if (fp32_dest_acc_en) {
+        TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
