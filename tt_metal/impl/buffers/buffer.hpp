@@ -161,16 +161,34 @@ class Buffer {
 
     uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    // SHARDED API STARTS HERE
+    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
+    uint64_t page_address(uint32_t page_index) const;
+
     uint64_t core_address(uint32_t core_id) const;
 
     ShardSpecBuffer shard_spec() const {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         TT_ASSERT(shard_parameters_.has_value());
         return this->shard_parameters_.value();
     }
 
-    std::vector<uint32_t> dev_page_to_core_mapping() const{
+    CoreCoord get_core_from_dev_page_id(uint32_t dev_page_id) const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return dev_page_to_core_mapping_;
+        TT_ASSERT(dev_page_id < dev_page_to_core_mapping_.size());
+        return all_cores_[dev_page_to_core_mapping_[dev_page_id]];
+    }
+
+    uint32_t get_mapped_page_id(uint32_t input_id) const {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        TT_ASSERT(input_id < dev_page_to_core_mapping_.size());
+        return dev_page_to_host_page_mapping_[input_id];
+    }
+
+    uint32_t get_bank_id_from_page_id (uint32_t page_id) const{
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        auto core_id = dev_page_to_core_mapping_[page_id];
+        return core_bank_indices_[core_id];
     }
 
     std::vector<CoreCoord> all_cores() const{
@@ -181,16 +199,6 @@ class Buffer {
     std::vector< std::vector<uint32_t> > core_host_page_indices() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return core_host_page_indices_;
-    }
-
-    std::vector < uint32_t> core_bank_indices() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_bank_indices_;
-    }
-
-    std::vector < uint32_t> dev_page_to_host_page_mapping() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return dev_page_to_host_page_mapping_;
     }
 
     uint32_t num_cores() const{

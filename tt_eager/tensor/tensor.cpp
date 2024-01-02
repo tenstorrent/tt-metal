@@ -257,12 +257,11 @@ std::vector<uint32_t> Tensor::host_page_ordering(){
     auto cores = buffer()->all_cores();
     auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
-    auto dp_map = buffer()->dev_page_to_host_page_mapping();
 
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(dp_map[page_id]);
+        ret_vec.push_back(buffer()->get_mapped_page_id(page_id));
     }
     return ret_vec;
 }

@@ -293,9 +293,21 @@ uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
 
     int pages_offset_within_bank = (int)page_index / num_banks;
-    if( is_sharded(this->buffer_layout_)){
-        pages_offset_within_bank = page_index % shard_spec().size();
-    }
+    auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
+    return base_page_address + offset;
+}
+
+uint64_t Buffer::page_address(uint32_t page_index) const {
+    TT_ASSERT(is_sharded(this->buffer_layout()));
+
+    auto bank_id = this->get_bank_id_from_page_id(page_index);
+
+    // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
+    uint64_t base_page_address = this->buffer_type_ == BufferType::DRAM ?
+        this->address_ :
+        this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
+
+    int pages_offset_within_bank = page_index % shard_spec().size();
     auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
     return base_page_address + offset;
 }
