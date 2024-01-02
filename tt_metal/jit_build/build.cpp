@@ -528,7 +528,6 @@ void jit_build(const JitBuildState& build,
                const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "jit_build";
 
     if (settings != nullptr) {
         build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
@@ -542,8 +541,6 @@ void jit_build_set(const JitBuildStateSet& build_set,
                    const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "jit_build_set";
-    ZoneName( tracyPrefix, tracyPrefix.length());
 
     std::vector<std::thread> threads;
     threads.resize(build_set.size());
@@ -568,8 +565,6 @@ void jit_build_subset(const JitBuildStateSubset& build_subset,
                       const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "jit_build_subset";
-    ZoneName( tracyPrefix, tracyPrefix.length());
 
     std::vector<std::thread> threads;
     threads.resize(build_subset.size);
