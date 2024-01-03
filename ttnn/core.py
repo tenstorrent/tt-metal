@@ -6,9 +6,8 @@ import math
 import pathlib
 from typing import Optional, Tuple, Union
 
-
 import tt_lib as ttl
-
+from ttnn.decorators import decorate_operation
 from ttnn.tensor import (
     Shape,
     Tensor,
@@ -26,7 +25,6 @@ from ttnn.tensor import (
     TILE_SIZE,
     has_storage_type_of,
 )
-from ttnn.decorators import decorate_operation
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
@@ -1081,6 +1079,13 @@ Tensor.__radd__ = add
 Tensor.__sub__ = sub
 Tensor.__mul__ = mul
 Tensor.__rmul__ = mul
+# TODO: Relationals mapped to TT_DNN
+# Tensor.__lt__ = lt # tt_lib.tensor.lt, ltz
+# Tensor.__le__ = le # tt_lib.tensor.le, lez
+# Tensor.__gt__ = gt # tt_lib.tensor.gt, gtz
+# Tensor.__ge__ = ge # tt_lib.tensor.ge, gez
+# Tensor.__ne__ = ne # tt_lib.tensor.ne, nez
+# Tensor.__eq__ = eq # tt_lib.tensor.eq, eqz
 
 
 # Data Transformations
@@ -1240,7 +1245,7 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
     elif len(input_tensor.shape) < 4:
         original_shape = tuple(input_tensor.shape)
-        desired_shape = tuple([original_shape[i] for i in order])
+        desired_shape = tuple(original_shape[i] for i in order)
         input_tensor = _reshape_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
         new_order = order
