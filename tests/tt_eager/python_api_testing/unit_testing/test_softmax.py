@@ -101,6 +101,11 @@ def test_softmax_mix_precision(device, inplace, in_dtype, cb_dtype):
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
+    "casual_mask",
+    [True, False],
+    ids=["causal", "no-causal"],
+)
+@pytest.mark.parametrize(
     "in0_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=[
@@ -109,10 +114,13 @@ def test_softmax_mix_precision(device, inplace, in_dtype, cb_dtype):
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+    ),
     ids=["BFLOAT16", "BFLOAT8_B"],
 )
-def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config):
+def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, casual_mask):
     torch.manual_seed(0)
     fuse_head = 2
 
@@ -125,18 +133,34 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config):
 
     hidden_dim = 1024
     num_heads = 16
+    # scale = 1.0
     scale = 1 / math.sqrt(hidden_dim // num_heads)
-    attention_mask = torch.rand(batch, 1, 32, 384)
-    attention_mask = (attention_mask > 0.5).float()
-    attention_mask32 = tilize_to_list(pad_weight(attention_mask))
-    attention_mask_t = ttl.tensor.Tensor(
-        attention_mask32,
-        [batch, 1, 32, 384],
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        device,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-    )
+
+    if casual_mask == False:
+        attention_mask = torch.rand(batch, 1, 32, 384)
+        attention_mask = (attention_mask > 0.5).float()
+        attention_mask32 = tilize_to_list(pad_weight(attention_mask))
+        attention_mask_t = ttl.tensor.Tensor(
+            attention_mask32,
+            [batch, 1, 32, 384],
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.TILE,
+            device,
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        )
+    else:
+        # attention_mask = torch.zeros(batch, 1, 384, 384)
+        attention_mask = torch.rand(batch, 1, 384, 384)
+        attention_mask = (attention_mask > 0.5).float()
+        attention_mask32 = tilize_to_list(pad_weight(attention_mask))
+        attention_mask_t = ttl.tensor.Tensor(
+            attention_mask32,
+            [batch, 1, 384, 384],
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.TILE,
+            device,
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        )
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
@@ -147,12 +171,13 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config):
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)
 
-    attention_mask = attention_mask.reshape(batch, 1, 32, 384)
-
-    attention_mask_ref = attention_mask[:, :, 0, :]
+    if casual_mask == False:
+        attention_mask = attention_mask.reshape(batch, 1, 32, 384)[:, :, 0, :]
+    else:
+        attention_mask = attention_mask.repeat(1, 1, num_cores_r * fuse_head, 1)
 
     for i in range(batch):
-        golden_output_tensor = input_tensor[i] * scale + attention_mask_ref[i]
+        golden_output_tensor = input_tensor[i] * scale + attention_mask[i]
         golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
         allclose, output = comp_pcc(

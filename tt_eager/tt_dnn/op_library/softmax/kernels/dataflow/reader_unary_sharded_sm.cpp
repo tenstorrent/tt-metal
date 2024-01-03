@@ -42,6 +42,7 @@ void kernel_main() {
     constexpr uint32_t cb_attn = tt::CB::c_in3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
     const DataFormat mask_data_format = get_dataformat(cb_attn);
+    uint32_t mask_id = mask_start_tile_id;
 
     const InterleavedAddrGenFast<is_dram_mask> addr_mask = {
         .bank_base_address = mask_addr,
@@ -51,20 +52,41 @@ void kernel_main() {
 
     generate_inv_sqrt_hw_bcast_tile();
 
+    #if CAUSAL_MASK
+    uint32_t fused_head = get_compile_time_arg_val(4);
+    for (uint32_t f = 0; f<fused_head; f++) {
+        mask_id = mask_start_tile_id;
+        for (uint32_t h = 0; h<block_wt; h++) {
+            cb_reserve_back(cb_attn, block_wt);
+            uint32_t l1_write_addr = get_write_ptr(cb_attn);
+            for (uint32_t w = 0; w<block_wt; w++) {
+                noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
+                l1_write_addr += mask_tile_bytes;
+                ++mask_id;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_attn, block_wt);
+
+            if (f == 0 && h == 0) {
+                generate_bcast_scaler();
+            }
+        }
+    }
+    #else
     cb_reserve_back(cb_attn, block_wt);
     uint32_t l1_write_addr = get_write_ptr(cb_attn);
-    uint32_t tile_offset = 0;
     for (uint32_t w = 0; w<block_wt; w++) {
-        uint64_t mask_noc_addr = get_noc_addr(mask_start_tile_id, addr_mask) + tile_offset;
-        noc_async_read(mask_noc_addr, l1_write_addr, 32);
-        mask_noc_addr += 512;
-        noc_async_read(mask_noc_addr, l1_write_addr + 512, 32);
+        noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
         l1_write_addr += mask_tile_bytes;
-        tile_offset += 32;
+        ++mask_id;
     }
     noc_async_read_barrier();
     cb_push_back(cb_attn, block_wt);
-    #endif
 
     generate_bcast_scaler();
+    #endif
+
+    #else
+    generate_bcast_scaler();
+    #endif
 }
