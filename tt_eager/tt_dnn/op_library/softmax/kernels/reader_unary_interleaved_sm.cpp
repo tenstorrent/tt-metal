@@ -76,6 +76,14 @@ void kernel_main() {
         .data_format = mask_data_format
     };
 
+    #if CAUSAL_MASK
+    constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(2);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);
+    uint32_t mask_offset = get_arg_val<uint32_t>(12);
+
+    uint32_t mask_id_offset = mask_offset;
+    uint32_t mask_ht = mask_start_ht;
+    #endif
 
     uint32_t ht = start_ht;
     uint32_t mask_id = start_mask_id;
@@ -115,6 +123,29 @@ void kernel_main() {
         // Recall that the total attention tensor size in tiles is NC,1,Wt
         // For fused scale-mask softmax we write Wt attention tiles for every partHt*Wt
         // of slice of tensor that was assigned to our core, then we skip to next batch
+        #if CAUSAL_MASK
+        for (uint32_t j = 0; j < Wt; j += blk) {
+            cb_reserve_back(cb_id_attn, blk);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_attn);
+            for (uint32_t wb = 0; wb<blk; ++wb) {
+                noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
+                l1_write_addr += mask_tile_bytes;
+                ++mask_id;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_attn, blk);
+        }
+        ++ht;
+        ++mask_ht;
+        if (ht == Ht) {
+            ht = 0;
+            mask_ht = 0;
+            mask_id_offset += num_tiles_causal_mask;
+        } else if (mask_ht == Wt) {
+            mask_ht = 0;
+            mask_id = mask_id_offset;
+        }
+        #else
         if (read_mask) {
             for (uint32_t j = 0; j < Wt; j += blk) {
                 // This is only executed every blk wts
@@ -135,6 +166,8 @@ void kernel_main() {
             ht = 0;
             read_mask = true;
         }
+        #endif // CAUSAL_MASK
+
         #endif // FUSED_SCALE_MASK
     }
 }
