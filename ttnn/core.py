@@ -1423,7 +1423,7 @@ def layer_norm(
     memory_config: Optional[MemoryConfig] = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     r"""
-    layer_norm(input_tensor: Tensor, dim: int) -> Tensor
+    layer_norm(input_tensor: Tensor) -> Tensor
 
     Compute layer_norm over :attr:`input_tensor`.
 
@@ -1454,6 +1454,28 @@ def layer_norm(
 
     output_tensor = Tensor(output_tensor)
     output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+def rms_norm(input_tensor: Tensor, weight: Tensor, *, epsilon: float = 1e-6) -> Tensor:
+    r"""
+    rms_norm(input_tensor: Tensor) -> Tensor
+
+    Compute rms_norm over :attr:`input_tensor`.
+
+    """
+
+    original_shape = input_tensor.shape
+    input_tensor = _reshape_to_4D(input_tensor)
+    weight = _reshape_to_4D(weight)
+
+    ttl_input_tensor = input_tensor.value
+    ttl_weight = weight.value
+    ttl_output_tensor = ttl.tensor.rmsnorm(ttl_input_tensor, epsilon, ttl_weight)
+
+    output_tensor = Tensor(ttl_output_tensor)
+    output_tensor = reshape(output_tensor, original_shape)
+
     return output_tensor
 
 
@@ -1529,5 +1551,6 @@ __all__ = [
     "embedding",
     "softmax",
     "layer_norm",
+    "rms_norm",
     "mean",
 ]

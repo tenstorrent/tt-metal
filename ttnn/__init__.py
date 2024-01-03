@@ -53,6 +53,7 @@ from ttnn.core import (
     # fused operations
     softmax,
     layer_norm,
+    rms_norm,
     # reduction operations
     mean,
 )

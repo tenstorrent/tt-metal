@@ -91,6 +91,9 @@ def has_storage_type_of(tensor: Tensor, storage_type) -> bool:
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[DataType] = None,
+    *,
+    layout: Optional[Layout] = ROW_MAJOR_LAYOUT,
+    device: Optional[Device] = None,
 ) -> Tensor:
     """
     from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None) -> Tensor
@@ -112,14 +115,26 @@ def from_torch(
     def impl(tensor, dtype):
         return Tensor(ttl.tensor.Tensor(tensor, dtype))
 
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype)
+
+    if layout is not None:
+        tensor = to_layout(tensor, layout)
+
+    if device is not None:
+        tensor = to_device(tensor, device)
+
+    return tensor
 
 
 @decorate_operation()
 def to_torch(tensor: Tensor) -> "torch.Tensor":
+    if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+        tensor = from_device(tensor)
+
+    if tensor.layout != ROW_MAJOR_LAYOUT:
+        tensor = to_layout(tensor, ROW_MAJOR_LAYOUT)
+
     def impl(ttl_tensor):
-        if ttl_tensor.storage_type() == DEVICE_STORAGE_TYPE:
-            raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
         return ttl_tensor.to_torch()
 
     ttl_tensor = tensor.value
