@@ -264,7 +264,6 @@ def preprocess_inputs(
     num_heads,
     max_length,
     attention_mask=None,
-    **kwargs,
 ):
     num_tokens = input_ids.shape[-1]
     padding_needed = (max_length - (num_tokens % max_length)) % max_length
