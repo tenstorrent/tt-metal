@@ -1,4 +1,4 @@
-personal_ws-1.1 en 432
+personal_ws-1.1 en 465
 ABI
 ADDI
 API
@@ -96,6 +96,7 @@ NoC
 NoCs
 Nt
 OPs
+Operations
 OwnedStorage
 PCC
 PCI
@@ -152,8 +153,10 @@ WriteToDevice
 XXXX
 ZoneScoped
 abovementioned
+abs
 acc
 acos
+acosh
 addexp
 addr
 agrebenisan
@@ -162,9 +165,11 @@ apis
 arg
 args
 asin
+asinh
 asm
 async
 atan
+atanh
 autoclass
 autofunction
 backend
@@ -180,11 +185,13 @@ brisc
 cachable
 cb
 cbid
+cbrt
 cd
 cin
 ckernel
 ckernels
 cli
+clone
 codebase
 concat
 config
@@ -192,6 +199,8 @@ const
 constexpr
 coord
 coords
+cos
+cosh
 cpp
 cpu
 cq
@@ -206,11 +215,13 @@ deallocate
 debiases
 dec
 defaultfloat
+deg
 denorms
 dest
 dev
 devs
 dfb
+digamma
 dir
 dnn
 doxygendefine
@@ -236,6 +247,7 @@ erfc
 erfinv
 exexp
 exman
+exp
 expm
 fb
 fno
@@ -250,8 +262,10 @@ gez
 grayskull
 grey
 gtz
+hardshrink
 hardsigmoid
 hardswish
+hardtanh
 heaviside
 hpp
 hs
@@ -278,12 +292,16 @@ iw
 iy
 jupyter
 ld
+leaky
 lez
+lgamma
 linenos
 llk
 llrt
 loadi
 loadis
+log
+logit
 loopback
 ltz
 lut
@@ -292,6 +310,7 @@ lz
 matmul
 maxdepth
 md
+mish
 modindex
 mul
 multicast
@@ -300,6 +319,7 @@ namespace
 nans
 ncrisc
 nd
+neg
 nez
 noc
 nodebias
@@ -319,8 +339,11 @@ param
 perf
 performant
 phyiscally
+polygamma
+pow
 pragma
 pre
+prelu
 profiler
 ptr
 pwd
@@ -329,6 +352,7 @@ pytest
 pytorch
 qkv
 quickstart
+rad
 randint
 randn
 rb
@@ -364,14 +388,18 @@ shflror
 shflshr
 shft
 sigmoid
+sign
 signbit
 silu
+sin
+sinh
 sizeof
 skillset
 smi
 smsg
 softmax
 sqrt
+square
 sr
 src
 srca
@@ -382,8 +410,11 @@ struct
 submodule
 subvec
 sudo
+swish
 sys
+tan
 tanh
+tanhshrink
 teardown
 tensix
 tgz
@@ -395,8 +426,10 @@ toctree
 todo
 tracy
 transp
+tril
 trisc
 triscs
+triu
 tt
 ttDNN
 ttnn
