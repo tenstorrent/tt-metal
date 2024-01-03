@@ -68,7 +68,6 @@ def test_performance_of_bloom_for_question_answering(
     )
 
     # TODO: don't modify the config globally. Pass it into the functions instead
-    ttnn_optimized_functional_bloom.BLOOM_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
     ttnn_optimized_functional_bloom.ASSUME_FUSED_SOFTMAX = True
 
     durations = []
@@ -100,5 +99,4 @@ def test_performance_of_bloom_for_question_answering(
     logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
     # TODO: don't modify the config globally. Pass it into the functions instead
-    ttnn_optimized_functional_bloom.BLOOM_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
     ttnn_optimized_functional_bloom.ASSUME_FUSED_SOFTMAX = False
