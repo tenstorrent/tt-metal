@@ -66,6 +66,14 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     uint32_t num_units = tilized ? input_tensor.volume() / TILE_HW : input_tensor.volume() / input_tensor.shape()[-1];
 
     bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
+
+    // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to reallocate at lower addresses
+    // If the tensor is not allocated in a new address, there is no need to move the data
+    if (move_within_same_mem_space and input_address == output_tensor.buffer()->address()) {
+        tt::log_debug(tt::LogOp, "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}", input_address);
+        return output_tensor;
+    }
+
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
     const auto num_banks = input_tensor.device()->num_banks(output_tensor.buffer()->buffer_type());
@@ -102,7 +110,6 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     }
 
     auto output = operation::run(Move{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor}).at(0);
-    input_tensor.deallocate();
     return output;
 }
 
@@ -133,7 +140,6 @@ inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& me
     }
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
     auto output = operation::run(Move{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor}).at(0);
-    input_tensor.deallocate();
     return output;
 }
 
