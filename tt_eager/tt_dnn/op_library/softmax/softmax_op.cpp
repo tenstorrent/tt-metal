@@ -35,7 +35,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
     const std::optional<const Tensor> mask,
     std::optional<float> scale,
     MathFidelity fidelity,
-    DataType im_data_format
+    DataType im_data_format,
+    bool causal_mask
 ) {
 
     const auto shape = input_tensor.shape();
@@ -110,12 +111,19 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
         bool mask_is_dram = mask.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
         reader_compile_time_args.push_back(mask_is_dram);
     }
+    if (causal_mask) {
+        uint32_t num_tiles_causal_mask = mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+        reader_compile_time_args.push_back(num_tiles_causal_mask);
+    }
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       out0_is_dram};
     std::map<string, string> softmax_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
+    }
+    if (causal_mask) {
+        softmax_defines["CAUSAL_MASK"] = "1";
     }
     auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/reader_unary_interleaved_sm.cpp", all_device_cores,
@@ -193,9 +201,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
 
         uint32_t tile_offset = curr_row * Wt;
         uint32_t curr_ht = curr_row % Ht;
-        uint32_t mask_id = curr_row / Ht * Wt;
+        uint32_t mask_curr_ht = curr_ht % Wt;   // the start offset for causal mask
+        uint32_t mask_offset = curr_row / Ht * Wt * Wt; // causal mask batch offset
+        uint32_t mask_id = causal_mask ? (mask_curr_ht * Wt + mask_offset) : (curr_row / Ht * Wt); // causal mask start offset + causal mask batch offset
 
-        SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
+        if (causal_mask) {
+            SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80, mask_curr_ht, mask_offset }); // [10]=1.0f is scaler
+        } else {
+            SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
+        }
+
         SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
         SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size });
         curr_row += num_tile_rows_per_core;
@@ -327,6 +342,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
     std::optional<float> scale,
     MathFidelity fidelity,
     DataType im_data_format,
+    bool causal_mask,
     CoreCoord grid_size,
     uint32_t subblock_wt,
     uint32_t block_ht,
@@ -388,7 +404,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in2_CB_size = 1 * scale_tile_size;
     // attention mask
-    uint32_t in3_CB_size = block_wt * mask_tile_size;
+    uint32_t in3_CB_size = causal_mask ? block_wt * mask_tile_size * 2 : block_wt * mask_tile_size;
     // cb_exps - keeps exps in CB in L1 to avoid recomputing
     uint32_t im0_CB_size = block_wt * im_tile_size;
     // 1/sum(exp(x))
@@ -436,8 +452,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
     }
+    if (causal_mask) {
+        reader_compile_time_args.push_back((std::uint32_t) block_ht / block_wt); // fused head
+    }
+
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
+    }
+    if (causal_mask) {
+        softmax_defines["CAUSAL_MASK"] = "1";
     }
     auto reader_kernels_id = CreateKernel(
         program,
@@ -520,7 +543,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
             reader_args.push_back(mask_start_tile_id);
             tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
-            mask_start_tile_id += use_row_major_kernel ? shape[0]: 1;
+            if (mask.has_value()) {
+                if (causal_mask) {
+                    mask_start_tile_id += mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                } else {
+                    mask_start_tile_id += use_row_major_kernel ? mask.value().shape()[-2] : mask.value().shape()[-1] / TILE_WIDTH;
+                }
+            }
+
+
         }
     }
 
@@ -642,6 +673,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = this->inplace ? input_tensors.at(0) : output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
+    bool causal_mask = mask.has_value() ? mask.value().shape()[-2] == mask.value().shape()[-1] : false;
 
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
@@ -654,6 +686,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
                                             input_tensor, output_tensor, mask, this->scale,
                                             fidelity,
                                             program_config.im_data_format,
+                                            causal_mask,
                                             program_config.compute_with_storage_grid_size,
                                             program_config.subblock_w,
                                             program_config.block_h,
@@ -663,9 +696,9 @@ operation::ProgramWithCallbacks Softmax::create_program(
                 std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxInterleavedMultiCoreProgramConfig>
             ) {
                 MathFidelity fidelity = program_config.math_fidelity;
-                return scale_mask_softmax_(input_tensor, output_tensor, mask, this->scale, fidelity, program_config.im_data_format);
+                return scale_mask_softmax_(input_tensor, output_tensor, mask, this->scale, fidelity, program_config.im_data_format, causal_mask);
             } else {
-                return scale_mask_softmax_(input_tensor, output_tensor, mask, this->scale, MathFidelity::HiFi4, DataType::BFLOAT16);
+                return scale_mask_softmax_(input_tensor, output_tensor, mask, this->scale, MathFidelity::HiFi4, DataType::BFLOAT16, causal_mask);
             }
         },
         this->program_config

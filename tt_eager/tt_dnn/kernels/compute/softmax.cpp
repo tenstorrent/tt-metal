@@ -77,6 +77,27 @@ void MAIN {
         }
         unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
+        #if CAUSAL_MASK
+        for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+            ACQ();
+            cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles
+            cb_wait_front(cb_scale_mask, ndst);
+            add_tiles_init();
+            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                add_tiles(cb_scale_mask, cb_fused_attn, wt8, wt+wt8, wt8); // tile *= 1/(sum(exp(x)))
+            }
+            cb_pop_front(cb_scale_mask, ndst);
+            cb_reserve_back(cb_exps, ndst);
+            exp_tile_init(true);
+            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                exp_tile(wt8,true); // exp on DST[0]
+                pack_tile(wt8, cb_exps); // reuse the exps buffer again, this time in a circular manner
+            }
+            cb_push_back(cb_exps, ndst);
+            REL();
+        }
+        cb_pop_front(cb_fused_attn, Wt);
+        #else
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
             ACQ();
             if (wait_mask) {
@@ -106,6 +127,8 @@ void MAIN {
             ht = 0;
             wait_mask = true;
         }
+        #endif // CAUSAL_MASK
+
         unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
         #else
         unpack_reconfig_data_format(cb_in0, cb_in0);
