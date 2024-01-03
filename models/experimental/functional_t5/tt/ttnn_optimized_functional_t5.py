@@ -16,43 +16,7 @@ from models.experimental.functional_common.attention_mask_functions import (
 
 
 def t5_layer_norm(config, hidden_states, *, weight):
-    # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
-    # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus varience is calculated
-    # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
-    # half-precision inputs is done in fp32
-
-    """
-    # TODO: add ttnn.rms_norm
-    import tt_lib as ttl
-
-    original_shape = tuple(hidden_states.shape)
-    hidden_states = ttnn.core._reshape_to_4D(hidden_states)
-    weight = ttnn.core._reshape_to_4D(weight)
-
-    ttl_hidden_states = hidden_states.value
-    ttl_weight = weight.value
-    ttl_hidden_states = ttl.tensor.rmsnorm(ttl_hidden_states, config.layer_norm_epsilon, ttl_weight)
-
-    hidden_states = ttnn.Tensor(ttl_hidden_states)
-    hidden_states = ttnn.reshape(hidden_states, original_shape)
-
-    return hidden_states
-    """
-
-    squared_hidden_states = ttnn.pow(hidden_states, 2)
-    averaged_squared_hidden_states = ttnn.mean(
-        squared_hidden_states,
-        dim=-1,
-        keepdim=True,
-    )
-
-    variance = averaged_squared_hidden_states + config.layer_norm_epsilon
-    std = ttnn.rsqrt(variance)
-
-    hidden_states = hidden_states * std
-    hidden_states = hidden_states * weight
-
-    return hidden_states
+    return ttnn.rms_norm(hidden_states, weight, epsilon=config.layer_norm_epsilon)
 
 
 def get_activation_function(dense_act_fn):
