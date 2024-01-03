@@ -163,12 +163,6 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
-    if ( reduce_dim == ReduceOpDim::W && (is_arch_whb0(input_tensor.device()->arch())) ) {
-        Tensor output = transpose(input_tensor, -1, -2, output_mem_config);
-        output = reduce(output, reduce_math, ReduceOpDim::H, scaler, output_mem_config);
-        return transpose(output, -1, -2, output_mem_config);
-    }
-
     if (is_multicore_hw) {
         Device * device;
 
@@ -190,15 +184,12 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {input_tensor}, {}, pad_value).at(0);
     }
 }
-
 Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     return mean(input_tensor,2,output_mem_config);
 }
-
 Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     return mean(input_tensor,4,output_mem_config);
 }
-
 Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config) {
     tt::tt_metal::Shape shape = input_tensor.shape();
 
@@ -219,21 +210,20 @@ Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const Memo
     return scaled_sum_hw;
 }
 
-template<ReduceOpMath operatorValue>
-Tensor reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
     TT_ASSERT( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
       if (is_arch_whb0(input_tensor.device()->arch())) {
         Tensor output = transpose(input_tensor, -1, -2, output_mem_config);
-        output = reduce_impl<operatorValue>(output, 2, output_mem_config);
+        output = sum(output, 2, output_mem_config);
         return transpose(output, -1, -2, output_mem_config);
       } else {
-        return reduce(input_tensor, operatorValue, ReduceOpDim::W, scaler1, output_mem_config);
+        return reduce(input_tensor, ReduceOpMath::SUM, ReduceOpDim::W, scaler1, output_mem_config);
       }
     } else if ( dim == 2 ) {
-        return reduce(input_tensor, operatorValue, ReduceOpDim::H, scaler1, output_mem_config);
+        return reduce(input_tensor, ReduceOpMath::SUM, ReduceOpDim::H, scaler1, output_mem_config);
     }
 
     // Other sum dims will autoformat first before doing composite operations
@@ -262,7 +252,7 @@ Tensor reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig& out
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose(formatted_input_tensor, 1, -2, output_mem_config);
-        output = reduce_impl<operatorValue>(output, 2, output_mem_config);
+        output = sum(output, 2, output_mem_config);
         output = transpose(output, 1, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
@@ -276,18 +266,10 @@ Tensor reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig& out
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose(input_tensor, 0, -2, output_mem_config);
-        output = reduce_impl<operatorValue>(output, 2, output_mem_config);
+        output = sum(output, 2, output_mem_config);
         output = transpose(output, 0, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
-}
-
-Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
-    return reduce_impl<ReduceOpMath::MAX>(input_tensor, dim,output_mem_config);
-}
-
-Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
-    return reduce_impl<ReduceOpMath::SUM>(input_tensor, dim,output_mem_config);
 }
 
 Tensor global_sum(Tensor& val, const MemoryConfig& output_mem_config) {
