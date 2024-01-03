@@ -7,11 +7,10 @@ import pathlib
 import shutil
 from typing import Optional, Union
 
-from loguru import logger
 import numpy as np
 import torch
-
 import ttnn
+from loguru import logger
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
