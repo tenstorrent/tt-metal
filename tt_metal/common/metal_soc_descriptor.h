@@ -17,12 +17,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     std::vector<CoreCoord> preferred_worker_dram_core;  // per channel preferred worker endpoint
     std::vector<CoreCoord> preferred_eth_dram_core;     // per channel preferred eth endpoint
     std::vector<size_t> dram_address_offsets;           // starting address offset
-    CoreCoord compute_with_storage_grid_size;
-    std::vector<RelativeCoreCoord> compute_with_storage_cores;  // saved as CoreType::WORKER
-    std::vector<RelativeCoreCoord> storage_cores;               // saved as CoreType::WORKER
-    std::vector<RelativeCoreCoord> dispatch_cores;              // saved as CoreType::WORKER
     std::vector<CoreCoord> logical_ethernet_cores;
-    int l1_bank_size;
     uint32_t dram_core_size;
 
     // in tt_SocDescriptor worker_log_to_routing_x and worker_log_to_routing_y map logical coordinates to NOC virtual
@@ -60,6 +55,5 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
    private:
     void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);
     void load_dram_metadata_from_device_descriptor();
-    void load_dispatch_and_banking_config(uint32_t harvesting_mask);
     void generate_logical_eth_coords_mapping();
 };

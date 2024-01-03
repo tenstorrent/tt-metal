@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -76,7 +77,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         .dram_bank_offsets = {},
         .worker_grid_size = this->logical_grid_size(),
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
+        .l1_bank_size = static_cast<size_t>(get_storage_core_bank_size(this->id_)),
         .core_type_from_noc_coord_table = {}, // Populated later
         .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
         .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
@@ -90,22 +91,19 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     for (const auto& core: soc_desc.physical_cores) {
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
-    for (const auto& core : soc_desc.compute_with_storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->compute_cores.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_)) {
+        this->compute_cores.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const auto& core : soc_desc.storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->storage_only_cores_.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_)) {
+        this->storage_only_cores_.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const auto& core : soc_desc.dispatch_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->dispatch_cores_.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+    for (const CoreCoord& core : tt::get_logical_dispatch_cores(id_)) {
+        this->dispatch_cores_.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
@@ -372,7 +370,7 @@ CoreCoord Device::logical_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    return tt::Cluster::instance().get_soc_desc(id_).compute_with_storage_grid_size;
+    return tt::get_compute_grid_size(id_);
 }
 
 CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {

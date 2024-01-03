@@ -62,18 +62,3 @@ features:
     version: 1
   overlay:
     version: 1
-
-dispatch_and_banking:
-  E150:
-    l1_bank_size:
-      524288
-
-    compute_with_storage_grid_range: # Logical only start and end [x, y]
-      start: [0, 0]
-      end: [0, 0]
-
-    storage_cores: # Logical Only
-      []
-
-    dispatch_cores: # Logical Only
-      []
