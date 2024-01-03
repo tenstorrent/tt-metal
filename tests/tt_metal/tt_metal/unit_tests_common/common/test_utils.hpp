@@ -62,6 +62,19 @@ inline bool FileContainsAllStrings(string file_name, vector<string> &must_contai
     return false;
 }
 
+// Compare two strings with a (single-character) wildcard
+inline bool StringCompareWithWildcard(string& s1, string& s2, char wildcard) {
+    if (s1.size() != s2.size())
+        return false;
+
+    for (int idx = 0; idx < s1.size(); idx++) {
+        if (s1[idx] != s2[idx] && s1[idx] != wildcard && s2[idx] != wildcard)
+            return false;
+    }
+
+    return true;
+}
+
 // Checkes whether a given file matches a golden string.
 inline bool FilesMatchesString(string file_name, const string& expected) {
     // Open the input file.
@@ -83,7 +96,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     int line_num = 0;
     while (getline(file, line_a) && getline(expect_stream, line_b)) {
         line_num++;
-        if (line_a != line_b) {
+        if (!StringCompareWithWildcard(line_a, line_b, '*')) {
             tt::log_info(
                 tt::LogTest,
                 "Test Error: Line {} of {} did not match expected:\n\t{}\n\t{}",

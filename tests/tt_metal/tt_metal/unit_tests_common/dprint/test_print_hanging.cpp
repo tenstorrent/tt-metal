@@ -15,8 +15,9 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+// Some machines will run this test on different physical cores, so wildcard the exact coordinates.
 const std::string golden_output =
-R"(DPRINT server timed out on core (1,1) riscv 4, waiting on a RAISE signal: 1
+R"(DPRINT server timed out on core (*,*) riscv 4, waiting on a RAISE signal: 1
 )";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
@@ -43,15 +44,12 @@ try {
 }
 
     // Check the print log against golden output.
-    // TODO: dma look into CI error here, comment out this check for now. See #4490.
-    /*
     EXPECT_TRUE(
         FilesMatchesString(
             DPrintFixture::dprint_file_name,
             golden_output
         )
     );
-    */
 }
 
 TEST_F(DPrintFixture, TestPrintHanging) {
