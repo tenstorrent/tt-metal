@@ -79,6 +79,10 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t pages_to_read;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
 
+    const DeviceCommand assemble_device_command_postamble(const DeviceCommand & input_cmd,
+                                    uint32_t padded_page_size,
+                                    uint32_t num_pages);
+
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
@@ -91,6 +95,7 @@ class EnqueueReadBufferCommand : public Command {
         std::optional<uint32_t> pages_to_read = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t dst);
+    const DeviceCommand assemble_device_command_sharded(uint32_t dst);
 
     void process();
 
@@ -107,6 +112,10 @@ class EnqueueWriteBufferCommand : public Command {
     uint32_t dst_page_index;
     uint32_t pages_to_write;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
+
+    const DeviceCommand assemble_device_command_postamble(const DeviceCommand & input_cmd,
+                                    uint32_t padded_page_size,
+                                    uint32_t num_pages);
    public:
     EnqueueWriteBufferCommand(
         Device* device,
@@ -117,6 +126,7 @@ class EnqueueWriteBufferCommand : public Command {
         std::optional<uint32_t> pages_to_write = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
+    const DeviceCommand assemble_device_command_sharded(uint32_t src_address);
 
     void process();
 

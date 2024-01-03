@@ -106,7 +106,7 @@ std::string Buffer::get_shard_info() const {
 
     auto t2d_size = sspec.tensor2d_shape;
     ret_str += "Tensor2D Size: ("  + std::to_string(t2d_size[0]) + ", " + std::to_string(t2d_size[1]) + ")\n";
-    auto s_shape = sspec.shape;
+    auto s_shape = sspec.shape();
     ret_str += "Shard Shape: ("  + std::to_string(s_shape[0]) +  ", " + std::to_string(s_shape[1]) + ")\n"; ;
 
     auto p_shape = sspec.page_shape;
@@ -156,15 +156,15 @@ Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferTy
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if(is_sharded(buffer_layout)){
-        auto row_major = shard_parameters.value().orientation == ShardOrientation::ROW_MAJOR;
-        all_cores_ = corerange_to_cores(shard_parameters.value().grid, this->num_cores(), row_major);
+        auto row_major = shard_parameters.value().orientation() == ShardOrientation::ROW_MAJOR;
+        all_cores_ = corerange_to_cores(shard_parameters.value().grid(), this->num_cores(), row_major);
         TT_ASSERT(this->num_cores() == all_cores_.size());
         uint32_t core_id = 0;
         for(auto core: all_cores_){
             this->core_to_core_id_.insert({core, core_id });
             core_id++;
         }
-        core_host_page_indices_ = core_to_host_pages(shard_spec().size(), this->num_cores(), buffer_layout, shard_spec().page_shape, shard_spec().shape, shard_spec().tensor2d_shape);
+        core_host_page_indices_ = core_to_host_pages(shard_spec().size(), this->num_cores(), buffer_layout, shard_spec().page_shape, shard_spec().shape(), shard_spec().tensor2d_shape);
         core_bank_indices_.reserve(this->num_cores());
 
         auto total_dev_pages = this->num_cores() * shard_spec().size();

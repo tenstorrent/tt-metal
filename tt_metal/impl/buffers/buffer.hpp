@@ -62,7 +62,8 @@ struct ShardSpec {
 };
 
 
-struct ShardSpecBuffer:  ShardSpec {
+struct ShardSpecBuffer {
+    ShardSpec tensor_shard_spec;
     std::array<uint32_t, 2> page_shape;
     std::array<uint32_t, 2 > tensor2d_shape;
     ShardSpecBuffer(const CoreRangeSet & core_sets_,
@@ -71,7 +72,7 @@ struct ShardSpecBuffer:  ShardSpec {
                 const bool & halo_,
                 const std::array<uint32_t, 2> & page_shape,
                 const std::array<uint32_t, 2> & tensor2d_shape
-                ): ShardSpec(core_sets_, shard_shape_, shard_orientation_, halo_)
+                ): tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_, halo_)
                 {
                     this->page_shape = page_shape;
                     this->tensor2d_shape = tensor2d_shape;
@@ -80,14 +81,26 @@ struct ShardSpecBuffer:  ShardSpec {
             const ShardSpec & shard_spec,
             const std::array<uint32_t, 2> & page_shape,
             const std::array<uint32_t, 2> & tensor2d_shape
-            ): ShardSpec(shard_spec)
+            ): tensor_shard_spec(shard_spec)
             {
                 this->page_shape = page_shape;
                 this-> tensor2d_shape = tensor2d_shape;
             }
+    CoreRangeSet grid() {
+        return tensor_shard_spec.grid;
+    }
+    std::array<uint32_t, 2>  shape() {
+        return tensor_shard_spec.shape;
+    }
+    ShardOrientation orientation() {
+        return tensor_shard_spec.orientation;
+    }
+    bool halo() {
+        return tensor_shard_spec.halo;
+    }
     uint32_t size(){
-        auto width_in_pages = this->shape[0] / this->page_shape[0];
-        auto height_in_pages = this->shape[1] / this->page_shape[1];
+        auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
+        auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
         return width_in_pages * height_in_pages;
 
     }
