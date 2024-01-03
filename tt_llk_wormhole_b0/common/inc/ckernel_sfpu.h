@@ -328,6 +328,11 @@ inline void _init_topk()
     _sfpu_load_config32_(0xF, 0x0, 0x4);          // Set bit [2] of the SFPU_CONTROL_REG to enable index tracking mode
 }
 
+inline void _init_sfpu_config_reg()
+{
+    _sfpu_load_config32_(0xF, 0x0, 0x0);          // Set bit [2] of the SFPU_CONTROL_REG to enable index tracking mode
+}
+
 inline void init_quant_zero_point(const uint zero_point)
 {
     _sfpu_load_imm32_(2,zero_point);
