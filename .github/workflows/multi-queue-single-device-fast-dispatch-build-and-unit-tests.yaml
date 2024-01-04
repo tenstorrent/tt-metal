@@ -3,7 +3,7 @@ name: "[post-commit] all - Fast dispatch multi queue single device post-commit m
 on:
   workflow_dispatch:
   push:
-    branches: ["agrebenisan/multi-cq"]
+    branches: ["main"]
   workflow_call:
 
 jobs:
