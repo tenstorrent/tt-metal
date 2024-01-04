@@ -30,23 +30,37 @@ namespace ckernel {
 ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose=0) {
     UNPACK(( llk_setup_operands() ));
     #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose) ));
+    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
     #else
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id) ));
+    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
     #endif
-    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
     #else
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id) ));
+    MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
     #endif
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
 
     PACK(( llk_pack_init()  ));
+
+    #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
+    #else
+    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
+    #endif
+
     PACK(( llk_setup_outputs()  ));
+
+    #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
+    #else
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>()  ));
+    #endif
+
     // TODO(AP): ZM-only kernel
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
 }
