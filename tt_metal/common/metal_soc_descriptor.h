@@ -50,6 +50,10 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     const std::vector<CoreCoord>& get_logical_ethernet_cores() const;
     const std::vector<CoreCoord>& get_physical_ethernet_cores() const;
 
+    CoreCoord get_physical_ethernet_core_from_logical(const CoreCoord &logical_coord) const;
+    CoreCoord get_physical_tensix_core_from_logical(const CoreCoord &logical_coord) const;
+    CoreCoord get_physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const;
+
     tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const;
 
    private:

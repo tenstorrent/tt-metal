@@ -25,8 +25,6 @@
 uint8_t noc_index = NOC_INDEX;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
-CQReadInterface cq_read_interface;
-CQWriteInterface cq_write_interface;
 
 void __attribute__((section("erisc_l1_code"))) kernel_launch() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];

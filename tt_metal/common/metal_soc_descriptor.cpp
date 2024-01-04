@@ -72,6 +72,38 @@ const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() 
     return this->logical_ethernet_cores;
 }
 
+CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord &logical_coord) const {
+    const auto &eth_chan_map = this->logical_eth_core_to_chan_map;
+    TT_ASSERT(
+        (eth_chan_map.find(logical_coord) != eth_chan_map.end()),
+        "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
+        logical_coord.str());
+    return this->physical_ethernet_cores.at(eth_chan_map.at(logical_coord));
+}
+
+CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord &logical_coord) const {
+    TT_ASSERT(
+        (logical_coord.x < this->worker_grid_size.x) and
+        (logical_coord.y < this->worker_grid_size.y),
+        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
+        logical_coord.str(),
+        this->worker_grid_size.str()
+    );
+    CoreCoord physical_tensix_core({
+            .x = static_cast<size_t>(this->worker_log_to_physical_routing_x.at(logical_coord.x)),
+            .y = static_cast<size_t>(this->worker_log_to_physical_routing_y.at(logical_coord.y)),
+    });
+    return physical_tensix_core;
+}
+
+CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
+    switch (core_type) {
+        case CoreType::ETH: return this->get_physical_ethernet_core_from_logical(logical_coord);
+        case CoreType::WORKER: return this->get_physical_tensix_core_from_logical(logical_coord);
+        default: TT_THROW("Undefined conversion for core type.");
+    }
+}
+
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
     int num_dram_channels = this->get_num_dram_channels();

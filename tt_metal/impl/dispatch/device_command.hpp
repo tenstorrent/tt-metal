@@ -16,16 +16,12 @@ class DeviceCommand {
 
     // Constants
     //TODO: investigate other num_cores
+    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
     static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
-    static constexpr uint32_t DATA_SECTION_ADDRESS = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
-    static constexpr uint32_t PRODUCER_DATA_BUFFER_SIZE =
-        (MEM_L1_SIZE - (NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - L1_UNRESERVED_BASE);
-    static constexpr uint32_t CONSUMER_DATA_BUFFER_SIZE = (PRODUCER_DATA_BUFFER_SIZE - NUM_BYTES_IN_DEVICE_COMMAND) / 2;
-    static constexpr uint32_t DEVICE_COMMAND_DATA_ADDR = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
     static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
