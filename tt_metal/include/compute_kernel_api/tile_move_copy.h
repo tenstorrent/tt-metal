@@ -126,6 +126,9 @@ ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_block<BroadcastType::NONE, false>(icb, start_itile, ntiles, 1)  ));
     MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf>(start_idst, ntiles)  ));
+    #else
+    UNPACK(( llk_unpack_A_block<BroadcastType::NONE, false>(icb, start_itile, ntiles, 1)  ));
+    MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf>(start_idst, ntiles)  ));
     #endif
 }
 

@@ -82,6 +82,8 @@ ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
 {
     #ifdef ARCH_GRAYSKULL
     PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
+    #else
+    PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
     #endif
 }
 
