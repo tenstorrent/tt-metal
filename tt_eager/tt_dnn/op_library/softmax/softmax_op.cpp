@@ -233,7 +233,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
             cb_intermed0_id,
             cb_intermed3_id,
             cb_in3_id,
-            cb_in4_id
+            cb_in4_id,
+            causal_mask
         ]
     (
         const void* operation,
@@ -322,9 +323,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
 
             uint32_t tile_offset = curr_row * Wt;
             uint32_t curr_ht = curr_row % Ht;
-            uint32_t mask_id = curr_row / Ht * Wt;
+            uint32_t mask_curr_ht = curr_ht % Wt;   // the start offset for causal mask
+            uint32_t mask_offset = curr_row / Ht * Wt * Wt; // causal mask batch offset
+            uint32_t mask_id = causal_mask ? (mask_curr_ht * Wt + mask_offset) : (curr_row / Ht * Wt); // causal mask start offset + causal mask batch offset
 
-            SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
+            if (causal_mask) {
+                SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f803f80, mask_curr_ht, mask_offset }); // [10]=1.0f is scaler
+            } else {
+                SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
+            }
+
             SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
             SetRuntimeArgs(program, writer_kernels_id, core, { dst_buffer_address, num_tile_rows_per_core * Wt, tile_offset, block_size });
             curr_row += num_tile_rows_per_core;
