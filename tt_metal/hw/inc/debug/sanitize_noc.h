@@ -55,6 +55,8 @@ inline uint32_t debug_sanitize_get_which_riscv()
     return DebugSanitizeBrisc;
 #elif defined(COMPILE_FOR_NCRISC)
     return DebugSanitizeNCrisc;
+#elif defined(COMPILE_FOR_ERISC)
+    return DebugSanitizeErisc;
 #else
     return DebugSanitizeTrisc0 + COMPILE_FOR_TRISC;
 #endif

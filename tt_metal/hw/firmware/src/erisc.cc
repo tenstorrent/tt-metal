@@ -25,6 +25,9 @@ void ApplicationHandler(void) __attribute__((__section__(".init")));
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
 }
+
+tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
