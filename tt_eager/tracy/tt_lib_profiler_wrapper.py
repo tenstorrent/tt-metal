@@ -18,7 +18,7 @@ def decorator(f, name):
 
 
 def callable_decorator(parrentObj):
-    # This function is called on the c++ side which does not dump exceptions
+    # This function is called on the C++ side which does not dump exceptions
     # Try catch is added to dump the exception to stdout
     try:
         for name in dir(parrentObj):

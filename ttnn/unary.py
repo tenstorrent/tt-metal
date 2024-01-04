@@ -2,10 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
-
 import tt_lib as ttl
-
+from ttnn.core import reshape, _reshape_to_4D
+from ttnn.decorators import decorate_operation
 from ttnn.tensor import (
     Tensor,
     has_storage_type_of,
@@ -13,13 +12,6 @@ from ttnn.tensor import (
     DRAM_MEMORY_CONFIG,
     DEVICE_STORAGE_TYPE,
 )
-from ttnn.core import reshape, _reshape_to_4D
-from ttnn.decorators import decorate_operation
-
-
-THIS_MODULE = sys.modules[__name__]
-
-__all__ = []
 
 
 def register_ttl_unary_function(name, ttl_unary_function):
@@ -80,8 +72,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
-    setattr(THIS_MODULE, name, unary_function)
-    __all__.append(name)
+    return unary_function
 
 
 TTL_UNARY_FUNCTIONS = [
@@ -92,9 +83,12 @@ TTL_UNARY_FUNCTIONS = [
     ("rsqrt", ttl.tensor.rsqrt),
 ]
 
-
-for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
-    register_ttl_unary_function(unary_function_name, ttl_unary_function)
+# register functions
+exp = register_ttl_unary_function("exp", ttl.tensor.exp)
+tanh = register_ttl_unary_function("tanh", ttl.tensor.tanh)
+gelu = register_ttl_unary_function("gelu", ttl.tensor.gelu)
+relu = register_ttl_unary_function("relu", ttl.tensor.relu)
+rsqrt = register_ttl_unary_function("rsqrt", ttl.tensor.rsqrt)
 
 
 def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
@@ -151,14 +145,17 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
-    setattr(THIS_MODULE, name, unary_function)
-    __all__.append(name)
+    return unary_function
 
 
-TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
-    ("pow", ttl.tensor.power),
+# register functions
+pow = register_ttl_unary_function_with_float_parameter("pow", ttl.tensor.power)
+
+__all__ = [
+    "exp",
+    "tanh",
+    "gelu",
+    "relu",
+    "rsqrt",
+    "pow",
 ]
-
-
-for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
-    register_ttl_unary_function_with_float_parameter(unary_function_name, ttl_unary_function)

@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import io
 import pathlib
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union
 
 import tt_lib as ttl
-
 from ttnn.decorators import decorate_operation
-
 
 Device = ttl.device.Device
 

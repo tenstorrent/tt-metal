@@ -5,7 +5,8 @@
 from typing import Optional, Tuple
 
 import tt_lib as ttl
-
+from ttnn.core import reshape
+from ttnn.decorators import decorate_operation
 from ttnn.tensor import (
     Tensor,
     MemoryConfig,
@@ -14,8 +15,6 @@ from ttnn.tensor import (
     has_storage_type_of,
     DEVICE_STORAGE_TYPE,
 )
-from ttnn.core import reshape
-from ttnn.decorators import decorate_operation
 
 
 def _torch_split_heads(input_tensor: Tensor, *, num_heads, order):

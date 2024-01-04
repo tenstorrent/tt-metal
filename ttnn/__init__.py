@@ -60,6 +60,7 @@ from ttnn.core import (
 
 from ttnn.unary import *
 
-import ttnn.decorators
+# import ttnn.decorators
 import ttnn.nlp
-import ttnn.model_preprocessing
+
+# import ttnn.model_preprocessing

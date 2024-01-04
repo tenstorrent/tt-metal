@@ -20,12 +20,12 @@ TRACY_CSV_FILE_NAME = "tracy_profile_log_host.csv"
 TRACY_CAPTURE_TOOL = "capture"
 TRACY_CSVEXPROT_TOOL = "csvexport"
 
-import tracy_state
+import state
 
 
 class Profiler:
     def __init__(self):
-        from tracy_tt_lib import tracy_marker_func, tracy_marker_line, finish_all_zones
+        from tt_lib import tracy_marker_func, tracy_marker_line, finish_all_zones
 
         self.doProfile = tracy_state.doPartial and sys.gettrace() is None and sys.getprofile() is None
         self.doLine = tracy_state.doLine
@@ -49,7 +49,7 @@ class Profiler:
 
 
 def runctx(cmd, globals, locals, partialProfile):
-    from tracy_tt_lib import tracy_marker_func, finish_all_zones
+    from tt_lib import tracy_marker_func, finish_all_zones
 
     if not partialProfile:
         sys.setprofile(tracy_marker_func)
