@@ -65,15 +65,6 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
         attention_mask = torch.rand(batch, 1, 1, 384)
         attention_mask = (attention_mask > 0.5).float()
         attention_mask = attention_mask.reshape(batch, 1, -1, 32)
-        # attention_mask32 = tilize_to_list(pad_weight(attention_mask))
-        # attention_mask_t = ttl.tensor.Tensor(
-        #     attention_mask32,
-        #     [batch, 1, 32, 384],
-        #     ttl.tensor.DataType.BFLOAT16,
-        #     ttl.tensor.Layout.TILE,
-        #     device,
-        #     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        # )
         attention_mask_t = ttl.tensor.Tensor(
             attention_mask,
             ttl.tensor.DataType.BFLOAT16,
