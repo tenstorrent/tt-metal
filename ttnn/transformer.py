@@ -22,10 +22,6 @@ def _torch_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_he
     import ttnn
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
-
     batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
     hidden_size = three_times_hidden_size // 3
     head_size = hidden_size // num_heads
@@ -49,7 +45,17 @@ def _torch_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_he
     return query_layer, key_layer, value_layer
 
 
-@decorate_operation(torch_function=_torch_split_query_key_value_and_split_heads)
+def _fallback_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_heads, **_):
+    import ttnn
+
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    return _torch_split_query_key_value_and_split_heads(input_tensor, num_heads=num_heads)
+
+
+@decorate_operation(torch_function=_fallback_split_query_key_value_and_split_heads)
 def split_query_key_value_and_split_heads(
     input_tensor: Tensor,
     kv_input_tensor: Optional[Tensor] = None,
@@ -132,17 +138,7 @@ def split_query_key_value_and_split_heads(
 
 
 def _torch_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_mask, **_):
-    import ttnn
     import torch
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
-
-    if attention_mask is not None:
-        attention_mask = ttnn.from_device(attention_mask)
-        attention_mask = ttnn.to_layout(attention_mask, ttnn.ROW_MAJOR_LAYOUT)
-        attention_mask = ttnn.to_torch(attention_mask)
 
     if head_size is not None:
         scaler = 1 / (head_size**0.5)
@@ -157,11 +153,26 @@ def _torch_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_
     return torch.softmax(input_tensor, -1)
 
 
-@decorate_operation(torch_function=_torch_attention_softmax)
+def _fallback_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_mask, **_):
+    import ttnn
+
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    if attention_mask is not None:
+        attention_mask = ttnn.from_device(attention_mask)
+        attention_mask = ttnn.to_layout(attention_mask, ttnn.ROW_MAJOR_LAYOUT)
+        attention_mask = ttnn.to_torch(attention_mask)
+
+    return _torch_attention_softmax(input_tensor, head_size=head_size, attention_mask=attention_mask)
+
+
+@decorate_operation(torch_function=_fallback_attention_softmax)
 def attention_softmax(
     input_tensor: Tensor,
     *,
-    head_size: int,
+    head_size: Optional[int],
     attention_mask: Optional[Tensor],
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
@@ -177,12 +188,15 @@ def attention_softmax(
 
     """
     if len(input_tensor.shape) != 4:
-        raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
+        raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
     if input_tensor.layout != TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
-    scaler = 1 / (head_size**0.5)
+    if head_size is not None:
+        scaler = 1 / (head_size**0.5)
+    else:
+        scaler = 1.0
 
     if attention_mask is not None:
         output_tensor = ttl.tensor.scale_mask_softmax(
@@ -215,7 +229,7 @@ def attention_softmax_(
 
     """
     if len(input_tensor.shape) != 4:
-        raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
+        raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
     if input_tensor.layout != TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
@@ -235,14 +249,9 @@ def attention_softmax_(
 
 
 def _torch_concatenate_heads(input_tensor: Tensor, **_):
-    import ttnn
     import torch
 
-    batch_size, num_heads, sequence_size, head_size = input_tensor.shape.padded()
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
+    batch_size, num_heads, sequence_size, head_size = input_tensor.shape
 
     output_tensor = torch.permute(input_tensor, (0, 2, 1, 3)).contiguous().clone()
     output_tensor = (
@@ -251,7 +260,17 @@ def _torch_concatenate_heads(input_tensor: Tensor, **_):
     return output_tensor
 
 
-@decorate_operation(torch_function=_torch_concatenate_heads)
+def _fallback_concatenate_heads(input_tensor: Tensor, **_):
+    import ttnn
+
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    return _torch_concatenate_heads(input_tensor)
+
+
+@decorate_operation(torch_function=_fallback_concatenate_heads)
 def concatenate_heads(
     input_tensor: Tensor,
     *,
