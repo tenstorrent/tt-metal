@@ -32,6 +32,15 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
     assert pcc_passed, print_comparison(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
+def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
+    return (
+        expected_pytorch_result.shape == actual_pytorch_result.shape,
+        f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+    )
+    pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    return pcc_passed, pcc_message
+
+
 def update_process_id():
     print(f"Debugging PID: {os.getpid()}")
     cwd = os.getcwd()
