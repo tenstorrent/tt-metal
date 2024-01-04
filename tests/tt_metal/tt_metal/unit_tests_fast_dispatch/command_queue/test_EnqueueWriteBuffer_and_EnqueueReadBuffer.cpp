@@ -197,7 +197,6 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
 
 bool test_EnqueueWrap_on_EnqueueReadBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     auto [buffer, src] = EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
     vector<uint32_t> dst;
     EnqueueReadBuffer(cq, buffer, dst, true);
 
@@ -260,7 +259,6 @@ namespace dram_tests {
 
 TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
-
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
@@ -329,8 +327,8 @@ TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     uint32_t num_pages = buffer_size / page_size;
 
     TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), buf_config));
+    CommandQueue a(this->device_, 0);
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, a, buf_config));
 }
 
 TEST_F(CommandQueueFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
@@ -420,7 +418,6 @@ namespace l1_tests {
 
 TEST_F(CommandQueueFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
-
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 

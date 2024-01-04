@@ -370,6 +370,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
 
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
+
     if (is_dram_pow2) {
         ss << "#define LOG_BASE_2_OF_NUM_DRAM_BANKS " << log2(dram_bank_map.size()) << endl;
     } else {
@@ -494,9 +495,7 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
     const std::vector<uint32_t>& harvested_rows,
-    const vector<CoreCoord>& dispatch_cores) {
-
-    TT_ASSERT(dispatch_cores.size() == 1, "Only 1 dispatch core supported so far");
+    const CoreCoord& enqueue_program_physical_dispatch_core) {
 
     stringstream ss;
 
@@ -573,10 +572,10 @@ static string generate_noc_addr_ranges_string(
     ss << "       (y) <= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
     ss << "       (y) >= NOC_Y((uint32_t)" << grid_size.y - 1<< "))))";
     ss << endl;
-
     ss << endl;
-    ss << "#define DISPATCH_CORE_X " << dispatch_cores[0].x << endl;
-    ss << "#define DISPATCH_CORE_Y " << dispatch_cores[0].y << endl;
+
+    ss << "#define DISPATCH_CORE_X " << enqueue_program_physical_dispatch_core.x << endl;
+    ss << "#define DISPATCH_CORE_Y " << enqueue_program_physical_dispatch_core.y << endl;
 
     return ss.str();
 }
@@ -592,10 +591,10 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
     const std::vector<uint32_t>& harvested_rows,
-    const vector<CoreCoord>& dispatch_cores) {
+    const CoreCoord& enqueue_program_physical_dispatch_core) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, dispatch_cores);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, enqueue_program_physical_dispatch_core);
 
     ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;

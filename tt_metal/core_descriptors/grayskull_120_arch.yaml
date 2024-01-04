@@ -17,8 +17,27 @@ E150:
     storage_cores: # Relative to grid of tensix cores
       [[1, -1],[2, -1],[3, -1],[4, -1],[5, -1],[7, -1],[8, -1],[9, -1],[10, -1],[11, -1]]
 
-    dispatch_cores: # Relative to grid of tensix cores
-      [[0, -1],[6, -1]]
+    producer_cores:
+      [[0, -1]]
+
+    consumer_cores:
+      [[6, -1]]
+  2:
+    l1_bank_size:
+      524288
+
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [11, 8]
+
+    storage_cores: # Relative to grid of tensix cores
+      [[2, -1],[3, -1],[4, -1],[5, -1],[8, -1],[9, -1],[10, -1],[11, -1]]
+
+    producer_cores:
+      [[0, -1], [1, -1]]
+
+    consumer_cores:
+      [[6, -1], [7, -1]]
 
 E75:
   1:
@@ -32,5 +51,24 @@ E75:
     storage_cores: # Relative to grid of tensix cores
       [[11, 1], [11, 2], [11, 3], [11, 5], [11, 6], [11, 7]]
 
-    dispatch_cores: # Relative to grid of tensix cores
-      [[11, 0], [11, 4]]
+    producer_cores:
+      [[11, 0]]
+
+    consumer_cores:
+      [[11, 4]]
+  2:
+    l1_bank_size:
+      1048576
+
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [10, 7]
+
+    storage_cores: # Relative to grid of tensix cores
+      [[11, 2], [11, 3], [11, 6], [11, 7]]
+
+    producer_cores:
+      [[11, 0], [11, 1]]
+
+    consumer_cores:
+      [[11, 4], [11, 5]]

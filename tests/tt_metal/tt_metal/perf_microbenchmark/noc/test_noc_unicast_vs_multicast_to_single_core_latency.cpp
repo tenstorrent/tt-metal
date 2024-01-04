@@ -11,14 +11,13 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
 using namespace tt;
-
+//
 void measure_latency(string kernel_name) {
     const int device_id = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-    auto dispatch_cores = device->dispatch_cores().begin();
-    CoreCoord producer_logical_core = *dispatch_cores++;
-    CoreCoord consumer_logical_core = *dispatch_cores;
+    CoreCoord producer_logical_core = *device->producer_cores().begin();
+    CoreCoord consumer_logical_core = *device->consumer_cores().begin();
 
     auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
 

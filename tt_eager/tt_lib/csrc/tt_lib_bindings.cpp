@@ -35,7 +35,7 @@ void DeviceModule(py::module &m_device) {
         .def(
             py::init<>(
                 [](int device_id) {
-                    return Device(device_id);
+                    return Device(device_id, 1);
                 }
             ), "Create device."
         )
@@ -56,7 +56,7 @@ void DeviceModule(py::module &m_device) {
         | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
         )doc");
-    m_device.def("CreateDevice", [](int device_id) { return CreateDevice(device_id); }, R"doc(
+    m_device.def("CreateDevice", [](int device_id) { return CreateDevice(device_id, 1); }, R"doc(
         Creates an instance of TT device.
 
         +------------------+------------------------+---------------------+------------------------------+----------+

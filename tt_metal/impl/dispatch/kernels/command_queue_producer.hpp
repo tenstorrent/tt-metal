@@ -33,7 +33,7 @@ void issue_queue_wait_front() {
 FORCE_INLINE
 void notify_host_of_issue_queue_read_pointer() {
     // These are the PCIE core coordinates
-    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_ISSUE_READ_PTR;  // For now, we are writing to host hugepages at offset
+    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | get_compile_time_arg_val(0);  // For now, we are writing to host hugepages at offset
     uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);;
     volatile tt_l1_ptr uint32_t* issue_rd_ptr_addr = get_cq_issue_read_ptr();
     issue_rd_ptr_addr[0] = issue_rd_ptr_and_toggle;
@@ -48,6 +48,11 @@ void issue_queue_pop_front(uint32_t cmd_size_B) {
     // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
     uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
     cq_read_interface.issue_fifo_rd_ptr += cmd_size_16B;
+
+    if (cq_read_interface.issue_fifo_rd_ptr >= cq_read_interface.issue_fifo_limit) {
+        cq_read_interface.issue_fifo_rd_ptr -= cq_read_interface.issue_fifo_size;
+        cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
+    }
 
     notify_host_of_issue_queue_read_pointer();
 }

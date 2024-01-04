@@ -43,14 +43,18 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint16_t ncrisc_watcher_kernel_id;
     volatile uint16_t triscs_watcher_kernel_id;
     volatile uint16_t ncrisc_kernel_size16; // size in 16 byte units
-    volatile uint8_t mode;
-    volatile uint8_t brisc_noc_id;
-    volatile uint8_t enable_brisc;
-    volatile uint8_t enable_ncrisc;
-    volatile uint8_t enable_triscs;
-    volatile uint8_t max_cb_index;
-    volatile uint8_t enable_erisc;
-    volatile uint8_t run;  // must be in last cacheline of this msg
+
+    // TODO(agrebenisan): This must be added in to launch_msg_t
+    // volatile uint16_t dispatch_core_x;
+    // volatile uint16_t dispatch_core_y;
+    volatile uint8_t  mode;
+    volatile uint8_t  brisc_noc_id;
+    volatile uint8_t  enable_brisc;
+    volatile uint8_t  enable_ncrisc;
+    volatile uint8_t  enable_triscs;
+    volatile uint8_t  max_cb_index;
+    volatile uint8_t  enable_erisc;
+    volatile uint8_t  run;  // must be in last cacheline of this msg
 };
 
 struct slave_sync_msg_t {
