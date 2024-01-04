@@ -93,6 +93,19 @@ protected:
             );
             return true;
         }
+
+        // Also skip all devices after device 0 for grayskull. This to match all other tests
+        // targetting device 0 by default (and to not cause issues with BMs that have E300s).
+        // TODO: when we can detect only supported devices, this check can be removed.
+        if (this->arch_ == tt::ARCH::GRAYSKULL && device_id > 0) {
+            log_info(
+                tt::LogTest,
+                "Skipping test on device {} due to unsupported E300",
+                device_id
+            );
+            return true;
+        }
+
         return false;
     }
 

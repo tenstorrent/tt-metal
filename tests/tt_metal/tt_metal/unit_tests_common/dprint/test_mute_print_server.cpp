@@ -62,8 +62,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     );
 }
 
-// See issue #4549
-TEST_F(DPrintFixture, DISABLED_TestPrintMuting) {
+TEST_F(DPrintFixture, TestPrintMuting) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }
