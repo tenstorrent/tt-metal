@@ -4,6 +4,7 @@
 
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/common/math.hpp"
 

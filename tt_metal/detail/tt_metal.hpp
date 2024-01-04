@@ -11,6 +11,7 @@
 #include "tt_metal/jit_build/build.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -444,6 +445,13 @@ namespace tt::tt_metal{
 
         inline void SendDispatchKernelsToDevice(Device *device, const SystemMemoryManager& manager, const uint32_t hugepage_channel) {
             ZoneScoped;
+
+            /*
+                two cases for sending dispatch kernels:
+                    - mmio device
+                        -
+                    - remote device
+            */
 
             Program dispatch_program = CreateProgram();
 
