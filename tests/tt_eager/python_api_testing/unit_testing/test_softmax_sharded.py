@@ -110,7 +110,9 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
         im_data_format=cb_dtype,
     )
 
-    tt_output_sharded = sm_op(in1_t_shard, scale, attention_mask_t, program_config=program_config)
+    tt_output_sharded = sm_op(
+        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
+    )
 
     tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
     tt_output_tensor = tt_output.cpu().to_torch().float()

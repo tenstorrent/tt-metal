@@ -72,6 +72,7 @@ void py_module(py::module& m_transformers) {
         py::arg("scale").noconvert() = std::nullopt,
         py::arg("mask").noconvert() = std::nullopt,
         py::arg("program_config").noconvert() = SoftmaxDefaultProgramConfig{},
+        py::arg("is_causal_mask").noconvert() = false,
         "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place."
         );
 }
