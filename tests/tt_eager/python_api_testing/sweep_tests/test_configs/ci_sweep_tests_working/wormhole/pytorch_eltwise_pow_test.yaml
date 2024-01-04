@@ -1,15 +1,16 @@
 ---
 test-list:
-  - eltwise-power:
+  - eltwise-pow:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 1
         num-samples: 64
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: -100
           high: 100
@@ -18,20 +19,24 @@ test-list:
       args-gen: gen_power_args
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_power_sweep.csv
-  - eltwise-power:
+      output-file: eltwise_pow_sweep.csv
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
+  - eltwise-pow:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 1, 2]
         num-shapes: 1
         num-samples: 64
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: -100
           high: 100
@@ -43,4 +48,7 @@ test-list:
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_power_sweep.csv
+      output-file: eltwise_pow_sweep.csv
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"

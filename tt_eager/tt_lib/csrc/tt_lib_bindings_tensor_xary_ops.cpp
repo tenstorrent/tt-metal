@@ -163,12 +163,6 @@ namespace tt::tt_metal::detail {
             R"doc("subtrahent value which is actually calculated as minuend", "float")doc"
         );
         detail::bind_unary_op_with_param(
-            m_tensor, "power", power,
-            py::arg("exponent"),
-            R"doc(Returns tensor with the all of elements of the input tensor ``{0}`` raised to ``{1}``.)doc",
-            R"doc("exponent value", "int", ">=0")doc"
-        );
-        detail::bind_unary_op_with_param(
             m_tensor, "leaky_relu", leaky_relu,
             py::arg("slope"),
             R"doc(Returns tensor with the leaky relu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",

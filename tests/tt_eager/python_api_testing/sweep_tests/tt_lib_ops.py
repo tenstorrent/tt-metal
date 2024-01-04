@@ -1741,7 +1741,7 @@ def eltwise_rpow(
 
 
 @setup_host_and_device
-def eltwise_power(
+def eltwise_pow(
     x,
     *args,
     exponent,
@@ -1753,25 +1753,7 @@ def eltwise_power(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.power(t0, exponent, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_power_fp(
-    x,
-    *args,
-    exponent,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.power_fp(t0, exponent, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.pow(t0, exponent, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

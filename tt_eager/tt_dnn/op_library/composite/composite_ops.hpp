@@ -300,6 +300,11 @@ Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outpu
 //repeat a input tensor @input_a as specified by the number of dimensions
 Tensor repeat(const Tensor& input_a, const Shape& shape,const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+
 } //namespace tt_metal
 
 } //namespace tt

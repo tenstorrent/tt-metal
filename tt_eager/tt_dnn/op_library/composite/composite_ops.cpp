@@ -14,7 +14,6 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-
 namespace tt {
 
 namespace tt_metal {
@@ -1261,21 +1260,32 @@ Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outp
     TT_FATAL( exponent >= 0.0f, "works for positive exponents only");
     const uint32_t exponent_floor = static_cast<uint32_t>( floor(exponent) );
     if ( static_cast<float>( exponent_floor ) == exponent ) {
-        return power( input_a, exponent_floor );
+        return power( input_a, exponent_floor, output_mem_config );
     }
-
-
     const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
     Tensor  pow_trunc_log = mul_unary( log(input_a,output_mem_config),
                                        exponent_trunc, output_mem_config );
     Tensor pow_frac = exp( pow_trunc_log, output_mem_config );
     pow_trunc_log.deallocate();
-
-    return mul( power(input_a, exponent_floor, output_mem_config),
+    Tensor  t_nan  = full_like(input_a, std::nanf(""), output_mem_config);
+    Tensor result =  mul( power(input_a, exponent_floor, output_mem_config),
 		pow_frac, {}, output_mem_config );
+    // To handle negative inputs:
+    // in torch For -ve inputs with float exponent power returns nan
+    result = where(ltz(input_a, output_mem_config), t_nan, result);
+    return result;
 }
 Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     return operation::decorate_as_composite(__func__, _power_fp)(input_a, exponent, output_mem_config);
+}
+
+
+Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config){
+    return power_fp(input_a, exponent, output_mem_config);
+}
+
+Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config){
+    return power(input_a, exponent, output_mem_config);
 }
 
 //repeat a input tensor @input_a as specified by the number of dimensions
