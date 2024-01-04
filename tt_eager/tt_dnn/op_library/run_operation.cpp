@@ -128,9 +128,16 @@ constexpr auto decorate_operation(const Function& function) {
         return output_tensors;
     };
 }
+
+static int OP_COUNT = 0;
+#define ZoneScopedOp ZoneScoped;\
+    OP_COUNT ++;\
+    ZoneName(operation.get_type_name().c_str(), operation.get_type_name().size());\
+    std::string text = fmt::format("OP#: {}", OP_COUNT);\
+    ZoneText(text.c_str(), text.size())
+
 std::vector<Tensor> run_host_operation(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
-    ZoneScoped;
-    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
+    ZoneScopedOp;
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
@@ -152,8 +159,7 @@ std::vector<Tensor> run_device_operation(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-    ZoneScoped;
-    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
+    ZoneScopedOp;
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
 
