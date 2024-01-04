@@ -18,8 +18,10 @@ namespace tt {
 namespace tt_metal {
 
 
-std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad_runtime_args_rm(const Tensor &input_tensor,
+std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad_runtime_args_rm(
+                                                                                const Tensor &input_tensor,
                                                                                 Tensor& output_tensor,
+                                                                                const Shape &output_tensor_start,
                                                                                 uint32_t num_cores_total,
                                                                                 uint32_t num_cores,
                                                                                 uint32_t num_cores_y,
@@ -29,6 +31,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
                                                                                 uint32_t num_sticks_per_core_group_2
                                                                                 ){
 
+    tt_metal::Device *device = input_tensor.device();
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
@@ -61,7 +64,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
     }
 
     vector<uint32_t> common_reader_kernel_args = {
-        input_buffer->address(),
+        input_tensor.buffer()->address() + output_tensor_start[-1] * output_tensor.element_size(),
         padded_row_size_bytes,
         unpadded_row_size_bytes,
         num_dims,
@@ -73,6 +76,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val (num_cores_total);
 
+    uint32_t start_offset = get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++){
 
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -88,7 +92,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_written / num_unpadded_sticks_per_dim[0];
-        uint32_t start_id = id_per_dim[0];
+        uint32_t start_id = id_per_dim[0] + start_offset;
 
         for(uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_unpadded_sticks_per_dim[j];
@@ -183,7 +187,9 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
         total_cores,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args_vec});
 
-    auto all_runtime_args = get_unpad_runtime_args_rm(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+    auto all_runtime_args = get_unpad_runtime_args_rm(a, output, output_tensor_start,
+                                                    num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2,
+                                                    num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -222,7 +228,10 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
         uint32_t num_unpadded_sticks = dst_tensor.volume() / dst_tensor.shape()[-1];
         auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-        auto all_runtime_args = get_unpad_runtime_args_rm(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+        const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
+        auto all_runtime_args = get_unpad_runtime_args_rm(src_tensor, dst_tensor, tensor_start,
+                                             num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2,
+                                             num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++){
@@ -248,6 +257,7 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
 // Second of pair is writer args
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad_runtime_args_tile(const Tensor &input_tensor,
                                                                                 Tensor& output_tensor,
+                                                                                const Shape &output_tensor_start,
                                                                                 uint32_t num_cores_total,
                                                                                 uint32_t num_cores,
                                                                                 uint32_t num_cores_y,
@@ -302,6 +312,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val (num_cores_total);
 
+    uint32_t start_offset = get_tiled_start_offset(input_tensor, output_tensor_start);
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core;
@@ -316,7 +328,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
         id_per_dim[0] = num_tiles_written % num_unpadded_tiles_per_dim[0];
         uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
-        uint32_t start_id = id_per_dim[0];
+        uint32_t start_id = id_per_dim[0] + start_offset;
 
         for(uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
@@ -407,7 +419,7 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
 
 
 
-    auto all_runtime_args = get_unpad_runtime_args_tile(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
+    auto all_runtime_args = get_unpad_runtime_args_tile(a, output, output_tensor_start, num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
 
 
@@ -451,8 +463,8 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
 
         auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-
-        auto all_runtime_args = get_unpad_runtime_args_tile(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
+        const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
+        auto all_runtime_args = get_unpad_runtime_args_tile(src_tensor, dst_tensor, tensor_start, num_cores_total,  num_cores, num_cores_y, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
 
         for (uint32_t i = 0; i < num_cores_total; i++){

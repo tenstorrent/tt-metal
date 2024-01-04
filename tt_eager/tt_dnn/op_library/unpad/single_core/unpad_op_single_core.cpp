@@ -17,7 +17,8 @@ namespace tt_metal {
 
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_args_rm(const Tensor &input_tensor,
-                                                                                Tensor& output_tensor
+                                                                                Tensor& output_tensor,
+                                                                                const Shape &output_tensor_start
                                                                                 ){
 
     auto input_shape = input_tensor.shape();
@@ -49,12 +50,13 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_arg
 
     uint32_t num_unpadded_sticks = output_tensor.volume() / output_shape[-1];
 
+    uint32_t start_offset = get_rm_start_offset(input_tensor, output_tensor_start);
     vector<uint32_t> reader_kernel_args = {
-        input_tensor.buffer()->address(),
+        input_tensor.buffer()->address() + output_tensor_start[-1] * output_tensor.element_size(),
         padded_row_size_bytes,
         unpadded_row_size_bytes,
         num_dims,
-        0,
+        start_offset,
         num_unpadded_sticks
     };
     reader_kernel_args.insert(reader_kernel_args.end(), num_unpadded_sticks_per_dim.begin(), num_unpadded_sticks_per_dim.end());
@@ -104,7 +106,7 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
 		.set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    auto all_runtime_args = get_unpad_runtime_args_rm(a, output);
+    auto all_runtime_args = get_unpad_runtime_args_rm(a, output, output_tensor_start);
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(src_stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(src_stick_size) : 0;
@@ -165,7 +167,8 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
         auto dst_tensor = output_tensors.at(0);
 
         CoreCoord core = {0, 0};
-        auto all_runtime_args = get_unpad_runtime_args_rm(src_tensor, dst_tensor);
+        const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
+        auto all_runtime_args = get_unpad_runtime_args_rm(src_tensor, dst_tensor, tensor_start);
 
         {
             SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args.first);
@@ -180,7 +183,8 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
 }
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_args_tile(const Tensor &input_tensor,
-                                                                                Tensor& output_tensor
+                                                                                Tensor& output_tensor,
+                                                                                const Shape &output_tensor_start
                                                                                 ){
 
     auto input_shape = input_tensor.shape();
@@ -217,11 +221,12 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_arg
     }
 
     uint32_t num_unpadded_tiles = output_tensor.volume() / TILE_HW;
+    uint32_t start_offset = get_tiled_start_offset(input_tensor, output_tensor_start);
 
     vector<uint32_t> reader_kernel_args = {
         input_tensor.buffer()->address(),
         num_dims,
-        0,
+        start_offset,
         num_unpadded_tiles
     };
     reader_kernel_args.insert(reader_kernel_args.end(), num_unpadded_tiles_per_dim.begin(), num_unpadded_tiles_per_dim.end());
@@ -295,7 +300,7 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
 
 
 
-    auto all_runtime_args = get_unpad_runtime_args_tile(a, output);
+    auto all_runtime_args = get_unpad_runtime_args_tile(a, output, output_tensor_start);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -324,7 +329,8 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
         auto dst_tensor = output_tensors.at(0);
 
         CoreCoord core = {0, 0};
-        auto all_runtime_args = get_unpad_runtime_args_tile(src_tensor, dst_tensor);
+        const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
+        auto all_runtime_args = get_unpad_runtime_args_tile(src_tensor, dst_tensor, tensor_start);
 
         {
             SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args.first);

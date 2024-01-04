@@ -6,6 +6,7 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_metal/common/constants.hpp"
 
 namespace tt {
 
@@ -14,6 +15,9 @@ namespace tt_metal {
 enum class UnpadOpParallelizationStrategy {
     MULTI_CORE = 0, SINGLE_CORE = 1
 };
+
+uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &output_tensor_start);
+uint32_t get_rm_start_offset(const Tensor &output_tensor, const Shape &output_tensor_start);
 
 operation::ProgramWithCallbacks unpad_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 operation::ProgramWithCallbacks unpad_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);

@@ -19,16 +19,85 @@ namespace tt {
 namespace tt_metal {
 
 
+uint32_t get_upper_dims_compressed(const Tensor & tensor) {
+
+    uint32_t upper_dims_compressed = 1;
+
+    for(uint32_t dim=0; dim<tensor.shape().rank() - 2; dim++) {
+        upper_dims_compressed *= tensor.shape()[dim];
+    }
+
+    return upper_dims_compressed;
+}
+
+uint32_t get_upper_start_offset(const Tensor & tensor, const Shape & output_tensor_start) {
+
+    // offset for every dim except last 2
+    uint32_t start_offset = 0;
+
+    uint32_t num_pages = tensor.volume();
+    if(tensor.layout() == Layout::TILE) {
+        num_pages /= (TILE_HW);
+    }
+    else {
+        uint32_t page_width = tensor.shape()[-1];
+        num_pages /= page_width;
+    }
+
+    for(uint32_t dim_outer=0; dim_outer<tensor.shape().rank() - 2; dim_outer++) {
+        uint32_t compressed_dims = 1;
+        for(uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
+            compressed_dims*=tensor.shape()[dim_inner];
+        }
+        start_offset += (num_pages/compressed_dims) * output_tensor_start[dim_outer];
+    }
+    return start_offset;
+
+}
+
+
+
+uint32_t get_tiled_start_offset(const Tensor &input_tensor,
+                        const Shape &output_tensor_start
+ ) {
+    uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
+
+    uint32_t upper_dims_compressed = get_upper_dims_compressed(input_tensor);
+    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * (input_tensor.shape()[-2]/TILE_HEIGHT));
+
+
+    // offset for every dim except last 2
+    uint32_t start_offset = get_upper_start_offset(input_tensor, output_tensor_start);
+
+    start_offset += output_tensor_start[-2]/TILE_HEIGHT*num_pages_width
+                                + output_tensor_start[-1]/TILE_WIDTH;
+    return start_offset;
+
+}
+
+uint32_t get_rm_start_offset(
+                        const Tensor &tensor,
+                        const Shape &output_tensor_start
+ ) {
+
+    uint32_t start_offset = 0;
+
+    if (tensor.shape().rank() >= 2) {
+        uint32_t num_pages = tensor.volume() / tensor.shape()[-1];
+        uint32_t upper_dims_compressed = get_upper_dims_compressed(tensor);
+        start_offset = get_upper_start_offset(tensor, output_tensor_start);
+        start_offset += output_tensor_start[-2];
+    }
+
+    return start_offset;
+}
+
+
 void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
-
-    TT_FATAL(
-        (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
-        "On device unpadding only supports unpadding at end of dims"
-    );
 
     for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
         TT_FATAL(this->output_tensor_start[i] < input_tensor_a.shape()[i]);
@@ -42,10 +111,16 @@ void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
 
     if (input_tensor_a.layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
-        TT_FATAL((output_tensor_shape[-2] % TILE_HEIGHT == 0), "Can only unpad tilized tensor with full tiles");
-        TT_FATAL((output_tensor_shape[-1] % TILE_WIDTH == 0), "Can only unpad tilized tensor with full tiles");
+        TT_FATAL((output_tensor_shape[-2] % TILE_HEIGHT == 0) &&
+                 (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
+                "Can only unpad tilized tensor with full tiles");
+        TT_FATAL((output_tensor_shape[-1] % TILE_WIDTH == 0) &&
+                 (this->output_tensor_start[-1] % TILE_WIDTH == 0),
+                "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0, "RM unpadding requires output X size to be packable");
+        TT_FATAL(( output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0) &&
+                  (this->output_tensor_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0)
+                    ,"RM unpadding requires output X size to be packable");
     }
 }
 std::vector<Shape> Unpad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -120,8 +195,10 @@ const operation::Hash Unpad::compute_program_hash (
     auto str = operation::hash_operation<Unpad>(
         num_dims,
         input_tensor.layout(),
-        input_mem_config,
-        output_mem_config,
+        input_mem_config.memory_layout,
+        input_mem_config.buffer_type,
+        output_mem_config.memory_layout,
+        output_mem_config.buffer_type,
         dtype,
         get_parallelization_strategy(input_tensors),
         rm_width
