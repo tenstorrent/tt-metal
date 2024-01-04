@@ -15,7 +15,8 @@ struct core_descriptor_t {
     std::vector<RelativeCoreCoord> relative_compute_cores;
     std::vector<RelativeCoreCoord> relative_storage_cores;
     uint32_t storage_core_bank_size;
-    std::vector<RelativeCoreCoord> relative_dispatch_cores;
+    std::vector<RelativeCoreCoord> relative_producer_cores;
+    std::vector<RelativeCoreCoord> relative_consumer_cores;
 };
 
 inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
@@ -66,7 +67,7 @@ inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_
     return product_name.at(arch).at(num_harvested_rows);
 }
 
-inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id) {
+inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs) {
     // {arch : {product : {num hardware command queues : config}}}
     static std::unordered_map<ARCH, std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>>> config_by_arch;
 
@@ -76,7 +77,6 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id) 
     uint32_t num_harvested_rows = mask_bitset.count();
 
     std::string product_name = get_product_name(arch, num_harvested_rows);
-    static constexpr uint8_t num_hw_cqs = 1;
 
     if (num_harvested_rows > 2) {
         TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_rows);
@@ -127,8 +127,8 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id) 
         }
     }
 
-    std::vector<RelativeCoreCoord> dispatch_cores;
-    for (const auto& core_node : desc_yaml["dispatch_cores"]) {
+    std::vector<RelativeCoreCoord> producer_cores;
+    for (const auto& core_node : desc_yaml["producer_cores"]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
             // Logical coord
@@ -136,26 +136,41 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id) 
         } else {
             TT_THROW("Only logical relative coords supported for dispatch_cores cores");
         }
-        dispatch_cores.push_back(coord);
+        producer_cores.push_back(coord);
     }
+    TT_ASSERT(producer_cores.size(), "Producer cores size must be positive");
+
+    std::vector<RelativeCoreCoord> consumer_cores;
+    for (const auto& core_node : desc_yaml["consumer_cores"]) {
+        RelativeCoreCoord coord = {};
+        if (core_node.IsSequence()) {
+            // Logical coord
+            coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
+        } else {
+            TT_THROW("Only logical relative coords supported for dispatch_cores cores");
+        }
+        consumer_cores.push_back(coord);
+    }
+    TT_ASSERT(consumer_cores.size(), "Consumer cores size must be positive");
 
     config_by_num_cqs[num_hw_cqs] = core_descriptor_t{
         .compute_grid_size = compute_grid_size,
         .relative_compute_cores = compute_cores,
         .relative_storage_cores = storage_cores,
         .storage_core_bank_size = storage_core_bank_size,
-        .relative_dispatch_cores = dispatch_cores
+        .relative_producer_cores = producer_cores,
+        .relative_consumer_cores = consumer_cores
     };
     return config_by_arch.at(arch).at(product_name).at(num_hw_cqs);
 }
 
-inline uint32_t get_storage_core_bank_size(chip_id_t device_id) {
-    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id);
+inline uint32_t get_storage_core_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
     return core_desc.storage_core_bank_size;
 }
 
-inline const std::vector<CoreCoord> &get_logical_storage_cores(chip_id_t device_id) {
-    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id);
+inline const std::vector<CoreCoord> &get_logical_storage_cores(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
     static std::unordered_map<chip_id_t, std::vector<CoreCoord>> logical_storage_cores_by_device;
     if (logical_storage_cores_by_device.count(device_id)) {
         return logical_storage_cores_by_device.at(device_id);
@@ -167,13 +182,13 @@ inline const std::vector<CoreCoord> &get_logical_storage_cores(chip_id_t device_
     return logical_storage_cores;
 }
 
-inline CoreCoord get_compute_grid_size(chip_id_t device_id) {
-    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id);
+inline CoreCoord get_compute_grid_size(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
     return core_desc.compute_grid_size;
 }
 
-inline const std::vector<CoreCoord> &get_logical_compute_cores(chip_id_t device_id) {
-    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id);
+inline const std::vector<CoreCoord> &get_logical_compute_cores(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
     static std::unordered_map<chip_id_t, std::vector<CoreCoord>> logical_compute_cores_by_device;
     if (logical_compute_cores_by_device.count(device_id)) {
         return logical_compute_cores_by_device.at(device_id);
@@ -185,17 +200,30 @@ inline const std::vector<CoreCoord> &get_logical_compute_cores(chip_id_t device_
     return logical_compute_cores;
 }
 
-inline const std::vector<CoreCoord> &get_logical_dispatch_cores(chip_id_t device_id) {
-    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id);
-    static std::unordered_map<chip_id_t, std::vector<CoreCoord>> logical_dispatch_cores_by_device;
-    if (logical_dispatch_cores_by_device.count(device_id)) {
-        return logical_dispatch_cores_by_device.at(device_id);
+inline const std::vector<CoreCoord> &get_logical_producer_cores(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
+    static std::unordered_map<chip_id_t, std::vector<CoreCoord>> logical_producer_cores_by_device;
+    if (logical_producer_cores_by_device.count(device_id)) {
+        return logical_producer_cores_by_device.at(device_id);
     }
     CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
-    std::vector<CoreCoord> &logical_dispatch_cores = logical_dispatch_cores_by_device[device_id];
-    std::transform(core_desc.relative_dispatch_cores.cbegin(), core_desc.relative_dispatch_cores.cend(), std::back_inserter(logical_dispatch_cores),
+    std::vector<CoreCoord> &logical_producer_cores = logical_producer_cores_by_device[device_id];
+    std::transform(core_desc.relative_producer_cores.cbegin(), core_desc.relative_producer_cores.cend(), std::back_inserter(logical_producer_cores),
                 [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
-    return logical_dispatch_cores;
+    return logical_producer_cores;
+}
+
+inline const std::vector<CoreCoord> &get_logical_consumer_cores(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
+    static std::unordered_map<chip_id_t, std::vector<CoreCoord>> logical_consumer_cores_by_device;
+    if (logical_consumer_cores_by_device.count(device_id)) {
+        return logical_consumer_cores_by_device.at(device_id);
+    }
+    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
+    std::vector<CoreCoord> &logical_consumer_cores = logical_consumer_cores_by_device[device_id];
+    std::transform(core_desc.relative_consumer_cores.cbegin(), core_desc.relative_consumer_cores.cend(), std::back_inserter(logical_consumer_cores),
+                [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    return logical_consumer_cores;
 }
 
 }   // namespace tt

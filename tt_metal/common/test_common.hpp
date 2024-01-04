@@ -22,7 +22,6 @@
 #include "common/base.hpp"
 
 inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevice target_device, string output_dir = "") {
-
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     bool use_full_soc_desc = getenv("TT_METAL_VERSIM_FORCE_FULL_SOC_DESC");
     string tt_metal_home;

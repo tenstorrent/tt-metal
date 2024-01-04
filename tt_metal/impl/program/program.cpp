@@ -463,7 +463,7 @@ void Program::validate_circular_buffer_region(const Device *device) const {
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
-    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores.begin());
+    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
 

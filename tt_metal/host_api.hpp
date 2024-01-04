@@ -56,11 +56,11 @@ size_t GetNumPCIeDevices();
  *
  * Return value: Device *
  *
- * | Argument  | Description                | Type            | Valid Range                       | Required |
- * |-----------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id | ID of the device to target | chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | Argument   | Description                | Type            | Valid Range                       | Required |
+ * |------------|----------------------------|-----------------|-----------------------------------|----------|
+ * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
-Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
+Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs = 1, const std::vector<uint32_t>& l1_bank_remap = {});
 
 /**
  * Resets device and closes device

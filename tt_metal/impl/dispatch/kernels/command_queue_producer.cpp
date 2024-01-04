@@ -52,20 +52,19 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
 
 // Only the read interface is set up on the device... the write interface
 // belongs to host
-void setup_issue_queue_read_interface(const uint32_t command_issue_region_size) {
-    uint issue_fifo_addr = CQ_START >> 4;  // The fifo starts after the pointer addresses
-    uint issue_fifo_size = (command_issue_region_size >> 4) - issue_fifo_addr;
-
-    cq_read_interface.issue_fifo_limit = issue_fifo_addr + issue_fifo_size;
-    cq_read_interface.issue_fifo_rd_ptr = issue_fifo_addr;
-    cq_read_interface.issue_fifo_size = issue_fifo_size;
+void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const uint32_t issue_region_size) {
+    cq_read_interface.issue_fifo_rd_ptr = issue_region_rd_ptr >> 4;
+    cq_read_interface.issue_fifo_size = issue_region_size >> 4;
+    cq_read_interface.issue_fifo_limit = (issue_region_rd_ptr + issue_region_size) >> 4;
     cq_read_interface.issue_fifo_rd_toggle = 0;
 }
 
 void kernel_main() {
-    constexpr uint32_t command_issue_region_size = get_compile_time_arg_val(0);
+    constexpr uint32_t host_issue_queue_read_ptr_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t issue_queue_start_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t issue_queue_size = get_compile_time_arg_val(2);
 
-    setup_issue_queue_read_interface(command_issue_region_size);
+    setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -78,14 +77,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 2 by host
 
     bool db_buf_switch = false;
-
     while (true) {
+
         issue_queue_wait_front();
 
         // Read in command
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
-        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, command_issue_region_size - rd_ptr));
+        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));
         noc_async_read_barrier();
 
         // Producer information
@@ -102,10 +101,11 @@ void kernel_main() {
         uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
         uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
+        uint32_t finish = command_ptr[DeviceCommand::finish_idx];
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
-            cq_read_interface.issue_fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
+            cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
             cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
             notify_host_of_issue_queue_read_pointer();
             continue;
@@ -128,9 +128,7 @@ void kernel_main() {
         noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
         noc_async_write_barrier();  // Barrier for now
 
-
         // Fetch data and send to the consumer
-
         produce(
             command_ptr,
             num_buffer_transfers,

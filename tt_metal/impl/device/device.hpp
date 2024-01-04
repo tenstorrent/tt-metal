@@ -53,20 +53,22 @@ class Device {
    public:
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
-    Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
+    Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap = {});
 
     ~Device();
 
     // TODO: Add copy/move semantics
-    Device(const Device &other) { }
+    Device(const Device &other): num_hw_cqs_(other.num_hw_cqs_) { }
     Device& operator=(const Device &other) { return *this; }
 
-    Device(Device &&other) { }
+    Device(Device &&other): num_hw_cqs_(other.num_hw_cqs_) { }
     Device& operator=(Device &&other) { return *this; }
 
     tt::ARCH arch() const;
 
     chip_id_t id() const { return id_; }
+
+    uint8_t num_hw_cqs() const { return num_hw_cqs_; }
 
     bool is_initialized() const { return this->initialized_; }
 
@@ -105,6 +107,10 @@ class Device {
         return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
     }
 
+    bool is_mmio_capable() const {
+        return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
+    }
+
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t bank_size(const BufferType &buffer_type) const;
 
@@ -129,8 +135,10 @@ class Device {
     // Set of logical storage only core coordinates
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
 
+    const std::set<CoreCoord> &producer_cores() const { return this->producer_cores_; }
+    const std::set<CoreCoord> &consumer_cores() const { return this->consumer_cores_; }
+
     // Set of logical dispatch core coordinates
-    const std::set<CoreCoord> &dispatch_cores() const { return this->dispatch_cores_; }
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
@@ -188,10 +196,13 @@ class Device {
     // Allows access to sysmem_writer
     friend class CommandQueue;
 
-    std::set<CoreCoord> compute_cores;
+    std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
-    std::set<CoreCoord> dispatch_cores_;
+    std::set<CoreCoord> producer_cores_;
+    std::set<CoreCoord> consumer_cores_;
     std::set<CoreCoord> ethernet_cores_;
+
+    const uint8_t num_hw_cqs_;
 };
 
 }  // namespace tt_metal

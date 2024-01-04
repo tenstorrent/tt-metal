@@ -96,8 +96,8 @@ void completion_queue_reserve_back(uint32_t data_size_B) {
         completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
         completion_rd_toggle = completion_rd_ptr_and_toggle >> 31;
     } while (
-        cq_write_interface.completion_fifo_wr_ptr < completion_rd_ptr and cq_write_interface.completion_fifo_wr_ptr + data_size_16B > completion_rd_ptr or
-        (completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle and cq_write_interface.completion_fifo_wr_ptr == completion_rd_ptr)
+        (cq_write_interface.completion_fifo_wr_ptr < completion_rd_ptr) and (cq_write_interface.completion_fifo_wr_ptr + data_size_16B > completion_rd_ptr) or
+        (completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle) and (cq_write_interface.completion_fifo_wr_ptr == completion_rd_ptr)
     );
 
     DEBUG_STATUS('N', 'Q', 'R', 'B', 'D');
@@ -105,7 +105,8 @@ void completion_queue_reserve_back(uint32_t data_size_B) {
 
 FORCE_INLINE
 void notify_host_of_completion_queue_write_pointer() {
-    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_COMPLETION_WRITE_PTR;  // For now, we are writing to host hugepages at offset
+    constexpr static uint32_t host_completion_queue_write_ptr_addr = get_compile_time_arg_val(0);
+    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | host_completion_queue_write_ptr_addr;  // For now, we are writing to host hugepages at offset
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
@@ -116,11 +117,11 @@ void notify_host_of_completion_queue_write_pointer() {
 }
 
 FORCE_INLINE
-void completion_queue_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B) {
+void completion_queue_push_back(const uint32_t completion_queue_start_addr, uint32_t push_size_B) {
     uint32_t push_size_16B = align(push_size_B, 32) >> 4;
     cq_write_interface.completion_fifo_wr_ptr += push_size_16B;
     if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit) {
-        cq_write_interface.completion_fifo_wr_ptr = command_issue_region_size >> 4;
+        cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;
         // Flip the toggle
         cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
     }
@@ -131,7 +132,7 @@ void completion_queue_push_back(const uint32_t command_issue_region_size, uint32
 
 FORCE_INLINE void write_buffers(
     volatile tt_l1_ptr uint32_t* command_ptr,
-    const uint32_t command_issue_region_size,
+    const uint32_t completion_queue_start_addr,
     uint32_t num_destinations,
     uint32_t sharded_buffer_num_cores,
     uint32_t consumer_cb_size,
@@ -184,7 +185,7 @@ FORCE_INLINE void write_buffers(
             page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            completion_queue_push_back(command_issue_region_size, num_pages * page_size);
+            completion_queue_push_back(completion_queue_start_addr, num_pages * page_size);
         }
     }
     noc_async_write_barrier();
@@ -301,8 +302,7 @@ void write_and_launch_program(
     }
 }
 
-FORCE_INLINE void wait_for_program_completion(
-    uint32_t num_workers, uint32_t tensix_soft_reset_addr) {
+FORCE_INLINE void wait_for_program_completion(uint32_t num_workers) {
     if (not num_workers)
         return;
 
@@ -315,14 +315,16 @@ FORCE_INLINE void wait_for_program_completion(
     while (*message_addr_ptr != num_workers)
         ;
 
+
     DEBUG_STATUS('Q', 'D');
 }
 
+template <uint32_t host_finish_addr>
 FORCE_INLINE void notify_host_complete() {
     volatile tt_l1_ptr uint32_t* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
     constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
-    uint64_t finish_noc_addr = pcie_core_noc_encoding | HOST_CQ_FINISH_PTR;
+    uint64_t finish_noc_addr = pcie_core_noc_encoding | host_finish_addr;
     noc_async_write(uint32_t(finish_ptr), finish_noc_addr, 4);
     noc_async_write_barrier();
     finish_ptr[0] = 0;

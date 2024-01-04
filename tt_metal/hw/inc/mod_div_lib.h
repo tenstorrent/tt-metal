@@ -33,6 +33,11 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n)
     return (((uint64_t) n * 0xAE4C415D) >> 32) >> 6;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_124(uint32_t n)
+{
+    return (((uint64_t) n * 0x08421085) >> 32) >> 2;
+}
+
 template <uint32_t d>
 inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
 {
@@ -42,6 +47,8 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 94) {
         // fast divide for 94 divisor. Handles Banked L1 address generation for E75
         return fast_udiv_94(n);
+    } else if constexpr (d == 124) {
+        return fast_udiv_124(n);
     } else {
         // generic divide from llvm
         const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;

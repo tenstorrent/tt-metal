@@ -18,7 +18,7 @@ TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
     size_t total_size_bytes = 0;
 
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
-    const uint32_t interleaved_l1_bank_size = tt::get_storage_core_bank_size(device->id());
+    const uint32_t interleaved_l1_bank_size = tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs());
     uint64_t alloc_limit = interleaved_l1_bank_size - STORAGE_ONLY_UNRESERVED_BASE;
 
     std::vector<std::unique_ptr<Buffer>> buffers;
@@ -45,7 +45,7 @@ TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
     tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0);
 
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
-    const uint32_t interleaved_l1_bank_size = tt::get_storage_core_bank_size(device->id());
+    const uint32_t interleaved_l1_bank_size = tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs());
     uint64_t alloc_limit = interleaved_l1_bank_size - STORAGE_ONLY_UNRESERVED_BASE;
 
     tt::tt_metal::InterleavedBufferConfig l1_config{

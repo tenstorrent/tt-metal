@@ -65,8 +65,10 @@ run_post_commit_pipeline_tests() {
     # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
     if [[ $dispatch_mode == "slow" ]]; then
         ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
-    else
+    elif [[ $dispatch_mode == "fast" ]]; then
         ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
+    elif [[ $dispatch_mode == "fast-multi-queue-single-device" ]]; then
+        TT_METAL_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     fi
 }
 
@@ -167,7 +169,6 @@ run_pipeline_tests() {
 
     # Add your logic here for pipeline-specific tests
     echo "Running tests for pipeline: $pipeline_type with tt-arch: $tt_arch"
-
     # Call the appropriate module tests based on pipeline
     if [[ $pipeline_type == "post_commit" ]]; then
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
@@ -261,7 +262,7 @@ main() {
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
 
-    available_dispatch_modes=("fast" "slow")
+    available_dispatch_modes=("fast" "slow" "fast-multi-queue-single-device")
     available_tt_archs=("grayskull" "wormhole_b0")
 
     # Validate arguments

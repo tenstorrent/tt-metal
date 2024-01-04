@@ -39,7 +39,7 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
     const std::vector<uint32_t>& harvested_rows,
-    const std::vector<CoreCoord>& dispatch_cores);
+    const CoreCoord& enqueue_program_physical_dispatch_core);
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env,
                                     JitBuildOptions& options);

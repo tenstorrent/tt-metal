@@ -78,11 +78,13 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t src_page_index;
     uint32_t pages_to_read;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
+    uint32_t command_queue_channel;
 
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
     EnqueueReadBufferCommand(
+        uint32_t command_queue_channel,
         Device* device,
         Buffer& buffer,
         void* dst,
@@ -107,8 +109,10 @@ class EnqueueWriteBufferCommand : public Command {
     uint32_t dst_page_index;
     uint32_t pages_to_write;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
+    uint32_t command_queue_channel;
    public:
     EnqueueWriteBufferCommand(
+        uint32_t command_queue_channel,
         Device* device,
         Buffer& buffer,
         const void* src,
@@ -125,6 +129,7 @@ class EnqueueWriteBufferCommand : public Command {
 
 class EnqueueProgramCommand : public Command {
    private:
+    uint32_t command_queue_channel;
     Device* device;
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
@@ -134,16 +139,14 @@ class EnqueueProgramCommand : public Command {
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall);
+    EnqueueProgramCommand(uint32_t command_queue_channel, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall);
 
-    const DeviceCommand assemble_device_command(uint32_t);
+    const DeviceCommand assemble_device_command(uint32_t src_address);
 
     void process();
 
     EnqueueCommandType type();
 };
-
-// Easiest way for us to process finish is to explicitly have the device
 // write to address chosen by us for finish... that way we don't need
 // to mess with checking recv and acked
 class FinishCommand : public Command {
@@ -151,9 +154,10 @@ class FinishCommand : public Command {
     Device* device;
     SystemMemoryManager& manager;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::FINISH;
+    uint32_t command_queue_channel;
 
    public:
-    FinishCommand(Device* device, SystemMemoryManager& manager);
+    FinishCommand(uint32_t command_queue_channel, Device* device, SystemMemoryManager& manager);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -168,9 +172,10 @@ class EnqueueWrapCommand : public Command {
     SystemMemoryManager& manager;
     DeviceCommand::WrapRegion wrap_region;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::WRAP;
+    uint32_t command_queue_channel;
 
    public:
-    EnqueueWrapCommand(Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
+    EnqueueWrapCommand(uint32_t command_queue_channel, Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -186,17 +191,37 @@ namespace detail{
 
 class CommandQueue {
    public:
-    CommandQueue(Device* device);
+    CommandQueue(Device* device, uint32_t command_queue_channel);
 
     ~CommandQueue();
 
    private:
-    Device* device;
-    // thread processing_thread;
-    map<uint64_t, unique_ptr<Buffer>>
-        program_to_buffer;
+    CoreCoord dispatch_core;
+    uint32_t command_queue_channel;
+    uint32_t command_queue_channel_size;
+    SystemMemoryManager& manager;
 
-    map<uint64_t, ProgramMap> program_to_dev_map;
+    Device* device;
+
+    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer(const chip_id_t chip_id) {
+        static map<chip_id_t, map<uint64_t, unique_ptr<Buffer>>> chip_to_program_to_buffer;
+        if (chip_to_program_to_buffer.count(chip_id)) {
+            return chip_to_program_to_buffer[chip_id];
+        }
+        map<uint64_t, unique_ptr<Buffer>> dummy;
+        chip_to_program_to_buffer.emplace(chip_id, std::move(dummy));
+        return chip_to_program_to_buffer[chip_id];
+    }
+
+    map<uint64_t, ProgramMap>& program_to_dev_map(const chip_id_t chip_id) {
+        static map<chip_id_t, map<uint64_t, ProgramMap>> chip_to_program_to_dev_map;
+        if (chip_to_program_to_dev_map.count(chip_id)) {
+            return chip_to_program_to_dev_map[chip_id];
+        }
+        map<uint64_t, ProgramMap> dummy;
+        chip_to_program_to_dev_map.emplace(chip_id, std::move(dummy));
+        return chip_to_program_to_dev_map[chip_id];
+    };
 
     void enqueue_command(Command& command, bool blocking);
 
