@@ -1,6 +1,6 @@
 ---
 test-list:
-  eltwise-power:
+  eltwise-pow:
     shape:
       start-shape: [1, 1, 1, 2]
       end-shape: [2, 2, 2048, 2048]
@@ -15,4 +15,4 @@ test-list:
     comparison:
       function: comp_pcc
     args-gen: gen_power_args
-    output-file: eltwise_power_sweep.csv
+    output-file: eltwise_pow_sweep.csv

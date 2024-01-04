@@ -516,12 +516,10 @@ class TestEltwiseUnary:
             device,
         )
 
-    @pytest.mark.parametrize("input_value", [-1.0, 2.0, 3.0])
-    @pytest.mark.parametrize("exponent", [0, 1, 2, 3])
+    @pytest.mark.parametrize("exponent", [0, 1, 2, 3, 1.5, 2.5, 0.5])
     def test_run_eltwise_power_op(
         self,
         input_shapes,
-        input_value,
         exponent,
         device,
         function_level_defaults,
@@ -529,12 +527,9 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_constant, constant=input_value),
-                torch.bfloat16,
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
-        comparison_func = comparison_funcs.comp_equal
+        comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"exponent": exponent})
         test_args.update(
@@ -544,7 +539,7 @@ class TestEltwiseUnary:
             }
         )
         run_single_pytorch_test(
-            "eltwise-power",
+            "eltwise-pow",
             input_shapes,
             datagen_func,
             comparison_func,

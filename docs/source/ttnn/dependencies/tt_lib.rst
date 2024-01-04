@@ -283,8 +283,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.polyval
 
-.. autofunction:: tt_lib.tensor.power
-
 .. autofunction:: tt_lib.tensor.sign
 
 .. autofunction:: tt_lib.tensor.abs
@@ -734,7 +732,7 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.repeat_interleave
 
-.. autofunction:: tt_lib.tensor.power_fp
+.. autofunction:: tt_lib.tensor.pow
 
 .. autofunction:: tt_lib.tensor.identity
 

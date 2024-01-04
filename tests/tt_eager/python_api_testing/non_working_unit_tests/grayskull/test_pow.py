@@ -10,10 +10,10 @@ import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_power_fp as tt_eltwise_power_fp
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_pow as tt_eltwise_pow
 
 
-def run_eltwise_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed, device):
+def run_eltwise_pow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed, device):
     torch.manual_seed(data_seed)
 
     if in_mem_config == "SYSTEM_MEMORY":
@@ -25,7 +25,7 @@ def run_eltwise_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     # get ref result
     ref_value = pytorch_ops.power(x_ref, exponent=exponent)
 
-    tt_result = tt_eltwise_power_fp(
+    tt_result = tt_eltwise_pow(
         x=x,
         exponent=exponent,
         device=device,
@@ -77,5 +77,5 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_rpow(input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed, device):
-    run_eltwise_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed, device)
+def test_eltwise_pow(input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed, device):
+    run_eltwise_pow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, exponent, data_seed, device)

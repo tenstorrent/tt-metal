@@ -153,7 +153,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
 
 
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
-    ("pow", ttl.tensor.power),
+    ("pow", ttl.tensor.pow),
 ]
 
 

@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-power_fp:
+  - eltwise-pow:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [12, 24, 512, 512]
@@ -15,14 +15,14 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_power_fp_args
+      args-gen: gen_power_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_power_fp_sweep.csv
-  - eltwise-power_fp:
+      output-file: eltwise_power_sweep.csv
+  - eltwise-pow:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [12, 24, 512, 512]
@@ -37,10 +37,10 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_power_fp_args
+      args-gen: gen_power_args
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_power_fp_sweep.csv
+      output-file: eltwise_power_sweep.csv

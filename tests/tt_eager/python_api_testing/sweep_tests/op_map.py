@@ -388,12 +388,8 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,
     },
-    "eltwise-power": {
-        "tt_lib_op": tt_lib_ops.eltwise_power,
-        "pytorch_op": pytorch_ops.power,
-    },
-    "eltwise-power_fp": {
-        "tt_lib_op": tt_lib_ops.eltwise_power_fp,
+    "eltwise-pow": {
+        "tt_lib_op": tt_lib_ops.eltwise_pow,
         "pytorch_op": pytorch_ops.power,
     },
     "bert-large-fused-qkv-matmul": {
