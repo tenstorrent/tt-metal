@@ -10,6 +10,7 @@ import torch
 
 import tt_lib as ttl
 
+from models.utility_functions import get_debug_tensor
 
 tt_dtype_to_torch_dtype = {
     ttl.tensor.DataType.UINT32: torch.int32,
@@ -35,25 +36,6 @@ def print_tiles(tiled_tensor, num_tiles_height, num_tiles_width):
             print(tile)
             col_idx = col_idx + 1
         row_idx = row_idx + 1
-
-
-def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, page_height=32):
-    torch_tensor = None
-    for row_idx in range(0, int(num_pages_height)):
-        tile_row = None
-        for col_idx in range(0, int(num_pages_width)):
-            tile_idx = col_idx + num_pages_width * row_idx
-            tile = torch.full((1, 1, page_width, page_height), tile_idx + 1, dtype=dtype)
-            if tile_row == None:
-                tile_row = tile
-            else:
-                tile_row = torch.cat((tile_row, tile), 3)
-        if torch_tensor == None:
-            torch_tensor = tile_row
-        else:
-            torch_tensor = torch.cat((torch_tensor, tile_row), 2)
-
-    return torch_tensor
 
 
 def get_tensor(shape, dtype):
