@@ -201,6 +201,9 @@ ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul(c_in0, c_in1, itile0, itile1, ct_dim, rt_dim, kt_dim) ));
     MATH(( llk_math_matmul<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
+    #else
+    UNPACK(( llk_unpack_AB_matmul(c_in0, c_in1, itile0, itile1, ct_dim, rt_dim, kt_dim) ));
+    MATH(( llk_math_matmul<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
     #endif
 }
 

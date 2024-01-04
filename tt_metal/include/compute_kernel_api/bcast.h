@@ -215,17 +215,14 @@ ALWI void add_bcast_rows_init_short()
  */
 ALWI void add_bcast_rows_init_short_post_matmul()
 {
+    #ifdef ARCH_GRAYSKULL
     // math
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0, 1)  ));
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<SYNC>()  ));
 
     // unpacker
-    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(0, 0, 255) ));
-    #else
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    #endif
 
     //TODO: Check default operand values for this
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
@@ -234,6 +231,12 @@ ALWI void add_bcast_rows_init_short_post_matmul()
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
+    #else
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
+    #endif
+
 }
 
 /**
