@@ -160,6 +160,22 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     );
 }
 
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false>
+inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
+    std::uint8_t output_id = get_output_id(output);
+
+    static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+
+    for (uint32_t tile_index=start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
+
+        _llk_pack_<Dst, untilize, is_fp32_dest_acc_en>(
+            tile_index,
+            pack_tile_addr
+        );
+    }
+}
+
 /*************************************************************************
 * LLK PACK COMMON
 *************************************************************************/

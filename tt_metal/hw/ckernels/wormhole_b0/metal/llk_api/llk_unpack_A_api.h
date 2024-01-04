@@ -87,3 +87,23 @@ inline void llk_unpack_A(
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
+
+
+template <
+    BroadcastType BType = BroadcastType::NONE,
+    bool acc_to_dest = false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest = false>
+inline void llk_unpack_A_block(
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles, const bool transpose_of_faces = 0) {
+    std::uint32_t operand_id = get_operand_id(operand);
+    std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;
+    std::uint32_t offset_address = cb_interface[operand_id].fifo_page_size;
+    std::uint32_t address = base_address;
+
+    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+            address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        address += offset_address;
+    }
+}
