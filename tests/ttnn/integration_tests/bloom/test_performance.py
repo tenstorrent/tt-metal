@@ -24,8 +24,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 def get_expected_times(functional_bloom):
     return {
-        ttnn_functional_bloom: (8, 5),
-        ttnn_optimized_functional_bloom: (8, 0.85),
+        ttnn_functional_bloom: (12, 5),
+        ttnn_optimized_functional_bloom: (12, 0.85),
     }[functional_bloom]
 
 

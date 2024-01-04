@@ -94,6 +94,7 @@ def from_torch(
     *,
     layout: Optional[Layout] = ROW_MAJOR_LAYOUT,
     device: Optional[Device] = None,
+    memory_config: Optional[MemoryConfig] = None,
 ) -> Tensor:
     """
     from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None) -> Tensor
@@ -112,6 +113,10 @@ def from_torch(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
     """
 
+    if memory_config is not None:
+        if device is None:
+            raise RuntimeError("device must be specified when memory_config is specified")
+
     def impl(tensor, dtype):
         return Tensor(ttl.tensor.Tensor(tensor, dtype))
 
@@ -121,7 +126,7 @@ def from_torch(
         tensor = to_layout(tensor, layout)
 
     if device is not None:
-        tensor = to_device(tensor, device)
+        tensor = to_device(tensor, device, memory_config=memory_config)
 
     return tensor
 
