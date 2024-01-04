@@ -91,7 +91,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed_l1(uint32_t 
   return (NOC_STATUS_READ_REG_L1(noc, NIU_MST_RD_RESP_RECEIVED) == noc_reads_num_issued[noc]);
 }
 
-inline bool ncrisc_noc_fast_read_ok(uint32_t noc, uint32_t cmd_buf) {
+inline __attribute__((always_inline)) bool ncrisc_noc_fast_read_ok(uint32_t noc, uint32_t cmd_buf) {
   return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
