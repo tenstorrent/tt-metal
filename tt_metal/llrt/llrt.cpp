@@ -101,7 +101,7 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             break;
         case 5:
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::FIRMWARE_BASE + eth_l1_mem::address_map::ERISC_FIRMWARE_SIZE;
+            range_max = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
             break;
         default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
     }
