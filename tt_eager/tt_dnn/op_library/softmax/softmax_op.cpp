@@ -673,7 +673,8 @@ operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = this->inplace ? input_tensors.at(0) : output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
-    bool causal_mask = mask.has_value() ? mask.value().shape()[-2] == mask.value().shape()[-1] : false;
+    // bool causal_mask = mask.has_value() ? mask.value().shape()[-2] == mask.value().shape()[-1] : false;
+    bool causal_mask = this->is_causal_mask;
 
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
@@ -732,8 +733,8 @@ Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgram
 }
 
 namespace transformers {
-Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config) {
-    operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config}, {input_tensor}, {mask});
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask) {
+    operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=is_causal_mask}, {input_tensor}, {mask});
     return input_tensor;
 }
 
@@ -747,7 +748,7 @@ Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config
 }
 
 namespace transformers {
-Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config) {
+Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask) {
     Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
     FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
     std::optional<FormatParams> mask_format_params = std::nullopt;
@@ -761,7 +762,7 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
         Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().shape());
         mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
     }
-    return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params}).at(0);
+    return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params}).at(0);
 }
 }  // namespace transformers
 }  // namespace tt_metal

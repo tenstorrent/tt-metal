@@ -297,7 +297,7 @@ namespace tt::tt_metal::detail {
             "Performs a softmax operation on the last tensor dimension.");
 
         m_tensor.def("scale_mask_softmax", &transformers::scale_mask_softmax,
-        py::arg("input").noconvert(), py::arg("scale"), py::arg("mask").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("input").noconvert(), py::arg("scale"), py::arg("mask").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("is_causal_mask").noconvert() = false,
         "Performs a fused scale->attention_mask->softmax operation.");
 
     }

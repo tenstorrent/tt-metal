@@ -47,6 +47,7 @@ struct Softmax {
     const bool inplace;
     const MemoryConfig output_mem_config;
     const tt::operations::primary::transformers::SoftmaxProgramConfig program_config;
+    const bool is_causal_mask;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -72,7 +73,7 @@ namespace transformers {
 // tmp2 = bcast_add_w->h(tmp1, mask) ; shape of attn mask is [1,N,32,W]
 // y = softmax(tmp2)              ; r=result
 // If scale == 0.0f then just y = softmax(x) is computed
-Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale = std::nullopt, std::optional<const Tensor> mask = std::nullopt, const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{});
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale = std::nullopt, std::optional<const Tensor> mask = std::nullopt, const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{}, const bool is_causal_mask = false);
 }  // namespace transformers
 
 }  // namespace primary
@@ -82,7 +83,7 @@ namespace tt_metal {
 Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 namespace transformers {
-Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const bool is_causal_mask = false);
 }  // namespace transformers
 }  // namespace tt_metal
 
