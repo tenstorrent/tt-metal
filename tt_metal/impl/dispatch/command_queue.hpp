@@ -78,13 +78,13 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t src_page_index;
     uint32_t pages_to_read;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
-    uint32_t command_queue_channel;
+    uint32_t command_queue_id;
 
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
     EnqueueReadBufferCommand(
-        uint32_t command_queue_channel,
+        uint32_t command_queue_id,
         Device* device,
         Buffer& buffer,
         void* dst,
@@ -109,10 +109,10 @@ class EnqueueWriteBufferCommand : public Command {
     uint32_t dst_page_index;
     uint32_t pages_to_write;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
-    uint32_t command_queue_channel;
+    uint32_t command_queue_id;
    public:
     EnqueueWriteBufferCommand(
-        uint32_t command_queue_channel,
+        uint32_t command_queue_id,
         Device* device,
         Buffer& buffer,
         const void* src,
@@ -129,7 +129,7 @@ class EnqueueWriteBufferCommand : public Command {
 
 class EnqueueProgramCommand : public Command {
    private:
-    uint32_t command_queue_channel;
+    uint32_t command_queue_id;
     Device* device;
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
@@ -139,7 +139,7 @@ class EnqueueProgramCommand : public Command {
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    EnqueueProgramCommand(uint32_t command_queue_channel, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall);
+    EnqueueProgramCommand(uint32_t command_queue_id, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 
@@ -154,10 +154,10 @@ class FinishCommand : public Command {
     Device* device;
     SystemMemoryManager& manager;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::FINISH;
-    uint32_t command_queue_channel;
+    uint32_t command_queue_id;
 
    public:
-    FinishCommand(uint32_t command_queue_channel, Device* device, SystemMemoryManager& manager);
+    FinishCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -172,10 +172,10 @@ class EnqueueWrapCommand : public Command {
     SystemMemoryManager& manager;
     DeviceCommand::WrapRegion wrap_region;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::WRAP;
-    uint32_t command_queue_channel;
+    uint32_t command_queue_id;
 
    public:
-    EnqueueWrapCommand(uint32_t command_queue_channel, Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
+    EnqueueWrapCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -191,14 +191,13 @@ namespace detail{
 
 class CommandQueue {
    public:
-    CommandQueue(Device* device, uint32_t command_queue_channel);
+    CommandQueue(Device* device, uint32_t command_queue_id);
 
     ~CommandQueue();
 
    private:
-    CoreCoord dispatch_core;
-    uint32_t command_queue_channel;
-    uint32_t command_queue_channel_size;
+    uint32_t command_queue_id;
+    uint32_t command_queue_size;
     SystemMemoryManager& manager;
 
     Device* device;

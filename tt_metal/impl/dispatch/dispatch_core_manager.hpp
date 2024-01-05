@@ -106,7 +106,7 @@ class dispatch_core_manager {
     dispatch_core_manager() {
         for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
             std::list<CoreCoord> &logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
-            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id)) {
+            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, 1)) {   // TODO: DO NOT HARDCODE NUMBER OF CQS HERE
                 logical_dispatch_cores.push_back(logical_dispatch_core);
             }
         }

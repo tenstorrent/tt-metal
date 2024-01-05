@@ -103,13 +103,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const CoreCoord& core : tt::get_logical_producer_cores(id_, num_hw_cqs_)) {
-        this->producer_cores_.insert(core);
-        const auto noc_coord = this->worker_core_from_logical_core(core);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
-    }
-    for (const CoreCoord& core : tt::get_logical_consumer_cores(id_, num_hw_cqs_)) {
-        this->consumer_cores_.insert(core);
+    for (const CoreCoord& core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_)) {
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
@@ -265,6 +259,33 @@ void Device::clear_l1_state() {
     }
 }
 
+void Device::initialize_command_queue() {
+    std::cout << "Initializing command queue for device " << this->id() << std::endl;
+    if (not this->is_mmio_capable()) {
+        TT_ASSERT(this->num_hw_cqs() == 1, "Only support one hardware command queue for fast dispatch on remote device");
+    }
+    this->sysmem_manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
+
+    std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
+    const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
+    const uint32_t cq_size = hugepage_size / this->num_hw_cqs();
+
+    for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(cq_id) + cq_offset(channel, cq_id, cq_size)) >> 4;
+
+        std::cout << "Writing HOST_CQ_ISSUE_READ_PTR " << pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] << " and HOST_CQ_COMPLETION_WRITE_PTR " << pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)]
+                  << " to channel " << channel << " at address " << cq_id * cq_size << std::endl;
+
+        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, this->id_, channel);
+    }
+
+    detail::SendDispatchKernelsToDevice(this);
+}
+
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}", this->id_);
@@ -296,40 +317,9 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e. hugepage)
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        if (this->is_mmio_capable()) {
-            vector<pair<CoreCoord, CoreCoord>> dispatch_cores;
-            std::transform(
-                    this->producer_cores().begin(), this->producer_cores().end(),
-                    this->consumer_cores().begin(), std::back_inserter(dispatch_cores),
-                    [](const CoreCoord& producer_core, const CoreCoord& consumer_core) {
-                        return std::make_pair(producer_core, consumer_core);
-                    });
-
-            this->sysmem_manager = std::make_unique<SystemMemoryManager>(
-                this->id_,
-                dispatch_cores,
-                [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
-            );
-
-            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
-
-            std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
-            const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(this->id_, channel);
-            const uint32_t cq_channel_size = hugepage_size / this->num_hw_cqs();
-
-            for (uint8_t command_queue_channel = 0; command_queue_channel < this->num_hw_cqs(); command_queue_channel++) {
-                pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + command_queue_channel * cq_channel_size) >> 4;
-                pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(command_queue_channel) + command_queue_channel * cq_channel_size) >> 4;
-                tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), command_queue_channel * cq_channel_size, this->id_, channel);
-            }
-
-            detail::SendDispatchKernelsToDevice(this, *this->sysmem_manager, channel);
-        } else {
-            TT_ASSERT(this->num_hw_cqs_ == 1, "num_hw_cqs must be 1 for remote chips (for time being) and in slow dispatch");
-            log_warning(tt::LogDispatch, "Not creating a sysmem manager for remote chip and not sending dispatch kernels to remote chip");
-        }
+        this->initialize_command_queue();
     } else {
-        TT_ASSERT(this->num_hw_cqs_ == 1, "num_hw_cqs must be 1 for remote chips (for time being) and in slow dispatch");
+        TT_ASSERT(this->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
     return true;

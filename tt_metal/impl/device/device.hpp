@@ -135,9 +135,6 @@ class Device {
     // Set of logical storage only core coordinates
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
 
-    const std::set<CoreCoord> &producer_cores() const { return this->producer_cores_; }
-    const std::set<CoreCoord> &consumer_cores() const { return this->consumer_cores_; }
-
     // Set of logical dispatch core coordinates
 
     // Set of logical ethernet core coordinates
@@ -169,6 +166,7 @@ class Device {
     void build_firmware();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
     void initialize_and_launch_firmware();
+    void initialize_command_queue();
     void clear_l1_state();
 
     std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
@@ -198,8 +196,6 @@ class Device {
 
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
-    std::set<CoreCoord> producer_cores_;
-    std::set<CoreCoord> consumer_cores_;
     std::set<CoreCoord> ethernet_cores_;
 
     const uint8_t num_hw_cqs_;
