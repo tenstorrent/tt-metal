@@ -18,8 +18,10 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
 )
 from models.utility_functions import skip_for_wormhole_b0
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
+    TTPyCompositeConv,
+    SlidingWindowOpParamsWithParallelConfig,
+)
 
 # hardcoding matmul config for 1x1 convs
 # key: mm act height, mm act width, mm weight width
@@ -517,28 +519,40 @@ def test_resnet50_conv(
         assert len(conv_blocking_and_parallelization_config) == 11
 
         [
-            act_block_w_datums,
-            act_block_h_datums,
+            act_block_w,
+            act_block_h,
             act_c_num_blocks,
-            weight_block_w_datums,
-            out_subblock_h_datums,
-            out_subblock_w_datums,
-            out_block_h_datums,
+            weight_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            out_block_h,
             grid_size,
             per_core_out_matrix_h,
             per_core_weight_matrix_w,
             num_cores_nhw,
         ] = conv_blocking_and_parallelization_config
         if R == 1 and S == 1:
-            assert C % act_block_w_datums == 0
+            assert C % act_block_w == 0
         else:
-            assert act_block_w_datums == C or act_block_w_datums == C * S
-        assert act_block_w_datums % 32 == 0
-        assert act_block_h_datums % 32 == 0
-        assert weight_block_w_datums % 32 == 0
+            assert act_block_w == C or act_block_w == C * S
+
         assert per_core_out_matrix_h % 32 == 0
         per_core_out_matrix_h_ntiles = (int)(per_core_out_matrix_h / 32)
         per_core_weight_matrix_w_ntiles = (int)(per_core_weight_matrix_w / 32)
+
+        config_override = {
+            "act_block_w": act_block_w,
+            "act_block_h": act_block_h,
+            "weight_block_w": weight_block_w,
+            "out_subblock_h": out_subblock_h,
+            "out_subblock_w": out_subblock_w,
+            "out_block_h": out_block_h,
+            "act_c_num_blocks": act_c_num_blocks,
+            "grid_size": grid_size,
+            "per_core_out_matrix_height": per_core_out_matrix_h,
+            "per_core_weight_matrix_width": per_core_weight_matrix_w,
+            "num_cores_nhw": num_cores_nhw,
+        }
 
         ###############################################
         # Directly run old conv (row major input)
@@ -548,10 +562,10 @@ def test_resnet50_conv(
             conv_weight_pyt.reshape(-1).tolist(),
             conv_params,
             device,
-            [act_block_h_datums, act_block_w_datums],
-            [act_block_w_datums, weight_block_w_datums],
-            [out_subblock_h_datums, out_subblock_w_datums],
-            out_block_h_datums,
+            [act_block_h, act_block_w],
+            [act_block_w, weight_block_w],
+            [out_subblock_h, out_subblock_w],
+            out_block_h,
             grid_size,
             per_core_out_matrix_h_ntiles,
             per_core_weight_matrix_w_ntiles,
@@ -593,52 +607,34 @@ def test_resnet50_conv(
         out_result = torch.transpose(out_result, 2, 3)
         out_result_baseline = torch.transpose(out_result, 1, 2)
 
-        ########################################################
-        # Tilize, untilize_with_halo, conv with reader indices
-        # Create interleaved input on device
-        ########################################################
-        if act_c_num_blocks > 1:  # 2D conv
-            in_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED, tt_lib.tensor.BufferType.L1
-            )
-            out_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED, tt_lib.tensor.BufferType.L1
-            )
-        else:
-            in_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
-            )
-            out_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
-            )
+        sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
+            stride_h=stride_h,
+            stride_w=stride_w,
+            pad_h=pad_h,
+            pad_w=pad_w,
+            window_h=R,
+            window_w=S,
+            batch_size=N,
+            input_h=H,
+            input_w=W,
+            num_cores_h=grid_size[1],
+            num_cores_w=grid_size[0],
+            num_cores_nhw=num_cores_nhw,
+        )
+        is_1d_systolic = act_c_num_blocks == 1
 
-        sliding_window_op_params = [
-            (stride_h, stride_w),
-            (pad_h, pad_w),
-            (R, S),
-            (N, H, W),
-            grid_size,
-            num_cores_nhw,
-        ]
-        conv = TTPyConv(
+        conv = TTPyCompositeConv(
             sliding_window_op_params,
             conv_weight_pyt.reshape(-1).tolist(),
-            conv_params,
+            K,
+            C,
             device,
-            [act_block_h_datums, act_block_w_datums],
-            [act_block_w_datums, weight_block_w_datums],
-            [out_subblock_h_datums, out_subblock_w_datums],
-            out_block_h_datums,
-            grid_size,
-            per_core_out_matrix_h_ntiles,
-            per_core_weight_matrix_w_ntiles,
+            is_1d_systolic,
             conv_bias_pyt.reshape(-1).tolist(),
-            output_mem_config=out_memory_config,
-            input_tensor_shape=conv_input_shape_nhwc,
+            conv_blocking_and_parallelization_config_override=config_override,
             weights_dtype=weights_dtype,
             output_dtype=activations_dtype,
             math_fidelity=math_fidelity,
-            act_c_num_blocks=act_c_num_blocks,
         )
 
         conv_input = tt_lib.tensor.Tensor(
@@ -688,11 +684,7 @@ def test_resnet50_conv(
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
             )
 
-        # Untilize with halo concat
-        tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params)
-        conv_input_on_device = tt_py_untilize_with_halo_op(conv_input_on_device)
-
-        # Conv with new reader for sharded untilized with halo inputs
+        # Optimized conv v2
         output_on_device = conv(conv_input_on_device)
 
         # Convert sharded output to tiled interleaved
@@ -719,8 +711,7 @@ def test_resnet50_conv(
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 
-        TTPyConv.static_kernel_configs_cache_map = {}
-        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
+        TTPyCompositeConv.clear_static_cache_maps()
 
         # Compare baseline against golden
         assert out_result_baseline.shape == out_golden.shape
