@@ -59,17 +59,17 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t num_input_tiles, num_output_tiles;
 
     if (shard_spec.has_value()) {
-        row_major = shard_spec.value().shard_orientation == ShardOrientation::ROW_MAJOR;
-        all_cores = shard_spec.value().shard_grid;
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet({});
-        num_rows_per_core_group_1 = shard_spec.value().shard_shape[0] / TILE_HEIGHT;
+        num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_rows_per_core_group_2 = 0;
         num_input_tiles =
-            in_sharded ? shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW : 2 * Wt;
+            in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         num_output_tiles =
-            out_sharded ? shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW : 2 * Wt;
+            out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end.x + 1;
         num_cores_y = bbox.end.y + 1;

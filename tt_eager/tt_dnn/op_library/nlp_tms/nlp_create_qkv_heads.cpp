@@ -293,8 +293,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     uint32_t head_size = head_tiles * single_tile_size;
 
     auto q_shard_spec = output[0].shard_spec().value();
-    auto q_cores = q_shard_spec.shard_grid;
-    auto q_num_tiles = q_shard_spec.shard_shape[0] * q_shard_spec.shard_shape[1] / TILE_HW;
+    auto q_cores = q_shard_spec.grid;
+    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
 
     uint32_t per_core_out_q_heads = num_q_heads / q_cores.num_cores();
     uint32_t per_risc0_out_q_heads = div_up(per_core_out_q_heads, 2);
@@ -309,8 +309,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
     auto k_shard_spec = output[1].shard_spec().value();
-    auto k_cores = k_shard_spec.shard_grid;
-    auto k_num_tiles = k_shard_spec.shard_shape[0] * k_shard_spec.shard_shape[1] / TILE_HW;
+    auto k_cores = k_shard_spec.grid;
+    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
     uint32_t k_output_cb_index = CB::c_out1;
     tt_metal::CircularBufferConfig cb_k_output_config =
@@ -320,8 +320,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     auto cb_k_output = tt_metal::CreateCircularBuffer(program, k_cores, cb_k_output_config);
 
     auto v_shard_spec = output[0].shard_spec().value();
-    auto v_cores = q_shard_spec.shard_grid;
-    auto v_num_tiles = v_shard_spec.shard_shape[0] * v_shard_spec.shard_shape[1] / TILE_HW;
+    auto v_cores = q_shard_spec.grid;
+    auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
     uint32_t v_output_cb_index = CB::c_out2;
     tt_metal::CircularBufferConfig cb_v_output_config =

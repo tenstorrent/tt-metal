@@ -67,7 +67,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input(
     CBHandle cb_sharded_act = 0;
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
-        auto shard_shape = input.shard_spec().value().shard_shape;
+        auto shard_shape = input.shard_spec().value().shape;
         // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
         TT_ASSERT(shard_shape[0] <= (1<<16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
         CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
@@ -908,7 +908,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
             uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
 
             if (weight_width_sliced) {
-                auto shard_shape = a.shard_spec().value().shard_shape;
+                auto shard_shape = a.shard_spec().value().shape;
                 uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
                 CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
                 auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);

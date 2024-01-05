@@ -124,18 +124,15 @@ namespace detail {
         #ifdef DEBUG_PRINT_SHARD
             std::cout << "Writing to Device Sharded " << std::endl;
         #endif
-        auto cores = buffer.all_cores();
-        auto core_bank_ids = buffer.core_bank_indices();
         auto core_host_page_ids = buffer.core_host_page_indices();
 
 
         int dev_page_index = 0;
-        for(int core_index = 0; core_index < cores.size(); core_index++){
-            auto core = cores[core_index];
-            auto bank_id = core_bank_ids[core_index];
+        for(int core_index = 0; core_index < buffer.num_cores(); core_index++){
+            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_index);
             auto host_page_ids = core_host_page_ids[core_index];
             for(auto host_page_id: host_page_ids){
-                auto absolute_address = buffer.page_address(bank_id, dev_page_index);
+                auto absolute_address = buffer.page_address(dev_page_index);
                 auto data_index = host_page_id * num_entries_per_page;
                 std::vector<uint32_t> page;
                 page.insert(
@@ -268,7 +265,7 @@ namespace detail {
                                   const uint32_t & dev_page_id,
                                   const uint32_t & bank_id
     ){
-        auto absolute_address = dev_buffer.page_address(bank_id, dev_page_id);
+        auto absolute_address = dev_buffer.page_address(dev_page_id);
         auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
 
         uint32_t num_entries_per_page = page_size/sizeof(uint32_t);
@@ -291,18 +288,9 @@ namespace detail {
             std::cout << "Reading From Device Height Sharded " << std::endl;
         #endif
 
-        auto cores = buffer.all_cores();
-        auto core_bank_ids = buffer.core_bank_indices();
-        auto core_dev_page_ids = buffer.core_host_page_indices();
-        auto host_page_ids = buffer.dev_page_to_host_page_mapping();
 
         int output_page_index = 0;
-
-        auto total_pages = cores.size() * buffer.shard_size();
-        auto dev_page_to_core_mapping = buffer.dev_page_to_core_mapping();
-
-
-
+        auto total_pages = buffer.num_pages();
         uint32_t page_size = buffer.page_size();
         uint32_t bytes_per_page_entry = sizeof(uint32_t);
         uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
@@ -311,10 +299,8 @@ namespace detail {
 
 
         for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
-            auto core_index = dev_page_to_core_mapping[dev_page_id];
-            auto core = cores[core_index];
-            auto bank_id = core_bank_ids[core_index];
-            auto host_page_id = host_page_ids[dev_page_id];
+            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_id);
+            auto host_page_id = buffer.get_mapped_page_id(dev_page_id);
             if(!shard_order){
                 read_pages_to_host_helper(
                     device,
@@ -337,9 +323,6 @@ namespace detail {
                     bank_id
                 );
             }
-            #ifdef DEBUG_PRINT_SHARD
-                print_page(dev_page_id, core, host_page_id, noc_coordinates, absolute_address, bank_id,  page);
-            #endif
         }
 
     }
@@ -391,18 +374,14 @@ namespace detail {
         host_buffer.clear();  // overwrite the data
 
         uint32_t num_entries_per_page = buffer.page_size() / sizeof(uint32_t);
-        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_size();
+        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_spec().size();
         host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
         auto page_ids = buffer.dev_pages_in_shard(core_id);
 
-        auto core_bank_ids = buffer.core_bank_indices();
-        auto dev_page_to_core_mapping = buffer.dev_page_to_core_mapping();
-
         uint32_t host_page_id = 0;
         for(auto dev_page_id: page_ids){
-            auto core_index = dev_page_to_core_mapping[dev_page_id];
-            auto bank_id = core_bank_ids[core_index];
+            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_id);
             read_pages_to_host_helper(
                 device,
                 buffer,

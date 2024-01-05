@@ -41,12 +41,12 @@ class test_config {
             return shape;
         }
         ShardSpec get_shard_spec(){
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(0, num_cores_height*num_cores_width - 1))
                                                      }),
-                                     .shard_shape = {page_height * num_pages_per_core_height, num_pages_per_core_width * page_width},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {page_height * num_pages_per_core_height, num_pages_per_core_width * page_width},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             return shard_spec;
         }
@@ -64,14 +64,14 @@ class test_config {
 };
 
 
-bool test_sharded_loopback(Device *device, Layout layout, const Shape & shape, const ShardSpec & shard_spec, const MemoryConfig & mem_config) {
+bool test_sharded_loopback(Device *device, Layout layout, const Shape & shape, const MemoryConfig & mem_config) {
     bool pass = true;
     Tensor host_a = tt::numpy::random::random(shape);
 
     if(layout == Layout::TILE)
         host_a  = host_a.to(Layout::TILE);
 
-    Tensor device_a = host_a.to(device, mem_config, shard_spec);
+    Tensor device_a = host_a.to(device, mem_config);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
@@ -82,14 +82,14 @@ bool test_sharded_loopback(Device *device, Layout layout, const Shape & shape, c
 }
 
 
-bool test_create_sharded_tensor(Device *device, DataType data_type , Layout layout, const Shape & shape, const ShardSpec & shard_spec, const MemoryConfig & mem_config) {
+bool test_create_sharded_tensor(Device *device, DataType data_type , Layout layout, const Shape & shape, const MemoryConfig & mem_config) {
     bool pass = true;
     Tensor host_a = tt::numpy::random::random(shape);
 
     if(layout == Layout::TILE)
         host_a  = host_a.to(Layout::TILE);
 
-    auto tensor = create_sharded_device_tensor(shape, data_type , layout, device, mem_config, shard_spec);
+    auto tensor = create_sharded_device_tensor(shape, data_type , layout, device, mem_config);
     return tensor.is_sharded();
 }
 
@@ -111,8 +111,8 @@ int main(int argc, char **argv) {
         // 2x2 Block sharded
         {
             test_config config(4, 1, 2, 2,
-                            MemoryConfig{.memory_layout=TensorMemoryLayout::BLOCK_SHARDED, .buffer_type=BufferType::L1});
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.get_shard_spec(), config.mem_config);
+                            MemoryConfig{.memory_layout=TensorMemoryLayout::BLOCK_SHARDED, .buffer_type=BufferType::L1, .shard_spec = config.get_shard_spec()});
+            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
         }
 
         // 4x4 TILES
@@ -120,11 +120,11 @@ int main(int argc, char **argv) {
         // 2x2 Block sharded
         {
             test_config config(2, 2, 2, 2,
-                            MemoryConfig{.memory_layout=TensorMemoryLayout::BLOCK_SHARDED, .buffer_type=BufferType::L1});
+                            MemoryConfig{.memory_layout=TensorMemoryLayout::BLOCK_SHARDED, .buffer_type=BufferType::L1, .shard_spec = config.get_shard_spec()});
 
 
 
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.get_shard_spec(), config.mem_config);
+            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
 
         }
 
@@ -133,8 +133,8 @@ int main(int argc, char **argv) {
         // Width Sharded
         {
             test_config config(1, 4, 2, 2,
-                            MemoryConfig{.memory_layout=TensorMemoryLayout::WIDTH_SHARDED, .buffer_type=BufferType::L1});
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.get_shard_spec(), config.mem_config);
+                            MemoryConfig{.memory_layout=TensorMemoryLayout::WIDTH_SHARDED, .buffer_type=BufferType::L1, .shard_spec = config.get_shard_spec()});
+            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
         }
 
         // 8x2 TILES
@@ -142,8 +142,8 @@ int main(int argc, char **argv) {
         // Height Sharded
         {
             test_config config(4, 1, 2, 2,
-                            MemoryConfig{.memory_layout=TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type=BufferType::L1});
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.get_shard_spec(), config.mem_config);
+                            MemoryConfig{.memory_layout=TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type=BufferType::L1, .shard_spec = config.get_shard_spec()});
+            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
         }
 
 
@@ -151,17 +151,17 @@ int main(int argc, char **argv) {
 
         {
             Shape shape = {1, 1, 2304, 256};
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(7, 7))
                                                      }),
-                                     .shard_shape = {72, 128},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {72, 128},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             Layout layout = Layout::ROW_MAJOR;
             MemoryConfig mem_config = {.memory_layout=TensorMemoryLayout::BLOCK_SHARDED,
-                                    .buffer_type=BufferType::L1} ;
-            pass &= test_sharded_loopback(device, layout, shape, shard_spec, mem_config);
+                                    .buffer_type=BufferType::L1, .shard_spec = shard_spec} ;
+            pass &= test_sharded_loopback(device, layout, shape, mem_config);
 
 
         }
@@ -169,36 +169,36 @@ int main(int argc, char **argv) {
 
         {
             Shape shape = {1, 1, 800, 512};
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(8, 7))
                                                      }),
-                                     .shard_shape = {96, 64},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {96, 64},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             Layout layout = Layout::TILE;
             MemoryConfig mem_config = {.memory_layout=TensorMemoryLayout::BLOCK_SHARDED,
-                                    .buffer_type=BufferType::L1} ;
+                                    .buffer_type=BufferType::L1, .shard_spec = shard_spec} ;
             DataType data_type = DataType::BFLOAT16;
-            pass &= test_create_sharded_tensor(device, data_type , layout,  shape, shard_spec, mem_config);
+            pass &= test_create_sharded_tensor(device, data_type , layout,  shape,  mem_config);
 
 
         }
 
         {
             Shape shape = {1, 1, 800, 512};
-            ShardSpec shard_spec = {.shard_grid = CoreRangeSet(
+            ShardSpec shard_spec = {.grid = CoreRangeSet(
                                                      {CoreRange(
                                                          CoreCoord(0, 0), CoreCoord(8, 7))
                                                      }),
-                                     .shard_shape = {96, 64},
-                                     .shard_orientation = ShardOrientation::ROW_MAJOR
+                                     .shape = {96, 64},
+                                     .orientation = ShardOrientation::ROW_MAJOR
                                                      };
             Layout layout = Layout::TILE;
             MemoryConfig mem_config = {.memory_layout=TensorMemoryLayout::BLOCK_SHARDED,
                                     .buffer_type=BufferType::L1} ;
             DataType data_type = DataType::BFLOAT8_B;
-            pass &= test_create_sharded_tensor(device, data_type , layout,  shape, shard_spec, mem_config);
+            pass &= test_create_sharded_tensor(device, data_type , layout,  shape,  mem_config);
 
 
         }

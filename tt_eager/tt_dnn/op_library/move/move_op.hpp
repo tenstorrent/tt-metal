@@ -126,15 +126,17 @@ inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& me
         return input_tensor;
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_shape = shard_spec.shard_shape;
-    auto shard_grid = shard_spec.shard_grid;
+    auto shard_shape = shard_spec.shape;
+    auto shard_grid = shard_spec.grid;
     auto input_shape = input_tensor.shape();
     auto input_dtype = input_tensor.dtype();
     auto input_layout = input_tensor.layout();
 
     DeallocateBuffer(*input_tensor.buffer());
     // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    auto output_tensor = create_sharded_device_tensor(input_shape, input_dtype, input_layout, input_tensor.device(), output_mem_config, shard_spec);
+    auto shard_mem_config = output_mem_config;
+    shard_mem_config.shard_spec = shard_spec;
+    auto output_tensor = create_sharded_device_tensor(input_shape, input_dtype, input_layout, input_tensor.device(), shard_mem_config);
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         TT_FATAL(false, "No space to move the tensor. Move op's input address == output address. No-op move unsupported.");
     }

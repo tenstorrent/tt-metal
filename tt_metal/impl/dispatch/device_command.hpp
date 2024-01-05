@@ -89,7 +89,9 @@ class DeviceCommand {
 
     uint32_t get_data_size() const;
 
-    void add_buffer_transfer_instruction(
+    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
+    
+    void add_buffer_transfer_interleaved_instruction(
         const uint32_t src,
         const uint32_t dst,
         const uint32_t num_pages,
@@ -100,9 +102,7 @@ class DeviceCommand {
         const uint32_t dst_page_index
     );
 
-    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
-
-    void add_buffer_transfer_instruction_sharded(
+    void add_buffer_transfer_sharded_instruction(
         const uint32_t src,
         const uint32_t dst,
         const uint32_t num_pages,
@@ -132,4 +132,15 @@ class DeviceCommand {
     std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND> desc;
     uint32_t buffer_transfer_idx;
     uint32_t program_transfer_idx;
+    void add_buffer_transfer_instruction_preamble(
+        const uint32_t src,
+        const uint32_t dst,
+        const uint32_t num_pages,
+        const uint32_t padded_page_size,
+        const uint32_t src_buf_type,
+        const uint32_t dst_buf_type,
+        const uint32_t src_page_index,
+        const uint32_t dst_page_index
+        );
+    void add_buffer_transfer_instruction_postamble();
 };

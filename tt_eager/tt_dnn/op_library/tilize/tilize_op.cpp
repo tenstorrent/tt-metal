@@ -43,7 +43,7 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
         TT_FATAL(this->use_multicore == true);
-        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+        TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
     } else {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
@@ -59,7 +59,9 @@ std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &inpu
 std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.memory_config().is_sharded()) {
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor.device(), this->output_mem_config, input_tensor.shard_spec().value())};
+        auto mem_config = this->output_mem_config;
+        mem_config.shard_spec = input_tensor.memory_config().shard_spec;
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }
@@ -138,8 +140,10 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
     if (input_tensor_a.memory_config().is_sharded()) {
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         auto shard_spec = input_tensor_a.shard_spec().value();
-        shard_spec.shard_shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
-        return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+        shard_spec.shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
+        auto mem_config = this->output_mem_config;
+        mem_config.shard_spec = shard_spec;
+        return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }

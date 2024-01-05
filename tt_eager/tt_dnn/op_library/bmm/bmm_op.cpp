@@ -591,20 +591,20 @@ void Matmul::validate(
                         if (this->output_mem_config.is_sharded()) {
                             TT_FATAL(input_tensor_a.memory_config() == this->output_mem_config);
                         }
-                        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+                        TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
                         uint32_t M = (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.shape()[-1] : input_tensor_a.shape()[-2]) / TILE_HEIGHT;
                         uint32_t N = input_tensor_b.shape()[-1] / TILE_WIDTH;
                         uint32_t K = input_tensor_a.shape()[-1] / TILE_WIDTH;
                         uint32_t per_core_M = program_config.per_core_M;
                         uint32_t per_core_N = program_config.per_core_N;
-                        auto shard_shape = input_tensor_a.shard_spec().value().shard_shape;
+                        auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                         // No padding
                         TT_FATAL(M == per_core_M);
                         TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
                         TT_FATAL(K % program_config.in0_block_w == 0);
-                        TT_FATAL(K / program_config.in0_block_w == input_tensor_a.shard_spec().value().shard_grid.num_cores());
-                        TT_FATAL(N / per_core_N == input_tensor_a.shard_spec().value().shard_grid.num_cores());
+                        TT_FATAL(K / program_config.in0_block_w == input_tensor_a.shard_spec().value().grid.num_cores());
+                        TT_FATAL(N / per_core_N == input_tensor_a.shard_spec().value().grid.num_cores());
                     }
                     if (this->output_mem_config.is_sharded()) {
                         TT_FATAL(program_config.mcast_in0 == true);
@@ -627,11 +627,11 @@ void Matmul::validate(
                         if (this->output_mem_config.is_sharded()) {
                             TT_FATAL(input_tensor_a.memory_config() == this->output_mem_config);
                         }
-                        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+                        TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
                         uint32_t M = (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.shape()[-1] : input_tensor_a.shape()[-2]) / TILE_HEIGHT;
                         uint32_t K = input_tensor_a.shape()[-1] / TILE_WIDTH;
                         uint32_t per_core_M = program_config.per_core_M;
-                        auto shard_shape = input_tensor_a.shard_spec().value().shard_shape;
+                        auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                         // No padding
                         TT_FATAL(M % per_core_M == 0);
@@ -658,9 +658,9 @@ void Matmul::validate(
             ) {
                 if (input_tensor_a.memory_config().is_sharded()) {
                     if (program_config.transpose_mcast) {
-                        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
+                        TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR);
                     } else {
-                        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+                        TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
                     }
                     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
                     if (this->output_mem_config.is_sharded()) {
@@ -671,12 +671,11 @@ void Matmul::validate(
                     uint32_t K = input_tensor_a.shape()[-1] / TILE_WIDTH;
                     uint32_t N = input_tensor_b.shape()[-1] / TILE_WIDTH;
                     uint32_t per_core_M = program_config.per_core_M;
-                    auto shard_shape = input_tensor_a.shard_spec().value().shard_shape;
+                    auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                     TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
                     TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
                     TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == N / program_config.per_core_N);
-
                 }
                 if (this->output_mem_config.is_sharded()) {
                     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
@@ -700,7 +699,7 @@ void Matmul::validate(
                 TT_ASSERT(N == per_core_N);
                 if (input_tensor_a.is_sharded()) {
                     TT_FATAL(input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-                    auto in0_shard_shape = input_tensor_a.shard_spec().value().shard_shape;
+                    auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
 
                     TT_FATAL(K == in0_shard_shape[1]);
                     TT_FATAL(in0_shard_shape[1] == program_config.in0_block_w * TILE_WIDTH);
@@ -708,7 +707,7 @@ void Matmul::validate(
 
                     if (input_tensor_b.is_sharded()) {
                         TT_FATAL(input_tensor_a.memory_config() == input_tensor_b.memory_config());
-                        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == input_tensor_b.shard_spec().value().shard_orientation);
+                        TT_FATAL(input_tensor_a.shard_spec().value().orientation == input_tensor_b.shard_spec().value().orientation);
                     }
                     if (this->output_mem_config.is_sharded()) {
                         TT_FATAL(input_tensor_a.memory_config() == this->output_mem_config);
@@ -718,7 +717,7 @@ void Matmul::validate(
                     bool broadcast_batch = input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1;
                     TT_FATAL(!broadcast_batch);
                     TT_FATAL(input_tensor_b.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-                    auto in1_shard_shape = input_tensor_b.shard_spec().value().shard_shape;
+                    auto in1_shard_shape = input_tensor_b.shard_spec().value().shape;
                     TT_FATAL(in1_shard_shape[1] == input_tensor_b.shape()[-1]);
                     TT_FATAL(per_core_N * TILE_HEIGHT == in1_shard_shape[1]);
                     TT_FATAL(in1_shard_shape[0] % K == 0);
@@ -777,8 +776,10 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, true);
-                    ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=ShardOrientation::ROW_MAJOR};
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+                    ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=ShardOrientation::ROW_MAJOR};
+                    auto mem_config = this->output_mem_config;
+                    mem_config.shard_spec = shard_spec;
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
                 } else if constexpr (
                     std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>
                 ) {
@@ -800,8 +801,10 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_blocks_x - 1, num_blocks_y - 1}}});
                         shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
-                    ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=shard_orientation};
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+                    ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=shard_orientation};
+                    auto mem_config = this->output_mem_config;
+                    mem_config.shard_spec = shard_spec;
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
                 } else if constexpr (
                     std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>
                 ) {
@@ -816,14 +819,16 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
                     if (input_tensor_a.is_sharded()) {
-                        shard_orientation = input_tensor_a.shard_spec().value().shard_orientation;
+                        shard_orientation = input_tensor_a.shard_spec().value().orientation;
                     } else if (input_tensor_b.is_sharded()) {
-                        shard_orientation = input_tensor_b.shard_spec().value().shard_orientation;
+                        shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
                     CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, shard_orientation==ShardOrientation::ROW_MAJOR);
-                    ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=shard_orientation};
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+                    ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=shard_orientation};
+                    auto mem_config = this->output_mem_config;
+                    mem_config.shard_spec = shard_spec;
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
                 } else {
                     TT_ASSERT(false, "Unsupported op for output sharding");
                     return {};

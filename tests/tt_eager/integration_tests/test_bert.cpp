@@ -22,8 +22,8 @@
 
 using Parameters = std::map<std::string, Tensor>;
 
-constexpr auto l1_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::L1};
-constexpr auto dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
+MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::L1};
+MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
 
 Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Parameters& parameters, std::size_t encoder_index, const std::uint32_t head_size) {
 

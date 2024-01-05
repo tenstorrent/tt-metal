@@ -470,6 +470,10 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("grid_size"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from interleaved to sharded memory layout)doc"
         );
+        m_tensor.def("interleaved_to_sharded_core_range_set", &interleaved_to_sharded_core_range_set,
+            py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
+            R"doc(Converts tensor from interleaved to sharded memory layout)doc"
+        );
         m_tensor.def("sharded_to_interleaved", &sharded_to_interleaved,
             py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
