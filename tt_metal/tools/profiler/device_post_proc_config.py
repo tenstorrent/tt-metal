@@ -8,6 +8,12 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 class default_setup(metaclass=MergeMetaclass):
     timerAnalysis = {
+        "OPs": {
+            "across": "ops",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "BRISC", "timerID": 1},
+            "end": {"core": "ANY", "risc": "BRISC", "timerID": 4},
+        },
         "Core (0,0) OPs": {
             "across": "device",
             "type": "adjacent",

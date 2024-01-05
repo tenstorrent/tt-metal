@@ -23,6 +23,10 @@ import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_confi
 import tt_metal.tools.profiler.dummy_refresh as dummy_refresh
 
 
+# TODO(MO): Grab this from the core_descriptor yaml files
+NON_COMPUTE_ROW = 9
+
+
 def coreCompare(core):
     if type(core) == str:
         return (1 << 64) - 1
@@ -442,39 +446,37 @@ def import_device_profile_log(
     return devicesData, programsData
 
 
-def is_new_launch_core(tsRisc):
+def is_new_op_core(tsRisc):
     timerID, tsValue, risc = tsRisc
     if risc == "BRISC" and timerID == 1:
         return True
     return False
 
 
-def is_new_launch_device(tsCore, coreOpMap):
+def is_new_op_device(tsCore, coreOpMap):
     timerID, tsValue, risc, core = tsCore
+    appendTs = False
     isNewOp = False
     isNewOpFinished = False
-    if risc == "BRISC" and timerID == 1:
-        if not coreOpMap:
+    if core[1] != NON_COMPUTE_ROW:
+        appendTs = True
+        if risc == "BRISC" and timerID == 1:
+            assert (
+                core not in coreOpMap.keys()
+            ), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}, this could be caused by soft resets"
             isNewOp = True
-        # Remove
-        # if core in coreOpMap.keys():
-        # for opDuration in coreOpMap.items():
-        # print (opDuration)
-        # print (coreOpMap[core])
-        # print (tsCore)
-        assert core not in coreOpMap.keys(), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}"
-        coreOpMap[core] = (tsValue,)
-    elif risc == "BRISC" and timerID == 4:
-        assert core in coreOpMap.keys(), "Unexpected BRISC end"
-        coreOpMap[core] = (coreOpMap[core][0], tsValue)
-        isNewOpFinished = True
-        for opDuration in coreOpMap.values():
-            pairSize = len(opDuration)
-            assert pairSize == 1 or pairSize == 2, "Wrong op duration"
-            if pairSize == 1:
-                isNewOpFinished = False
-                break
-    return isNewOp, isNewOpFinished
+            coreOpMap[core] = (tsValue,)
+        elif risc == "BRISC" and timerID == 4:
+            assert core in coreOpMap.keys() and len(coreOpMap[core]) == 1, "Unexpected BRISC end"
+            coreOpMap[core] = (coreOpMap[core][0], tsValue)
+            isNewOpFinished = True
+            for opDuration in coreOpMap.values():
+                pairSize = len(opDuration)
+                assert pairSize == 1 or pairSize == 2, "Wrong op duration"
+                if pairSize == 1:
+                    isNewOpFinished = False
+                    break
+    return appendTs, isNewOp, isNewOpFinished
 
 
 def risc_to_core_timeseries(devicesData):
@@ -487,16 +489,16 @@ def risc_to_core_timeseries(devicesData):
 
             tmpTimeseries.sort(key=lambda x: x[1])
 
-            launches = []
+            ops = []
             for ts in tmpTimeseries:
                 timerID, tsValue, risc = ts
-                if is_new_launch_core(ts):
-                    launches.append([ts])
+                if is_new_op_core(ts):
+                    ops.append([ts])
                 else:
-                    if len(launches) > 0:
-                        launches[-1].append(ts)
+                    if len(ops) > 0:
+                        ops[-1].append(ts)
 
-            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "launches": launches}
+            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "ops": ops}
 
 
 def core_to_device_timeseries(devicesData):
@@ -517,17 +519,18 @@ def core_to_device_timeseries(devicesData):
         for risc in tmpTimeseries["riscs"].keys():
             tmpTimeseries["riscs"][risc]["timeseries"].sort(key=lambda x: x[1])
 
-        # launches = [[]]
-        # coreOpMap = {}
-        # for ts in tmpTimeseries["riscs"]["TENSIX"]["timeseries"]:
-        # isNewOp, isNewOpFinished = is_new_launch_device(ts, coreOpMap)
-        # launches[-1].append(ts)
-        # if isNewOpFinished:
-        # coreOpMap = {}
-        # launches.append([])
+        ops = []
+        coreOpMap = {}
+        for ts in tmpTimeseries["riscs"]["TENSIX"]["timeseries"]:
+            appendTs, isNewOp, isNewOpFinished = is_new_op_device(ts, coreOpMap)
+            if appendTs:
+                if isNewOp:
+                    ops.append({"timeseries": []})
+                ops[-1]["timeseries"].append(ts)
+            if isNewOpFinished:
+                coreOpMap = {}
 
-        # tmpTimeseries["riscs"]["TENSIX"]["launches"] = launches
-
+        tmpTimeseries["riscs"]["TENSIX"]["ops"] = ops
         deviceData["cores"]["DEVICE"] = tmpTimeseries
 
 
@@ -792,15 +795,15 @@ def first_last_analysis(timeseries, analysis):
     return durations
 
 
-def session_first_last_analysis(riscData, analysis):
+def model_first_last_analysis(riscData, analysis):
     return first_last_analysis(riscData["timeseries"], analysis)
 
 
-def launch_first_last_analysis(riscData, analysis):
+def op_first_last_analysis(riscData, analysis):
     durations = []
-    if "launches" in riscData.keys():
-        for launch in riscData["launches"]:
-            durations += first_last_analysis(launch, analysis)
+    if "ops" in riscData.keys():
+        for op in riscData["ops"]:
+            durations += first_last_analysis(op, analysis)
     return durations
 
 
@@ -830,10 +833,10 @@ def timeseries_analysis(riscData, name, analysis):
     tmpList = []
     if analysis["type"] == "adjacent":
         tmpList = adjacent_LF_analysis(riscData, analysis)
-    elif analysis["type"] == "session_first_last":
-        tmpList = session_first_last_analysis(riscData, analysis)
-    elif analysis["type"] == "launch_first_last":
-        tmpList = launch_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "model_first_last":
+        tmpList = model_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "op_first_last":
+        tmpList = op_first_last_analysis(riscData, analysis)
 
     tmpDF = pd.DataFrame(tmpList)
     tmpDict = {}
@@ -877,6 +880,18 @@ def device_analysis(name, analysis, devicesData):
         assert risc in deviceData["cores"][core]["riscs"].keys()
         riscData = deviceData["cores"][core]["riscs"][risc]
         timeseries_analysis(riscData, name, analysis)
+
+
+def ops_analysis(name, analysis, devicesData):
+    for chipID, deviceData in devicesData["devices"].items():
+        core = "DEVICE"
+        risc = "TENSIX"
+        assert core in deviceData["cores"].keys()
+        assert risc in deviceData["cores"][core]["riscs"].keys()
+        riscData = deviceData["cores"][core]["riscs"][risc]
+        if "ops" in riscData.keys():
+            for op in riscData["ops"]:
+                timeseries_analysis(op, name, analysis)
 
 
 def generate_device_level_summary(devicesData):
@@ -935,56 +950,11 @@ def import_log_run_stats(setup=device_post_proc_config.default_setup()):
             core_analysis(name, analysis, devicesData)
         elif analysis["across"] == "device":
             device_analysis(name, analysis, devicesData)
+        elif analysis["across"] == "ops":
+            ops_analysis(name, analysis, devicesData)
 
     generate_device_level_summary(devicesData)
     return devicesData
-
-
-def timeline_annotations(yVals, deviceData, fig, setup):
-    # annotateLaunches = False
-    # for core in yVals:
-    # assert core in deviceData["cores"].keys(), "Cores is and y axis labels mismatch"
-    # if "launches" in deviceData["cores"][core]["riscs"]["TENSIX"].keys():
-    # launches = deviceData["cores"][core]["riscs"]["TENSIX"]["launches"]
-    # if len(launches) > 1:
-    # annotateLaunches = True
-
-    # if annotateLaunches:
-    # for core in yVals:
-    # assert core in deviceData["cores"].keys(), "Cores is and y axis labels mismatch"
-    # if "launches" in deviceData["cores"][core]["riscs"]["TENSIX"].keys():
-    # launches = deviceData["cores"][core]["riscs"]["TENSIX"]["launches"]
-    # for i, launch in enumerate(launches):
-    # timerID, tsValueStart, risc = launch[0]
-    # timerID, tsValueEnd, risc = launch[-1]
-    # width = tsValueEnd - tsValueStart
-    # fig.add_annotation(
-    # x=tsValueStart - deviceData["metadata"]["global_min"]["ts"],
-    # y=[core, "BRISC"],
-    # text=f"Launch {i+1}",
-    # xanchor="left",
-    # xshift=-2,
-    # ax=0,
-    # ay=30,
-    # )
-    # # TODO: Annotations are actually pretty slow
-    # # fig.add_annotation(x=tsValueEnd - deviceData["metadata"]["global_min"]["ts"], y=[core, "BRISC"],
-    # # text=f"",
-    # # xanchor="left",
-    # # xshift=2,
-    # # ax=0,
-    # # ay=30)
-
-    # fig.add_annotation(
-    # x=0,
-    # y=[deviceData["metadata"]["global_min"]["core"], "BRISC"],
-    # text=f"T0",
-    # xanchor="left",
-    # bgcolor="rgba(255,255,0,1)",
-    # ax=0,
-    # ay=0,
-    # )
-    return fig
 
 
 def generate_plots(devicesData, setup, saveFigure=True):
@@ -996,13 +966,7 @@ def generate_plots(devicesData, setup, saveFigure=True):
 
         xValsDict = plotData_to_timelineXVals(deviceData, yVals, setup)
         key = f"Chip {chipID} Cores"
-        fig = timeline_plot(yVals, xValsDict, setup)
-        timelineFigs[key] = timeline_annotations(yVals, deviceData, fig, setup)
-
-        # TODO: Very inefficient in large datasets. Will need to draw manually if deemed useful
-        # xValsDict = plotData_to_timelineXVals(deviceData, ['DEVICE'], setup)
-        # key = f"Chip {chipID} Device"
-        # timelineFigs[key] = timeline_plot(['DEVICE'], xValsDict, setup)
+        timelineFigs[key] = timeline_plot(yVals, xValsDict, setup)
 
         figHtmls = {
             f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{fig.replace(' ','_')}_{setup.devicePerfHTML}": fig
@@ -1183,6 +1147,8 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
 
     if not no_print_stats:
         print_stats(devicesData, setup)
+        for opCount, op in enumerate(devicesData["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]):
+            print(f"{opCount +1} : {op['analysis']['OPs']['series']}")
 
     timelineFigs = {}
     if not no_plots:
