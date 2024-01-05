@@ -17,6 +17,9 @@
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "noc/noc_parameters.h"
+#include "third_party/taskflow/taskflow/taskflow.hpp"
+#include "common/executor.hpp"
+#include "tt_metal/host_api.hpp"
 
 namespace tt::tt_metal {
 
@@ -308,7 +311,7 @@ class EnqueueWrapCommand : public Command {
 
 // Fwd declares
 namespace detail{
-    CommandQueue &GetCommandQueue(Device *device);
+    HWCommandQueue &GetCommandQueue(Device *device);
 }
 
 
@@ -322,42 +325,33 @@ class Trace {
           uint32_t num_data_bytes;
       };
       bool trace_complete;
-      CommandQueue& command_queue;
+      HWCommandQueue& command_queue;
       vector<TraceNode> history;
       uint32_t num_data_bytes;
       void create_replay();
 
     friend class EnqueueProgramCommand;
-    friend Trace BeginTrace(CommandQueue& cq);
+    friend Trace BeginTrace(HWCommandQueue& cq);
     friend void EndTrace(Trace& trace);
     friend void EnqueueTrace(Trace& trace, bool blocking);
 
     public:
-      Trace(CommandQueue& command_queue);
+      Trace(HWCommandQueue& command_queue);
       void record(const TraceNode& trace_node);
 };
 
 namespace detail {
-void EnqueueRestart(CommandQueue& cq);
+void EnqueueRestart(HWCommandQueue& cq);
 }
 
-class CommandQueue {
+class HWCommandQueue {
    public:
+    HWCommandQueue(Device* device, uint32_t id);
 
-    CommandQueue(Device* device, uint32_t id);
+    ~HWCommandQueue();
 
-    ~CommandQueue();
     CoreCoord issue_queue_reader_core;
     CoreCoord completion_queue_writer_core;
-
-   private:
-    uint32_t id;
-    uint32_t size_B;
-
-
-    SystemMemoryManager& manager;
-
-    Device* device;
 
     map<uint64_t, unique_ptr<Buffer>>& program_to_buffer(const chip_id_t chip_id) {
         static map<chip_id_t, map<uint64_t, unique_ptr<Buffer>>> chip_to_program_to_buffer;
@@ -388,7 +382,6 @@ class CommandQueue {
     void enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
 
     void wait_finish();
-
     void finish();
 
     void wrap(DeviceCommand::WrapRegion wrap_region, bool blocking);
@@ -413,8 +406,58 @@ class CommandQueue {
     friend void EnqueueTrace(Trace& trace, bool blocking);
     friend class Device;
     friend class Trace;
+   private:
+    uint32_t id;
+    uint32_t size_B;
+
+    SystemMemoryManager& manager;
+
+    Device* device;    
+
 };
 
+class CommandQueue
+{
+    public:
+        CommandQueue () = delete;
+        CommandQueue ( Device * device, uint32_t command_queue_channel) : device_(device), command_queue_channel_(command_queue_channel)
+        {
+        }
+
+        ~CommandQueue() {}
+
+        template < class F >
+        void submit ( F && func, std::reference_wrapper< std::future< void > > event ){
+            std::lock_guard<std::mutex> lk(mutex_);
+            std::tie(last_, event.get()) = last_.has_value() ? detail::GetExecutor().dependent_async ( func, last_.value()) : detail::GetExecutor().dependent_async ( func );
+        }
+
+        template < class F >
+        void submit ( F && func){
+            std::lock_guard<std::mutex> lk(mutex_);
+            last_ = last_.has_value() ? detail::GetExecutor().silent_dependent_async((func), last_.value()) : detail::GetExecutor().silent_dependent_async( func );
+        }
+
+        Device* device() const {
+            return device_;
+        }
+        uint32_t command_queue_channel() const{
+            return command_queue_channel_;
+        }
+
+    private:
+        std::mutex mutex_;
+        std::optional<tf::AsyncTask> last_;
+        uint32_t command_queue_channel_;
+        Device * device_;
+};
+
+
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
+
+namespace detail
+{
+    void ClearProgramCache( CommandQueue & cq);
+}
 
 } // namespace tt::tt_metal
