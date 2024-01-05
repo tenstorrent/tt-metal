@@ -11,7 +11,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from models.utility_functions import skip_for_wormhole_b0, torch_random
 
 
-@skip_for_wormhole_b0()
 def test_sweep(device, sweep_index):
     parameters = {
         "batch_size": [1],
