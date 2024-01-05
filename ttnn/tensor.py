@@ -126,6 +126,8 @@ def from_torch(
         tensor = to_layout(tensor, layout)
 
     if device is not None:
+        if memory_config is None:
+            memory_config = DRAM_MEMORY_CONFIG
         tensor = to_device(tensor, device, memory_config=memory_config)
 
     return tensor

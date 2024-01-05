@@ -1420,7 +1420,7 @@ def layer_norm(
     residual_input_tensor: Optional[Tensor] = None,
     weight: Optional[Tensor] = None,
     bias: Optional[Tensor] = None,
-    memory_config: Optional[MemoryConfig] = DRAM_MEMORY_CONFIG,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     r"""
     layer_norm(input_tensor: Tensor) -> Tensor
