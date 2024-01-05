@@ -61,5 +61,5 @@ from ttnn.core import (
 from ttnn.unary import *
 
 import ttnn.decorators
-import ttnn.nlp
+import ttnn.transformer
 import ttnn.model_preprocessing

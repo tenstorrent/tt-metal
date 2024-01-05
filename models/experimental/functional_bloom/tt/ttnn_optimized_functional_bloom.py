@@ -70,7 +70,7 @@ def split_query_key_value_and_split_heads(
     query_key_value: torch.Tensor, num_heads: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     batch_size, *_ = query_key_value.shape
-    output = ttnn.nlp.split_query_key_value_and_split_heads(
+    output = ttnn.transformer.split_query_key_value_and_split_heads(
         query_key_value, core_grid=(batch_size, 12), memory_config=BLOOM_MEMORY_CONFIG, num_heads=num_heads
     )
     return output
@@ -124,7 +124,7 @@ def compute_attention_probs(attention_scores, causal_mask):
 
 # Based on transformers/models/bloom/modeling_bloom.py
 def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
-    return ttnn.nlp.concatenate_heads(x, memory_config=BLOOM_MEMORY_CONFIG)
+    return ttnn.transformer.concatenate_heads(x, memory_config=BLOOM_MEMORY_CONFIG)
 
 
 def compute_context_layer(attention_probs, value_layer):

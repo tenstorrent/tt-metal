@@ -33,7 +33,7 @@ def bert_attention(
         query,
         key,
         value,
-    ) = ttnn.nlp.split_query_key_value_and_split_heads(
+    ) = ttnn.transformer.split_query_key_value_and_split_heads(
         query_key_value_output,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         core_grid=(batch_size, num_cores_x),
@@ -51,7 +51,9 @@ def bert_attention(
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
-    attention_probs = ttnn.nlp.attention_softmax_(attention_scores, attention_mask=attention_mask, head_size=head_size)
+    attention_probs = ttnn.transformer.attention_softmax_(
+        attention_scores, attention_mask=attention_mask, head_size=head_size
+    )
 
     context_layer = ttnn.matmul(
         attention_probs,
@@ -63,7 +65,7 @@ def bert_attention(
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
-    context_layer = ttnn.nlp.concatenate_heads(
+    context_layer = ttnn.transformer.concatenate_heads(
         context_layer,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )

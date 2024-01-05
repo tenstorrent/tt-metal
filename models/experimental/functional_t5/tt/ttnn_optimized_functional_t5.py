@@ -118,7 +118,7 @@ def t5_attention(
             query,
             key,
             value,
-        ) = ttnn.nlp.split_query_key_value_and_split_heads(
+        ) = ttnn.transformer.split_query_key_value_and_split_heads(
             query_key_value_output,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=(batch_size, num_cores_x),
@@ -134,7 +134,7 @@ def t5_attention(
             # dtype=ttnn.bfloat8_b,
             core_grid=(batch_size, num_cores_x),
         )
-        query = ttnn.nlp.split_heads(
+        query = ttnn.transformer.split_heads(
             query_proj,
             num_heads=config.num_heads,
             order=(0, 2, 1, 3),
@@ -148,7 +148,7 @@ def t5_attention(
             # dtype=ttnn.bfloat8_b,
             core_grid=(batch_size, num_cores_x),
         )
-        key, value = ttnn.nlp.split_key_value_and_split_heads(key_value_proj, num_heads=config.num_heads)
+        key, value = ttnn.transformer.split_key_value_and_split_heads(key_value_proj, num_heads=config.num_heads)
         ttnn.deallocate(key_value_proj)
 
     attention_scores = ttnn.matmul(
@@ -164,7 +164,7 @@ def t5_attention(
     if mask is None:
         attention_probs = ttnn.softmax(attention_scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
-        attention_probs = ttnn.nlp.attention_softmax_(attention_scores, attention_mask=mask, head_size=None)
+        attention_probs = ttnn.transformer.attention_softmax_(attention_scores, attention_mask=mask, head_size=None)
 
     context_layer = ttnn.matmul(
         attention_probs,
@@ -176,7 +176,7 @@ def t5_attention(
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
-    context_layer = ttnn.nlp.concatenate_heads(
+    context_layer = ttnn.transformer.concatenate_heads(
         context_layer,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
