@@ -74,13 +74,22 @@ def confirmTracyToolInstall(tool):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            subprocess.run(
-                f"cd {toolTracyPath}; make",
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            try:
+                subprocess.run(
+                    f"cd {toolTracyPath}; make",
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except subprocess.CalledProcessError as e:
+                subprocess.run(
+                    f"cd {toolTracyPath}; make clean; make",
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             subprocess.run(
                 f"cp {toolTracyPath}/{tool}-release {PROFILER_BIN_DIR / tool}",
                 shell=True,
@@ -93,13 +102,14 @@ def confirmTracyToolInstall(tool):
     return ret
 
 
-def run_report_setup():
+def run_report_setup(verbose):
     toolsReady = True
 
     logger.info("Verifying tracy profiling tools")
     toolsReady &= confirmTracyToolInstall(TRACY_CAPTURE_TOOL)
     toolsReady &= confirmTracyToolInstall(TRACY_CSVEXPROT_TOOL)
 
+    captureProcess = None
     if toolsReady:
         subprocess.run(
             f"rm -rf {PROFILER_LOGS_DIR}; mkdir -p {PROFILER_LOGS_DIR}",
@@ -108,24 +118,30 @@ def run_report_setup():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {PROFILER_LOGS_DIR / TRACY_FILE_NAME} -f&",
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+
+        captureCommand = (f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {PROFILER_LOGS_DIR / TRACY_FILE_NAME} -f",)
+        if verbose:
+            logger.info(f"Capture command: {captureCommand}")
+            captureProcess = subprocess.Popen(captureCommand, shell=True)
+        else:
+            captureProcess = subprocess.Popen(
+                captureCommand, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
     else:
         logger.warning(
             "Perf report generation is skipped!! Tracy tools can't be installed,  make sure tt_metal dev packages are installed"
         )
 
-    return toolsReady
+    return toolsReady, captureProcess
 
 
 def generate_report():
-    while not os.path.exists(PROFILER_LOGS_DIR / TRACY_FILE_NAME):
-        time.sleep(1)
+    tracyOutFile = PROFILER_LOGS_DIR / TRACY_FILE_NAME
+    if not os.path.exists(tracyOutFile):
+        logger.warning(
+            f"tracy capture output file {tracyOutFile} was not generated. Run in verbose (-v) mode to see tracy capture info"
+        )
+        return
     with open(PROFILER_LOGS_DIR / TRACY_CSV_FILE_NAME, "w") as csvFile:
         subprocess.run(
             f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u {PROFILER_LOGS_DIR / TRACY_FILE_NAME}",
@@ -148,6 +164,7 @@ def main():
     parser.add_option("-p", dest="partial", action="store_true", help="Only profile enabled zones", default=False)
     parser.add_option("-l", dest="lines", action="store_true", help="Profile every line of python code", default=False)
     parser.add_option("-r", dest="report", action="store_true", help="Generate ops report", default=False)
+    parser.add_option("-v", dest="verbose", action="store_true", help="More info is printed to stdout", default=False)
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -161,7 +178,7 @@ def main():
     if len(args) > 0:
         doReport = False
         if options.report:
-            doReport = run_report_setup()
+            doReport, captureProcess = run_report_setup(options.verbose)
 
         if not doReport:
             if options.module:
@@ -202,8 +219,13 @@ def main():
             originalArgs.remove("-r")
             osCmd = " ".join(originalArgs[1:])
 
-            test_command = f"python -m tracy {osCmd}&"
-            subprocess.run([test_command], shell=True, check=False, env=dict(os.environ))
+            testCommand = f"python -m tracy {osCmd}"
+            testProcess = subprocess.Popen([testCommand], shell=True, env=dict(os.environ))
+
+            testProcess.communicate()
+            logger.info(f"Test fully finished. Waiting for tracy capture tool to finish ...")
+            captureProcess.communicate()
+
             generate_report()
 
     else:
