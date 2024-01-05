@@ -159,6 +159,13 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         return reduce_min(input_tensor,reduce_dim,scaler,output_mem_config);
     }
 
+
+    if (reduce_dim == ReduceOpDim::W && is_arch_whb0(input_tensor.device()->arch())) {
+      Tensor output = transpose(input_tensor, -1, -2, output_mem_config);
+      output = reduce(output, reduce_math, ReduceOpDim::H, scaler, output_mem_config);
+      return transpose(output, -1, -2, output_mem_config);
+    }
+
     auto parallelization_strategy = Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
@@ -213,20 +220,13 @@ Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const Memo
     return scaled_sum_hw;
 }
 
-Tensor max_reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
-    constexpr ReduceOpMath operatorValue = ReduceOpMath::MAX;
-
+template<ReduceOpMath operatorValue>
+Tensor reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
     TT_ASSERT( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
-      if (is_arch_whb0(input_tensor.device()->arch())) {
-        Tensor output = transpose(input_tensor, -1, -2, output_mem_config);
-        output = reduce(output, operatorValue, ReduceOpDim::H, scaler1, output_mem_config);
-        return transpose(output, -1, -2, output_mem_config);
-      } else {
         return reduce(input_tensor, operatorValue, ReduceOpDim::W, scaler1, output_mem_config);
-      }
     } else if ( dim == 2 ) {
         return reduce(input_tensor, operatorValue, ReduceOpDim::H, scaler1, output_mem_config);
     }
@@ -257,7 +257,7 @@ Tensor max_reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig&
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose(formatted_input_tensor, 1, -2, output_mem_config);
-        output = max_reduce_impl(output, 2, output_mem_config);
+        output = reduce_impl<operatorValue>(output, 2, output_mem_config);
         output = transpose(output, 1, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
@@ -271,19 +271,23 @@ Tensor max_reduce_impl(const Tensor &input_tensor, uint dim, const MemoryConfig&
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose(input_tensor, 0, -2, output_mem_config);
-        output = max_reduce_impl(output, 2, output_mem_config);
+        output = reduce_impl<operatorValue>(output, 2, output_mem_config);
         output = transpose(output, 0, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
 }
 
 Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
-    return max_reduce_impl(input_tensor, dim,output_mem_config);
+    return reduce_impl<ReduceOpMath::MAX>(input_tensor, dim,output_mem_config);
 }
 
 Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
     TT_ASSERT( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     constexpr float scaler1 = 1.0;
+
+    if (is_arch_whb0(input_tensor.device()->arch())) {
+      return reduce_impl<ReduceOpMath::SUM>(input_tensor, dim,output_mem_config);
+    }
 
     if ( dim == 3 ) {
       if (is_arch_whb0(input_tensor.device()->arch())) {
