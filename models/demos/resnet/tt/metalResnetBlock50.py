@@ -22,7 +22,10 @@ from tt_lib.fused_ops.conv import (
     resnet50_optimized_conv,
     resnet50_1x1_conv_s2_as_downsample_and_matmul,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
+    TTPyCompositeConv,
+    SlidingWindowOpParamsWithParallelConfig,
+)
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
@@ -1052,6 +1055,31 @@ class Bottleneck:
             self.bn3 = nn.Identity()
 
         self.module_input_shape = input_shape
+        self.deallocate = True
+        self.downsample_or_noop = self.downsample_conv_on_tt
+        if self.downsample_or_noop is None:
+            self.downsample_or_noop = do_nothing_op
+            self.deallocate = False
+        else:
+            if (not use_downsample_op_and_mm_for_conv1x1_s2) and (
+                self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0
+            ):
+                # this downsample conv requires row major input
+                def downsample_conv_op_wrapper(op):
+                    def downsample_conv_op_with_formatting(x):
+                        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+                        x = x.reshape(
+                            self.module_input_shape[0],
+                            self.module_input_shape[1],
+                            self.module_input_shape[2],
+                            self.module_input_shape[3],
+                        )
+                        return op(x)
+
+                    return downsample_conv_op_with_formatting
+
+                self.downsample_or_noop = downsample_conv_op_wrapper(self.downsample_conv_on_tt)
+
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
         conv1_as_mm_padded_act_height = _nearest_32(
@@ -1080,12 +1108,12 @@ class Bottleneck:
         )
         assert (conv2_output_padded_face_size, width) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
         [
-            act_block_w_datums,
-            act_block_h_datums,
-            weight_block_w_datums,
-            out_subblock_h_datums,
-            out_subblock_w_datums,
-            out_block_h_datums,
+            act_block_w,
+            act_block_h,
+            weight_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            out_block_h,
             grid_size,
             per_core_act_h,
             per_core_weight_w,
@@ -1096,45 +1124,65 @@ class Bottleneck:
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
         # For sharded input, use new untilize_with_halo + conv infra
         if self.conv_halo:
-            sliding_window_op_params = [
-                (stride, stride),
-                (1, 1),
-                (3, 3),
-                (input_shape[0], input_shape[1], input_shape[2]),
-                grid_size,
-                num_cores_nhw,
-            ]
-            self.conv2 = TTPyConv(
+            sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
+                stride_h=stride,
+                stride_w=stride,
+                pad_h=1,
+                pad_w=1,
+                window_h=3,
+                window_w=3,
+                batch_size=input_shape[0],
+                input_h=input_shape[1],
+                input_w=input_shape[2],
+                num_cores_h=grid_size[1],
+                num_cores_w=grid_size[0],
+                num_cores_nhw=num_cores_nhw,
+            )
+
+            config_override = {
+                "act_block_w": act_block_w,
+                "act_block_h": act_block_h,
+                "weight_block_w": weight_block_w,
+                "out_subblock_h": out_subblock_h,
+                "out_subblock_w": out_subblock_w,
+                "out_block_h": out_block_h,
+                "act_c_num_blocks": grid_size[1] if conv_2d else 1,
+                "grid_size": grid_size,
+                "per_core_out_matrix_height": per_core_act_h,
+                "per_core_weight_matrix_width": per_core_weight_w,
+                "num_cores_nhw": num_cores_nhw,
+            }
+            move_utwh_output = False
+            if self.deallocate and (
+                self.module_input_shape[0] == 20
+                and self.module_input_shape[1] == 56
+                and self.module_input_shape[3] == 256
+            ):
+                move_utwh_output = True
+            self.conv2 = TTPyCompositeConv(
                 sliding_window_op_params,
                 conv2_weight.reshape(-1).tolist(),
-                self.conv2_params,
+                width,
+                width,
                 self.device,
-                [act_block_h_datums, act_block_w_datums],
-                [act_block_w_datums, weight_block_w_datums],
-                [out_subblock_h_datums, out_subblock_w_datums],
-                out_block_h_datums,
-                grid_size,
-                per_core_act_h_ntiles,
-                per_core_weight_w_ntiles,
+                not conv_2d,
                 conv2_bias.tolist(),
-                True,
-                output_mem_config=self.sharded_memory_config,
-                input_tensor_shape=self.conv1_output_shape,
+                conv_blocking_and_parallelization_config_override=config_override,
+                fuse_relu=True,
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
-                act_c_num_blocks=grid_size[1] if conv_2d else 1,
+                move_utwh_output=move_utwh_output,
             )
-            self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(self.device, sliding_window_op_params)
         else:
             self.conv2 = resnet50_optimized_conv(
                 conv2_weight.reshape(-1).tolist(),
                 self.conv2_params,
                 self.device,
-                [act_block_h_datums, act_block_w_datums],
-                [act_block_w_datums, weight_block_w_datums],
-                [out_subblock_h_datums, out_subblock_w_datums],
-                out_block_h_datums,
+                [act_block_h, act_block_w],
+                [act_block_w, weight_block_w],
+                [out_subblock_h, out_subblock_w],
+                out_block_h,
                 grid_size,
                 per_core_act_h_ntiles,
                 per_core_weight_w_ntiles,
@@ -1174,30 +1222,6 @@ class Bottleneck:
             math_fidelity=model_config["MATH_FIDELITY"],
         )
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
-        self.deallocate = True
-        self.downsample_or_noop = self.downsample_conv_on_tt
-        if self.downsample_or_noop is None:
-            self.downsample_or_noop = do_nothing_op
-            self.deallocate = False
-        else:
-            if (not use_downsample_op_and_mm_for_conv1x1_s2) and (
-                self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0
-            ):
-                # this downsample conv requires row major input
-                def downsample_conv_op_wrapper(op):
-                    def downsample_conv_op_with_formatting(x):
-                        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-                        x = x.reshape(
-                            self.module_input_shape[0],
-                            self.module_input_shape[1],
-                            self.module_input_shape[2],
-                            self.module_input_shape[3],
-                        )
-                        return op(x)
-
-                    return downsample_conv_op_with_formatting
-
-                self.downsample_or_noop = downsample_conv_op_wrapper(self.downsample_conv_on_tt)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         # logger.info("This module input shape - ", self.module_input_shape)
@@ -1210,15 +1234,7 @@ class Bottleneck:
             if self.deallocate:
                 x.deallocate()
 
-        if self.conv_halo:
-            out = self.tt_py_untilize_with_halo_op(out)
-            if self.deallocate and (
-                self.module_input_shape[0] == 20
-                and self.module_input_shape[1] == 56
-                and self.module_input_shape[3] == 256
-            ):
-                out = tt_lib.tensor.move_sharded(out)
-        else:
+        if not self.conv_halo:
             out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
             out = out.reshape(
                 self.conv1_output_shape[0],
@@ -1388,12 +1404,12 @@ class ResNet(nn.Module):
                 first_conv_output_channels,
             ) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
             [
-                act_block_w_datums,
-                act_block_h_datums,
-                weight_block_w_datums,
-                out_subblock_h_datums,
-                out_subblock_w_datums,
-                out_block_h_datums,
+                act_block_w,
+                act_block_h,
+                weight_block_w,
+                out_subblock_h,
+                out_subblock_w,
+                out_block_h,
                 grid_size,
                 per_core_act_h,
                 per_core_weight_w,
@@ -1401,40 +1417,52 @@ class ResNet(nn.Module):
             ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][
                 (first_conv_output_padded_nhw_size, first_conv_output_channels)
             ]
-            sliding_window_op_params = [
-                (1, 1),
-                (0, 0),
-                (4, 4),
-                (batch_size, 115, 115),
-                grid_size,
-                self.first_conv_num_cores_nhw,
-            ]
+
+            sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
+                stride_h=1,
+                stride_w=1,
+                pad_h=0,
+                pad_w=0,
+                window_h=4,
+                window_w=4,
+                batch_size=batch_size,
+                input_h=115,
+                input_w=115,
+                num_cores_h=grid_size[1],
+                num_cores_w=grid_size[0],
+                num_cores_nhw=self.first_conv_num_cores_nhw,
+            )
+
             per_core_act_h_ntiles = (int)(per_core_act_h / 32)
             per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
             conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
-            self.conv1 = TTPyConv(
+            config_override = {
+                "act_block_w": act_block_w,
+                "act_block_h": act_block_h,
+                "weight_block_w": weight_block_w,
+                "out_subblock_h": out_subblock_h,
+                "out_subblock_w": out_subblock_w,
+                "out_block_h": out_block_h,
+                "act_c_num_blocks": 1,
+                "grid_size": grid_size,
+                "per_core_out_matrix_height": per_core_act_h,
+                "per_core_weight_matrix_width": per_core_weight_w,
+                "num_cores_nhw": self.first_conv_num_cores_nhw,
+            }
+
+            self.conv1 = TTPyCompositeConv(
                 sliding_window_op_params,
                 conv1_weight.reshape(-1).tolist(),
-                self.folded_conv1_params,
+                self.inplanes,
+                16,
                 self.device,
-                [act_block_h_datums, act_block_w_datums],
-                [act_block_w_datums, weight_block_w_datums],
-                [out_subblock_h_datums, out_subblock_w_datums],
-                out_block_h_datums,
-                grid_size,
-                per_core_act_h_ntiles,
-                per_core_weight_w_ntiles,
-                conv1_bias.tolist(),
                 True,
-                output_mem_config=self.height_sharded_memory_config,
-                input_tensor_shape=[batch_size, 115, 115, 16],
+                conv1_bias.tolist(),
+                conv_blocking_and_parallelization_config_override=config_override,
+                fuse_relu=True,
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
-                act_c_num_blocks=1,
-            )
-            self.tt_py_untilize_with_halo_op_before_first_conv = TTPyUntilizeWithHalo(
-                self.device, sliding_window_op_params
             )
             self.first_conv_op_params = sliding_window_op_params
         else:
@@ -1464,14 +1492,21 @@ class ResNet(nn.Module):
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         if sharded:
-            max_pool_op_params = [
-                (self.maxpool_config_params["stride"], self.maxpool_config_params["stride"]),
-                (self.maxpool_config_params["pad"], self.maxpool_config_params["pad"]),
-                (self.maxpool_config_params["kernel_size"], self.maxpool_config_params["kernel_size"]),
-                (batch_size, self.conv1_output_shape[1], self.conv1_output_shape[2]),
-                grid_size,
-                self.first_conv_num_cores_nhw,
-            ]
+            max_pool_op_params = SlidingWindowOpParamsWithParallelConfig(
+                stride_h=2,
+                stride_w=2,
+                pad_h=1,
+                pad_w=1,
+                window_h=3,
+                window_w=3,
+                batch_size=batch_size,
+                input_h=self.conv1_output_shape[1],
+                input_w=self.conv1_output_shape[2],
+                num_cores_h=grid_size[1],
+                num_cores_w=grid_size[0],
+                num_cores_nhw=self.first_conv_num_cores_nhw,
+            )
+
             self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(self.device, max_pool_op_params, pad_val=0xF7FF)
             self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, grid_size)
         else:
@@ -1605,9 +1640,8 @@ class ResNet(nn.Module):
 
     def __del__(self):
         # Need to clear global static configs for each Resnet run
-        TTPyConv.static_kernel_configs_cache_map = {}
+        TTPyCompositeConv.clear_static_cache_maps()
         TTPyMaxPool.static_kernel_configs_cache_map = {}
-        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
 
     def _make_layer(
         self,
@@ -1893,7 +1927,6 @@ class ResNet(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
             x = x.to(self.device, mem_config, shard_spec)
-            x = self.tt_py_untilize_with_halo_op_before_first_conv(x)
 
         else:
             original_A_cl_host_shape = x.shape()

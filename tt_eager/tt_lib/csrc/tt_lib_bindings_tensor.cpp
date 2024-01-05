@@ -359,7 +359,10 @@ void TensorModule(py::module &m_tensor) {
             py::arg("grid_size"),
             py::arg("per_core_out_matrix_height_ntiles").noconvert(),
             py::arg("per_core_weight_matrix_width_ntiles").noconvert()
-        );
+        )
+        .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
+        .def_property_readonly("per_core_out_matrix_height_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
+        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_weight_matrix_width_ntiles; });
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
@@ -372,7 +375,14 @@ void TensorModule(py::module &m_tensor) {
             py::arg("out_block_h_ntiles").noconvert(),
             py::arg("out_subblock_h_ntiles").noconvert(),
             py::arg("out_subblock_w_ntiles").noconvert()
-        );
+        )
+        .def_property_readonly("act_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_h_ntiles; })
+        .def_property_readonly("act_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_w_ntiles; })
+        .def_property_readonly("act_c_num_blocks", [](OptimizedConvBlockConfig const& c) { return c.act_c_num_blocks; })
+        .def_property_readonly("weight_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.weight_block_w_ntiles; })
+        .def_property_readonly("out_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_block_h_ntiles; })
+        .def_property_readonly("out_subblock_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_h_ntiles; })
+        .def_property_readonly("out_subblock_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_w_ntiles; });
 
     m_tensor.def("optimized_conv", &optimized_conv,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("conv_reader_indices").noconvert() = std::nullopt,

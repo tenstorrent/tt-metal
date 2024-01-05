@@ -9,7 +9,10 @@ from loguru import logger
 
 import torch
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
+    TTPyMaxPool,
+    SlidingWindowOpParamsWithParallelConfig,
+)
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 import tt_lib as ttl
@@ -180,15 +183,20 @@ def test_run_max_pool(
     else:
         assert False
 
-    sliding_window_op_params = [
-        (stride_h, stride_w),
-        (pad_h, pad_w),
-        (kernel_h, kernel_w),
-        (in_n, in_h, in_w),
-        grid_size,
-        ncores_nhw,
-    ]
-
+    sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        window_h=kernel_h,
+        window_w=kernel_w,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        num_cores_h=grid_size[1],
+        num_cores_w=grid_size[0],
+        num_cores_nhw=ncores_nhw,
+    )
     pad_val = 0xF7FF
 
     shard_spec = ttl.tensor.ShardSpec(
