@@ -42,7 +42,6 @@ class Tensor {
         void deallocate(bool force=false);
 
         Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
-        Tensor to(Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) const;
 
         Tensor to(Layout target_layout) const;
 
@@ -119,10 +118,30 @@ class Tensor {
 
 };
 
+
+
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec);
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config);
 
 }  // namespace tt_metal
 
 }  // namespace tt
+
+
+namespace std {
+template <>
+struct hash<tt::tt_metal::Tensor> {
+    std::size_t operator()(const tt::tt_metal::Tensor &tensor) const {
+        std::size_t hash = std::hash<tt::tt_metal::TensorMemoryLayout>()(tensor.memory_config().memory_layout);
+        hash ^= std::hash<tt::tt_metal::BufferType>()(tensor.memory_config().buffer_type);
+        for(int idx=0; idx < tensor.shape().rank(); idx++){
+            hash ^= std::hash<uint32_t>()(tensor.shape()[idx]);
+        }
+        hash ^= std::hash<tt::tt_metal::Layout>()(tensor.layout());
+        hash ^= std::hash<tt::tt_metal::DataType>()(tensor.dtype());
+        return hash;
+
+    }
+};
+}

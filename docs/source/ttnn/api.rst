@@ -16,6 +16,16 @@ Tensor
    ttnn/load_tensor
    ttnn/deallocate
    ttnn/reallocate
+   ttnn/to_memory_config
+
+Miscellaneous
+*************
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/create_sharded_memory_config
+
 
 Operations
 **********

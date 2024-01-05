@@ -60,9 +60,9 @@ class TestUpdateCache:
                 False,
             )
             input_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
             )
-            xt = xt.to(device, input_mem_config, input_shard_spec)
+            xt = xt.to(device, input_mem_config)
         else:
             xt = xt.to(device)
 

@@ -1965,9 +1965,9 @@ class ResNet(nn.Module):
                 False,
             )
             mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
             )
-            x = x.to(self.device, mem_config, shard_spec)
+            x = x.to(self.device, mem_config)
 
         else:
             original_A_cl_host_shape = x.shape()

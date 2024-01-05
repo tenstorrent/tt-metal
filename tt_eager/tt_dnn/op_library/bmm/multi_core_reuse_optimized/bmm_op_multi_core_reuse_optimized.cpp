@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks create_program(
     CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
 
     if(shard_spec.has_value()) {
-        all_cores = shard_spec.value().shard_grid;
+        all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_blocks_per_core_group_1 = num_output_blocks_total / num_cores * batch_scale_factor;
@@ -317,7 +317,7 @@ operation::ProgramWithCallbacks create_program(
     };
     bool row_major = false;
     if (shard_spec.has_value()) {
-        row_major = shard_spec.value().shard_orientation == ShardOrientation::ROW_MAJOR;
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     }
     const auto cores = grid_to_cores(num_cores, core_range.x, core_range.y, row_major);
 

@@ -56,14 +56,14 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
-        row_major = shard_spec.value().shard_orientation == ShardOrientation::ROW_MAJOR;
-        all_cores = shard_spec.value().shard_grid;
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet({});
-        num_batched_heads_per_core_group_1 = shard_spec.value().shard_shape[0] / TILE_HEIGHT;
+        num_batched_heads_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_batched_heads_per_core_group_2 = 0;
-        num_input_tiles = shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW;
+        num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end.x + 1;
         num_cores_y = bbox.end.y + 1;

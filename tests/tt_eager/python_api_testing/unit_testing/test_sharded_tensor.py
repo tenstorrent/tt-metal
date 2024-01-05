@@ -110,8 +110,8 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     else:
         torch_tensor = get_tensor(tensor_shape, dtype)
     tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
-    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1)
-    tt_tensor = tt_tensor.to(device, mem_config, shard_spec)
+    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    tt_tensor = tt_tensor.to(device, mem_config)
 
     tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     torch_tensor_after_round_trip = tt_tensor.to_torch()
@@ -122,7 +122,7 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
     assert passing
 
-    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype, device, ttl.tensor.Layout.TILE, mem_config, shard_spec)
+    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype, device, ttl.tensor.Layout.TILE, mem_config)
     tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 
@@ -170,8 +170,8 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
 
     assert list(torch_tensor.size()) == tensor_shape
 
-    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1)
-    tt_tensor = tt_tensor.to(device, mem_config, shard_spec)
+    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    tt_tensor = tt_tensor.to(device, mem_config)
     tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     torch_tensor_after_round_trip = tt_tensor.to_torch()

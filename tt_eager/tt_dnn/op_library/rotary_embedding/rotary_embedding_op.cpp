@@ -42,10 +42,10 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     }
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-        TT_FATAL(input_tensor.shard_spec().value().shard_shape[1] == input_tensor.shape()[-1]);
+        TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.shape()[-1]);
         // Require even work division for now
         TT_FATAL(
-            (input_tensor.volume() / input_tensor.shape()[-1]) % input_tensor.shard_spec().value().shard_shape[0] == 0);
+            (input_tensor.volume() / input_tensor.shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0);
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         }
@@ -70,7 +70,7 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = this->compute_output_shapes(input_tensors)[0];
     if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec{.shard_grid = CoreRangeSet({}), .shard_shape = {0, 0}};
+        ShardSpec shard_spec{.grid = CoreRangeSet({}), .shape = {0, 0}};
         if (input_tensor.is_sharded()) {
             shard_spec = input_tensor.shard_spec().value();
         } else {
@@ -85,17 +85,18 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
                 }
             }
             uint32_t Ht = div_up(num_blocks, num_cores);
-            shard_spec.shard_grid = num_cores_to_corerange_set(num_cores, core_grid, true);
-            shard_spec.shard_shape = {Ht * TILE_HEIGHT, input_tensor.shape()[-1]};
-            shard_spec.shard_orientation = ShardOrientation::ROW_MAJOR;
+            shard_spec.grid = num_cores_to_corerange_set(num_cores, core_grid, true);
+            shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.shape()[-1]};
+            shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
+        auto mem_config = this->output_mem_config;
+        mem_config.shard_spec = shard_spec;
         return {create_sharded_device_tensor(
             output_shape,
             input_tensor.dtype(),
             input_tensor.layout(),
             input_tensor.device(),
-            this->output_mem_config,
-            shard_spec)};
+            mem_config)};
     } else {
         return {create_device_tensor(
             output_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config)};

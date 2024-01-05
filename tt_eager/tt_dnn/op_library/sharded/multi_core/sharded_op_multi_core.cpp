@@ -34,15 +34,15 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto shard_spec = output.shard_spec().value();
     auto shard_strategy = output.memory_config().memory_layout;
 
-    bool rm_orientation = shard_spec.shard_orientation == ShardOrientation::ROW_MAJOR;
+    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    CoreCoord end_core = (*shard_spec.shard_grid.ranges().rbegin()).end;
+    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end;
     if (input.layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt_metal::detail::TileSize(output_cb_data_format);
-        num_units_per_shard_height = shard_spec.shard_shape[0] / TILE_HEIGHT;
-        num_units_per_shard_width = shard_spec.shard_shape[1] / TILE_WIDTH;
+        num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
+        num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = input.shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
@@ -52,11 +52,11 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard_width_last =
             num_units_per_shard_width - (round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
     } else {
-        num_units = (input.volume() / input.shape()[-1] / shard_spec.shard_shape[0]) *
-                    (input.shape()[-1] / shard_spec.shard_shape[1]);
-        input_unit_size = shard_spec.shard_shape[1] * input.element_size();
-        output_unit_size = shard_spec.shard_shape[1] * output.element_size();
-        num_units_per_shard_height = shard_spec.shard_shape[0];
+        num_units = (input.volume() / input.shape()[-1] / shard_spec.shape[0]) *
+                    (input.shape()[-1] / shard_spec.shape[1]);
+        input_unit_size = shard_spec.shape[1] * input.element_size();
+        output_unit_size = shard_spec.shape[1] * output.element_size();
+        num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = input.shape()[-1] * input.element_size();
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
-    auto all_cores = shard_spec.shard_grid;
+    auto all_cores = shard_spec.grid;
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
     uint32_t num_cores = all_cores.num_cores();
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         auto dst_buffer = output_tensors.at(0).buffer();
 
         auto shard_spec = output_tensors.at(0).shard_spec().value();
-        auto all_cores = shard_spec.shard_grid;
+        auto all_cores = shard_spec.grid;
 
         for (const auto& core : cores) {
             {
@@ -278,14 +278,14 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     auto shard_spec = input.shard_spec().value();
     auto shard_strategy = input.memory_config().memory_layout;
 
-    bool rm_orientation = shard_spec.shard_orientation == ShardOrientation::ROW_MAJOR;
-    CoreCoord end_core = (*shard_spec.shard_grid.ranges().rbegin()).end;
+    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end;
     if (output.layout() == Layout::TILE) {
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt_metal::detail::TileSize(output_cb_data_format);
-        num_units_per_shard_height = shard_spec.shard_shape[0] / TILE_HEIGHT;
-        num_units_per_shard_width = shard_spec.shard_shape[1] / TILE_WIDTH;
+        num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
+        num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
@@ -295,11 +295,11 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_width_last =
             num_units_per_shard_width - (round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
     } else {
-        num_units = (output.volume() / output.shape()[-1] / shard_spec.shard_shape[0]) *
-                    (input.shape()[-1] / shard_spec.shard_shape[1]);
-        input_unit_size = shard_spec.shard_shape[1] * input.element_size();
-        output_unit_size = shard_spec.shard_shape[1] * output.element_size();
-        num_units_per_shard_height = shard_spec.shard_shape[0];
+        num_units = (output.volume() / output.shape()[-1] / shard_spec.shape[0]) *
+                    (input.shape()[-1] / shard_spec.shape[1]);
+        input_unit_size = shard_spec.shape[1] * input.element_size();
+        output_unit_size = shard_spec.shape[1] * output.element_size();
+        num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.shape()[-1] * output.element_size();
@@ -313,7 +313,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
-    auto all_cores = shard_spec.shard_grid;
+    auto all_cores = shard_spec.grid;
     auto bbox = all_cores.bounding_box();
     uint32_t num_cores_x = bbox.end.x + 1;
     uint32_t num_cores_y = bbox.end.y + 1;
@@ -488,7 +488,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         auto dst_buffer = output_tensors.at(0).buffer();
 
         auto shard_spec = input_tensors.at(0).shard_spec().value();
-        auto all_cores = shard_spec.shard_grid;
+        auto all_cores = shard_spec.grid;
 
         for (const auto& core : cores) {
             {

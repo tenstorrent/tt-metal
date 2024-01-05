@@ -101,8 +101,10 @@ std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &inp
     if(this->output_mem_config.is_sharded()){
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         auto shard_spec = input_tensor.shard_spec().value();
-        shard_spec.shard_shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
-        return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
+        shard_spec.shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
+        auto mem_config = this->output_mem_config;
+        mem_config.shard_spec = shard_spec;
+        return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }

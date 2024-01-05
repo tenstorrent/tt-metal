@@ -105,11 +105,6 @@ def test_run_max_pool(
         ttl.tensor.TensorMemoryLayout.INTERLEAVED,
         ttl.tensor.BufferType.DRAM if act_shape[0] > 8 else ttl.tensor.BufferType.L1,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-    )
-
     assert out_mem_config.is_sharded() and in_mem_config.is_sharded()
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -202,6 +197,9 @@ def test_run_max_pool(
     shard_spec = ttl.tensor.ShardSpec(
         shard_grid, [in_nhw // ncores_nhw, act_padded.shape[-1]], ttl.tensor.ShardOrientation.ROW_MAJOR, False
     )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+    )
 
     ttact_tilize = (
         ttl.tensor.Tensor(
@@ -211,7 +209,7 @@ def test_run_max_pool(
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device, sharded_mem_config, shard_spec)
+        .to(device, sharded_mem_config)
         # .to(device, interleaved_mem_config)
     )
     ttact_sharded = ttact_tilize

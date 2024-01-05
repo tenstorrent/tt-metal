@@ -74,7 +74,7 @@ void DeviceCommand::update_buffer_transfer_src(const uint8_t buffer_transfer_idx
 }
 
 
-void DeviceCommand::add_buffer_transfer_instruction(
+void DeviceCommand::add_buffer_transfer_instruction_preamble(
     const uint32_t src,
     const uint32_t dst,
     const uint32_t num_pages,
@@ -82,7 +82,9 @@ void DeviceCommand::add_buffer_transfer_instruction(
     const uint32_t src_buf_type,
     const uint32_t dst_buf_type,
     const uint32_t src_page_index,
-    const uint32_t dst_page_index) {
+    const uint32_t dst_page_index
+)
+{
     this->desc[this->buffer_transfer_idx] = src;
     this->desc[this->buffer_transfer_idx + 1] = dst;
     this->desc[this->buffer_transfer_idx + 2] = num_pages;
@@ -91,6 +93,10 @@ void DeviceCommand::add_buffer_transfer_instruction(
     this->desc[this->buffer_transfer_idx + 5] = dst_buf_type;
     this->desc[this->buffer_transfer_idx + 6] = src_page_index;
     this->desc[this->buffer_transfer_idx + 7] = dst_page_index;
+
+}
+
+void DeviceCommand::add_buffer_transfer_instruction_postamble(){
     this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
     this->desc[this->num_buffer_transfers_idx]++;
@@ -100,8 +106,26 @@ void DeviceCommand::add_buffer_transfer_instruction(
         DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS);
 }
 
+void DeviceCommand::add_buffer_transfer_interleaved_instruction(
+    const uint32_t src,
+    const uint32_t dst,
+    const uint32_t num_pages,
+    const uint32_t padded_page_size,
+    const uint32_t src_buf_type,
+    const uint32_t dst_buf_type,
+    const uint32_t src_page_index,
+    const uint32_t dst_page_index) {
 
-void DeviceCommand::add_buffer_transfer_instruction_sharded(
+    this->add_buffer_transfer_instruction_preamble(src, dst, num_pages, padded_page_size,
+                                        src_buf_type, dst_buf_type,
+                                        src_page_index, dst_page_index
+                                        );
+    this->add_buffer_transfer_instruction_postamble();
+
+}
+
+
+void DeviceCommand::add_buffer_transfer_sharded_instruction(
     const uint32_t src,
     const uint32_t dst,
     const uint32_t num_pages,
@@ -116,31 +140,25 @@ void DeviceCommand::add_buffer_transfer_instruction_sharded(
     ) {
 
 
+    this->add_buffer_transfer_instruction_preamble(src, dst, num_pages, padded_page_size,
+                                        src_buf_type, dst_buf_type,
+                                        src_page_index, dst_page_index
+                                        );
+
+
+    // Shard specific portion of instruction
     TT_ASSERT(core_id_x.size() == core_id_y.size());
     TT_ASSERT(core_id_x.size() == num_pages_in_shard.size());
     uint32_t num_shards = core_id_x.size();
-
-    uint32_t idx_offset = 0;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = src;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = dst;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = num_pages;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = padded_page_size;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = src_buf_type;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = dst_buf_type;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = src_page_index;
-    this->desc[this->buffer_transfer_idx + idx_offset++] = dst_page_index;
+    uint32_t idx_offset = COMMAND_PTR_SHARD_IDX;
     for (auto shard_id = 0; shard_id < num_shards; shard_id++) {
         this->desc[this->buffer_transfer_idx + idx_offset++] = num_pages_in_shard[shard_id];
         this->desc[this->buffer_transfer_idx + idx_offset++] = core_id_x[shard_id];
         this->desc[this->buffer_transfer_idx + idx_offset++] = core_id_y[shard_id];
     }
-    this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
-    this->desc[this->num_buffer_transfers_idx]++;
-    TT_ASSERT(
-        this->desc[this->num_buffer_transfers_idx] <= DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS,
-        "Surpassing the limit of {} on possible buffer transfers in a single command",
-        DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS);
+
+    this->add_buffer_transfer_instruction_postamble();
 }
 
 void DeviceCommand::write_program_entry(const uint32_t value) {

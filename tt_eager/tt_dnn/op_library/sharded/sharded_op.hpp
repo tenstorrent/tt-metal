@@ -84,6 +84,23 @@ inline Tensor interleaved_to_sharded(
         .at(0);
 }
 
+
+inline Tensor interleaved_to_sharded_core_range_set(
+    const Tensor &input_tensor,
+    CoreRangeSet grid,
+    std::array<uint32_t, 2> shard_shape,
+    TensorMemoryLayout shard_scheme,
+    ShardOrientation shard_orientation,
+    std::optional<const DataType> output_dtype = std::nullopt)
+{
+
+//TODO : extend for CoreRangeSets with multiple core ranges
+    auto core_range = *grid.ranges().begin();
+    auto grid_size = CoreCoord(core_range.end.x - core_range.start.x, core_range.end.y- core_range.start.y);
+    return interleaved_to_sharded(input_tensor, grid_size, shard_shape, shard_scheme, shard_orientation, output_dtype);
+}
+
+
 inline Tensor sharded_to_interleaved(
     const Tensor &input_tensor,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

@@ -573,11 +573,10 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     std::optional<DataType> data_type,
                     Device *device,
                     Layout layout,
-                    const MemoryConfig& mem_config,
-                    ShardSpec shard_spec) {
+                    const MemoryConfig& mem_config) {
                         auto tensor = detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
                         auto layout_tensor = tensor.to(layout);
-                        return layout_tensor.to(device, mem_config, shard_spec);
+                        return layout_tensor.to(device, mem_config);
                     }
                 ),
                 py::arg("torch_tensor"),
@@ -585,7 +584,6 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 py::arg("device").noconvert(),
                 py::arg("layout").noconvert(),
                 py::arg("mem_config").noconvert(),
-                py::arg("shard_spec").noconvert(),
                 py::return_value_policy::move,
                 R"doc(
                     +--------------+---------------------+
@@ -601,8 +599,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     +--------------+---------------------+
                     | mem_config   | TT memory_config    |
                     +--------------+---------------------+
-                    | shard_spec   | Shard Spec          |
-                    +--------------+---------------------+
+
 
                     Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
 
@@ -634,31 +631,6 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-
-                .. code-block:: python
-
-                    tt_tensor = tt_tensor.to(tt_device)
-            )doc")
-            .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) {
-                return self.to(device, mem_config, shard_spec);
-            }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout=TensorMemoryLayout::HEIGHT_SHARDED},  py::arg("shard_spec").noconvert(),
-                py::keep_alive<0, 2>(), R"doc(
-                Move TT Tensor from host device to TT accelerator device.
-
-                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
-
-                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
-
-                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-                | Argument  | Description                                     | Data type                  | Valid range           | Required |
-                +===========+=================================================+============================+=======================+==========+
-                | arg0      | Device to which tensor will be moved            | tt_lib.device.Device       | TT accelerator device | Yes      |
-                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-                | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
-                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-                | arg2      | ShardSpec of sharded tensor                     | ShardSpec                  |                       | No       |
-                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-
 
                 .. code-block:: python
 

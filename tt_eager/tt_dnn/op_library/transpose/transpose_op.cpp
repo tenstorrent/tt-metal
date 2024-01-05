@@ -29,8 +29,8 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
             const auto& shard_spec = input_tensor.shard_spec().value();
-            TT_FATAL(shard_spec.shard_shape[1] == W);
-            TT_FATAL(shard_spec.shard_shape[0] % H == 0);
+            TT_FATAL(shard_spec.shape[1] == W);
+            TT_FATAL(shard_spec.shape[0] % H == 0);
             TT_FATAL(this->output_mem_config.is_sharded());
             TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         } else {
@@ -95,16 +95,17 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &
     if (this->output_mem_config.is_sharded()) {
         if (this->dim == TransposeOpDim::WH) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();
-            shard_spec.shard_shape[0] = shard_spec.shard_shape[0] / input_tensor.shape()[-2] * input_tensor.shape()[-1];
-            shard_spec.shard_shape[1] = input_tensor.shape()[-2];
+            shard_spec.shape[0] = shard_spec.shape[0] / input_tensor.shape()[-2] * input_tensor.shape()[-1];
+            shard_spec.shape[1] = input_tensor.shape()[-2];
             const auto output_shape = this->compute_output_shapes(input_tensors)[0];
+            auto mem_config = this->output_mem_config;
+            mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(
                 output_shape,
                 input_tensor.dtype(),
                 input_tensor.layout(),
                 input_tensor.device(),
-                this->output_mem_config,
-                shard_spec)};
+                mem_config)};
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }
