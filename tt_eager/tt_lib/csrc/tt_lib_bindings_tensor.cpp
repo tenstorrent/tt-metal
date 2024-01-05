@@ -494,7 +494,7 @@ void TensorModule(py::module &m_tensor) {
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-            "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, num_rows, 1]", "Yes"
+            "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, 1, num_rows]", "Yes"
             "weights", "Entire embedding table", "Tensor", "Tensor shape is [1,1, num_embeddings, num_columns]. Num_columns must be divisible by 32.", "Yes"
             "tilized", "Enable fused tilize on output. Default is true.", "Bool", "", "No",
             "embeddings_type", "Version of optimized embeddings to run. PADDED requires passing pad_token. BINARY expects the indices to only be 0, 1 and weights to have 2 rows", "EmbeddingsType", "GENERIC, PADDED, BINARY", "No"
