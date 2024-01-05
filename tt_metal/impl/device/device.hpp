@@ -23,7 +23,7 @@ enum class BufferType;
 class Buffer;
 class Program;
 class JitBuildEnv;
-class CommandQueue;
+class HWCommandQueue;
 
 namespace detail {
 // TODO(agrebenisan): Need device to hold onto command queue programs,
@@ -207,6 +207,11 @@ class Device {
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;
     JitBuildStateSet kernel_build_states_;
+
+    // SystemMemoryManager is the interface to the hardware command queue
+    std::unique_ptr<SystemMemoryManager> sysmem_manager;
+    // Allows access to sysmem_writer
+    friend class HWCommandQueue;
 
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;

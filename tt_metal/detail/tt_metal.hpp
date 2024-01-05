@@ -277,15 +277,12 @@ namespace tt::tt_metal{
         inline CommandQueue &GetCommandQueue(Device *device, bool init_cq)
         {
             detail::DispatchStateCheck(true);
-            // For now there is only one SW CommandQueue per device
             static std::vector<std::unique_ptr<CommandQueue>> command_queues( GetNumAvailableDevices() );
-            chip_id_t id = device->id();
-            TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
-            TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
             static std::mutex cq_creation_mutex;
             if (init_cq) {
                 std::lock_guard<std::mutex> lock(cq_creation_mutex);
-                command_queues[device->id()] = std::make_unique<CommandQueue>(device, 0);
+                if ( command_queues[device->id()] == nullptr)
+                    command_queues[device->id()] = std::make_unique<CommandQueue>( device, 0);
             }
             return *(command_queues[id]);
         }
