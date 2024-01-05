@@ -114,9 +114,24 @@ def split_query_key_value_and_split_heads(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """
-    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[Tensor, Tensor, Tensor]
+    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads: int, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[Tensor, Tensor, Tensor]
 
-    Splits tensor of shape [batch_size, sequence_size, 3 * hidden_size] into 3 tensors (Query, Key, Value) of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes them, to make them ready for computing attention scores
+    Splits tensor of shape [batch_size, sequence_size, 3 * hidden_size] into 3 tensors (Query, Key, Value) of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes them, to make them ready for computing attention scores. Equivalent pytorch code:
+
+        batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
+        hidden_size = three_times_hidden_size // 3
+        head_size = hidden_size // num_heads
+
+        query_layer, key_layer, value_layer = torch.split(input_tensor, [hidden_size, hidden_size, hidden_size], dim=-1)
+
+        query_layer = torch.reshape(query_layer, (batch_size, sequence_size, num_heads, head_size))
+        query_layer = torch.permute(query_layer, (0, 2, 1, 3)).contiguous().clone()
+
+        key_layer = torch.reshape(key_layer, (batch_size, sequence_size, num_heads, head_size))
+        key_layer = torch.permute(key_layer, (0, 2, 3, 1)).contiguous().clone()
+
+        value_layer = torch.reshape(value_layer, (batch_size, sequence_size, num_heads, head_size))
+        value_layer = torch.permute(value_layer, (0, 2, 1, 3)).contiguous().clone()
 
     Args:
         * :attr:`input_tensor`: Input Tensor
@@ -150,57 +165,18 @@ def split_query_key_value_and_split_heads(
         query, key, value = query_key_value
         return query, key, value
     else:
-        import ttnn
-        import torch
+        input_tensor = reshape(input_tensor, (batch_size, 1, sequence_size, three_times_hidden_size))
 
-        device = input_tensor.value.device()
-        input_dtype = input_tensor.dtype
+        ttl_input_tensor = input_tensor.value
 
-        def impl(tensor):
-            hidden_size = three_times_hidden_size // 3
-            head_size = hidden_size // num_heads
-
-            tensor = torch.reshape(tensor, (batch_size, sequence_size, 3, num_heads, head_size))
-            query_layer, key_layer, value_layer = (
-                tensor[..., 0, :, :],
-                tensor[..., 1, :, :],
-                tensor[..., 2, :, :],
-            )
-
-            query_layer = torch.reshape(query_layer, (batch_size, sequence_size, num_heads, head_size))
-            query_layer = torch.permute(query_layer, (0, 2, 1, 3)).contiguous().clone()
-
-            key_layer = torch.reshape(key_layer, (batch_size, sequence_size, num_heads, head_size))
-            key_layer = torch.permute(key_layer, (0, 2, 3, 1)).contiguous().clone()
-
-            value_layer = torch.reshape(value_layer, (batch_size, sequence_size, num_heads, head_size))
-            value_layer = torch.permute(value_layer, (0, 2, 1, 3)).contiguous().clone()
-
-            return query_layer, key_layer, value_layer
-
-        impl = ttl.tensor.decorate_external_operation(
-            impl, function_name="ttnn.transformer.split_query_key_value_and_split_heads"
+        query_key_value = ttl.tensor.nlp_create_qkv_heads(
+            ttl_input_tensor,
+            num_heads=num_heads,
+            output_mem_config=memory_config,
         )
-
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        input_tensor = ttnn.from_device(input_tensor)
-        input_tensor = ttnn.to_torch(input_tensor)
-
-        query_layer, key_layer, value_layer = impl(input_tensor)
-
-        query_layer = ttnn.from_torch(query_layer, input_dtype)
-        query_layer = ttnn.to_layout(query_layer, ttnn.TILE_LAYOUT)
-        query_layer = ttnn.to_device(query_layer, device)
-
-        key_layer = ttnn.from_torch(key_layer, input_dtype)
-        key_layer = ttnn.to_layout(key_layer, ttnn.TILE_LAYOUT)
-        key_layer = ttnn.to_device(key_layer, device)
-
-        value_layer = ttnn.from_torch(value_layer, input_dtype)
-        value_layer = ttnn.to_layout(value_layer, ttnn.TILE_LAYOUT)
-        value_layer = ttnn.to_device(value_layer, device)
-
-        return query_layer, key_layer, value_layer
+        query_key_value = (Tensor(ttl_tensor) for ttl_tensor in query_key_value)
+        query, key, value = query_key_value
+        return query, key, value
 
 
 def _torch_split_key_value_and_split_heads(input_tensor: Tensor, *, num_heads, **_):
@@ -237,7 +213,7 @@ def split_key_value_and_split_heads(
     num_heads: int,
 ) -> Tuple[Tensor, Tensor]:
     """
-    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[Tensor, Tensor, Tensor]
+    split_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[Tensor, Tensor, Tensor]
 
     Splits tensor of shape [batch_size, sequence_size, 2 * hidden_size] into 2 tensors (Key, Value) of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes them, to make them ready for computing attention scores
 
@@ -281,7 +257,7 @@ def split_key_value_and_split_heads(
         return key_layer, value_layer
 
     impl = ttl.tensor.decorate_external_operation(
-        impl, function_name="ttnn.transformer.split_query_key_value_and_split_heads"
+        impl, function_name="ttnn.transformer.split_key_value_and_split_heads"
     )
 
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
