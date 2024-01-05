@@ -2,12 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from types import ModuleType
+
 import pytest
 
 import ttnn
 
 
 def pytest_make_parametrize_id(config, val, argname):
+    if isinstance(val, ModuleType):
+        val = val.__name__
     return f"{argname}={val}"
 
 

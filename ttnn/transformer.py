@@ -53,7 +53,7 @@ def split_heads(input_tensor: Tensor, *, num_heads: int, order: Tuple[int]) -> T
         tensor = torch.permute(tensor, order).contiguous().clone()
         return tensor
 
-    impl = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.nlp.split_heads")
+    impl = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.transformer.split_heads")
 
     device = input_tensor.value.device()
     input_dtype = input_tensor.dtype
@@ -179,7 +179,7 @@ def split_query_key_value_and_split_heads(
             return query_layer, key_layer, value_layer
 
         impl = ttl.tensor.decorate_external_operation(
-            impl, function_name="ttnn.nlp.split_query_key_value_and_split_heads"
+            impl, function_name="ttnn.transformer.split_query_key_value_and_split_heads"
         )
 
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -280,7 +280,9 @@ def split_key_value_and_split_heads(
 
         return key_layer, value_layer
 
-    impl = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.nlp.split_query_key_value_and_split_heads")
+    impl = ttl.tensor.decorate_external_operation(
+        impl, function_name="ttnn.transformer.split_query_key_value_and_split_heads"
+    )
 
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.from_device(input_tensor)

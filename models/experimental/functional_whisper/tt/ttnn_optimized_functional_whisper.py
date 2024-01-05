@@ -47,7 +47,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
 #     fused_qkv: torch.Tensor, head_size
 # ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 #     batch_size, *_ = fused_qkv.shape
-#     output = ttnn.nlp.split_fused_qkv_and_split_heads(
+#     output = ttnn.transformer.split_fused_qkv_and_split_heads(
 #         fused_qkv, core_grid=(batch_size, 12), memory_config=WHISPER_MEMORY_CONFIG
 #     )
 #     return output
