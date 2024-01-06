@@ -189,7 +189,9 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     eth_noc_async_read_barrier();
     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
     noc_semaphore_inc(receiver_semaphore_noc_addr, 1);
-    eth_wait_for_receiver_done();
+    while (erisc_info->bytes_sent != 0) {
+        risc_context_switch();
+    }
 }
 /**
  * A blocking call that waits for num_bytes of data to be sent from the remote sender ethernet core using any number of
