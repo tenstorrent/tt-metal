@@ -375,7 +375,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
 
     // tensor shape
     const auto shape = input_tensor.shape();
-    uint32_t M = shape[2];
+    uint32_t M = shape[2] * shape[1];
     uint32_t K = shape[3] * shape[0];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
@@ -628,7 +628,7 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                         std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>
                     ) {
                         const auto shape = input_tensor.shape();
-                        uint32_t M = shape[2];
+                        uint32_t M = shape[2] * shape[1];
                         uint32_t K = shape[3] * shape[0];
                         uint32_t Mt = M / TILE_WIDTH;
                         uint32_t Kt = K / TILE_WIDTH;

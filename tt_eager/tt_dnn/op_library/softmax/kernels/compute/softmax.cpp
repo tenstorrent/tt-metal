@@ -139,7 +139,9 @@ void MAIN {
         // sum(exp(x))
         ACQ();
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-        // cb_wait_front(cb_exps, block_w);
+        if constexpr (block_w == 1) {  // has to add wait cb back for the one tile input
+            cb_wait_front(cb_exps, block_w);
+        }
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);
         for (uint32_t w = 0; w < block_w; w++) {
