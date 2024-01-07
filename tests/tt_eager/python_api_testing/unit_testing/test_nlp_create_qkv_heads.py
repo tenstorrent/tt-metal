@@ -104,13 +104,19 @@ def test_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_confi
 
 def test_nlp_create_qkv_heads_falcon7b_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
+        run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, mem_config, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
+        run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, mem_config, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
     assert ttl.program_cache.num_entries() == 2
 

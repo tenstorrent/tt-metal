@@ -122,12 +122,18 @@ def test_split_query_key_value_and_split_heads(device, batch, dtype, in0_mem_con
 
 def test_split_query_key_value_and_split_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_split_query_key_value_and_split_heads_test(device, 9, dtype, dram_mem_config, dram_mem_config)
+        run_split_query_key_value_and_split_heads_test(device, 9, dtype, mem_config, mem_config)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_split_query_key_value_and_split_heads_test(device, 9, dtype, dram_mem_config, dram_mem_config)
+        run_split_query_key_value_and_split_heads_test(device, 9, dtype, mem_config, mem_config)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
     assert ttl.program_cache.num_entries() == 2

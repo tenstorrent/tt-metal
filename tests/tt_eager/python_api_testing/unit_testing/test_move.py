@@ -91,18 +91,23 @@ def test_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_confi
 
 
 def test_move_op_with_program_cache(use_program_cache, device):
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    output_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     dtype = ttl.tensor.DataType.BFLOAT16
     layout = ttl.tensor.Layout.TILE
     shape = [1, 3, 320, 384]
 
     # Single core because of overlap
     for _ in range(2):
-        run_move_op(0, shape, layout, dtype, in0_mem_config, output_mem_config, device)
+        run_move_op(0, shape, layout, dtype, mem_config, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
     # Multi-core
     for _ in range(2):
-        run_move_op(1, shape, layout, dtype, in0_mem_config, output_mem_config, device)
+        run_move_op(1, shape, layout, dtype, mem_config, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
     assert ttl.program_cache.num_entries() == 2
