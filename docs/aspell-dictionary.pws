@@ -304,9 +304,13 @@ llrt
 loadi
 loadis
 log
+logical_and
 logical_andi
 logical_noti
+logical_not_unary
+logical_or
 logical_ori
+logical_xor
 logical_xori
 logit
 loopback

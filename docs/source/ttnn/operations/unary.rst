@@ -81,6 +81,8 @@ Unary Operations
 
 .. autofunction:: ttnn.logical_noti
 
+.. autofunction:: ttnn.logical_not_unary
+
 .. autofunction:: ttnn.logical_ori
 
 .. autofunction:: ttnn.logical_xori
