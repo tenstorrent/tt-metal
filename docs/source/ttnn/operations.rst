@@ -21,3 +21,4 @@ Operations
    operations/to_torch
    operations/unary
    operations/binary
+   operations/relational
