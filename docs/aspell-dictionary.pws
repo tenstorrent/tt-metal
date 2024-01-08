@@ -304,6 +304,10 @@ llrt
 loadi
 loadis
 log
+logical_andi
+logical_noti
+logical_ori
+logical_xori
 logit
 loopback
 ltz
