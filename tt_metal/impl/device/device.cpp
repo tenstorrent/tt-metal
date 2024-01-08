@@ -272,15 +272,16 @@ void Device::initialize_command_queue() {
     std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
     const uint32_t cq_size = hugepage_size / this->num_hw_cqs();
+    static constexpr bool add_channel_offset = true;
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(cq_id) + cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(cq_id) + cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
 
         std::cout << "Writing HOST_CQ_ISSUE_READ_PTR " << pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] << " and HOST_CQ_COMPLETION_WRITE_PTR " << pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)]
                   << " to channel " << channel << " at address " << cq_id * cq_size << std::endl;
 
-        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, this->id_, channel);
+        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, mmio_device_id, channel);
     }
 
     detail::SendDispatchKernelsToDevice(this);

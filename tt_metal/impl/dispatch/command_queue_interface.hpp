@@ -10,9 +10,13 @@
 
 using namespace tt::tt_metal;
 
+template <bool channel_offet>
 inline uint32_t cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size) {
-    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
-    return (MAX_HUGEPAGE_SIZE * channel) + (cq_id * cq_size);
+    uint32_t offset = (cq_id * cq_size);
+    if (channel_offet) {
+        offset += (DeviceCommand::MAX_HUGEPAGE_SIZE * channel);
+    }
+    return offset;
 }
 
 template <bool addr_16B>
@@ -20,7 +24,12 @@ inline uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t c
     uint32_t recv;
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_READ_PTR + cq_offset(channel, cq_id, cq_size), mmio_device_id, channel);
+    // no need to account for channle in the cq offset here just use offset using cq_id ? ...
+    static constexpr bool add_channel_offset = false;
+    std::cout << "Reading cq issue read ptr for device " << chip_id
+              << " from addr: " << HOST_CQ_ISSUE_READ_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size)
+              << " at channel: " << channel << std::endl;
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_READ_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -32,7 +41,12 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     uint32_t recv;
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_WRITE_PTR + cq_offset(channel, cq_id, cq_size), mmio_device_id, channel);
+    // no need to account for channle in the cq offset here just use offset using cq_id ? ...
+    static constexpr bool add_channel_offset = false;
+    std::cout << "Reading cq completion write ptr for device " << chip_id
+              << " from addr: " << HOST_CQ_COMPLETION_WRITE_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size)
+              << " at channel: " << channel << std::endl;
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_WRITE_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -49,10 +63,10 @@ struct SystemMemoryCQInterface {
       command_issue_region_size(tt::round_up((cq_size - CQ_START) * this->default_issue_queue_split, 32)),
       command_completion_region_size((cq_size - CQ_START) - this->command_issue_region_size),
       issue_fifo_size(command_issue_region_size >> 4),
-      issue_fifo_limit(((CQ_START + this->command_issue_region_size) + cq_offset(channel, cq_id, cq_size)) >> 4),
+      issue_fifo_limit(((CQ_START + this->command_issue_region_size) + cq_offset<true>(channel, cq_id, cq_size)) >> 4),
       completion_fifo_size(command_completion_region_size >> 4),
       completion_fifo_limit(issue_fifo_limit + completion_fifo_size),
-      offset(cq_offset(channel, cq_id, cq_size))
+      offset(cq_offset<true>(channel, cq_id, cq_size))
      {
         TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
         this->issue_fifo_wr_ptr = (CQ_START + this->offset) >> 4;  // In 16B words
@@ -101,6 +115,8 @@ class SystemMemoryManager {
     char* cq_sysmem_start;
     vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size;
+    // TODO: add comment explaining why this is added
+    uint32_t channel_offset;
 
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
@@ -118,6 +134,7 @@ class SystemMemoryManager {
         char* hugepage_start = (char*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
         this->cq_sysmem_start = hugepage_start;
         this->cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+        this->channel_offset = DeviceCommand::MAX_HUGEPAGE_SIZE * channel;
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             tt_cxy_pair issue_queue_interface_core = dispatch_core_manager::get().issue_queue_interface_core(device_id, channel, cq_id);
@@ -180,7 +197,8 @@ class SystemMemoryManager {
     }
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
-        void* user_scratchspace = this->cq_sysmem_start + write_ptr;
+        std::cout << "memcopy to address cq_sysmem_start + " << (write_ptr - this->channel_offset) << std::endl;
+        void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         memcpy(user_scratchspace, data, size_in_bytes);
     }

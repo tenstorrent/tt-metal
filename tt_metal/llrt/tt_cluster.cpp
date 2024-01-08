@@ -151,6 +151,10 @@ void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std
         }
         this->device_to_host_mem_channel_[device_id] = channel++;
     }
+
+    for (const auto &[dev_id, channel] : this->device_to_host_mem_channel_) {
+        std::cout << "Device " << dev_id << " assigned to channel " << channel << std::endl;
+    }
 }
 
 void Cluster::get_metal_desc_from_tt_desc(

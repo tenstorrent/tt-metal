@@ -448,7 +448,7 @@ namespace tt::tt_metal{
 
         inline void SendDispatchKernelsToDevice(Device *device) {
             ZoneScoped;
-            std::cout << "-------- Sending dispatch kernels to device --------" << std::endl;
+            // std::cout << "-------- Sending dispatch kernels to device " << device->id() << " --------" << std::endl;
             if (device->is_mmio_capable()) {
                 Program dispatch_program = CreateProgram();
 
@@ -460,7 +460,7 @@ namespace tt::tt_metal{
                     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
                     uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(device->id(), channel) / num_hw_cqs;
 
-                    std::cout << "Loading dispatch kernels on device " << device->id() << " that will service device " << device_id << std::endl;
+                    // std::cout << "Loading dispatch kernels on device " << device->id() << " that will service device " << device_id << std::endl;
 
                     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                         tt_cxy_pair issue_q_interface_location = dispatch_core_manager::get().issue_queue_interface_core(device_id, channel, cq_id);
@@ -474,8 +474,8 @@ namespace tt::tt_metal{
                         CoreCoord issue_q_physical_core = get_physical_dispatch_coord(issue_q_interface_location);
                         CoreCoord completion_q_physical_core = get_physical_dispatch_coord(completion_q_interface_location);
 
-                        std::cout << "Issue queue - logical location: " << issue_q_interface_location.str() << " phyical: " << issue_q_physical_core.str()
-                                  << " Completion queue - logical location: " << completion_q_interface_location.str() << " physical: "  << completion_q_physical_core.str() << std::endl;
+                        // std::cout << "Issue queue - logical location: " << issue_q_interface_location.str() << " phyical: " << issue_q_physical_core.str()
+                        //           << " Completion queue - logical location: " << completion_q_interface_location.str() << " physical: "  << completion_q_physical_core.str() << std::endl;
 
                         std::map<string, string> producer_defines = {
                             {"CONSUMER_NOC_X", std::to_string(completion_q_physical_core.x)},
@@ -487,28 +487,28 @@ namespace tt::tt_metal{
                         };
 
                         // Address in sysmem for CQ to write back its read ptr to
-                        uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + cq_offset(channel, cq_id, cq_size);
-                        uint32_t issue_queue_start_addr = CQ_START + cq_offset(channel, cq_id, cq_size);
+                        uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + cq_offset<true>(channel, cq_id, cq_size);
+                        uint32_t issue_queue_start_addr = CQ_START + cq_offset<true>(channel, cq_id, cq_size);
                         uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
                         std::vector<uint32_t> producer_compile_args = {host_issue_queue_read_ptr_addr, issue_queue_start_addr, issue_queue_size};
 
-                        std::cout << "host_issue_queue_read_ptr_addr " << host_issue_queue_read_ptr_addr
-                                  << " issue_queue_start_addr " << issue_queue_start_addr
-                                  << " issue_queue_size " << issue_queue_size << std::endl;
+                        // std::cout << "host_issue_queue_read_ptr_addr " << host_issue_queue_read_ptr_addr
+                        //           << " issue_queue_start_addr " << issue_queue_start_addr
+                        //           << " issue_queue_size " << issue_queue_size << std::endl;
 
-                        uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + cq_offset(channel, cq_id, cq_size);
-                        uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + cq_offset(channel, cq_id, cq_size);
+                        uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + cq_offset<true>(channel, cq_id, cq_size);
+                        uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + cq_offset<true>(channel, cq_id, cq_size);
                         uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
-                        uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + cq_offset(channel, cq_id, cq_size);
+                        uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + cq_offset<true>(channel, cq_id, cq_size);
                         std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr};
 
-                        std::cout << "host_completion_queue_write_ptr_addr " << host_completion_queue_write_ptr_addr
-                                << " completion_queue_start_addr " << completion_queue_start_addr
-                                << " completion_queue_size " << completion_queue_size
-                                << " host_finish_addr " << host_finish_addr << std::endl;
+                        // std::cout << "host_completion_queue_write_ptr_addr " << host_completion_queue_write_ptr_addr
+                        //         << " completion_queue_start_addr " << completion_queue_start_addr
+                        //         << " completion_queue_size " << completion_queue_size
+                        //         << " host_finish_addr " << host_finish_addr << std::endl;
 
                         std::string issue_q_interface_kernel = (device_id == device->id()) ? "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp" : "tt_metal/impl/dispatch/kernels/remote_issue_queue_interface.cpp";
-                        std::cout << "issue queue interface kernel: " << issue_q_interface_kernel << std::endl;
+                        // std::cout << "issue queue interface kernel: " << issue_q_interface_kernel << std::endl;
 
                         tt::tt_metal::CreateKernel(
                             dispatch_program,
@@ -534,7 +534,7 @@ namespace tt::tt_metal{
                         // Currently remote device dispatch completion queue interface has not been brought up
                         // This will be updated with https://github.com/tenstorrent-metal/tt-metal/issues/3949
                         if (device_id == device->id()) {
-                            std::cout << "programming completion queue interface" << std::endl;
+                            // std::cout << "programming completion queue interface" << std::endl;
                             tt::tt_metal::CreateKernel(
                                 dispatch_program,
                                 "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
@@ -574,7 +574,7 @@ namespace tt::tt_metal{
                 //  https://github.com/tenstorrent-metal/tt-metal/issues/3953 and https://github.com/tenstorrent-metal/tt-metal/issues/3954
             }
 
-            std::cout << "-------- Done sending dispatch kernels to device --------" << std::endl;
+            // std::cout << "-------- Done sending dispatch kernels to device --------" << std::endl;
         }
     }
 }

@@ -16,6 +16,7 @@ class DeviceCommand {
 
     // Constants
     //TODO: investigate other num_cores
+    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
     static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;

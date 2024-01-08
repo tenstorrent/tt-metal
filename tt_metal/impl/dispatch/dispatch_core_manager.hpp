@@ -54,7 +54,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.issue_queue_interface = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
-        std::cout << "For device " << device_id << " channel " << channel << " CQ " << cq_id << " issue queue interface location: " << assignment.issue_queue_interface.value().str() << std::endl;
+        std::cout << "For device " << device_id << " channel " << channel << " CQ " << std::to_string(cq_id) << " issue queue interface location: " << assignment.issue_queue_interface.value().str() << std::endl;
         return assignment.issue_queue_interface.value();
     }
 
@@ -67,10 +67,10 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord completion_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.completion_queue_interface = tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
-        std::cout << "For device " << device_id << " channel " << channel << " CQ " << cq_id << " completion queue interface location: " << assignment.completion_queue_interface.value().str() << std::endl;
+        std::cout << "For device " << device_id << " channel " << channel << " CQ " << std::to_string(cq_id) << " completion queue interface location: " << assignment.completion_queue_interface.value().str() << std::endl;
         if (mmio_device_id == device_id) {
             // For MMIO devices completion queue core is same as command dispatcher core
-            TT_ASSERT(not assignment.command_dispatcher.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
+            TT_ASSERT(not assignment.command_dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.command_dispatcher.value().str(), device_id);
             assignment.command_dispatcher = assignment.completion_queue_interface;
         }
         return assignment.completion_queue_interface.value();
@@ -83,11 +83,12 @@ class dispatch_core_manager {
         }
         CoreCoord command_dispatcher_coord = this->get_next_available_dispatch_core(device_id);
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        assignment.command_dispatcher = tt_cxy_pair(mmio_device_id, command_dispatcher_coord.x, command_dispatcher_coord.y);
+        assignment.command_dispatcher = tt_cxy_pair(device_id, command_dispatcher_coord.x, command_dispatcher_coord.y);
+        std::cout << "For device " << device_id << " channel " << channel << " CQ " << std::to_string(cq_id) << " command dispatcher location: " << assignment.command_dispatcher.value().str() << std::endl;
         if (mmio_device_id == device_id) {
             // For MMIO devices completion queue core is same as command dispatcher core
             TT_ASSERT(not assignment.completion_queue_interface.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
-            assignment.completion_queue_interface = assignment.completion_queue_interface;
+            assignment.completion_queue_interface = assignment.command_dispatcher;
         }
         return assignment.command_dispatcher.value();
     }

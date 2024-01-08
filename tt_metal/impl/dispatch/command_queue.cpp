@@ -519,6 +519,7 @@ void EnqueueWriteBufferCommand::process() {
     uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
+    std::cout << "writing the enqueue write buffer command to: " << system_memory_temporary_storage_address << std::endl;
     const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
     uint32_t data_size_in_bytes = cmd.get_data_size();
 
@@ -541,6 +542,28 @@ void EnqueueWriteBufferCommand::process() {
     }
 
     this->manager.issue_queue_push_back(cmd_size, LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
+
+    auto cmd_desc = cmd.get_desc();
+
+    std::cout << "WRAP: " << cmd_desc[0]
+              << " FINISH: " << cmd_desc[1]
+              << " NUM WORKERS: " << cmd_desc[2]
+              << " NUM BUFFER TRANSFERS: " << cmd_desc[3]
+              << " IS PROGRAM BUFFER: " << cmd_desc[4]
+              << " STALL: " << cmd_desc[5]
+              << " PAGE SIZE: " << cmd_desc[6]
+              << " PRODUCER CB SIZE: " << cmd_desc[7]
+              << " CONSUMER CB SIZE: " << cmd_desc[8]
+              << " PRODUCER CB NUM PAGES: " << cmd_desc[9]
+              << " CONSUMER CB NUM PAGES: " << cmd_desc[10]
+              << " NUM PAGES: " << cmd_desc[11]
+              << " NUM RUNTIME ARGS PAGE: " << cmd_desc[12]
+              << " NUM CB CONFIG PAGES: " << cmd_desc[13]
+              << " NUM PROGRAM PAGES: " << cmd_desc[14]
+              << " NUM GO SIGNAL PAGES: " << cmd_desc[15]
+              << " DATA SIZE: " << cmd_desc[16]
+              << " PRODUCER CONSUMER TX NUM PAGES: " << cmd_desc[17]
+              << " SHARDED BUFFER NUM CORES: " << cmd_desc[18] << std::endl;
 }
 
 EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
