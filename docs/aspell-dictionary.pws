@@ -334,6 +334,7 @@ nans
 ncrisc
 nd
 neg
+nextafter
 nez
 noc
 nodebias
@@ -347,6 +348,7 @@ numpy
 ocb
 oct
 onboarding
+outer
 parallelization
 parallelizes
 param
