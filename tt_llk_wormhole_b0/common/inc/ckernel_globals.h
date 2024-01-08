@@ -20,3 +20,5 @@ extern uint32_t math_sync_tile_dst_index;
 extern uint32_t __local_mem_rodata_start_addr[];
 extern uint32_t __local_mem_rodata_end_addr[];
 extern uint32_t __firmware_start[];
+
+extern int32_t topk_replay_init;
