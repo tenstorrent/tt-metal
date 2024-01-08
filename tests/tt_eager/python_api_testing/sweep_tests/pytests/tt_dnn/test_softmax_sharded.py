@@ -27,6 +27,11 @@ seq_lens = [32, 64, 256, 384, 512]
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
+    "scale_mask",
+    [True, False],
+    ids=["mask", "no-mask"],
+)
+@pytest.mark.parametrize(
     "seq_len",
     seq_lens,
     ids=[f"seq_len_{x}" for x in seq_lens],
@@ -49,9 +54,8 @@ seq_lens = [32, 64, 256, 384, 512]
     ),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
-def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len):
+def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len, scale_mask):
     torch.manual_seed(0)
-    sm_op = ttl.operations.primary.transformers.scale_mask_softmax_in_place
 
     fuse_head = 768 // seq_len if 768 // seq_len > 0 else 1
 
@@ -119,9 +123,12 @@ def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len):
         im_data_format=ttl.tensor.DataType.BFLOAT16,
     )
 
-    tt_output_sharded = sm_op(
-        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
-    )
+    if scale_mask:
+        tt_output_sharded = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+            in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
+        )
+    else:
+        tt_output_sharded = ttl.operations.primary.softmax_in_place(in1_t_shard, program_config=program_config)
 
     tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
     tt_output_tensor = tt_output.cpu().to_torch().float()
@@ -131,7 +138,10 @@ def test_softmax(device, in_dtype, casual_mask, grid_size, seq_len):
     if casual_mask == False:
         attention_mask = attention_mask.reshape(batch, 1, 1, seq_len)
 
-    golden_output_tensor = input_tensor * scale + attention_mask
+    if scale_mask:
+        golden_output_tensor = input_tensor * scale + attention_mask
+    else:
+        golden_output_tensor = input_tensor
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
     allclose, output = comp_pcc(
