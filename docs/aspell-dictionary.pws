@@ -243,6 +243,7 @@ enqueue
 enqueued
 enum
 env
+eq
 eqz
 erf
 erfc
@@ -263,6 +264,8 @@ genindex
 gez
 grayskull
 grey
+gt
+gte
 gtz
 hardshrink
 hardsigmoid
@@ -317,6 +320,8 @@ logical_xor
 logical_xori
 logit
 loopback
+lt
+lte
 ltz
 lut
 lv
@@ -333,6 +338,7 @@ namespace
 nans
 ncrisc
 nd
+ne
 neg
 nextafter
 nez
