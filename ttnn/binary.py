@@ -177,9 +177,12 @@ def torch_squared_difference(x, y, *args, **kwargs):
 
 
 TTL_BINARY_FUNCTIONS = [
-    ("squared_difference", ttl.tensor.squared_difference, torch_squared_difference),
-    ("hypot", ttl.tensor.hypot, torch.hypot),
     ("atan2", ttl.tensor.atan2, torch.atan2),
+    ("hypot", ttl.tensor.hypot, torch.hypot),
+    ("logical_and", ttl.tensor.logical_and, torch.logical_and),
+    ("logical_or", ttl.tensor.logical_or, torch.logical_or),
+    ("logical_xor", ttl.tensor.logical_xor, torch.logical_xor),
+    ("squared_difference", ttl.tensor.squared_difference, torch_squared_difference),
 ]
 
 
@@ -188,8 +191,8 @@ for binary_function_name, ttl_binary_function, torch_function in TTL_BINARY_FUNC
 
 
 TTL_BINARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
-    ("subalpha", ttl.tensor.subalpha, torch.sub),
     ("addalpha", ttl.tensor.addalpha, torch.add),
+    ("subalpha", ttl.tensor.subalpha, torch.sub),
 ]
 
 for binary_function_name, ttl_binary_function, torch_function in TTL_BINARY_FUNCTIONS_WITH_FLOAT_PARAMETER:

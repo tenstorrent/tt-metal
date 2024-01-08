@@ -191,6 +191,7 @@ TTL_UNARY_FUNCTIONS = [
     ("lerp", ttl.tensor.lerp, torch.lerp),
     ("lgamma", ttl.tensor.lgamma, torch.lgamma),
     ("log", ttl.tensor.log, torch.log),
+    ("logical_not_unary", ttl.tensor.logical_not_unary, torch.logical_not),
     ("log10", ttl.tensor.log10, torch.log10),
     ("log1p", ttl.tensor.log1p, torch.log1p),
     ("log2", ttl.tensor.log2, torch.log2),
