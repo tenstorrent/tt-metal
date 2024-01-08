@@ -188,6 +188,7 @@ TTL_BINARY_FUNCTIONS = [
     ("nextafter", ttl.tensor.nextafter, torch.nextafter),
     ("outer", ttl.tensor.outer, torch.outer),
     ("squared_difference", ttl.tensor.squared_difference, torch_squared_difference),
+    ("xlogy", ttl.tensor.xlogy, torch.xlogy),
 ]
 
 
