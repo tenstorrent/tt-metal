@@ -228,6 +228,31 @@ TTL_UNARY_FUNCTIONS = [
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS:
     register_ttl_unary_function(unary_function_name, ttl_unary_function, torch_function)
 
+
+def torch_logical_andi(x, *args, **kwargs):
+    value = kwargs.pop("immediate")
+    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
+    return result
+
+
+def torch_logical_ori(x, *args, **kwargs):
+    value = kwargs.pop("immediate")
+    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
+    return result
+
+
+def torch_logical_xori(x, *args, **kwargs):
+    value = kwargs.pop("immediate")
+    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
+    return result
+
+
+def torch_logical_noti(x, *args, **kwargs):
+    immediate = kwargs.pop("immediate")
+    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
+    return result
+
+
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("pow", ttl_pow, torch.pow),
     ("elu", ttl.tensor.elu, F.elu),
@@ -239,6 +264,10 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("prelu", ttl.tensor.prelu, torch.prelu),
     ("polygamma", ttl.tensor.polygamma, torch.polygamma),
     ("logit", ttl.tensor.logit, torch.logit),
+    ("logical_ori", ttl.tensor.logical_ori, torch_logical_ori),
+    ("logical_andi", ttl.tensor.logical_andi, torch_logical_andi),
+    ("logical_xori", ttl.tensor.logical_xori, torch_logical_xori),
+    ("logical_noti", ttl.tensor.logical_noti, torch_logical_noti),
 ]
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
