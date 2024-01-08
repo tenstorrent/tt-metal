@@ -99,13 +99,19 @@ Unary Operations
 
 .. autofunction:: ttnn.rad2deg
 
+.. autofunction:: ttnn.rdiv
+
 .. autofunction:: ttnn.recip
 
 .. autofunction:: ttnn.relu
 
 .. autofunction:: ttnn.relu6
 
+.. autofunction:: ttnn.rpow
+
 .. autofunction:: ttnn.rsqrt
+
+.. autofunction:: ttnn.rsub
 
 .. autofunction:: ttnn.sigmoid
 
