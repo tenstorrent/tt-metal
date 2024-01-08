@@ -43,16 +43,6 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
-# def split_fused_qkv_and_split_heads(
-#     fused_qkv: torch.Tensor, head_size
-# ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-#     batch_size, *_ = fused_qkv.shape
-#     output = ttnn.transformer.split_fused_qkv_and_split_heads(
-#         fused_qkv, core_grid=(batch_size, 12), memory_config=WHISPER_MEMORY_CONFIG
-#     )
-#     return output
-
-
 def split_fused_qkv_and_split_heads(config, fused_qkv: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     head_size = config.d_model // config.encoder_attention_heads
     batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
