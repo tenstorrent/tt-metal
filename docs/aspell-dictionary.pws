@@ -170,6 +170,7 @@ asm
 async
 atan
 atanh
+atan2
 autoclass
 autofunction
 backend
