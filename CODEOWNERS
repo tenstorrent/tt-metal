@@ -54,6 +54,7 @@ docs/source/tt_metal/apis/host_apis/ @TT-billteng
 # tt_metal/hw/ckernels/**/module.mk @tt-rkim @davorchap
 # tt_metal/hw/ckernels/**/Makefile @tt-rkim @davorchap
 # tt_metal/hw/firmware/ @davorchap @pgkeller @DrJessop
+tt_metal/hw/ckernels/ @rtawfik01
 tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
 # tt_metal/hw/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
