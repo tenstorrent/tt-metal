@@ -6,3 +6,5 @@ Binary Operations
 .. autofunction:: ttnn.subalpha
 
 .. autofunction:: ttnn.hypot
+
+.. autofunction:: ttnn.atna2
