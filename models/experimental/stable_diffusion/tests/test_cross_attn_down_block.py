@@ -27,40 +27,26 @@ from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceCo
 
 
 @pytest.mark.parametrize("index", [1])  # FIXME: failing 0, 2 with L1 error.
-def test_run_cross_attn_down_block_real_input_inference(
-    device, index, model_location_generator
-):
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+def test_run_cross_attn_down_block_real_input_inference(device, index, model_location_generator):
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     dir_path = model_location_generator("tensor_files", model_subdir="StableDiffusion")
     attr_path = f"{dir_path}/CrossAttnDownBlock2D_inp__attr__block_{index}.pt"
-    attention_mask_path = (
-        f"{dir_path}/CrossAttnDownBlock2D_inp__attention_mask__block_{index}.pt"
-    )
-    cross_attn_kwargs_path = (
-        f"{dir_path}/CrossAttnDownBlock2D_inp__cross_attention_kwargs__block_{index}.pt"
-    )
+    attention_mask_path = f"{dir_path}/CrossAttnDownBlock2D_inp__attention_mask__block_{index}.pt"
+    cross_attn_kwargs_path = f"{dir_path}/CrossAttnDownBlock2D_inp__cross_attention_kwargs__block_{index}.pt"
     emb_path = f"{dir_path}/CrossAttnDownBlock2D_inp__emb__block_{index}.pt"
-    encoder_hidden_states_path = (
-        f"{dir_path}/CrossAttnDownBlock2D_inp__encoder_hidden_states__block_{index}.pt"
-    )
+    encoder_hidden_states_path = f"{dir_path}/CrossAttnDownBlock2D_inp__encoder_hidden_states__block_{index}.pt"
     sample_path = f"{dir_path}/CrossAttnDownBlock2D_inp__sample__block_{index}.pt"
 
     map_location = torch.device("cpu")
     sample = torch.load(sample_path, map_location=map_location)
     emb = torch.load(emb_path, map_location=map_location)
-    encoder_hidden_states = torch.load(
-        encoder_hidden_states_path, map_location=map_location
-    )
+    encoder_hidden_states = torch.load(encoder_hidden_states_path, map_location=map_location)
     attention_mask = torch.load(attention_mask_path, map_location=map_location)
-    cross_attention_kwargs = torch.load(
-        cross_attn_kwargs_path, map_location=map_location
-    )
+    cross_attention_kwargs = torch.load(cross_attn_kwargs_path, map_location=map_location)
 
     kwargs = torch.load(attr_path)
     base_address = f"down_block.{index}"
@@ -75,12 +61,8 @@ def test_run_cross_attn_down_block_real_input_inference(
     )
 
     tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
-    tt_emb = torch_to_tt_tensor_rm(
-        emb.unsqueeze(0).unsqueeze(0), device, put_on_device=False
-    )
-    tt_encoder_hidden_states = torch_to_tt_tensor_rm(
-        encoder_hidden_states.unsqueeze(0), device, put_on_device=False
-    )
+    tt_emb = torch_to_tt_tensor_rm(emb.unsqueeze(0).unsqueeze(0), device, put_on_device=False)
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states.unsqueeze(0), device, put_on_device=False)
 
     tt_cross_attn_down_block = TtCrossAttnDownBlock2D(
         **kwargs, state_dict=state_dict, base_address=f"down_blocks.{index}"
@@ -109,9 +91,7 @@ def test_run_cross_attn_down_block_real_input_inference(
 
 def test_run_cross_attn_down_block_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -184,9 +164,7 @@ def test_run_cross_attn_down_block_inference(device):
 
     tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
     tt_emb = torch_to_tt_tensor_rm(emb, device, put_on_device=False)
-    tt_encoder_hidden_states = torch_to_tt_tensor_rm(
-        encoder_hidden_states, device, put_on_device=False
-    )
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
 
     tt_output, list_out = tt_cross_attn_down_block(
         tt_sample,
@@ -195,7 +173,7 @@ def test_run_cross_attn_down_block_inference(device):
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs,
     )
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.95)

@@ -250,12 +250,14 @@ def test_perf(device, expected_inference_time, expected_compile_time):
     comments = f"image size: {height}x{width} - v1.4"
 
     prep_perf_report(
-        "batched_stable_diffusion",
-        BATCH_SIZE,
-        first_iter_time,
-        second_iter_time,
-        comments,
-        cpu_time,
+        model_name="batched_stable_diffusion",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time,
     )
     logger.info(f"Batched Stable Diffusion {comments} inference time: {second_iter_time}")
     logger.info(f"Batched Stable Diffusion {comments} compile time: {compile_time}")

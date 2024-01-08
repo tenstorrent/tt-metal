@@ -9,15 +9,30 @@ from PIL import Image
 from tqdm.auto import tqdm
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDiscreteScheduler, DPMSolverMultistepScheduler
+from diffusers import (
+    AutoencoderKL,
+    UNet2DConditionModel,
+    PNDMScheduler,
+    HeunDiscreteScheduler,
+    DPMSolverMultistepScheduler,
+)
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from models.utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler, \
-                                enable_persistent_kernel_cache, disable_persistent_kernel_cache
+from models.utility_functions import (
+    torch_to_tt_tensor,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+    comp_pcc,
+    comp_allclose_and_pcc,
+    Profiler,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+)
 
 import tt_lib as ttl
 from models.experimental.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -43,10 +58,12 @@ def save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
 
     torch.save(_latents, f"{pre_fix}{pre_fix2}latents_{iter}.pt")
 
-def guide(noise_pred, guidance_scale, t): # will return latents
+
+def guide(noise_pred, guidance_scale, t):  # will return latents
     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
     return noise_pred
+
 
 def latent_expansion(latents, scheduler, t):
     latent_model_input = torch.cat([latents] * 2)
@@ -55,33 +72,35 @@ def latent_expansion(latents, scheduler, t):
 
 
 def make_tt_unet(state_dict):
-    tt_unet = tt_unet_condition(sample_size = 64,
-                                in_channels = 4,
-                                out_channels = 4,
-                                center_input_sample = False,
-                                flip_sin_to_cos = True,
-                                freq_shift = 0,
-                                down_block_types = ['CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'DownBlock2D'],
-                                mid_block_type = 'UNetMidBlock2DCrossAttn',
-                                up_block_types = ['UpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D'],
-                                only_cross_attention = False,
-                                block_out_channels = [320, 640, 1280, 1280],
-                                layers_per_block = 2,
-                                downsample_padding = 1,
-                                mid_block_scale_factor = 1,
-                                act_fn = 'silu',
-                                norm_num_groups = 32,
-                                norm_eps = 1e-05,
-                                cross_attention_dim = 768,
-                                attention_head_dim = 8,
-                                dual_cross_attention = False,
-                                use_linear_projection = False,
-                                class_embed_type = None,
-                                num_class_embeds = None,
-                                upcast_attention = False,
-                                resnet_time_scale_shift = 'default',
-                                state_dict=state_dict,
-                                base_address="")
+    tt_unet = tt_unet_condition(
+        sample_size=64,
+        in_channels=4,
+        out_channels=4,
+        center_input_sample=False,
+        flip_sin_to_cos=True,
+        freq_shift=0,
+        down_block_types=["CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "DownBlock2D"],
+        mid_block_type="UNetMidBlock2DCrossAttn",
+        up_block_types=["UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"],
+        only_cross_attention=False,
+        block_out_channels=[320, 640, 1280, 1280],
+        layers_per_block=2,
+        downsample_padding=1,
+        mid_block_scale_factor=1,
+        act_fn="silu",
+        norm_num_groups=32,
+        norm_eps=1e-05,
+        cross_attention_dim=768,
+        attention_head_dim=8,
+        dual_cross_attention=False,
+        use_linear_projection=False,
+        class_embed_type=None,
+        num_class_embeds=None,
+        upcast_attention=False,
+        resnet_time_scale_shift="default",
+        state_dict=state_dict,
+        base_address="",
+    )
     return tt_unet
 
 
@@ -103,11 +122,15 @@ def demo():
     unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
 
     # 4. load the K-LMS scheduler with some fitting parameters.
-    scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    tt_scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = HeunDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
-    #scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    scheduler = LMSDiscreteScheduler(
+        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000
+    )
+    tt_scheduler = LMSDiscreteScheduler(
+        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000
+    )
+    # scheduler = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    # scheduler = HeunDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+    # scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
 
     torch_device = "cpu"
     vae.to(torch_device)
@@ -121,24 +144,28 @@ def demo():
     experiment_name = "mountain_fallback_nolatentupdate"
     # prompt = ["a photo of an astronaut riding a horse on mars"]
     # prompt = ["car"]
-    prompt = ["oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"]
+    prompt = [
+        "oil painting frame of Breathtaking mountain range with a clear river running through it, surrounded by tall trees and misty clouds, serene, peaceful, mountain landscape, high detail"
+    ]
 
-    height = 256                        # default height of Stable Diffusion
-    width = 256                         # default width of Stable Diffusion
-    num_inference_steps = 2           # Number of denoising steps
-    guidance_scale = 7.5                # Scale for classifier-free guidance
-    generator = torch.manual_seed(174)    # 10233 Seed generator to create the inital latent noise
+    height = 256  # default height of Stable Diffusion
+    width = 256  # default width of Stable Diffusion
+    num_inference_steps = 2  # Number of denoising steps
+    guidance_scale = 7.5  # Scale for classifier-free guidance
+    generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
 
     ## First, we get the text_embeddings for the prompt. These embeddings will be used to condition the UNet model.
     # Tokenizer and Text Encoder
-    text_input = tokenizer(prompt, padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt")
+    text_input = tokenizer(
+        prompt, padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt"
+    )
     text_embeddings = text_encoder(text_input.input_ids.to(torch_device))[0]
     max_length = text_input.input_ids.shape[-1]
     uncond_input = tokenizer([""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt")
     uncond_embeddings = text_encoder(uncond_input.input_ids.to(torch_device))[0]
 
-    #For classifier-free guidance, we need to do two forward passes: one with the conditioned input (text_embeddings),
+    # For classifier-free guidance, we need to do two forward passes: one with the conditioned input (text_embeddings),
     # and another with the unconditional embeddings (uncond_embeddings).
     # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
     text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
@@ -204,6 +231,9 @@ def demo():
         # perform guidance
         noise_pred = guide(noise_pred, guidance_scale, t)
         # compute the previous noisy sample x_t -> x_t-1
+        if UseDeviceConv.READY:
+            # force unpad noise_pred
+            noise_pred = noise_pred[:, :4, :, :]
         tt_latents = tt_scheduler.step(noise_pred, t, tt_latents).prev_sample
         save_image_and_latents(tt_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
         pcc_res[iter] = comp_allclose_and_pcc(latents_dict[iter], tt_latents)
@@ -213,7 +243,6 @@ def demo():
         # save things required!
         iter += 1
         enable_persistent_kernel_cache()
-
 
     latents = last_latents
     for key, val in pcc_res.items():
@@ -232,7 +261,8 @@ def demo():
 
     ttl.device.CloseDevice(device)
 
-'''
+
+"""
 @article{patil2022stable,
 author = {Patil, Suraj and Cuenca, Pedro and Lambert, Nathan and von Platen, Patrick},
 title = {Stable Diffusion with :firecracker: Diffusers},
@@ -240,5 +270,5 @@ journal = {Hugging Face Blog},
 year = {2022},
 note = {[https://huggingface.co/blog/rlhf](https://huggingface.co/blog/stable_diffusion)},
 }
-'''
+"""
 demo()

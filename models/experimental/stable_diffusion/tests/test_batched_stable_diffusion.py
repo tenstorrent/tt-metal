@@ -223,6 +223,9 @@ def test_batched_stable_diffusion(device):
         noise_pred = guide(noise_pred, guidance_scale, t)
 
         # compute the previous noisy sample x_t -> x_t-1
+        if UseDeviceConv.READY:
+            # force unpad noise_pred
+            noise_pred = noise_pred[:, :4, :, :]
         tt_latents = tt_scheduler.step(noise_pred, t, tt_latents).prev_sample
 
         # We need only one iteration

@@ -95,7 +95,7 @@ def test_run_basic_transformer_inference(device):
     logger.info(f"PASSED {passing[1]}")
 
 
-def test_run_transformer_inference():
+def test_run_transformer_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
