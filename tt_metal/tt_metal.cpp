@@ -17,7 +17,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
 
-#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt {

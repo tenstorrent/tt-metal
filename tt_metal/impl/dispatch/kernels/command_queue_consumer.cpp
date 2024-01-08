@@ -31,14 +31,12 @@ void kernel_main() {
     setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
 
     while (true) {
-
         kernel_profiler::init_profiler();
         kernel_profiler::mark_fw_start();
         kernel_profiler::mark_kernel_start();
 
         // Wait for producer to supply a command
         db_acquire(db_semaphore_addr, consumer_noc_encoding);
-        kernel_profiler::mark_time(5);
 
         // For each instruction, we need to jump to the relevant part of the device command
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, consumer_data_buffer_size>(db_buf_switch);

@@ -198,7 +198,7 @@ namespace kernel_profiler{
 
             uint32_t dram_address =
                 dram_profiler_address +
-                //TODO(MO): WORMHOLE SUPPORT : 15 is only foe GS
+                //TODO(MO): WORMHOLE SUPPORT : 15 is only for GS
                 (core_flat_id % 15) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 profiler_control_buffer[hostIndex] * sizeof(uint32_t);
@@ -211,8 +211,6 @@ namespace kernel_profiler{
                         dram_bank_dst_noc_addr,
                         profiler_control_buffer[deviceIndex] * sizeof(uint32_t));
 
-                //TODO(MO): This can go after for loop
-                noc_async_write_barrier();
                 profiler_control_buffer[hostIndex] = currEndIndex;
             }
             else
@@ -220,6 +218,7 @@ namespace kernel_profiler{
                 profiler_control_buffer[hostIndex] = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC+1;
             }
         }
+        noc_async_write_barrier();
 #endif //PROFILE_KERNEL
     }
 }

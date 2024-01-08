@@ -23,19 +23,19 @@ inline __attribute__((always_inline)) uint32_t get_flat_id(uint32_t coreX, uint3
 }
 
 namespace kernel_profiler{
-/**
- * L1 buffer structure for profiler markers
- * _____________________________________________________________________________________________________
- *|                  |                        |              |             |             |              |
-
- *|__________________|________________________|______________|_____________|_____________|______________|
- *
- * */
 
     constexpr static uint32_t PADDING_MARKER = ((1<<16) - 1);
     constexpr static uint32_t NOC_ALIGNMENT_FACTOR = 4;
 
-    enum BufferIndex {ID_HH, ID_HL, ID_LH, ID_LL, FW_START, FW_START_L, KERNEL_START, KERNEL_START_L, KERNEL_END, KERNEL_END_L, FW_END, FW_END_L, CUSTOM_MARKERS};
+    enum BufferIndex {
+        ID_HH, ID_HL,
+        ID_LH, ID_LL,
+        FW_START, FW_START_L,
+        KERNEL_START, KERNEL_START_L,
+        KERNEL_END, KERNEL_END_L,
+        FW_END, FW_END_L,
+        CUSTOM_MARKERS};
+
     enum ControlBuffer
     {
         HOST_BUFFER_END_INDEX_BR,

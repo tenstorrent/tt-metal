@@ -14,8 +14,6 @@
 
 #include "tools/cpuprof/cpuprof.h"
 #include "dev_msgs.h"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
 
 namespace tt {
 

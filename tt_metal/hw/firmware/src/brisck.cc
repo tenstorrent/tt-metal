@@ -17,7 +17,6 @@
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
 #include "dataflow_api.h"
 #include "noc_addr_ranges_gen.h"
 

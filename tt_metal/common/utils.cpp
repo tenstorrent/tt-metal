@@ -13,8 +13,8 @@ namespace utils
 {
     bool run_command(const string &cmd, const string &log_file, const bool verbose)
     {
-        //ZoneScoped;
-        //ZoneText( cmd.c_str(), cmd.length());
+        ZoneScoped;
+        ZoneText( cmd.c_str(), cmd.length());
         int ret;
         static std::mutex io_mutex;
         if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {

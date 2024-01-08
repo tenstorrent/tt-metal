@@ -13,7 +13,6 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
 
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
-    //CoreCoord end_core = start_core;
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores{.start=start_core, .end=end_core};
 
@@ -39,11 +38,9 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
     tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines}
-        );
+        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     EnqueueProgram(tt_metal::detail::GetCommandQueue(device), program, false);
-    Finish(tt_metal::detail::GetCommandQueue(device));
 
     return pass;
 }
@@ -59,16 +56,21 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        int loop_count = 300;
-        for (int i = 0; i < 1; i ++)
+        constexpr int device_loop_count = 300;
+        constexpr int host_loop_count = 5;
+
+        for (int i = 0; i < host_loop_count; i ++)
         {
-            pass &= RunCustomCycle(device, loop_count);
+            pass &= RunCustomCycle(device, device_loop_count);
         }
 
+        Finish(tt_metal::detail::GetCommandQueue(device));
         tt_metal::detail::DumpDeviceProfileResults(device);
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
+        pass = false;
+        // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
         log_error(LogTest, "System error message: {}", std::strerror(errno));

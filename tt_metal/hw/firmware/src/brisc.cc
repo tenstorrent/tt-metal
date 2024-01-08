@@ -277,6 +277,7 @@ inline void wait_ncrisc_trisc()
 }
 
 int main() {
+
     DEBUG_STATUS('I');
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;

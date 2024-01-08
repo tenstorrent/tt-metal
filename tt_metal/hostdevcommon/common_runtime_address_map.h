@@ -63,9 +63,7 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_T1 = PROFILER_L1_BUFFER_T0 + P
 constexpr static std::uint32_t PROFILER_L1_BUFFER_T2 = PROFILER_L1_BUFFER_T1 + PROFILER_L1_BUFFER_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_T2 + PROFILER_L1_BUFFER_SIZE;
 
-// This is the last address, move my CQ address after this
 constexpr static std::uint32_t PROFILER_L1_END_ADDRESS = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
-
 
 constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 constexpr static std::uint32_t PROFILER_CORE_COUNT = 120;
