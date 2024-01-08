@@ -400,6 +400,7 @@ smsg
 softmax
 sqrt
 square
+squared_difference
 sr
 src
 srca
