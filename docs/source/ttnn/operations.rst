@@ -22,3 +22,4 @@ Operations
    operations/unary
    operations/binary
    operations/relational
+   operations/ternary
