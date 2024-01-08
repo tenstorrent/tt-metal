@@ -25,16 +25,22 @@ void MAIN {
     constexpr uint32_t do_gamma                       = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta                        = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks                     = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h                        = get_compile_time_arg_val(4);
     constexpr uint32_t block_w                        = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_w                     = get_compile_time_arg_val(6);
+    constexpr uint32_t block_h_const                  = get_compile_time_arg_val(4);
+    volatile uint32_t block_h_volatile                = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_w_const               = get_compile_time_arg_val(6);
+    volatile uint32_t subblock_w_volatile             = get_compile_time_arg_val(6);
     constexpr uint32_t num_subblocks_w                = get_compile_time_arg_val(7);
     const bool is_allgather_worker                    = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_allgather_worker = get_compile_time_arg_val(9);
-    constexpr uint32_t num_tiles_per_block            = get_compile_time_arg_val(10);
+    constexpr uint32_t num_tiles_per_block            = get_compile_time_arg_val(9);
 
+    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(0) : 0;
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_intermed0);
+
+    // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
+    const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
+    const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
