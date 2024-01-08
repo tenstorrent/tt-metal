@@ -189,6 +189,7 @@ for binary_function_name, ttl_binary_function, torch_function in TTL_BINARY_FUNC
 
 TTL_BINARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("subalpha", ttl.tensor.subalpha, torch.sub),
+    ("addalpha", ttl.tensor.addalpha, torch.add),
 ]
 
 for binary_function_name, ttl_binary_function, torch_function in TTL_BINARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
