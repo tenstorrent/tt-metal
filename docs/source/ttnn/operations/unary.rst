@@ -77,6 +77,14 @@ Unary Operations
 
 .. autofunction:: ttnn.logit
 
+.. autofunction:: ttnn.logical_andi
+
+.. autofunction:: ttnn.logical_noti
+
+.. autofunction:: ttnn.logical_ori
+
+.. autofunction:: ttnn.logical_xori
+
 .. autofunction:: ttnn.mish
 
 .. autofunction:: ttnn.neg
