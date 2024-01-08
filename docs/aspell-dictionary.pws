@@ -158,6 +158,8 @@ acc
 acos
 acosh
 addalpha
+addcmul
+addcdiv
 addexp
 addr
 agrebenisan
@@ -326,6 +328,7 @@ ltz
 lut
 lv
 lz
+mac
 matmul
 maxdepth
 md
@@ -486,6 +489,7 @@ waypoint
 waypoints
 wget
 wh
+where
 ws
 xAA
 xFF
