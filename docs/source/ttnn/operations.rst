@@ -20,3 +20,4 @@ Operations
    operations/to_layout
    operations/to_torch
    operations/unary
+   operations/binary
