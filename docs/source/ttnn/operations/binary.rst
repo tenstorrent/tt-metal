@@ -19,6 +19,10 @@ Binary Operations
 
 .. autofunction:: ttnn.logical_xor
 
+.. autofunction:: ttnn.nextafter
+
+.. autofunction:: ttnn.outer
+
 .. autofunction:: ttnn.squared_difference
 
 .. autofunction:: ttnn.subalpha
