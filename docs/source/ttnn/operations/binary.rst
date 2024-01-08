@@ -7,6 +7,12 @@ Binary Operations
 
 .. autofunction:: ttnn.hypot
 
+.. autofunction:: ttnn.ldexp
+
+.. autofunction:: ttnn.logaddexp
+
+.. autofunction:: ttnn.logaddexp2
+
 .. autofunction:: ttnn.logical_and
 
 .. autofunction:: ttnn.logical_or
