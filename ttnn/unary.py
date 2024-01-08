@@ -254,6 +254,21 @@ def torch_logical_noti(x, *args, **kwargs):
     return result
 
 
+def torch_rpow(x, *args, **kwargs):
+    dim = kwargs["factor"]
+    return torch.pow(dim, x)
+
+
+def torch_rsub(x, *args, **kwargs):
+    dim = kwargs["factor"]
+    return torch.sub(dim, x)
+
+
+def torch_rdiv(x, *args, **kwargs):
+    dim = kwargs["factor"]
+    return dim / x
+
+
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("pow", ttl_pow, torch.pow),
     ("elu", ttl.tensor.elu, F.elu),
@@ -269,6 +284,9 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("logical_andi", ttl.tensor.logical_andi, torch_logical_andi),
     ("logical_xori", ttl.tensor.logical_xori, torch_logical_xori),
     ("logical_noti", ttl.tensor.logical_noti, torch_logical_noti),
+    ("rdiv", ttl.tensor.rdiv, torch_rdiv),
+    ("rsub", ttl.tensor.rsub, torch_rsub),
+    ("rpow", ttl.tensor.rpow, torch_rpow),
 ]
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
