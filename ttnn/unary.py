@@ -13,8 +13,6 @@ from ttnn.tensor import (
     DRAM_MEMORY_CONFIG,
     DEVICE_STORAGE_TYPE,
 )
-from ttnn.core import reshape, _reshape_to_4D
-from ttnn.decorators import decorate_operation
 import torch
 import torch.nn.functional as F
 
@@ -70,6 +68,59 @@ def register_ttl_unary_function(name, ttl_unary_function, torch_function):
 
         output_tensor = Tensor(ttl_output_tensor)
         output_tensor = reshape(output_tensor, original_shape)
+        return output_tensor
+
+    setattr(THIS_MODULE, name, unary_function)
+    __all__.append(name)
+    return unary_function
+
+
+def register_ttl_unary_function_reduce(name, ttl_unary_function, torch_function):
+    def _torch_unary(input_tensor: Tensor, **_):
+        import torch
+        import ttnn
+
+        input_tensor = ttnn.from_device(input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.to_torch(input_tensor)
+        assert torch_function, f"Torch function not implemented for {str(ttl_unary_function)}"
+        return torch_function(input_tensor)
+
+    @decorate_operation(torch_function=_torch_unary, name=name)
+    def unary_function(input_tensor: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
+        f"""{name}(input_tensor: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {name}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor)
+            >>> print(output)
+            Tensor([ 0, 2], dtype=bfloat16 )
+
+        """
+
+        original_shape = input_tensor.shape
+        input_tensor = _reshape_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
+
+        if not isinstance(input_tensor, Tensor):
+            raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
+
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
         return output_tensor
 
     setattr(THIS_MODULE, name, unary_function)
@@ -150,6 +201,19 @@ def ttl_pow(_t: ttl.tensor.Tensor, _exponent: Union[int, float], **kw_args):
     return ttl.tensor.power_fp(_t, _exponent, **kw_args)
 
 
+# Stats Ops
+def torch_var_hw(x, *args, **kwargs):
+    return torch.var(x, [-1, -2], keepdim=True)
+
+
+def torch_std_hw(x, *args, **kwargs):
+    return torch.std(x, [-1, -2], keepdim=True)
+
+
+def torch_mean_hw(x, *args, **kwargs):
+    return torch.mean(x, [-1, -2], keepdim=True)
+
+
 TTL_UNARY_FUNCTIONS = [
     ("exp", ttl.tensor.exp, torch.exp),
     ("tanh", ttl.tensor.tanh, torch.tanh),
@@ -224,13 +288,20 @@ TTL_UNARY_FUNCTIONS = [
     ("tan", ttl.tensor.tan, torch.tan),
     ("tanh", ttl.tensor.tanh, torch.tanh),
     ("tanhshrink", ttl.tensor.tanhshrink, F.tanhshrink),
-    ("tril", ttl.tensor.tril, torch.tril),
-    ("triu", ttl.tensor.triu, torch.triu),
+    ("var_hw", ttl.tensor.var_hw, torch_var_hw),
+    ("mean_hw", ttl.tensor.mean_hw, torch_mean_hw),
+    ("std_hw", ttl.tensor.std_hw, torch_std_hw),
+    ("normalize_hw", ttl.tensor.normalize_hw, None),
+    ("normalize_global", ttl.tensor.normalize_global, None),
 ]
 
+REDUCE_UNARY_FUNCTIONS = ["var_hw", "mean_hw", "std_hw", "normalize_hw", "normalize_global"]
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS:
-    register_ttl_unary_function(unary_function_name, ttl_unary_function, torch_function)
+    if unary_function_name in REDUCE_UNARY_FUNCTIONS:
+        register_ttl_unary_function_reduce(unary_function_name, ttl_unary_function, torch_function)
+    else:
+        register_ttl_unary_function(unary_function_name, ttl_unary_function, torch_function)
 
 
 def torch_logical_andi(x, *args, **kwargs):
@@ -290,6 +361,8 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("rdiv", ttl.tensor.rdiv, torch_rdiv),
     ("rsub", ttl.tensor.rsub, torch_rsub),
     ("rpow", ttl.tensor.rpow, torch_rpow),
+    ("tril", ttl.tensor.tril, torch.tril),
+    ("triu", ttl.tensor.triu, torch.triu),
 ]
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
