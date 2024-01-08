@@ -70,6 +70,8 @@ from ttnn.binary import *
 from ttnn.relational import *
 from ttnn.ternary import *
 from ttnn.createops import *
+from ttnn.complex import *
+
 
 import ttnn.decorators
 import ttnn.transformer
