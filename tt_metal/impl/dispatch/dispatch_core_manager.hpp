@@ -40,8 +40,9 @@ class dispatch_core_manager {
     dispatch_core_manager(const dispatch_core_manager &) = delete;
     dispatch_core_manager(dispatch_core_manager &&other) noexcept = delete;
 
-    static dispatch_core_manager &get() {
-        static dispatch_core_manager inst;
+    // Ugly to accept num HW CQs here but it is needed to pull the correct number of initially available dispatch cores for assignment
+    static dispatch_core_manager &get(uint8_t num_hw_cqs) {
+        static dispatch_core_manager inst = dispatch_core_manager(num_hw_cqs);
         return inst;
     }
 
@@ -104,10 +105,10 @@ class dispatch_core_manager {
     }
 
    private:
-    dispatch_core_manager() {
+    dispatch_core_manager(uint8_t num_hw_cqs) {
         for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
             std::list<CoreCoord> &logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
-            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, 1)) {   // TODO: DO NOT HARDCODE NUMBER OF CQS HERE
+            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, num_hw_cqs)) {
                 logical_dispatch_cores.push_back(logical_dispatch_core);
             }
         }

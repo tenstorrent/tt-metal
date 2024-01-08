@@ -115,7 +115,6 @@ class SystemMemoryManager {
     char* cq_sysmem_start;
     vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size;
-    // TODO: add comment explaining why this is added
     uint32_t channel_offset;
 
    public:
@@ -137,12 +136,12 @@ class SystemMemoryManager {
         this->channel_offset = DeviceCommand::MAX_HUGEPAGE_SIZE * channel;
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair issue_queue_interface_core = dispatch_core_manager::get().issue_queue_interface_core(device_id, channel, cq_id);
+            tt_cxy_pair issue_queue_interface_core = dispatch_core_manager::get(num_hw_cqs).issue_queue_interface_core(device_id, channel, cq_id);
             const std::tuple<uint32_t, uint32_t> issue_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(issue_queue_interface_core.chip, get_physical_dispatch_coord(issue_queue_interface_core))).value();
             auto [issue_tlb_offset, issue_tlb_size] = issue_interface_tlb_data;
             this->issue_byte_addrs[cq_id] = issue_tlb_offset + CQ_ISSUE_WRITE_PTR % issue_tlb_size;
 
-            tt_cxy_pair completion_queue_interface_core = dispatch_core_manager::get().completion_queue_interface_core(device_id, channel, cq_id);
+            tt_cxy_pair completion_queue_interface_core = dispatch_core_manager::get(num_hw_cqs).completion_queue_interface_core(device_id, channel, cq_id);
             const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(completion_queue_interface_core.chip, get_physical_dispatch_coord(completion_queue_interface_core))).value();
             auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
             this->completion_byte_addrs[cq_id] = completion_tlb_offset + CQ_COMPLETION_READ_PTR % completion_tlb_size;
@@ -197,6 +196,9 @@ class SystemMemoryManager {
     }
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
+        // this->cq_sysmem_start gives start of hugepage for a given channel from perspective of host
+        //  but all rd/wr pointers include channel offset from address 0 to match device side pointers
+        //  so channel offset needs to be subtracted to get address relative to channel
         std::cout << "memcopy to address cq_sysmem_start + " << (write_ptr - this->channel_offset) << std::endl;
         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 

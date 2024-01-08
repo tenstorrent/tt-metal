@@ -17,8 +17,9 @@ void measure_latency(string kernel_name) {
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::get().issue_queue_interface_core(device->id(), channel, 0);
-    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::get().completion_queue_interface_core(device->id(), channel, 0);
+    uint8_t num_hw_cqs = device->num_hw_cqs();
+    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).issue_queue_interface_core(device->id(), channel, 0);
+    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).completion_queue_interface_core(device->id(), channel, 0);
 
     auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
 

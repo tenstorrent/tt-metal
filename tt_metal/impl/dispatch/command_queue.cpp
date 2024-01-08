@@ -961,7 +961,8 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     map<uint64_t, unique_ptr<Buffer>>& program_to_buffer = this->program_to_buffer(this->device->id());
     if (not program_to_buffer.count(program_id)) {
         stall = true;
-        tt_cxy_pair logical_dispatch_location = dispatch_core_manager::get().command_dispatcher_core(this->device->id(), tt::Cluster::instance().get_assigned_channel_for_device(this->device->id()), this->command_queue_id);
+        uint8_t num_hw_cqs = this->device->num_hw_cqs();
+        tt_cxy_pair logical_dispatch_location = dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(this->device->id(), tt::Cluster::instance().get_assigned_channel_for_device(this->device->id()), this->command_queue_id);
         CoreCoord logical_dispatch_core(logical_dispatch_location.x, logical_dispatch_location.y);
         ProgramMap program_to_device_map = ConstructProgramMap(this->device, program, logical_dispatch_core);
 

@@ -370,8 +370,8 @@ namespace tt::tt_metal{
             }
 
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-            // Currently, only the first command queue is responsible for enqueuing programs
-            tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get().command_dispatcher_core(device->id(), channel, 0);
+            const uint8_t cq_id = 0; // Currently, only the first command queue is responsible for enqueuing programs
+            tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).command_dispatcher_core(device->id(), channel, cq_id);
             CoreCoord physical_enqueue_program_dispatch_core = get_physical_dispatch_coord(enqueue_program_dispatch_core);
 
             jit_build_genfiles_noc_addr_ranges_header(
@@ -463,8 +463,8 @@ namespace tt::tt_metal{
                     // std::cout << "Loading dispatch kernels on device " << device->id() << " that will service device " << device_id << std::endl;
 
                     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                        tt_cxy_pair issue_q_interface_location = dispatch_core_manager::get().issue_queue_interface_core(device_id, channel, cq_id);
-                        tt_cxy_pair completion_q_interface_location = dispatch_core_manager::get().completion_queue_interface_core(device_id, channel, cq_id);
+                        tt_cxy_pair issue_q_interface_location = dispatch_core_manager::get(num_hw_cqs).issue_queue_interface_core(device_id, channel, cq_id);
+                        tt_cxy_pair completion_q_interface_location = dispatch_core_manager::get(num_hw_cqs).completion_queue_interface_core(device_id, channel, cq_id);
 
                         TT_ASSERT(issue_q_interface_location.chip == device->id() and completion_q_interface_location.chip == device->id(),
                             "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_interface_location.chip, completion_q_interface_location.chip, device->id());
@@ -476,6 +476,12 @@ namespace tt::tt_metal{
 
                         // std::cout << "Issue queue - logical location: " << issue_q_interface_location.str() << " phyical: " << issue_q_physical_core.str()
                         //           << " Completion queue - logical location: " << completion_q_interface_location.str() << " physical: "  << completion_q_physical_core.str() << std::endl;
+                        CoreCoord consumer_physical_core = completion_q_physical_core;
+                        if (device_id != device->id()) {
+                            // This means the issue queue and completion queue interfaces that service a remote device are being set up
+                            // the issue queue interface needs to send fast dispatch packets to the "src" ethernet core
+                            consumer_physical_core = device->ethernet_core_from_logical_core(*device->get_active_ethernet_cores().begin());
+                        }
 
                         std::map<string, string> producer_defines = {
                             {"CONSUMER_NOC_X", std::to_string(completion_q_physical_core.x)},
