@@ -59,6 +59,7 @@ from ttnn.core import (
 )
 
 from ttnn.unary import *
+from ttnn.binary import *
 
 import ttnn.decorators
 import ttnn.transformer
