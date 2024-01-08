@@ -24,6 +24,7 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 
 void kernel_launch() {
 
+#if !defined(DEBUG_NULL_KERNELS) || defined(DISPATCH_KERNEL)
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE);
 
     noc_local_state_init(noc_index);
@@ -31,4 +32,5 @@ void kernel_launch() {
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+#endif
 }

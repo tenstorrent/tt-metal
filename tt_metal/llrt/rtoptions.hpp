@@ -36,6 +36,8 @@ class RunTimeOptions {
 
     bool profiler_enabled;
 
+    bool null_kernels;
+
 public:
     RunTimeOptions();
 
@@ -92,6 +94,9 @@ public:
     }
 
     inline bool get_profiler_enabled() { return profiler_enabled; }
+
+    inline void set_kernels_nullified(bool v) { null_kernels = v; }
+    inline bool get_kernels_nullified() { return null_kernels; }
 
 private:
     // Helper functions to parse DPrint-specific environment vaiables.
