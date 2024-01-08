@@ -7,4 +7,6 @@ Binary Operations
 
 .. autofunction:: ttnn.hypot
 
-.. autofunction:: ttnn.atna2
+.. autofunction:: ttnn.atan2
+
+.. autofunction:: ttnn.addalpha

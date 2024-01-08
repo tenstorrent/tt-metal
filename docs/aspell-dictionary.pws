@@ -157,6 +157,7 @@ abs
 acc
 acos
 acosh
+addalpha
 addexp
 addr
 agrebenisan
