@@ -370,6 +370,7 @@ rad
 randint
 randn
 rb
+rdiv
 recip
 reconfig
 regs
@@ -379,6 +380,7 @@ repo
 resnet
 riscv
 rmsg
+rpow
 rsqrt
 rst
 rsub
