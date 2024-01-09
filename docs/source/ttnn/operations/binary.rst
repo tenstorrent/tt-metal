@@ -3,6 +3,8 @@ Binary Operations
 
 .. autofunction:: ttnn.addalpha
 
+.. autofunction:: ttnn.assign
+
 .. autofunction:: ttnn.atan2
 
 .. autofunction:: ttnn.hypot
