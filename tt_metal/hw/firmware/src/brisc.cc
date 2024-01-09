@@ -350,13 +350,15 @@ int main() {
 
         mailboxes->launch.run = RUN_MSG_DONE;
 
+
+        kernel_profiler::mark_fw_end();
+        kernel_profiler::send_profiler_data_to_dram();
+
         // Notify dispatcher core that it has completed
         if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
             uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
             noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
         }
-        kernel_profiler::mark_fw_end();
-        kernel_profiler::send_profiler_data_to_dram();
     }
 
     return 0;

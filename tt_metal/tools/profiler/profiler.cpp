@@ -192,6 +192,8 @@ void DeviceProfiler::readRiscProfilerResults(
     std::cout << "Control Buffer :" << control_buffer [2] << "," << control_buffer [7] << "," << std::endl;
     std::cout << "Control Buffer :" << control_buffer [3] << "," << control_buffer [8] << "," << std::endl;
     std::cout << "Control Buffer :" << control_buffer [4] << "," << control_buffer [9] << "," << std::endl;
+
+    std::cout << "\nDRAM SIZE PER RISC :" << PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC << " L1 SIZE :" << PROFILER_L1_VECTOR_SIZE << std::endl;
     }
 #endif
 
@@ -201,9 +203,9 @@ void DeviceProfiler::readRiscProfilerResults(
         if (bufferEndIndex > 0)
         {
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
-            if (bufferEndIndex > PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC)
+            if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
-                bufferEndIndex = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
+                bufferEndIndex = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
             }
 
             uint16_t programID = 0;

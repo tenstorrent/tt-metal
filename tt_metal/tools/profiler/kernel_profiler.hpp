@@ -56,6 +56,15 @@ namespace kernel_profiler{
         volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T1);
         volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T2);
 
+        for (int i = ID_HH; i < CUSTOM_MARKERS; i ++)
+        {
+            briscBuffer[i] = 0;
+            ncriscBuffer[i] = 0;
+            trisc0Buffer[i] = 0;
+            trisc1Buffer[i] = 0;
+            trisc2Buffer[i] = 0;
+        }
+
         briscBuffer[ID_LH] = briscKernelID;
         ncriscBuffer[ID_LH] = ncriscKernelID;
         trisc0Buffer[ID_LH] = triscsKernelID;
@@ -203,7 +212,7 @@ namespace kernel_profiler{
                 hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
-            if ( currEndIndex < PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC)
+            if ( currEndIndex < PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
                 uint64_t dram_bank_dst_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, dram_address);
                 noc_async_write(
@@ -215,7 +224,7 @@ namespace kernel_profiler{
             }
             else
             {
-                profiler_control_buffer[hostIndex] = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC+1;
+                profiler_control_buffer[hostIndex] = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC+1;
             }
         }
         noc_async_write_barrier();
