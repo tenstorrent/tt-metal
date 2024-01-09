@@ -32,6 +32,10 @@ TILE_LAYOUT = Layout.TILE
 StorageType = ttl.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
+LossMode = ttl.tensor.LossReductionMode
+LOSS_MODE_NONE = LossMode.NONE
+LOSS_MODE_SUM = LossMode.SUM
+LOSS_MODE_MEAN = LossMode.MEAN
 
 TILE_SIZE = 32
 
