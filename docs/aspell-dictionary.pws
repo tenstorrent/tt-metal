@@ -299,6 +299,7 @@ intrinsics
 iomanip
 ios
 ipynb
+isclose
 isfinite
 isinf
 isnan
