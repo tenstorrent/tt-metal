@@ -293,6 +293,10 @@ TTL_UNARY_FUNCTIONS = [
     ("std_hw", ttl.tensor.std_hw, torch_std_hw),
     ("normalize_hw", ttl.tensor.normalize_hw, None),
     ("normalize_global", ttl.tensor.normalize_global, None),
+    ("ones_like", ttl.tensor.ones_like, torch.ones_like),
+    ("zeros_like", ttl.tensor.zeros_like, torch.zeros_like),
+    ("softsign", ttl.tensor.softsign, F.softsign),
+    ("softplus", ttl.tensor.softplus, F.softplus),
 ]
 
 REDUCE_UNARY_FUNCTIONS = ["var_hw", "mean_hw", "std_hw", "normalize_hw", "normalize_global"]
@@ -363,6 +367,8 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("rpow", ttl.tensor.rpow, torch_rpow),
     ("tril", ttl.tensor.tril, torch.tril),
     ("triu", ttl.tensor.triu, torch.triu),
+    ("full_like", ttl.tensor.full_like, torch.full_like),
+    ("softshrink", ttl.tensor.softshrink, F.softshrink),
 ]
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
