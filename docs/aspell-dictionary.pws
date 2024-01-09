@@ -331,11 +331,13 @@ lut
 lv
 lz
 mac
+maeloss
 matmul
 maxdepth
 md
 mish
 modindex
+mseloss
 mul
 multicast
 multihead

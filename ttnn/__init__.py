@@ -29,6 +29,10 @@ from ttnn.tensor import (
     load_tensor,
     dump_tensor,
     has_storage_type_of,
+    LossMode,
+    LOSS_MODE_NONE,
+    LOSS_MODE_SUM,
+    LOSS_MODE_MEAN,
 )
 
 from ttnn.core import (
