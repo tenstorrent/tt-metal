@@ -49,6 +49,8 @@ Unary Operations
 
 .. autofunction:: ttnn.hardtanh
 
+.. autofunction:: ttnn.heaviside
+
 .. autofunction:: ttnn.i0
 
 .. autofunction:: ttnn.isfinite
