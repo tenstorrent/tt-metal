@@ -23,6 +23,10 @@ Binary Operations
 
 .. autofunction:: ttnn.logical_xor
 
+.. autofunction:: ttnn.maeloss
+
+.. autofunction:: ttnn.mseloss
+
 .. autofunction:: ttnn.nextafter
 
 .. autofunction:: ttnn.outer
