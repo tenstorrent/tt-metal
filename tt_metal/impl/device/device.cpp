@@ -257,7 +257,8 @@ void Device::clear_l1_state() {
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
         std::vector<uint32_t> init_erisc_info_vec(
-            eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
+            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE) / sizeof(uint32_t),
+            0);
 
         llrt::write_hex_vec_to_core(
             this->id(), physical_core, init_erisc_info_vec, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
