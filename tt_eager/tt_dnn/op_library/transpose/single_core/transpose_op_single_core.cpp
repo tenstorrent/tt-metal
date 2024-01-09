@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     //TODO: move this kernel, currently being used in reduce, can't move to op library
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 

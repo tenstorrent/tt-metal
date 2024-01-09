@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines});
 

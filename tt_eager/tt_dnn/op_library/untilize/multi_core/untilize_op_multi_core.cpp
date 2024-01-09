@@ -279,7 +279,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             };
             unary_writer_kernel_id = CreateKernel(
                 program,
-                "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp",
+                "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
                 all_cores,
                 WriterDataMovementConfig{.compile_args = writer_ct_args});
         } else {
@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
             unary_writer_kernel_id = CreateKernel(
                 program,
-                "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
+                "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
                 all_cores,
                 WriterDataMovementConfig{.compile_args = writer_ct_args});
         }
@@ -695,7 +695,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         };
         unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
             WriterDataMovementConfig{.compile_args = writer_ct_args});
     }

@@ -70,13 +70,13 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
 
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_8bank.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_8bank.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/writer_bmm_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
     };
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/bmm.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
     );

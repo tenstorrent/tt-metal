@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor &input, Ten
     std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
     KernelHandle kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
+        "tt_eager/tt_dnn/op_library/move/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
         shard_grid,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::NOC_1,

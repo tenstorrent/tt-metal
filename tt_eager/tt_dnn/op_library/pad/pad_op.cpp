@@ -73,11 +73,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
     KernelHandle reader_kernel_id = CreateKernel(program,
-                                                        "tt_eager/tt_dnn/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+                                                        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         cores,
                                                         ReaderDataMovementConfig{.compile_args = reader_ct_args});
     KernelHandle writer_kernel_id = CreateKernel(program,
-                                                        "tt_eager/tt_dnn/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+                                                        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         cores,
                                                         WriterDataMovementConfig{.compile_args = writer_ct_args});
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
     KernelHandle reader_kernel_id = CreateKernel(program,
-                                                        "tt_eager/tt_dnn/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
+                                                        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
                                                         core,
                                                         ReaderDataMovementConfig{.compile_args = reader_ct_args});
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
@@ -352,7 +352,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/pad_dims_rm_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/pad_dims_rm_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = compile_time_args_vec});
 
@@ -473,7 +473,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 

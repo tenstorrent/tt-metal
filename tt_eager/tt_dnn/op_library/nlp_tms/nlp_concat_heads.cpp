@@ -88,12 +88,12 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         };
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/nlp_tms/kernels/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
+            "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig{.compile_args = compile_time_args});
         writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/nlp_tms/kernels/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
+            "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig{.compile_args = compile_time_args});
     } else {
@@ -112,7 +112,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         };
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/nlp_tms/kernels/reader_tm_tile_layout_nlp_concat_heads.cpp",
+            "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 

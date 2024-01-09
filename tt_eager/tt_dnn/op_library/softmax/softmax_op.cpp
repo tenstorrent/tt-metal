@@ -126,14 +126,14 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
         softmax_defines["CAUSAL_MASK"] = "1";
     }
     auto reader_kernels_id = CreateKernel(
-        program, "tt_eager/tt_dnn/op_library/softmax/kernels/reader_unary_interleaved_sm.cpp", all_device_cores,
+        program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
         tt_metal::ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args,
             .defines = softmax_defines
     });
 
     auto writer_kernels_id = CreateKernel(
-        program, "tt_eager/tt_dnn/op_library/softmax/kernels/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
+        program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
         tt_metal::WriterDataMovementConfig{
             .compile_args = writer_compile_time_args
     });
@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
     auto softmax_kernels_id = CreateKernel(
-        program, "tt_eager/tt_dnn/kernels/compute/softmax.cpp", all_device_cores,
+        program, "tt_eager/tt_dnn/op_library/softmax/kernels/compute/softmax.cpp", all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
             .compile_args = {},
@@ -488,7 +488,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
     auto softmax_kernels_id = CreateKernel(
-        program, "tt_eager/tt_dnn/op_library/softmax/kernels/compute/softmax.cpp", all_device_cores,
+        program, "tt_eager/tt_dnn/op_library/softmax/kernels/compute/softmax_sharded.cpp", all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,

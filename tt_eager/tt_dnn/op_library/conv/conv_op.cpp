@@ -1223,7 +1223,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
-    reader_kernel = "tt_eager/tt_dnn/kernels/dataflow/reader_binary_dtx.cpp";
+    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_binary_dtx.cpp";
     reader_rt_args = {
         // arguments for act
         act_dram_addr,
@@ -1251,7 +1251,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     string writer_kernel;
     vector<uint32_t> writer_rt_args;
     if (untilize_out) {
-        writer_kernel = "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
+        writer_kernel = "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
         writer_rt_args = {
             out_dram_addr,
             act_block_h_datums,
@@ -1267,7 +1267,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         };
     } else {
         assert(false && "Tiled output unsupported");
-        writer_kernel = "tt_eager/tt_dnn/kernels/dataflow/writer_matmul_tile_layout.cpp";
+        writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_matmul_tile_layout.cpp";
         writer_rt_args = {
             out_dram_addr,
             0,

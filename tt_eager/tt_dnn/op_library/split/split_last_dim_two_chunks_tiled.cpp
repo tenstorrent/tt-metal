@@ -196,31 +196,17 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
+        "tt_eager/tt_dnn/op_library/split/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args});
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
+        "tt_eager/tt_dnn/op_library/split/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig{
             .compile_args = writer_compile_time_args});
-
-    // Dummy compute kernel
-    std::vector<uint32_t> compute_args = {0};  // dummy
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto dummy_compute_kernel_id = tt_metal::CreateKernel(
-        program,
-        "tt_metal/kernels/compute/blank.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args});
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

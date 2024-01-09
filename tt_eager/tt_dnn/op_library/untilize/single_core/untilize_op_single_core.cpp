@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     // Untilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
@@ -300,7 +300,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     // Untilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_unpad_dims_split_rows.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_unpad_dims_split_rows.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
