@@ -16,7 +16,6 @@
 #include "hostdevcommon/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
 
 namespace tt {
 
@@ -243,6 +242,14 @@ void DeviceProfiler::readRiscProfilerResults(
             PROFILER_L1_BUFFER_CONTROL);
 }
 
+void DeviceProfiler::firstTimestamp(uint64_t timestamp)
+{
+    if (timestamp < smallest_timestamp)
+    {
+        smallest_timestamp = timestamp;
+    }
+}
+
 void DeviceProfiler::dumpResultToFile(
         uint16_t programID,
         int chip_id,
@@ -278,19 +285,20 @@ void DeviceProfiler::dumpResultToFile(
     }
     core_x--;
 
-    uint64_t threadID = core_x*1000000+core_y*10000+risc*100;
-    uint64_t eventID = timer_id + threadID;
+    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(chip_id, core_x, core_y, risc, timer_id);
 
-    if (device_data.find (eventID) != device_data.end())
+    if (device_data.find (event) != device_data.end())
     {
         ZoneScopedNC("eventFound",tracy::Color::Green);
-        device_data.at(eventID).push_back(timestamp);
+        device_data.at(event).push_back(timestamp);
     }
     else
     {
         ZoneScopedNC("eventNotFound",tracy::Color::Red);
-        device_data.emplace(eventID,std::list<uint64_t>{timestamp});
+        device_data.emplace(event,std::list<uint64_t>{timestamp});
     }
+
+    firstTimestamp(timestamp);
 
     log_file << chip_id << ", " << core_x << ", " << core_y << ", " << riscName[risc] << ", " << programID << ", ";
     log_file << timer_id << ", ";
@@ -389,18 +397,18 @@ void DeviceProfiler::dumpResults (
 void DeviceProfiler::pushTracyDeviceResults(int device_id)
 {
 #if defined(PROFILER)
-    tracyTTCtx->PopulateCLContext();
+    tracyTTCtx->PopulateCLContext( smallest_timestamp, 1000.f / (float)device_core_frequency);
 
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
     for (auto& data: device_data)
     {
         ZoneScopedNC("Marker",tracy::Color::Red);
-        uint64_t threadID = 100*(data.first/100);
-        uint64_t row = int(threadID / 1000000);
-        uint64_t col = int((threadID-row*1000000)/10000);
-        uint64_t risc = int ((threadID-row*1000000-col*10000)/100);
-        uint64_t markerID = data.first - threadID;
+        uint64_t threadID = data.first.get_thread_id();
+        uint64_t row = data.first.core_y;
+        uint64_t col = data.first.core_x;
+        uint64_t risc = data.first.risc;
+        uint64_t markerID = data.first.marker;
 
         if (row == 0 && col == 0 && markerID == 1)
         {

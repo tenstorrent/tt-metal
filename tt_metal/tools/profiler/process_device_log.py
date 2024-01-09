@@ -1148,7 +1148,8 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
     if not no_print_stats:
         print_stats(devicesData, setup)
         for opCount, op in enumerate(devicesData["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]):
-            print(f"{opCount +1} : {op['analysis']['OPs']['series']}")
+            if "analysis" in op.keys():
+                print(f"{opCount +1} : {op['analysis']['OPs']['series']}")
 
     timelineFigs = {}
     if not no_plots:

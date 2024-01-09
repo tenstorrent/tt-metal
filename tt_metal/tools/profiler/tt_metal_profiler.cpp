@@ -10,6 +10,7 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
 
 namespace tt {
 
@@ -30,6 +31,7 @@ void InitDeviceProfiler(Device *device){
 #if defined(PROFILER)
     ZoneScoped;
 
+    tracy::set_cpu_time();
     tt::tt_metal::InterleavedBufferConfig dram_config{
                 .device= device,
                 .size = PROFILER_FULL_HOST_BUFFER_SIZE,

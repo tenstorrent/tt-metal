@@ -87,6 +87,9 @@ class DeviceProfiler {
         // Device frequency
         int device_core_frequency;
 
+        //Smallest timestamp
+        uint64_t smallest_timestamp = (1lu << 63);
+
         // Output Dir for device Profile Logs
         std::filesystem::path output_dir;
 
@@ -106,13 +109,16 @@ class DeviceProfiler {
                 vector<std::uint32_t> profile_buffer,
                 const CoreCoord &worker_core);
 
+        //Track the smallest timestamp dumped to file
+        void firstTimestamp(uint64_t timestamp);
+
     public:
         //Constructor
         DeviceProfiler();
         ~DeviceProfiler();
 
         // Map for storing dvice data
-        std::map<uint64_t,std::list<uint64_t>> device_data;
+        std::map<tracy::TTDeviceEvent, std::list<uint64_t>, tracy::TTDeviceEvent_cmp> device_data;
 
         //TracyContext
         TracyCLCtx tracyTTCtx;
