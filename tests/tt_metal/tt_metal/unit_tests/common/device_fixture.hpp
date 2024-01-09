@@ -33,6 +33,7 @@ class DeviceFixture : public ::testing::Test {
             auto* device = tt::tt_metal::CreateDevice(id);
             devices_.push_back(device);
         }
+        tt::Cluster::instance().launch_internal_routing_for_ethernet_cores();
     }
 
     void TearDown() override {
