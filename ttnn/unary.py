@@ -344,6 +344,12 @@ def torch_rdiv(x, *args, **kwargs):
     return dim / x
 
 
+def torch_heaviside(x, *args, **kwargs):
+    value = kwargs.pop("scalar")
+    result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
+    return result
+
+
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("pow", ttl_pow, torch.pow),
     ("elu", ttl.tensor.elu, F.elu),
@@ -352,6 +358,7 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
     ("threshold", ttl.tensor.threshold, torch.threshold),
     ("leaky_relu", ttl.tensor.leaky_relu, F.leaky_relu),
     ("hardshrink", ttl.tensor.hardshrink, F.hardshrink),
+    ("heaviside", ttl.tensor.heaviside, torch_heaviside),
     ("prelu", ttl.tensor.prelu, torch.prelu),
     ("polygamma", ttl.tensor.polygamma, torch.polygamma),
     ("logit", ttl.tensor.logit, torch.logit),
