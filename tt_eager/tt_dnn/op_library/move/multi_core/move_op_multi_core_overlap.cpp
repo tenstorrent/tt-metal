@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     KernelHandle kernel_id = CreateKernel(
         program,
-        tilized ? "tt_eager/tt_dnn/op_library/move/kernels/move_interleaved_with_overlap.cpp" : "tt_eager/tt_dnn/op_library/move/kernels/move_stick_layout_interleaved_with_overlap.cpp",
+        tilized ? "tt_eager/tt_dnn/op_library/move/kernels/dataflow/move_interleaved_with_overlap.cpp" : "tt_eager/tt_dnn/op_library/move/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
         all_cores,
         DataMovementConfig{.compile_args = compile_time_args}
     );

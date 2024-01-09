@@ -206,14 +206,14 @@ operation::ProgramWithCallbacks layernorm_(
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     auto reader_kernels_id = CreateKernel(
         program,
-        use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln.cpp",
+        use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines}
     );
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
+        "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args}
     );
@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks layernorm_(
     bool math_approx_mode = true;
     auto compute_kernels_id = CreateKernel(
         program,
-        rms_norm ? "tt_eager/tt_dnn/kernels/compute/rmsnorm.cpp" : "tt_eager/tt_dnn/kernels/compute/layernorm.cpp",
+        rms_norm ? "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/rmsnorm.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = eltwise_binary_defines}
     );
@@ -841,14 +841,14 @@ operation::ProgramWithCallbacks layernorm_sharded_(
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm.cpp",
+        "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm_sharded.cpp",
         all_to_all_cores,
         tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = eltwise_binary_defines}
     );
     if (has_none_all_to_all_workers) {
         compute_kernels_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm.cpp",
+            "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm_sharded.cpp",
             not_all_to_all_workers,
             tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = eltwise_binary_defines}
         );

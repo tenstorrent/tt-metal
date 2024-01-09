@@ -18,15 +18,13 @@ namespace tt_metal {
 enum class MatmulParallelizationStrategy {
     MULTI_CORE = 0,
     MULTI_CORE_REUSE = 1,
-    MULTI_CORE_REUSE_GENERALIZED = 2,
-    MULTI_CORE_REUSE_MCAST_GENERALIZED = 3,
-    MULTI_CORE_REUSE_PADDING = 4,
-    MULTI_CORE_REUSE_OPTIMIZED = 5,
-    MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED = 6,
-    MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED = 7,
-    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 8,
-    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 9,
-    SINGLE_CORE = 10
+    MULTI_CORE_REUSE_PADDING = 2,
+    MULTI_CORE_REUSE_OPTIMIZED = 3,
+    MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED = 4,
+    MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED = 5,
+    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 6,
+    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 7,
+    SINGLE_CORE = 8
 };
 
 
@@ -37,8 +35,6 @@ operation::ProgramWithCallbacks matmul_single_core  (const Tensor &input_tensor_
 operation::ProgramWithCallbacks matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 

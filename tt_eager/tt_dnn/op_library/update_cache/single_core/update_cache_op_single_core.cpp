@@ -102,13 +102,13 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 
     auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/update_cache.cpp",
+        "tt_eager/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );

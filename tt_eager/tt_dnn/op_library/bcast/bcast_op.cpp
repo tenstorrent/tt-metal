@@ -20,20 +20,20 @@ using namespace tt::constants;
 const char* get_reader_name(BcastOpDim bcast_dim, BcastOpParallelizationStrategy bcast_parallelization_strategy) {
     if (bcast_parallelization_strategy == BcastOpParallelizationStrategy::SINGLE_CORE) {
         if (bcast_dim == BcastOpDim::H) {
-            return "tt_eager/tt_dnn/kernels/dataflow/reader_bcast_h_8bank.cpp";
+            return "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_interleaved.cpp";
         } else if (bcast_dim == BcastOpDim::W) {
-            return "tt_eager/tt_dnn/kernels/dataflow/reader_bcast_w_8bank.cpp";
+            return "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_w_interleaved.cpp";
         } if (bcast_dim == BcastOpDim::HW) {
-            return "tt_eager/tt_dnn/kernels/dataflow/reader_bcast_hw_8bank.cpp";
+            return "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_hw_interleaved.cpp";
         }
     }
     else {
         if (bcast_dim == BcastOpDim::H) {
-            return "tt_eager/tt_dnn/kernels/dataflow/reader_bcast_h_8bank_input_rows_partitioned.cpp";
+            return "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_interleaved_input_rows_partitioned.cpp";
         } else if (bcast_dim == BcastOpDim::W) {
-            return "tt_eager/tt_dnn/kernels/dataflow/reader_bcast_w_8bank_input_cols_partitioned.cpp";
+            return "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_w_interleaved_input_cols_partitioned.cpp";
         } if (bcast_dim == BcastOpDim::HW) {
-            return "tt_eager/tt_dnn/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp";
+            return "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp";
         }
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");
@@ -42,9 +42,9 @@ const char* get_reader_name(BcastOpDim bcast_dim, BcastOpParallelizationStrategy
 
 const char* get_compute_name(BcastOpDim bcast_dim) {
     switch (bcast_dim) {
-        case BcastOpDim::H:  return "tt_eager/tt_dnn/kernels/compute/bcast_h.cpp";
-        case BcastOpDim::W:  return "tt_eager/tt_dnn/kernels/compute/bcast_w.cpp";
-        case BcastOpDim::HW: return "tt_eager/tt_dnn/kernels/compute/bcast_hw.cpp";
+        case BcastOpDim::H:  return "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp";
+        case BcastOpDim::W:  return "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_w.cpp";
+        case BcastOpDim::HW: return "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_hw.cpp";
         default:  TT_ASSERT(false && "Unexpected bcast_dim!");
     }
     return "";

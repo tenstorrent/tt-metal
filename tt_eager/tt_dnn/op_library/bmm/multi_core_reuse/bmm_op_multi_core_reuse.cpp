@@ -108,20 +108,20 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     // Create reader and writer kernels per core
     auto mm_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     // Create compute kernel
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/bmm_large_block_zm.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args}
     );

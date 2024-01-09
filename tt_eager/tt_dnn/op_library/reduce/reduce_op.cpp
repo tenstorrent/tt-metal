@@ -26,9 +26,9 @@ using namespace tt::tt_metal;
 string dim_to_kernel_name(ReduceOpDim reduce_dim, ReduceOpMath reduce_op){
     string kernel_name;
     switch(reduce_dim){
-        case ReduceOpDim::H: kernel_name = "tt_eager/tt_dnn/kernels/compute/reduce_h.cpp"; break;
-        case ReduceOpDim::W: kernel_name = "tt_eager/tt_dnn/kernels/compute/reduce_w.cpp"; break;
-        case ReduceOpDim::HW: kernel_name = "tt_eager/tt_dnn/kernels/compute/reduce_hw.cpp"; break;
+        case ReduceOpDim::H: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp"; break;
+        case ReduceOpDim::W: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp"; break;
+        case ReduceOpDim::HW: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp"; break;
         default: TT_ASSERT(false && "Undefined dim");
     }
     return kernel_name;

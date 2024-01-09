@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
     };
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
         ReaderDataMovementConfig{
             .compile_args = reader_ct_args});

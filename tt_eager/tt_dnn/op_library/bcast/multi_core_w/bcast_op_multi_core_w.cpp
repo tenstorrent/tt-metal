@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
 	KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/kernels/dataflow/writer_unary_8bank_input_cols_batched.cpp",
+		"tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
 		all_device_cores,
 		tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 

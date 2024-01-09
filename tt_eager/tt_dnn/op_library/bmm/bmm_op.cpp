@@ -192,52 +192,18 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    bool use_general_large_matmul_params = false; // Hard force to use default 16, 16, 4, 2
     uint32_t per_core_M, per_core_N, out_subblock_h, out_subblock_w;
     uint32_t num_blocks_x, num_blocks_y;
-    if (use_general_large_matmul_params) {
-        // Get large matmul params
-        auto matmul_params = bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
-        per_core_M = std::get<0>(matmul_params);
-        per_core_N = std::get<1>(matmul_params);
-        out_subblock_h = std::get<2>(matmul_params);
-        out_subblock_w = std::get<3>(matmul_params);
-    }
-    else {
-        // out_subblock h/w doesn't matter
-        per_core_M = 16;
-        per_core_N = 16;
 
-        // Calculate number of blocks along x and y; tensor dims are padded up to 512
-        num_blocks_y = (Mt - 1) / per_core_M + 1;
-        num_blocks_x = (Nt - 1) / per_core_N + 1;
-    }
+    // out_subblock h/w doesn't matter
+    per_core_M = 16;
+    per_core_N = 16;
 
-    // If no possible params, matmul_params will be (0, 0, 0, 0)
-    if (use_general_large_matmul_params and per_core_M > 0 and Kt % in0_block_w == 0 and B == 1) {
-        CoreCoord core_range = get_core_range((Mt / per_core_M), (Nt / per_core_N), num_cores_y, num_cores_x);
-        // If matmul params are (16, 16, 4, 2), use the default mcast op
-        if (
-            per_core_M == 16 and
-            per_core_N == 16 and
-            out_subblock_h == 4 and
-            out_subblock_w == 2
-        ) {
-            if (core_range.y == 1) {
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED;
-            } else if (core_range.x == 1) {
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED;
-            } else if (core_range.y > 0) {
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED;
-            } else {
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE;
-            }
-        }
-        else if (core_range.y > 0)
-            return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED;
-        return MatmulParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED;
-    }
-    else if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
+    // Calculate number of blocks along x and y; tensor dims are padded up to 512
+    num_blocks_y = (Mt - 1) / per_core_M + 1;
+    num_blocks_x = (Nt - 1) / per_core_N + 1;
+
+    if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
         if (core_range.y == 1) {
             return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED;
@@ -390,10 +356,6 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
                 config.per_core_M, config.per_core_N, false, std::nullopt, false
             );
-        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
-        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
             return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case MatmulParallelizationStrategy::SINGLE_CORE:
@@ -928,10 +890,6 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             2, 4, 2,
                             16, 16, false, std::nullopt, false
                         );
-                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-                        return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-                        return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
                         return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::SINGLE_CORE:

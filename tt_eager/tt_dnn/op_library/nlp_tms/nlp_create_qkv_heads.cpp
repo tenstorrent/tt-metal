@@ -145,12 +145,12 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &in
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines});
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
+        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args, .defines = writer_defines});
 
