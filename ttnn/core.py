@@ -1048,7 +1048,7 @@ def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], *
     input_tensor = to_torch(input_tensor)
 
     if isinstance(shape, Shape):
-        shape = tuple(shape.padded())
+        shape = tuple(shape)
 
     return torch.reshape(input_tensor, shape).contiguous().clone()
 
@@ -1129,7 +1129,7 @@ def pad_to_tile(input_tensor: Tensor) -> Tensor:
                         ttl_input_tensor,
                         batch_sizes + [padded_height, padded_width],
                         [0, 0, 0, 0],
-                        0,
+                        float("-inf"),
                     )
                 )
             else:

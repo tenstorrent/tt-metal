@@ -14,7 +14,7 @@ from ttnn.tensor import (
     has_storage_type_of,
     DEVICE_STORAGE_TYPE,
 )
-from ttnn.core import reshape
+from ttnn.core import reshape, Shape
 from ttnn.decorators import decorate_operation
 
 
@@ -99,10 +99,16 @@ def split_query_key_value_and_split_heads(
     if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
         raise RuntimeError("input_tensor must be on device!")
 
-    batch_size, *_ = input_tensor.shape
+    batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
+    _, sequence_size_padded, three_times_hidden_size_padded = input_tensor.shape.padded()
     if input_tensor.shape == (batch_size, 384, 1024 * 3):
-        batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-        input_tensor = reshape(input_tensor, (batch_size, 1, sequence_size, three_times_hidden_size))
+        input_tensor = reshape(
+            input_tensor,
+            Shape(
+                [batch_size, 1, sequence_size, three_times_hidden_size],
+                [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
+            ),
+        )
 
         ttl_input_tensor = input_tensor.value
 
@@ -116,6 +122,13 @@ def split_query_key_value_and_split_heads(
         return query, key, value
     else:
         batch_size, sequence_size, hidden_size = input_tensor.shape
+        input_tensor = reshape(
+            input_tensor,
+            Shape(
+                [batch_size, 1, sequence_size, three_times_hidden_size],
+                [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
+            ),
+        )
 
         input_tensor = reshape(input_tensor, (batch_size, 1, sequence_size, hidden_size))
         ttl_input_tensor = input_tensor.value

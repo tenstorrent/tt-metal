@@ -206,9 +206,9 @@ def test_tutorial_matmul(device):
 def test_tutorial_matmul_with_tilized_inputs(device):
     torch.manual_seed(0)
 
-    m = 1024
-    k = 1024
-    n = 1024
+    m = 1000
+    k = 1000
+    n = 1000
 
     torch_input_tensor_a = torch.randn((m, k), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)

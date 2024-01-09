@@ -178,15 +178,15 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         device=device,
     )
 
-    ttnn_hidden_states = ttnn_model.preprocess_encoder_inputs(
+    input_embeds = ttnn_model.preprocess_encoder_inputs(
         input_features=torch_input_features,
         parameters=ttnn_parameters,
         device=device,
     )
-    ttnn_hidden_states = ttnn.to_layout(ttnn_hidden_states, ttnn.TILE_LAYOUT)
-    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
+    input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+    input_embeds = ttnn.to_device(input_embeds, device)
 
-    tt_attn_output = ttnn_model.encoder(config, ttnn_hidden_states, parameters=ttnn_parameters)
+    tt_attn_output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
     tt_attn_output = ttnn.from_device(tt_attn_output)
     tt_attn_output = ttnn.to_torch(tt_attn_output)
 
@@ -372,7 +372,7 @@ def test_ttnn_whisper(device, ttnn_model):
         device=device,
     )
 
-    (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
         config=config,
         input_features=input_features,
         input_ids=decoder_input_ids,
@@ -383,7 +383,7 @@ def test_ttnn_whisper(device, ttnn_model):
 
     last_hidden_state = ttnn_model.whisper(
         config,
-        encoder_hidden_states,
+        input_embeds,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         parameters=ttnn_parameters,

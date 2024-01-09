@@ -152,7 +152,8 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, hidden_states, *, parameters):
+def encoder(config, inputs_embeds, *, parameters):
+    hidden_states = inputs_embeds + parameters.embed_positions.weight
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
@@ -374,8 +375,7 @@ def preprocess_encoder_inputs(input_features, parameters):
     )
 
     inputs_embeds = inputs_embeds.permute(0, 2, 1)
-    hidden_states = inputs_embeds + parameters.embed_positions.weight
-    return hidden_states
+    return inputs_embeds
 
 
 def preprocess_decoder_inputs(input_ids, attention_mask, *, parameters):
@@ -397,11 +397,11 @@ def preprocess_inputs(
     attention_mask,
     parameters,
 ):
-    encoder_hidden_states = preprocess_encoder_inputs(input_features, parameters.encoder)
+    input_embeds = preprocess_encoder_inputs(input_features, parameters.encoder)
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
         input_ids, attention_mask, parameters=parameters.decoder
     )
-    return encoder_hidden_states, decoder_hidden_states, attention_mask
+    return input_embeds, decoder_hidden_states, attention_mask
 
 
 def whisper_original(config, input_features, decoder_input_ids, attention_mask, *, parameters):
@@ -415,8 +415,8 @@ def whisper_original(config, input_features, decoder_input_ids, attention_mask, 
     )
 
 
-def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
+def whisper(config, input_embeds, decoder_hidden_states, decoder_attention_mask, *, parameters):
+    encoder_hidden_states = encoder(config, input_embeds, parameters=parameters.encoder)
     return decoder(
         config,
         decoder_hidden_states,

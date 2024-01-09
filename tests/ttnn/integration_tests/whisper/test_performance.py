@@ -61,7 +61,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         device=device,
     )
 
-    (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
         config=config,
         input_features=input_features,
         input_ids=decoder_input_ids,
@@ -75,7 +75,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         start = time.time()
         tt_output = ttnn_model.whisper(
             config,
-            encoder_hidden_states,
+            input_embeds,
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
             parameters=parameters,
