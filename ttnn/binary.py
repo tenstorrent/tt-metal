@@ -235,6 +235,84 @@ def register_ttl_assign_function(name, ttl_binary_function, torch_function):
     return binary_function
 
 
+def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_function, torch_function):
+    def _torch_binary(input_tensor_a: Tensor, input_tensor_b: Tensor, parameter_1, parameter_2, equal_nan, **_):
+        import torch
+        import ttnn
+
+        input_tensor_a = ttnn.from_device(input_tensor_a)
+        input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_a = ttnn.to_torch(input_tensor_a)
+
+        input_tensor_b = ttnn.from_device(input_tensor_b)
+        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_b = ttnn.to_torch(input_tensor_b)
+        assert torch_function, f"Torch function not implemented for {str(ttl_binary_function)}"
+        return torch_function(input_tensor_a, input_tensor_b, parameter_1, parameter_2, equal_nan)
+
+    @decorate_operation(torch_function=_torch_binary, name=name)
+    def binary_function(
+        input_tensor_a: Tensor,
+        input_tensor_b: Tensor,
+        parameter_1: float,
+        parameter_2: float,
+        equal_nan: bool,
+        *,
+        memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+    ) -> Tensor:
+        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+            {name}(\\mathrm{{input\\_tensor_a}}_i)
+            {name}(\\mathrm{{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, 0.4 , 0.1)
+            >>> print(output)
+            Tensor([ -3, -2], dtype=bfloat16 )
+
+        """
+
+        if not (input_tensor_a.shape == input_tensor_b.shape):
+            raise RuntimeError("input_tensors must be of same size!")
+
+        original_shape = input_tensor_a.shape
+        input_tensor_a = _reshape_to_4D(input_tensor_a)
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+
+        if not isinstance(input_tensor_a, Tensor) or not isinstance(input_tensor_b, Tensor):
+            raise TypeError("Expected both arguments to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor_a, DEVICE_STORAGE_TYPE) or not has_storage_type_of(
+            input_tensor_b, DEVICE_STORAGE_TYPE
+        ):
+            raise RuntimeError("input_tensors must be on device!")
+
+        ttl_input_tensor_a = input_tensor_a.value
+        ttl_input_tensor_b = input_tensor_b.value
+
+        ttl_output_tensor = ttl_binary_function(
+            ttl_input_tensor_a, ttl_input_tensor_b, parameter_1, parameter_2, equal_nan, output_mem_config=memory_config
+        )
+
+        output_tensor = Tensor(ttl_output_tensor)
+        output_tensor = reshape(output_tensor, original_shape)
+        return output_tensor
+
+    setattr(THIS_MODULE, name, binary_function)
+    __all__.append(name)
+    return binary_function
+
+
 # register functions
 
 
@@ -283,3 +361,11 @@ TTL_FUNCTION_ASSIGN = [
 
 for binary_function_name, ttl_binary_function, torch_function in TTL_FUNCTION_ASSIGN:
     register_ttl_assign_function(binary_function_name, ttl_binary_function, torch_function)
+
+
+TTL_FUNCTION_WITH_MULTIPLE_PARAMETER = [
+    ("isclose", ttl.tensor.isclose, torch.isclose),
+]
+
+for binary_function_name, ttl_binary_function, torch_function in TTL_FUNCTION_WITH_MULTIPLE_PARAMETER:
+    register_ttl_binary_function_with_multiple_parameter(binary_function_name, ttl_binary_function, torch_function)

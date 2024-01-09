@@ -7,6 +7,8 @@ Binary Operations
 
 .. autofunction:: ttnn.atan2
 
+.. autofunction:: ttnn.isclose
+
 .. autofunction:: ttnn.hypot
 
 .. autofunction:: ttnn.ldexp
