@@ -1781,22 +1781,7 @@ def eq(
 
 
 def _torch_ne(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
-    input_shape_a = input_tensor_a.shape
-    slices = [slice(0, dim) for dim in input_shape_a]
-    input_tensor_a = from_device(input_tensor_a)
-    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
-    input_tensor_a = to_torch(input_tensor_a)
-    input_tensor_a = input_tensor_a[slices]
-
-    if not _is_scalar(input_tensor_b):
-        input_shape_b = input_tensor_b.shape
-        slices = [slice(0, dim) for dim in input_shape_b]
-        input_tensor_b = from_device(input_tensor_b)
-        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
-        input_tensor_b = to_torch(input_tensor_b)
-        input_tensor_b = input_tensor_b[slices]
-
-    return input_tensor_a != input_tensor_b
+    return not _torch_eq(input_tensor_a, input_tensor_b, **_)
 
 
 @decorate_operation(torch_function=_torch_ne)
@@ -2059,12 +2044,12 @@ def lte(
     return output_tensor
 
 
-Tensor.__gt__ = gt  # tt_lib.tensor.gt, gtz
-Tensor.__gte__ = gte  # tt_lib.tensor.ge, gez
-Tensor.__eq__ = eq  # tt_lib.tensor.eq, eqz
-Tensor.__ne__ = ne  # tt_lib.tensor.ne, nez
-Tensor.__lt__ = lt  # tt_lib.tensor.lt, ltz
-Tensor.__lte__ = lte  # tt_lib.tensor.le, lez
+Tensor.__gt__ = gt
+Tensor.__ge__ = gte
+Tensor.__eq__ = eq
+Tensor.__ne__ = ne
+Tensor.__lt__ = lt
+Tensor.__le__ = lte
 
 __all__ = [
     "matmul",
