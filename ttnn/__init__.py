@@ -56,6 +56,13 @@ from ttnn.core import (
     rms_norm,
     # reduction operations
     mean,
+    # relational operations
+    gt,
+    gte,
+    eq,
+    ne,
+    lt,
+    lte,
 )
 
 from ttnn.unary import *
