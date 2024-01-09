@@ -274,3 +274,29 @@ class TestEltwiseBinary:
         output_tensor = ttnn.to_torch(output_tensor)
 
         assert_with_pcc(torch_b, output_tensor, 0.99)
+
+    @pytest.mark.parametrize(
+        "rtol, atol, equal_nan",
+        (
+            (1e-3, 1e-2, False),
+            (1e-5, 1e-4, True),
+            (1e-7, 1e-6, True),
+        ),
+    )
+    def test_isclose(self, input_shape_a, input_shape_b, rtol, atol, equal_nan, device):
+        torch_a = torch.rand(input_shape_a, dtype=torch.bfloat16)
+        torch_b = torch.rand(input_shape_b, dtype=torch.bfloat16)
+
+        torch_output_tensor = torch.isclose(torch_a, torch_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
+
+        a = ttnn.from_torch(torch_a)
+        b = ttnn.from_torch(torch_b)
+
+        a = ttnn.to_device(a, device)
+        b = ttnn.to_device(b, device)
+
+        output_tensor = ttnn.isclose(a, b, rtol, atol, equal_nan)
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
