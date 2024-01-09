@@ -10,8 +10,33 @@
 
 using namespace tt::tt_metal;
 
+// Starting L1 address of commands
+inline uint32_t get_command_start_l1_address(bool use_eth_l1) {
+    return (use_eth_l1 ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE);
+}
+
+// Where issue queue interface core pulls in data (follows command)
+inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
+    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE;
+    return l1_base + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+}
+
+// Space available in issue queue interface core pushing command data to consumer to dispatch or relay forward
+inline uint32_t get_producer_data_buffer_size(bool use_eth_l1) {
+    uint32_t l1_size = use_eth_l1 ? MEM_ETH_SIZE : MEM_L1_SIZE;
+    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE;
+    return (l1_size - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - l1_base);
+}
+
+// Space available in core receiving command data to dispatch or relay forward
+inline uint32_t get_consumer_data_buffer_size(bool use_eth_l1) {
+    uint32_t num_consumer_cmd_slots = use_eth_l1 ? 1 : 2;
+    uint32_t producer_data_buffer_size = get_producer_data_buffer_size(use_eth_l1);
+    return (producer_data_buffer_size - ((num_consumer_cmd_slots - 1) * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND)) / num_consumer_cmd_slots;
+}
+
 template <bool channel_offet>
-inline uint32_t cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size) {
+inline uint32_t get_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size) {
     uint32_t offset = (cq_id * cq_size);
     if (channel_offet) {
         offset += (DeviceCommand::MAX_HUGEPAGE_SIZE * channel);
@@ -27,9 +52,9 @@ inline uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t c
     // no need to account for channle in the cq offset here just use offset using cq_id ? ...
     static constexpr bool add_channel_offset = false;
     std::cout << "Reading cq issue read ptr for device " << chip_id
-              << " from addr: " << HOST_CQ_ISSUE_READ_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size)
+              << " from addr: " << HOST_CQ_ISSUE_READ_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)
               << " at channel: " << channel << std::endl;
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_READ_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_READ_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -44,9 +69,9 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     // no need to account for channle in the cq offset here just use offset using cq_id ? ...
     static constexpr bool add_channel_offset = false;
     std::cout << "Reading cq completion write ptr for device " << chip_id
-              << " from addr: " << HOST_CQ_COMPLETION_WRITE_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size)
+              << " from addr: " << HOST_CQ_COMPLETION_WRITE_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)
               << " at channel: " << channel << std::endl;
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_WRITE_PTR + cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_WRITE_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -63,10 +88,10 @@ struct SystemMemoryCQInterface {
       command_issue_region_size(tt::round_up((cq_size - CQ_START) * this->default_issue_queue_split, 32)),
       command_completion_region_size((cq_size - CQ_START) - this->command_issue_region_size),
       issue_fifo_size(command_issue_region_size >> 4),
-      issue_fifo_limit(((CQ_START + this->command_issue_region_size) + cq_offset<true>(channel, cq_id, cq_size)) >> 4),
+      issue_fifo_limit(((CQ_START + this->command_issue_region_size) + get_cq_offset<true>(channel, cq_id, cq_size)) >> 4),
       completion_fifo_size(command_completion_region_size >> 4),
       completion_fifo_limit(issue_fifo_limit + completion_fifo_size),
-      offset(cq_offset<true>(channel, cq_id, cq_size))
+      offset(get_cq_offset<true>(channel, cq_id, cq_size))
      {
         TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
         this->issue_fifo_wr_ptr = (CQ_START + this->offset) >> 4;  // In 16B words

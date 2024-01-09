@@ -275,8 +275,8 @@ void Device::initialize_command_queue() {
     static constexpr bool add_channel_offset = true;
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
-        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(cq_id) + cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(cq_id) + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
 
         std::cout << "Writing HOST_CQ_ISSUE_READ_PTR " << pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] << " and HOST_CQ_COMPLETION_WRITE_PTR " << pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)]
                   << " to channel " << channel << " at address " << cq_id * cq_size << std::endl;

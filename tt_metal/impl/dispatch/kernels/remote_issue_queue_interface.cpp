@@ -5,70 +5,15 @@
 #include "tt_metal/impl/dispatch/kernels/command_queue_producer.hpp"
 #include "debug/dprint.h"
 
-static constexpr uint32_t COMMAND_START_ADDR =
-    L1_UNRESERVED_BASE;  // Space between UNRESERVED_BASE -> data_start is for commands
-
-FORCE_INLINE
-void program_local_cb(uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
-    uint32_t cb_id = 0;
-    uint32_t fifo_addr = DeviceCommand::DATA_SECTION_ADDRESS >> 4;
-    uint32_t fifo_limit = fifo_addr + (cb_size >> 4);
-    cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
-    cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
-    cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
-    cb_interface[cb_id].fifo_size = cb_size >> 4;
-    cb_interface[cb_id].tiles_acked = 0;
-    cb_interface[cb_id].tiles_received = 0;
-    cb_interface[cb_id].fifo_num_pages = num_pages;
-    cb_interface[cb_id].fifo_page_size = page_size >> 4;
-}
-
-FORCE_INLINE
-void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
-    /*
-        This API programs the double-buffered CB space of the consumer. This API should be called
-        before notifying the consumer that data is available.
-    */
-    uint32_t acked_addr = get_db_cb_ack_addr(db_buf_switch);
-    uint32_t recv_addr = get_db_cb_recv_addr(db_buf_switch);
-    uint32_t num_pages_addr = get_db_cb_num_pages_addr(db_buf_switch);
-    uint32_t page_size_addr = get_db_cb_page_size_addr(db_buf_switch);
-    uint32_t total_size_addr = get_db_cb_total_size_addr(db_buf_switch);
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(acked_addr)[0] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_addr)[0] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_pages_addr)[0] = num_pages;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_size_addr)[0] = page_size >> 4;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(total_size_addr)[0] = cb_size >> 4;
-
-    uint32_t rd_ptr_addr = get_db_cb_rd_ptr_addr(db_buf_switch);
-    uint32_t wr_ptr_addr = get_db_cb_wr_ptr_addr(db_buf_switch);
-    uint32_t cb_start_addr = get_db_buf_addr(db_buf_switch);
-    reinterpret_cast<volatile uint32_t*>(rd_ptr_addr)[0] = cb_start_addr >> 4;
-    reinterpret_cast<volatile uint32_t*>(wr_ptr_addr)[0] = cb_start_addr >> 4;
-
-    uint32_t cb_base = get_db_cb_l1_base(db_buf_switch);
-    noc_async_write(cb_base, consumer_noc_encoding | cb_base, 7 * 16);
-    noc_async_write_barrier();  // barrier for now
-}
-
-// Only the read interface is set up on the device... the write interface
-// belongs to host
-void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const uint32_t issue_region_size) {
-    cq_read_interface.issue_fifo_rd_ptr = issue_region_rd_ptr >> 4;
-    cq_read_interface.issue_fifo_size = issue_region_size >> 4;
-    cq_read_interface.issue_fifo_limit = (issue_region_rd_ptr + issue_region_size) >> 4;
-    cq_read_interface.issue_fifo_rd_toggle = 0;
-
-    DPRINT << "issue_fifo_rd_ptr: " << cq_read_interface.issue_fifo_rd_ptr
-           << " issue_fifo_size: " << cq_read_interface.issue_fifo_size
-           << " issue_fifo_limit: " << cq_read_interface.issue_fifo_limit << ENDL();
-}
-
 // TODO: commonize pieces with command_queue_producer
 void kernel_main() {
     constexpr uint32_t host_issue_queue_read_ptr_addr = get_compile_time_arg_val(0);
     constexpr uint32_t issue_queue_start_addr = get_compile_time_arg_val(1);
     constexpr uint32_t issue_queue_size = get_compile_time_arg_val(2);
+    constexpr uint32_t command_start_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t data_section_addr = get_compile_time_arg_val(4);
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
 
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
@@ -88,9 +33,9 @@ void kernel_main() {
         // uint32_t debug_rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         // uint64_t debug_src_noc_addr = pcie_core_noc_encoding | debug_rd_ptr;
 
-        // noc_async_read(debug_src_noc_addr, COMMAND_START_ADDR, 2048);
+        // noc_async_read(debug_src_noc_addr, command_start_addr, 2048);
         // noc_async_read_barrier();
-        // volatile tt_l1_ptr uint32_t* debug_command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(COMMAND_START_ADDR);
+        // volatile tt_l1_ptr uint32_t* debug_command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
 
         // DPRINT << "debug rd ptr: " << debug_rd_ptr << " debug_src_noc_addr: " << debug_src_noc_addr << ENDL();
 
@@ -99,11 +44,11 @@ void kernel_main() {
         // Read in command
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
-        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));
+        noc_async_read(src_noc_addr, command_start_addr, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));
         noc_async_read_barrier();
 
         // Producer information
-        volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(COMMAND_START_ADDR);
+        volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
         uint32_t data_size = command_ptr[DeviceCommand::data_size_idx];
         uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];
         uint32_t stall = command_ptr[DeviceCommand::stall_idx];
@@ -140,11 +85,11 @@ void kernel_main() {
             continue;
         }
 
-        program_local_cb(producer_cb_num_pages, page_size, producer_cb_size);
+        program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        // program_consumer_cb(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
-        // relay_command(db_buf_switch, consumer_noc_encoding);
+        // program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
+        // relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         // if (stall) {
         //     while (*db_semaphore_addr != 2)
         //         ;
@@ -158,7 +103,7 @@ void kernel_main() {
         // noc_async_write_barrier();  // Barrier for now
 
         // Fetch data and send to the consumer
-        // produce(
+        // produce<consumer_cmd_base_addr, consumer_data_buffer_size>(
         //     command_ptr,
         //     num_buffer_transfers,
         //     sharded_buffer_num_cores,

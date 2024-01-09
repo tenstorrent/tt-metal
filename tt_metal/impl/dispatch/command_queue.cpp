@@ -373,7 +373,9 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
             dst_page_index);
     }
 
-    uint32_t consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
+    // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
+    bool cmd_consumer_on_ethernet = not device->is_mmio_capable();
+    uint32_t consumer_cb_num_pages = (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / padded_page_size);
 
     if (consumer_cb_num_pages >= 4) {
         consumer_cb_num_pages = (consumer_cb_num_pages / 4) * 4;
@@ -483,7 +485,9 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
         this->dst_page_index);
     }
 
-    uint32_t consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
+    // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
+    bool cmd_consumer_on_ethernet = not device->is_mmio_capable();
+    uint32_t consumer_cb_num_pages = (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / padded_page_size);
 
     if (consumer_cb_num_pages >= 4) {
         consumer_cb_num_pages = (consumer_cb_num_pages / 4) * 4;
@@ -665,11 +669,14 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
         }
     }
 
-    constexpr static uint32_t producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / DeviceCommand::PROGRAM_PAGE_SIZE);
-    constexpr static uint32_t producer_cb_size = producer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
+    // TODO (abhullar): deduce whether the producer is on ethernet core rather than hardcoding assuming tensix worker
+    const uint32_t producer_cb_num_pages = (get_producer_data_buffer_size(/*use_eth_l1=*/false) / DeviceCommand::PROGRAM_PAGE_SIZE);
+    const uint32_t producer_cb_size = producer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
-    constexpr static uint32_t consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / DeviceCommand::PROGRAM_PAGE_SIZE);
-    constexpr static uint32_t consumer_cb_size = consumer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
+    // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
+    bool cmd_consumer_on_ethernet = not device->is_mmio_capable();
+    const uint32_t consumer_cb_num_pages = (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / DeviceCommand::PROGRAM_PAGE_SIZE);
+    const uint32_t consumer_cb_size = consumer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     command.set_producer_cb_size(producer_cb_size);
     command.set_consumer_cb_size(consumer_cb_size);
@@ -908,8 +915,9 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
     TT_FATAL(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
 
     // TODO(agrebenisan): Fix these asserts after implementing multi-core CQ
+    // TODO (abhullar): Use eth mem l1 size when issue queue interface kernel is on ethernet core
     TT_ASSERT(
-        buffer.page_size() < MEM_L1_SIZE - DeviceCommand::DATA_SECTION_ADDRESS,
+        buffer.page_size() < MEM_L1_SIZE - get_data_section_l1_address(false),
         "Buffer pages must fit within the command queue data section");
 
     if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or

@@ -493,20 +493,25 @@ namespace tt::tt_metal{
                         };
 
                         // Address in sysmem for CQ to write back its read ptr to
-                        uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + cq_offset<true>(channel, cq_id, cq_size);
-                        uint32_t issue_queue_start_addr = CQ_START + cq_offset<true>(channel, cq_id, cq_size);
+                        uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + get_cq_offset<true>(channel, cq_id, cq_size);
+                        uint32_t issue_queue_start_addr = CQ_START + get_cq_offset<true>(channel, cq_id, cq_size);
                         uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
-                        std::vector<uint32_t> producer_compile_args = {host_issue_queue_read_ptr_addr, issue_queue_start_addr, issue_queue_size};
+                        uint32_t command0_l1_addr = get_command_start_l1_address(/*use_eth_l1=*/false); // issue queue interface kernels are currently placed on tensix cores
+                        uint32_t data_section_l1_addr = get_data_section_l1_address(/*use_eth_l1=*/false); // issue queue interface kernels are currently placed on tensix cores
+                        uint32_t consumer_cmd_base_addr = get_command_start_l1_address(device_id != device->id()); // device is MMIO capable but current device_id being set up is remote
+                        uint32_t consumer_data_buff_size = get_consumer_data_buffer_size(device_id != device->id()); // device is MMIO capable but current device_id being set up is remote
+                        std::vector<uint32_t> producer_compile_args = {
+                            host_issue_queue_read_ptr_addr, issue_queue_start_addr, issue_queue_size, command0_l1_addr, data_section_l1_addr, consumer_cmd_base_addr, consumer_data_buff_size};
 
                         // std::cout << "host_issue_queue_read_ptr_addr " << host_issue_queue_read_ptr_addr
                         //           << " issue_queue_start_addr " << issue_queue_start_addr
                         //           << " issue_queue_size " << issue_queue_size << std::endl;
 
-                        uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + cq_offset<true>(channel, cq_id, cq_size);
-                        uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + cq_offset<true>(channel, cq_id, cq_size);
+                        uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_cq_offset<true>(channel, cq_id, cq_size);
+                        uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_cq_offset<true>(channel, cq_id, cq_size);
                         uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
-                        uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + cq_offset<true>(channel, cq_id, cq_size);
-                        std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr};
+                        uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + get_cq_offset<true>(channel, cq_id, cq_size);
+                        std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr, consumer_cmd_base_addr, consumer_data_buff_size};
 
                         // std::cout << "host_completion_queue_write_ptr_addr " << host_completion_queue_write_ptr_addr
                         //         << " completion_queue_start_addr " << completion_queue_start_addr
