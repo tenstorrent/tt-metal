@@ -27,4 +27,4 @@ Binary Operations
 
 .. autofunction:: ttnn.subalpha
 
-.. autofunction:: ttnn.xlogy
+.. autofunction:: ttnn.xlogy3

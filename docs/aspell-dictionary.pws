@@ -1,4 +1,4 @@
-personal_ws-1.1 en 465
+personal_ws-1.1 en 507
 ABI
 ADDI
 API
@@ -157,15 +157,18 @@ abs
 acc
 acos
 acosh
+add
 addalpha
-addcmul
 addcdiv
+addcmul
 addexp
 addr
 agrebenisan
+and
+andi
+angle
 api
 apis
-angle
 arg
 args
 asin
@@ -174,7 +177,6 @@ asm
 async
 atan
 atanh
-atan2
 autoclass
 autofunction
 backend
@@ -198,16 +200,9 @@ ckernels
 cli
 clone
 codebase
-complex_abs
-complex_add
-complex_div
-complex_mul
-complex_polar
-complex_recip
-complex_sub
-conj
 concat
 config
+conj
 const
 constexpr
 coord
@@ -217,6 +212,7 @@ cosh
 cpp
 cpu
 cq
+creationops
 cref
 cstdint
 csv
@@ -234,8 +230,10 @@ dest
 dev
 devs
 dfb
+difference
 digamma
 dir
+div
 dnn
 doxygendefine
 doxygenfunction
@@ -321,15 +319,7 @@ loadi
 loadis
 log
 logaddexp
-logaddexp2
-logical_and
-logical_andi
-logical_noti
-logical_not_unary
-logical_or
-logical_ori
-logical_xor
-logical_xori
+logical
 logit
 loopback
 lt
@@ -360,6 +350,8 @@ nodebias
 nof
 nop
 nosgn
+not
+noti
 ns
 ntiles
 num
@@ -367,6 +359,7 @@ numpy
 ocb
 oct
 onboarding
+ori
 outer
 parallelization
 parallelizes
@@ -374,6 +367,7 @@ param
 perf
 performant
 phyiscally
+polar
 polygamma
 pow
 pragma
@@ -436,9 +430,12 @@ skillset
 smi
 smsg
 softmax
+softplus
+softshrink
+softsign
 sqrt
 square
-squared_difference
+squared
 sr
 src
 srca
@@ -446,6 +443,7 @@ srcb
 stderr
 storages
 struct
+sub
 subalpha
 submodule
 subvec
@@ -505,4 +503,6 @@ ws
 xAA
 xFF
 xlogy
+xor
+xori
 xyz
