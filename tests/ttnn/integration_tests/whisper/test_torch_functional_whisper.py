@@ -218,7 +218,7 @@ def test_torch_whisper():
     num_heads = config.encoder_attention_heads
 
     attention_mask = None
-    (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
         input_features=input_features, input_ids=decoder_input_ids, attention_mask=attention_mask, parameters=parameters
     )
 
@@ -226,7 +226,7 @@ def test_torch_whisper():
     # original_last_hidden_state = torch_functional_whisper.whisper_original(input_features, decoder_input_ids, parameters, embed_dim, num_heads)
     last_hidden_state = torch_functional_whisper.whisper(
         config,
-        encoder_hidden_states,
+        input_embeds,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         parameters=parameters,

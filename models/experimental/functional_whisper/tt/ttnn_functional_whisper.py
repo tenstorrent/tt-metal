@@ -140,7 +140,8 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, hidden_states, *, parameters):
+def encoder(config, inputs_embeds, *, parameters):
+    hidden_states = inputs_embeds + parameters.embed_positions.weight
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
@@ -274,7 +275,6 @@ def convert_to_ttnn(model, name):
         "encoder.conv1",
         "encoder.conv2",
         "decoder.embed_tokens",
-        "encoder.embed_positions",
         "decoder.embed_positions",
     ]
 
@@ -301,11 +301,10 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
         )
     )
     input_embeds = input_embeds.permute(0, 2, 1)
-    hidden_states = input_embeds + parameters.embed_positions.weight
-    hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16)
-    hidden_states = ttnn.to_device(hidden_states, device)
+    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16)
+    input_embeds = ttnn.to_device(input_embeds, device)
 
-    return hidden_states
+    return input_embeds
 
 
 def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, device):
@@ -336,11 +335,11 @@ def preprocess_inputs(
     parameters,
     device,
 ):
-    encoder_hidden_states = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
+    input_embeds = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
         config, input_ids, attention_mask, parameters=parameters.decoder, device=device
     )
-    return encoder_hidden_states, decoder_hidden_states, attention_mask
+    return input_embeds, decoder_hidden_states, attention_mask
 
 
 def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):

@@ -53,7 +53,7 @@ def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     return torch_output
 
 
-def decorate_operation(*, torch_function=None, pcc=0.95, name=None):
+def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
     def operation_decorator(function):
         function_name = name or function.__name__
 
@@ -74,6 +74,7 @@ def decorate_operation(*, torch_function=None, pcc=0.95, name=None):
                     if not matches:
                         import ttnn
 
+                        USE_TORCH_OUTPUT_IF_MISMATCHES = True
                         if USE_TORCH_OUTPUT_IF_MISMATCHES:
                             logger.warning(f"{function_name}: Comparing against PyTorch failed, using PyTorch output")
                             if not isinstance(output, ttnn.Tensor):

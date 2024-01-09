@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
+import os
 import torch
 import torch.nn.functional as F
 
@@ -69,3 +69,24 @@ def test_softmax_with_padded_tile_layout(device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@pytest.mark.skip(reason="#4629: softmax pcc at 0.948 when comparing to torch")
+@skip_for_wormhole_b0()
+def test_specific_tensor_combination(device):
+    current_dir = os.path.dirname(os.path.realpath(__file__))
+    tensor_file = os.path.join(current_dir, "softmax_weights.pt")
+    torch_input_tensor = torch.load(tensor_file)
+
+    torch_output_tensor = torch.softmax(torch_input_tensor, -1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+
+    output = ttnn.softmax(input_tensor, -1)
+    output = ttnn.from_device(output)
+    output = ttnn.to_torch(output)
+
+    assert len(output.shape) == len(torch_output_tensor.shape)
+    assert output.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.99)

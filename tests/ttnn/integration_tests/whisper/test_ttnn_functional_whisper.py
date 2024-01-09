@@ -147,9 +147,6 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
     model = model.to(torch.bfloat16)
 
-    num_heads = config.encoder_attention_heads
-    embed_dim = config.d_model
-
     torch_input_features = torch_random((batch_size, feature_size, sequence_length), -0.1, 0.1, dtype=torch.bfloat16)
 
     parameters = preprocess_model_parameters(
@@ -158,6 +155,8 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
 
+    # num_heads = config.encoder_attention_heads
+    # embed_dim = config.d_model
     # torch_original_attn_output = torch_functional_whisper.encoder_original(
     #     torch_input_features, parameters, embed_dim, num_heads
     # )

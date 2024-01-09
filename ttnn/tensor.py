@@ -321,7 +321,7 @@ def to_layout(tensor, layout: Layout):
                 )
             elif tensor.layout == ROW_MAJOR_LAYOUT:
                 tensor = Tensor(
-                    ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0.0).to(layout)
+                    ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
                 )
             tensor = _reshape(
                 tensor,
