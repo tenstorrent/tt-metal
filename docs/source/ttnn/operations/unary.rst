@@ -138,3 +138,19 @@ Unary Operations
 .. autofunction:: ttnn.tril
 
 .. autofunction:: ttnn.triu
+
+.. autofunction:: ttnn.mean_hw
+
+.. autofunction:: ttnn.std_hw
+
+.. autofunction:: ttnn.var_hw
+
+.. autofunction:: ttnn.normalize_hw
+
+.. autofunction:: ttnn.normalize_global
+
+.. autofunction:: ttnn.softsign
+
+.. autofunction:: ttnn.softplus
+
+.. autofunction:: ttnn.softshrink
