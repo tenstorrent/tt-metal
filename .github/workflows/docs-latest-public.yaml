@@ -46,7 +46,7 @@ jobs:
           make build
       - name: Activate and build docs
         run: |
-          export PYTHONPATH=$(pwd)
+          export PYTHONPATH=$(pwd):$TT_METAL_HOME/ttnn
           source build/python_env/bin/activate
           cd docs/
           make html

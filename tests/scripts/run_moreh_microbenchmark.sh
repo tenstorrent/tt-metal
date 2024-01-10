@@ -21,7 +21,7 @@ run_profiling_test() {
   echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
 
   source build/python_env/bin/activate
-  export PYTHONPATH=$TT_METAL_HOME
+  export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
 
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_dram
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_d2h_dram
