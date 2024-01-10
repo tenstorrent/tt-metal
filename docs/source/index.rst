@@ -23,7 +23,8 @@ Welcome to TT-Metalium documentation!
    :caption: TTNN
 
    ttnn/about
-   ttnn/ttnn
+   ttnn/tensor
+   ttnn/api
    ttnn/tutorials
    ttnn/dependencies/index.rst
 
