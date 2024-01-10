@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from tests.ttnn.sweep_tests.python_api_testing.sweep import run_sweeps, check_sweeps
+from tests.ttnn.sweep_tests.sweep import run_all_tests, print_report
 
 
 def main():
-    run_sweeps()
-    check_sweeps()
+    run_all_tests()
+    print_report()
 
 
 if __name__ == "__main__":

@@ -45,11 +45,11 @@ def run(
 ):
     input_shape = (*batch_sizes, height, width)
 
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, dtype=input_dtype, memory_config=input_memory_config
+        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config
     )
 
     output_tensor = ttnn_function(input_tensor, memory_config=output_memory_config)

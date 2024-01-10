@@ -15,11 +15,11 @@ parameters = {
     "k_size": [1024, 4096],  # [16, 128, 1024, 4096]
     "n_size": [1024, 4096],  # [16, 128, 1024, 4096]
     "batch_matrix_multiply": [True, False],
-    "input_dtype_a": [ttnn.bfloat16],
-    "input_dtype_b": [ttnn.bfloat16],
+    "input_a_dtype": [ttnn.bfloat16],
+    "input_b_dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
-    "input_memory_config_a": [ttnn.DRAM_MEMORY_CONFIG],
-    "input_memory_config_b": [ttnn.DRAM_MEMORY_CONFIG],
+    "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "core_grid": [None],
 }
@@ -35,11 +35,11 @@ def run(
     k_size,
     n_size,
     batch_matrix_multiply,
-    input_dtype_a,
-    input_dtype_b,
+    input_a_dtype,
+    input_b_dtype,
     output_dtype,
-    input_memory_config_a,
-    input_memory_config_b,
+    input_b_memory_config,
+    input_a_memory_config,
     output_memory_config,
     core_grid,
     *,
@@ -50,15 +50,15 @@ def run(
     if batch_matrix_multiply:
         input_shape_b = (*batch_sizes, k_size, n_size)
 
-    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, device=device, dtype=input_dtype_a, memory_config=input_memory_config_a
+        torch_input_tensor_a, dtype=input_a_dtype, device=device, memory_config=input_b_memory_config
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, device=device, dtype=input_dtype_b, memory_config=input_memory_config_b
+        torch_input_tensor_b, dtype=input_b_dtype, device=device, memory_config=input_a_memory_config
     )
 
     output_tensor = ttnn.matmul(

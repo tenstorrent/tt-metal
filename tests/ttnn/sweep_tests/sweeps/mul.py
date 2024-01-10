@@ -15,15 +15,19 @@ parameters = {
     "height": [384, 1024],
     "width": [1024, 4096],
     "broadcast": [None, "h", "w", "hw"],
-    "input_dtype_a": [ttnn.bfloat16],
-    "input_dtype_b": [ttnn.bfloat16],
-    "input_memory_config_a": [ttnn.DRAM_MEMORY_CONFIG],
-    "input_memory_config_b": [ttnn.DRAM_MEMORY_CONFIG],
+    "input_a_dtype": [ttnn.bfloat16],
+    "input_b_dtype": [ttnn.bfloat16],
+    "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
 }
 
 
-def skip(**_):
+def skip(*, broadcast, input_b_layout, **_):
+    if broadcast in {"w", "hw"} and input_b_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True
     return False
 
 
@@ -32,10 +36,12 @@ def run(
     height,
     width,
     broadcast,
-    input_dtype_a,
-    input_dtype_b,
-    input_memory_config_a,
-    input_memory_config_b,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_b_memory_config,
+    input_a_memory_config,
     output_memory_config,
     *,
     device,
@@ -49,15 +55,23 @@ def run(
     elif broadcast == "w":
         input_shape_b = (*batch_sizes, height, 1)
 
-    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, device=device, dtype=input_dtype_a, memory_config=input_memory_config_a
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_b_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, device=device, dtype=input_dtype_b, memory_config=input_memory_config_b
+        torch_input_tensor_b,
+        dtype=input_b_dtype,
+        layout=input_b_layout,
+        device=device,
+        memory_config=input_a_memory_config,
     )
 
     output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

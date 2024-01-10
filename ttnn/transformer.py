@@ -100,7 +100,7 @@ def split_query_key_value_and_split_heads(
         hidden_size_padded = three_times_hidden_size_padded // 3
     head_size = hidden_size // num_heads
 
-    if input_tensor.shape == (batch_size, 384, 1024 * 3) and kv_input_tensor is None:
+    if input_tensor.shape == (batch_size, 384, 1024 * 3) and 7 <= batch_size <= 9 and kv_input_tensor is None:
         input_tensor = ttnn.reshape(
             input_tensor,
             ttnn.Shape(
