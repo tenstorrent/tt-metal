@@ -22,6 +22,7 @@ enum DebugPrintHartFlags : unsigned int {
 };
 
 constexpr int DPRINT_NRISCVS = 5;
+constexpr int DPRINT_NRISCVS_ETH = 1;
 
 /*
 @brief Attaches a device to be monitored by the print server. If no devices were present on the
