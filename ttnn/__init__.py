@@ -58,7 +58,14 @@ from ttnn.core import (
     mean,
 )
 
-from ttnn.unary import *
+from ttnn.unary import (
+    exp,
+    tanh,
+    gelu,
+    rsqrt,
+    relu,
+    pow,
+)
 
 import ttnn.decorators
 import ttnn.transformer

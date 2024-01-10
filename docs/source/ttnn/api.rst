@@ -1,9 +1,9 @@
-ttnn
-==========
+API
+===
 
 
 Tensor
-************
+******
 
 .. toctree::
    :maxdepth: 1
