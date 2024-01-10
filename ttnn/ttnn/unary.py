@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import sys
 import tt_lib as ttl
+from ttnn.common import make_class_member_fn
 from ttnn.core import reshape, _reshape_to_4D
 from ttnn.decorators import decorate_operation
 from typing import Union
@@ -123,7 +124,6 @@ def register_ttl_unary_function_reduce(name, ttl_unary_function, torch_function)
 
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
-    return unary_function
 
 
 def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function, torch_function):
@@ -178,7 +178,6 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function, t
 
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
-    return unary_function
 
 
 def register_ttl_activation_function_with_dim_parameter(name, ttl_activation_function, torch_function):
@@ -462,3 +461,6 @@ TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER = [
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER:
     register_ttl_activation_function_with_dim_parameter(unary_function_name, ttl_unary_function, torch_function)
+
+
+make_class_member_fn(Tensor, locals(), __all__, 1)
