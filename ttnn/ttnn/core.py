@@ -1108,18 +1108,15 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
 
     ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
 
-    if input_tensor.is_contiguous():
-        if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            # Page size depends on the width, so only modify the shape if the width is the same
-            if input_tensor.shape[-1] == shape[-1]:
-                return ttnn_reshape(input_tensor, shape)
-        else:
+    # Page size depends on the width, so only modify the shape if the width is the same
+    if input_tensor.shape[-1] == shape[-1]:
+        if input_tensor.is_contiguous():
             return ttnn_reshape(input_tensor, shape)
 
-    if input_tensor.layout == TILE_LAYOUT:
-        *_, new_height, new_width = tuple(shape.padded())
-        if new_height % TILE_SIZE == 0 and new_width % TILE_SIZE == 0:
-            return ttnn_reshape(input_tensor, shape)
+        if input_tensor.layout == TILE_LAYOUT:
+            *_, new_height, new_width = tuple(shape.padded())
+            if new_height % TILE_SIZE == 0 and new_width % TILE_SIZE == 0:
+                return ttnn_reshape(input_tensor, shape)
 
     if (
         has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE)
@@ -1525,7 +1522,7 @@ def _torch_gt(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 
 @decorate_operation(torch_function=_torch_gt)
 def gt(
-    input_tensor_a: Tensor,
+    input_tensor_a: Union[Tensor, int, float],
     input_tensor_b: Union[Tensor, int, float],
     *,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
@@ -1537,8 +1534,8 @@ def gt(
         \mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i
 
     Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than  :attr:`input_tensor_a`.
 
     Example::
 
@@ -1549,12 +1546,18 @@ def gt(
         Tensor([ 1, 1], dtype=bfloat16 )
     """
 
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
     if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    if not isinstance(input_tensor_a, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.gt(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
 
     original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -1618,7 +1621,7 @@ def _torch_gte(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 
 @decorate_operation(torch_function=_torch_gte)
 def gte(
-    input_tensor_a: Tensor,
+    input_tensor_a: Union[Tensor, int, float],
     input_tensor_b: Union[Tensor, int, float],
     *,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
@@ -1630,8 +1633,8 @@ def gte(
         \mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i
 
     Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than or equal to :attr:`input_tensor_a`.
 
     Example::
 
@@ -1641,13 +1644,18 @@ def gte(
         >>> print(output)
         Tensor([ 1, 1], dtype=bfloat16 )
     """
-
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
     if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    if not isinstance(input_tensor_a, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.gte(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
 
     original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -1711,7 +1719,7 @@ def _torch_eq(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 
 @decorate_operation(torch_function=_torch_eq)
 def eq(
-    input_tensor_a: Tensor,
+    input_tensor_a: Union[Tensor, int, float],
     input_tensor_b: Union[Tensor, int, float],
     *,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
@@ -1723,8 +1731,8 @@ def eq(
         \mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i
 
     Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find equal to  :attr:`input_tensor_a`.
 
     Example::
 
@@ -1735,12 +1743,18 @@ def eq(
         Tensor([ 0, 1], dtype=bfloat16 )
     """
 
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
     if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    if not isinstance(input_tensor_a, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.eq(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
 
     original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -1789,7 +1803,7 @@ def _torch_ne(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 
 @decorate_operation(torch_function=_torch_ne)
 def ne(
-    input_tensor_a: Tensor,
+    input_tensor_a: Union[Tensor, int, float],
     input_tensor_b: Union[Tensor, int, float],
     *,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
@@ -1801,8 +1815,8 @@ def ne(
         \mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i
 
     Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find not equal to :attr:`input_tensor_a`.
 
     Example::
 
@@ -1813,12 +1827,18 @@ def ne(
         Tensor([ 1, 0], dtype=bfloat16 )
     """
 
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
     if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    if not isinstance(input_tensor_a, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.ne(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
 
     original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -1882,7 +1902,7 @@ def _torch_lt(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 
 @decorate_operation(torch_function=_torch_lt)
 def lt(
-    input_tensor_a: Tensor,
+    input_tensor_a: Union[Tensor, int, float],
     input_tensor_b: Union[Tensor, int, float],
     *,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
@@ -1894,8 +1914,8 @@ def lt(
         \mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i
 
     Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find lesser than :attr:`input_tensor_a`.
 
     Example::
 
@@ -1906,12 +1926,18 @@ def lt(
         Tensor([ 0, 0], dtype=bfloat16 )
     """
 
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
     if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    if not isinstance(input_tensor_a, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.lt(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
 
     original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
@@ -1975,7 +2001,7 @@ def _torch_lte(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 
 @decorate_operation(torch_function=_torch_lte)
 def lte(
-    input_tensor_a: Tensor,
+    input_tensor_a: Union[Tensor, int, float],
     input_tensor_b: Union[Tensor, int, float],
     *,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
@@ -1987,8 +2013,8 @@ def lte(
         \mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i
 
     Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find lesser than or equal :attr:`input_tensor_a`.
 
     Example::
 
@@ -1998,13 +2024,18 @@ def lte(
         >>> print(output)
         Tensor([ 0, 0], dtype=bfloat16 )
     """
-
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
     if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    if not isinstance(input_tensor_a, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.lte(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
 
     original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
