@@ -8,12 +8,12 @@ Tensor
 .. toctree::
    :maxdepth: 1
 
-   operations/to_device
-   operations/to_layout
-   operations/to_torch
-   operations/from_device
-   operations/from_torch
-   operations/deallocate
+   ttnn/to_device
+   ttnn/to_layout
+   ttnn/to_torch
+   ttnn/from_device
+   ttnn/from_torch
+   ttnn/deallocate
 
 Operations
 ************
@@ -24,7 +24,7 @@ Matrix Multiply
 .. toctree::
    :maxdepth: 1
 
-   operations/matmul
+   ttnn/matmul
 
 
 Pointwise
@@ -33,11 +33,11 @@ Pointwise
 .. toctree::
    :maxdepth: 1
 
-   operations/add
-   operations/gelu
-   operations/mul
-   operations/softmax
-   operations/sub
+   ttnn/add
+   ttnn/gelu
+   ttnn/mul
+   ttnn/softmax
+   ttnn/sub
 
 Transformations
 ~~~~~~~~~~~~~~~~~
@@ -45,8 +45,8 @@ Transformations
 .. toctree::
    :maxdepth: 1
 
-   operations/permute
-   operations/reshape
+   ttnn/permute
+   ttnn/reshape
 
 Embedding
 ~~~~~~~~~~~~~~~~~
@@ -54,4 +54,4 @@ Embedding
 .. toctree::
    :maxdepth: 1
 
-   operations/embedding
+   ttnn/embedding
