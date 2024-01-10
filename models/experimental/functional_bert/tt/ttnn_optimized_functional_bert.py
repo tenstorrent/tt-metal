@@ -36,7 +36,6 @@ def bert_attention(
     ) = ttnn.transformer.split_query_key_value_and_split_heads(
         query_key_value_output,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        core_grid=(batch_size, num_cores_x),
         num_heads=num_heads,
     )
     ttnn.deallocate(query_key_value_output)

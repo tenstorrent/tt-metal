@@ -121,7 +121,6 @@ def t5_attention(
         ) = ttnn.transformer.split_query_key_value_and_split_heads(
             query_key_value_output,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=(batch_size, num_cores_x),
             num_heads=config.num_heads,
         )
         ttnn.deallocate(query_key_value_output)
@@ -134,12 +133,6 @@ def t5_attention(
             # dtype=ttnn.bfloat8_b,
             core_grid=(batch_size, num_cores_x),
         )
-        query = ttnn.transformer.split_heads(
-            query_proj,
-            num_heads=config.num_heads,
-            order=(0, 2, 1, 3),
-        )
-        ttnn.deallocate(query_proj)
 
         key_value_proj = ttnn.linear(
             key_value_states,
@@ -148,7 +141,10 @@ def t5_attention(
             # dtype=ttnn.bfloat8_b,
             core_grid=(batch_size, num_cores_x),
         )
-        key, value = ttnn.transformer.split_key_value_and_split_heads(key_value_proj, num_heads=config.num_heads)
+        query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+            query_proj, key_value_proj, num_heads=config.num_heads
+        )
+        ttnn.deallocate(query_proj)
         ttnn.deallocate(key_value_proj)
 
     attention_scores = ttnn.matmul(

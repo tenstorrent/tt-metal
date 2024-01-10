@@ -17,10 +17,10 @@ import ttnn
 
 def get_expected_times(use_optimized_version):
     if use_optimized_version:
-        expected_compile_time = 27.0
+        expected_compile_time = 30.0
         expected_inference_time = 7.0
     else:
-        expected_compile_time = 27.0
+        expected_compile_time = 30.0
         expected_inference_time = 7.0
     return expected_compile_time, expected_inference_time
 

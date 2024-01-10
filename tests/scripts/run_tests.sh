@@ -150,6 +150,21 @@ run_stress_post_commit_pipeline_tests() {
     done
 }
 
+run_post_commit_multi_device_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    # Switch to modules only soon
+    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
+    if [[ $dispatch_mode == "slow" ]]; then
+        ./tests/scripts/run_pre_post_commit_regressions_multi_device.sh
+    else
+        echo "Only slow dispatch mode is currently supported with multi-device"
+        exit 1
+    fi
+}
+
 run_microbenchmarks_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -184,6 +199,8 @@ run_pipeline_tests() {
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "stress_post_commit" ]]; then
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "post_commit_multi_device" ]]; then
+        run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else

@@ -226,30 +226,15 @@ def matmul(
         batch_shape_a = []
         height_a = 1
         (width_a,) = input_shape_a
-        padded_height_a = 1
-        (padded_width_a,) = input_shape_a.padded()
     else:
         *batch_shape_a, height_a, width_a = input_shape_a
-        *_, padded_height_a, padded_width_a = input_shape_a.padded()
 
     if len(input_shape_b) == 1:
         batch_shape_b = []
         (height_b,) = input_shape_b
         width_b = 1
-        (padded_height_b,) = input_shape_b.padded()
-        padded_width_b = 1
     else:
         *batch_shape_b, height_b, width_b = input_shape_b
-        *_, padded_height_b, padded_width_b = input_shape_b.padded()
-
-    input_tensor_a = reshape(
-        input_tensor_a,
-        Shape(tuple(batch_shape_a + [height_a, width_a]), tuple(batch_shape_a + [padded_height_a, padded_width_a])),
-    )
-    input_tensor_b = reshape(
-        input_tensor_b,
-        Shape(tuple(batch_shape_b + [height_b, width_b]), tuple(batch_shape_b + [padded_height_b, padded_width_b])),
-    )
 
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     input_tensor_b = _reshape_to_4D(input_tensor_b)
@@ -350,8 +335,6 @@ def matmul(
         output_tensor = Tensor(ttl_output_tensor)
 
     elif height_a == 1 and width_b == 1:  # dot product
-        input_tensor_b = reshape(input_tensor_b, tuple(input_tensor_b.shape[:-2] + [width_b, height_b]))
-
         ttl_input_tensor_a = input_tensor_a.value
         ttl_input_tensor_b = input_tensor_b.value
 
@@ -495,31 +478,15 @@ def linear(
         batch_shape_a = []
         height_a = 1
         (width_a,) = input_shape_a
-        padded_height_a = 1
-        (padded_width_a,) = input_shape_a.padded()
     else:
         *batch_shape_a, height_a, width_a = input_shape_a
-        *_, padded_height_a, padded_width_a = input_shape_a.padded()
 
     if len(input_shape_b) == 1:
         batch_shape_b = []
         (height_b,) = input_shape_b
         width_b = 1
-        (padded_height_b,) = input_shape_b.padded()
-        padded_width_b = 1
     else:
         *batch_shape_b, height_b, width_b = input_shape_b
-        *_, padded_height_b, padded_width_b = input_shape_b.padded()
-
-    input_tensor_a = reshape(
-        input_tensor_a,
-        Shape(tuple(batch_shape_a + [height_a, width_a]), tuple(batch_shape_a + [padded_height_a, padded_width_a])),
-    )
-    input_tensor_b = reshape(
-        input_tensor_b,
-        Shape(tuple(batch_shape_b + [height_b, width_b]), tuple(batch_shape_b + [padded_height_b, padded_width_b])),
-    )
-
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     input_tensor_b = _reshape_to_4D(input_tensor_b)
 

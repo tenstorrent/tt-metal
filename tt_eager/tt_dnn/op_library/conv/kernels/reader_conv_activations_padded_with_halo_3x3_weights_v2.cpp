@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 
 void kernel_main() {
@@ -17,9 +16,7 @@ void kernel_main() {
     uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
     // inner loop bounds as compile-time args improve pef
     // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
-    // i+=1; // skip an arg
-
-    uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t first_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
     uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
@@ -52,8 +49,9 @@ void kernel_main() {
     constexpr uint32_t window_outer                        = get_compile_time_arg_val(10);
     constexpr uint32_t window_inner                        = get_compile_time_arg_val(11);
     constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(12);
-    constexpr uint32_t weight_size_w_compile_time_arg      = get_compile_time_arg_val(13);
-    constexpr uint32_t conv_act_size_w_padded      = get_compile_time_arg_val(14);
+    constexpr uint32_t act_block_num_tiles                 = get_compile_time_arg_val(13);
+    constexpr uint32_t weight_size_w_compile_time_arg      = get_compile_time_arg_val(14);
+    constexpr uint32_t conv_act_size_w_padded              = get_compile_time_arg_val(15);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
@@ -174,6 +172,13 @@ void kernel_main() {
         reader_offset += conv_act_size_w_padded;
     }
 
+    #ifdef SPLIT_READER
+    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 4; // Extra /2 because of packed uint16 reads
+    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles / 2;
+    #else
+    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // packed uint16 reads
+    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
+    #endif
 
     // TODO: need to make the read coalescing optimization cleaner
     // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
@@ -200,11 +205,11 @@ void kernel_main() {
                 // Reset reader_idx to finish act_block_h_datums
                 reader_idx = start_reader_idx;
 
-                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                cb_reserve_back(cb_id_act, act_block_num_tiles_read);
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
                 uint32_t reader_offset = act_l1_read_addr + (reader_offsets_ptr[reader_offset_idx] << log_base_2_of_conv_act_size_c_bytes);
                 // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
-                for (uint32_t bhd = 0; bhd < act_block_h_datums/2; bhd++) {
+                for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                     // local read from reader_index + reader_offset;
                     uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
                     uint32_t reader_idx_1 = two_reader_indices & 0xffff;
@@ -221,12 +226,16 @@ void kernel_main() {
                     reader_idx++;
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_id_act, act_block_num_tiles);
+                cb_push_back(cb_id_act, act_block_num_tiles_read);
 
                 reader_offset_idx += window_inner;
             }
             reader_offset_idx = 0;
+
             start_reader_idx = reader_idx;
+            #ifdef SPLIT_READER
+            start_reader_idx += act_block_h_datums_read;
+            #endif
         }
 
     } else {
