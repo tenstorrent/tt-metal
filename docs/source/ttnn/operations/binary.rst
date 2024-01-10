@@ -25,6 +25,10 @@ Binary Operations
 
 .. autofunction:: ttnn.maeloss
 
+.. autofunction:: ttnn.max
+
+.. autofunction:: ttnn.min
+
 .. autofunction:: ttnn.mseloss
 
 .. autofunction:: ttnn.nextafter
