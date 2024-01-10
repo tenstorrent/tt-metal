@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import sys
 import tt_lib as ttl
+from ttnn.common import make_class_member_fn
 from ttnn.core import reshape, _reshape_to_4D
 from ttnn.decorators import decorate_operation
 from typing import Union
@@ -93,7 +94,6 @@ def register_ttl_binary_function(name, ttl_binary_function, torch_function):
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 def register_ttl_binary_function_with_float_parameter(name, ttl_binary_function, torch_function):
@@ -169,7 +169,6 @@ def register_ttl_binary_function_with_float_parameter(name, ttl_binary_function,
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 def register_ttl_assign_function(name, ttl_binary_function, torch_function):
@@ -236,7 +235,6 @@ def register_ttl_assign_function(name, ttl_binary_function, torch_function):
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_function, torch_function):
@@ -314,7 +312,6 @@ def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_functi
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function):
@@ -389,7 +386,6 @@ def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function)
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 def register_ttl_outer_function(name, ttl_binary_function, torch_function):
@@ -454,7 +450,6 @@ def register_ttl_outer_function(name, ttl_binary_function, torch_function):
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 # register functions
@@ -531,3 +526,5 @@ TTL_FUNCTION_OUTER = [
 
 for binary_function_name, ttl_binary_function, torch_function in TTL_FUNCTION_OUTER:
     register_ttl_outer_function(binary_function_name, ttl_binary_function, torch_function)
+
+make_class_member_fn(Tensor, locals(), __all__, 2)

@@ -60,7 +60,6 @@ def register_ttl_function_with_float_parameter(name, ttl_binary_function, torch_
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 def register_ttl_function_with_shape(name, ttl_binary_function, torch_function):
@@ -98,7 +97,6 @@ def register_ttl_function_with_shape(name, ttl_binary_function, torch_function):
 
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
-    return binary_function
 
 
 # register functions
