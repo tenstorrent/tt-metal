@@ -177,7 +177,7 @@ def attention_softmax(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     """
-    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> Tensor
+    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> ttnn.Tensor
 
     Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax
 
@@ -218,7 +218,7 @@ def attention_softmax_(
     attention_mask: Optional[Tensor],
 ) -> Tensor:
     """
-    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> Tensor
+    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> ttnn.Tensor
 
     Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax. In-Place.
 
@@ -277,7 +277,7 @@ def concatenate_heads(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     """
-    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor
+    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size], concatenates heads back along the width dimension and return the tensor of [batch_size, sequence_size, num_heads * head_size]
 
