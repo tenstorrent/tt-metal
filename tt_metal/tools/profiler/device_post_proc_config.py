@@ -8,17 +8,23 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 class default_setup(metaclass=MergeMetaclass):
     timerAnalysis = {
-        "OPs": {
-            "across": "ops",
+        # "OPs": {
+        # "across": "ops",
+        # "type": "adjacent",
+        # "start": {"core": "ANY", "risc": "BRISC", "timerID": 1},
+        # "end": {"core": "ANY", "risc": "BRISC", "timerID": 4},
+        # },
+        "Core (0,0) Kernels": {
+            "across": "device",
             "type": "adjacent",
-            "start": {"core": "ANY", "risc": "BRISC", "timerID": 1},
-            "end": {"core": "ANY", "risc": "BRISC", "timerID": 4},
+            "start": {"core": (0, 0), "risc": "BRISC", "timerID": 2},
+            "end": {"core": (0, 0), "risc": "BRISC", "timerID": 3},
         },
         "Core (0,0) OPs": {
             "across": "device",
             "type": "adjacent",
-            "start": {"core": (0, 0), "risc": "ANY", "timerID": 1},
-            "end": {"core": (0, 0), "risc": "ANY", "timerID": 4},
+            "start": {"core": (0, 0), "risc": "BRISC", "timerID": 1},
+            "end": {"core": (0, 0), "risc": "BRISC", "timerID": 4},
         },
         # "T0 -> BRISC FW start": {
         # "across": "core",
@@ -99,10 +105,10 @@ class default_setup(metaclass=MergeMetaclass):
 
     riscs = [
         "BRISC",
-        # "NCRISC",
-        # "TRISC_0",
-        # "TRISC_1",
-        # "TRISC_2",
+        "NCRISC",
+        "TRISC_0",
+        "TRISC_1",
+        "TRISC_2",
         # "TENSIX",
     ]
 

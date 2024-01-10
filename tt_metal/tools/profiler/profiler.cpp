@@ -126,12 +126,13 @@ void DeviceProfiler::readRiscProfilerResults(
         const CoreCoord &worker_core){
 
     ZoneScoped;
-    uint32_t core_flat_id = get_flat_id(worker_core.x, worker_core.y);
+
+    uint32_t coreFlatID = get_flat_id(worker_core.x, worker_core.y);
 
 
 //#define DEBUG_CORES
 #ifdef DEBUG_CORES
-    uint32_t dram_noc_x = (core_flat_id % 4) * 3 + 1;
+    uint32_t dram_noc_x = (coreFlatID % 4) * 3 + 1;
     uint32_t dram_noc_y = worker_core.y > 6 ? 6 : 0;
 
     static size_t preRow = -1;
@@ -144,10 +145,10 @@ void DeviceProfiler::readRiscProfilerResults(
         std::cout << std::endl;
         preRow = worker_core.y;
     }
-    std::cout << worker_core.x << "," << worker_core.y <<  "," << core_flat_id << "," << dram_noc_x << "," << dram_noc_y << " | ";
+    std::cout << worker_core.x << "," << worker_core.y <<  "," << coreFlatID << "," << dram_noc_x << "," << dram_noc_y << " | ";
 #endif
 
-    uint32_t startIndex = core_flat_id * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+    uint32_t startIndex = coreFlatID * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     vector<std::uint32_t> control_buffer;
 
@@ -162,7 +163,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
 //#define DEBUG_PRINT_L1
 #ifdef DEBUG_PRINT_L1
-    if (core_flat_id < 8)
+    if (coreFlatID < 1)
     {
     vector<std::uint32_t> profile_buffer_l1;
 
@@ -172,7 +173,7 @@ void DeviceProfiler::readRiscProfilerResults(
             PROFILER_L1_BUFFER_BR,
             PROFILER_RISC_COUNT * PROFILER_L1_BUFFER_SIZE);
 
-    std::cout << worker_core.x << "," << worker_core.y <<  "," << core_flat_id << "," << startIndex <<  std::endl ;
+    std::cout << worker_core.x << "," << worker_core.y <<  "," << coreFlatID << "," << startIndex <<  std::endl ;
     for (int j = 0; j < PROFILER_RISC_COUNT; j++)
     {
         for (int i= 0; i < 12; i ++)
@@ -187,11 +188,11 @@ void DeviceProfiler::readRiscProfilerResults(
         std::cout <<  std::endl;
         std::cout <<  std::endl;
     }
-    std::cout << "Control Buffer :" << control_buffer [0] << "," << control_buffer [5] << "," << std::endl;
-    std::cout << "Control Buffer :" << control_buffer [1] << "," << control_buffer [6] << "," << std::endl;
-    std::cout << "Control Buffer :" << control_buffer [2] << "," << control_buffer [7] << "," << std::endl;
-    std::cout << "Control Buffer :" << control_buffer [3] << "," << control_buffer [8] << "," << std::endl;
-    std::cout << "Control Buffer :" << control_buffer [4] << "," << control_buffer [9] << "," << std::endl;
+    //std::cout << "Control Buffer :" << control_buffer [0] << "," << control_buffer [5] << "," << std::endl;
+    //std::cout << "Control Buffer :" << control_buffer [1] << "," << control_buffer [6] << "," << std::endl;
+    //std::cout << "Control Buffer :" << control_buffer [2] << "," << control_buffer [7] << "," << std::endl;
+    //std::cout << "Control Buffer :" << control_buffer [3] << "," << control_buffer [8] << "," << std::endl;
+    //std::cout << "Control Buffer :" << control_buffer [4] << "," << control_buffer [9] << "," << std::endl;
 
     std::cout << "\nDRAM SIZE PER RISC :" << PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC << " L1 SIZE :" << PROFILER_L1_VECTOR_SIZE << std::endl;
     }
@@ -208,29 +209,81 @@ void DeviceProfiler::readRiscProfilerResults(
                 bufferEndIndex = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
             }
 
-            uint16_t programID = 0;
+            uint32_t runCounter = 0;
+            uint32_t riscNumRead = 0;
+            uint32_t coreFlatIDRead = 0;
+            uint32_t runCounterRead = 0;
+
+            bool newRunStart = false;
 
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex); index += PROFILER_L1_MARKER_UINT32_SIZE)
             {
-                if (profile_buffer[index] != 0)
+                if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0)
                 {
-                    uint32_t marker = (profile_buffer[index] & 0xFFFF0000) >> 16;
-                    uint32_t time_H = profile_buffer[index] & 0x0000FFFF;
-                    uint32_t time_L = profile_buffer[index + 1];
+                    newRunStart = true;
+                }
+                else if (newRunStart)
+                {
+                    //TODO(MO): Cleanup magic numbers
+                    riscNumRead = profile_buffer[index] & 0x07;
+                    coreFlatIDRead = (profile_buffer[index] & 0x3F8) >> 3;
 
-                    dumpResultToFile(
-                            programID,
-                            device_id,
-                            worker_core.x,
-                            worker_core.y,
-                            riscNum,
-                            (uint64_t(time_H) << 32) | time_L,
-                            marker);
+                    runCounterRead = profile_buffer[index + 1];
+
+                    newRunStart = false;
                 }
                 else
                 {
-                    index += PROFILER_L1_MARKER_UINT32_SIZE;
-                    programID = profile_buffer[index] & 0x0000FFFF;
+                    uint32_t time_H = profile_buffer[index] & 0x0000FFFF;
+                    if (time_H)
+                    {
+                        uint32_t marker = (profile_buffer[index] & 0x00070000) >> 16;
+                        uint32_t riscNumReadts = (profile_buffer[index] & 0x00380000) >> 19;
+                        uint32_t coreFlatIDReadts = (profile_buffer[index] & 0x7FC00000) >> 22;
+                        uint32_t time_L = profile_buffer[index + 1];
+
+
+                        TT_ASSERT (riscNumReadts == riscNum && riscNumRead == riscNum,
+                                fmt::format("Unexpected risc id, expected {}, read ts {} and id {}. In core {},{} at run {}",
+                                    riscNum,
+                                    riscNumReadts,
+                                    riscNumRead,
+                                    worker_core.x,
+                                    worker_core.y,
+                                    runCounterRead)
+                                );
+                        TT_ASSERT (coreFlatIDReadts == coreFlatID && coreFlatIDRead == coreFlatID,
+                                fmt::format("Unexpected core id, expected {}, read ts {} and id {}. In core {},{} at run {}",
+                                    coreFlatID,
+                                    coreFlatIDReadts,
+                                    coreFlatIDRead,
+                                    worker_core.x,
+                                    worker_core.y,
+                                    runCounterRead));
+
+
+                        dumpResultToFile(
+                                true,
+                                runCounterRead,
+                                device_id,
+                                worker_core.x,
+                                worker_core.y,
+                                coreFlatID,
+                                coreFlatIDRead,
+                                coreFlatIDReadts,
+                                riscNum,
+                                riscNumRead,
+                                riscNumReadts,
+                                marker,
+                                (uint64_t(time_H) << 32) | time_L);
+
+
+                        if (riscNum == 0 && marker == 1)
+                        {
+                            TT_ASSERT (runCounterRead == runCounter, fmt::format("Unexpected run id, expected {}, read {}", runCounter, runCounterRead));
+                            runCounter ++;
+                        }
+                    }
                 }
             }
         }
@@ -253,17 +306,24 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp)
 }
 
 void DeviceProfiler::dumpResultToFile(
-        uint16_t programID,
+        bool debug,
+        uint32_t runID,
         int chip_id,
         int core_x,
         int core_y,
-        int risc,
-        uint64_t timestamp,
-        uint32_t timer_id){
+        int core_flat,
+        int core_flat_read,
+        int core_flat_read_ts,
+        int risc_num,
+        int risc_num_read,
+        int risc_num_read_ts,
+        uint32_t timer_id,
+        uint64_t timestamp){
     ZoneScoped;
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
+    //TODO(MO) : use enums here
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
 
@@ -271,7 +331,15 @@ void DeviceProfiler::dumpResultToFile(
     {
         log_file.open(log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "PCIe slot, core_x, core_y, RISC processor type, Program ID, timer_id, time[cycles since reset]" << std::endl;
+        if (!debug)
+        {
+            log_file << "Program ID, PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
+        }
+        else
+        {
+            log_file << "Program ID, PCIe slot, core_x, core_y, core_flat, core_flat_read, core_flat_read_ts, RISC, RISC read, RISC read ts, timer_id, time[cycles since reset]" << std::endl;
+        }
+
         new_log = false;
     }
     else
@@ -287,7 +355,7 @@ void DeviceProfiler::dumpResultToFile(
     }
     core_x--;
 
-    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(chip_id, core_x, core_y, risc, timer_id);
+    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(chip_id, core_x, core_y, risc_num, timer_id);
 
     if (device_data.find (event) != device_data.end())
     {
@@ -302,9 +370,21 @@ void DeviceProfiler::dumpResultToFile(
 
     firstTimestamp(timestamp);
 
-    log_file << chip_id << ", " << core_x << ", " << core_y << ", " << riscName[risc] << ", " << programID << ", ";
-    log_file << timer_id << ", ";
-    log_file << timestamp;
+    log_file << runID << ", " << chip_id;
+    log_file << ", " << core_x << ", " << core_y;
+    if (debug)
+    {
+        log_file << ", " << core_flat << ", " << core_flat_read << ", " << core_flat_read_ts;
+    }
+
+    log_file << ", " << riscName[risc_num];
+
+    if (debug)
+    {
+        log_file << ", " << riscName[risc_num_read] << ", " << riscName[risc_num_read_ts];
+    }
+
+    log_file  << ", " << timer_id << ", " << timestamp;
     log_file << std::endl;
     log_file.close();
 }
@@ -403,6 +483,12 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
 
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
+    static int BR_COUNTER = 0;
+    static int NC_COUNTER = 0;
+    static int T0_COUNTER = 0;
+    static int T1_COUNTER = 0;
+    static int T2_COUNTER = 0;
+
     for (auto& data: device_data)
     {
         ZoneScopedNC("Marker",tracy::Color::Red);
@@ -427,6 +513,7 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                                 TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
                             }
                             TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
+                            BR_COUNTER ++;
                         }
                         break;
                     case 1:
@@ -437,6 +524,7 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                                 TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
                             }
                             TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
+                            NC_COUNTER ++;
                         }
                         break;
                     case 2:
@@ -447,6 +535,7 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                                 TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
                             }
                             TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
+                            T0_COUNTER ++;
                         }
                         break;
                     case 3:
@@ -457,6 +546,7 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                                 TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
                             }
                             TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
+                            T1_COUNTER ++;
                         }
                         break;
                     case 4:
@@ -467,6 +557,7 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                                 TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
                             }
                             TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
+                            T2_COUNTER ++;
                         }
                         break;
 

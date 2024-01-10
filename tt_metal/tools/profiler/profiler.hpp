@@ -95,13 +95,20 @@ class DeviceProfiler {
 
         // Dumping profile result to file
         void dumpResultToFile(
-                uint16_t programID,
+                bool debug,
+                uint32_t runID,
                 int chip_id,
                 int core_x,
                 int core_y,
+                int core_flat,
+                int core_flat_read,
+                int core_flat_read_ts,
                 int risc_num,
-                uint64_t timestamp,
-                uint32_t timer_id);
+                int risc_num_read,
+                int risc_num_read_ts,
+                uint32_t timer_id,
+                uint64_t timestamp
+                );
 
         // Helper function for reading risc profile results
         void readRiscProfilerResults(
