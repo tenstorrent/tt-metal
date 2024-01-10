@@ -181,6 +181,57 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function, t
     return unary_function
 
 
+def register_ttl_activation_function_with_dim_parameter(name, ttl_activation_function, torch_function):
+    def _torch_unary(input_tensor: Tensor, dim, **_):
+        import torch
+        import ttnn
+
+        input_tensor = ttnn.from_device(input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.to_torch(input_tensor)
+        assert torch_function, f"Torch function not implemented for {str(ttl_activation_function)}"
+        return torch_function(input_tensor, dim)
+
+    @decorate_operation(torch_function=_torch_unary, name=name)
+    def unary_function(input_tensor: Tensor, dim: int, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
+        input_tensor = _reshape_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
+
+        if not isinstance(input_tensor, Tensor):
+            raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
+
+        ttl_output_tensor = ttl_activation_function(ttl_input_tensor, dim, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        return output_tensor
+
+    unary_function.__name__ = f"ttnn.{name}"
+    unary_function.__doc__ = f"""{name}(input_tensor: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {name}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.{name}(tensor, 2)
+
+        """
+
+    setattr(THIS_MODULE, name, unary_function)
+    __all__.append(name)
+    return unary_function
+
+
 # register functions
 def torch_cbrt(_t: torch.Tensor):
     return torch.sgn(_t) * torch.pow(torch.abs(_t), 1.0 / 3)
@@ -377,3 +428,37 @@ TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
 
 for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
     register_ttl_unary_function_with_float_parameter(unary_function_name, ttl_unary_function, torch_function)
+
+
+def torch_glu(x, *args, **kwargs):
+    dim = kwargs.get("dim", 3)
+    return torch.nn.functional.glu(x, dim)
+
+
+def torch_reglu(x, *args, **kwargs):
+    dim = kwargs.get("dim", 3)
+    a, b = torch.split(x, x.shape[dim] // 2, dim)
+    return a * torch.nn.functional.relu(b)
+
+
+def torch_geglu(x, *args, **kwargs):
+    dim = kwargs.get("dim", 3)
+    a, b = torch.split(x, x.shape[dim] // 2, dim)
+    return a * torch.nn.functional.gelu(b)
+
+
+def torch_swiglu(x, *args, **kwargs):
+    dim = kwargs.get("dim", 3)
+    a, b = torch.split(x, x.shape[dim] // 2, dim)
+    return a * torch.nn.functional.silu(b)
+
+
+TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER = [
+    ("geglu", ttl.tensor.geglu, torch_geglu),
+    ("glu", ttl.tensor.glu, torch_glu),
+    ("reglu", ttl.tensor.reglu, torch_reglu),
+    ("swiglu", ttl.tensor.swiglu, torch_swiglu),
+]
+
+for unary_function_name, ttl_unary_function, torch_function in TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER:
+    register_ttl_activation_function_with_dim_parameter(unary_function_name, ttl_unary_function, torch_function)
