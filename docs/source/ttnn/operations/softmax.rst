@@ -1,4 +1,4 @@
-TTNN.SOFTMAX
+ttnn.softmax
 ===============
 
 .. autofunction:: ttnn.softmax

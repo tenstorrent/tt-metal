@@ -1,4 +1,4 @@
-TTNN.SUB
+ttnn.sub
 ===============
 
 .. autofunction:: ttnn.sub

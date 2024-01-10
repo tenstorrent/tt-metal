@@ -1,4 +1,4 @@
-TTNN.TO_DEVICE
+ttnn.to_device
 ===============
 
 .. autofunction:: ttnn.to_device

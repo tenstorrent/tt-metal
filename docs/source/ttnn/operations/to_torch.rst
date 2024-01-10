@@ -1,4 +1,4 @@
-TTNN.TO_TORCH
+ttnn.to_torch
 ===============
 
 .. autofunction:: ttnn.to_torch

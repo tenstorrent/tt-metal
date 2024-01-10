@@ -1,4 +1,4 @@
-TTNN.MATMUL
+ttnn.matmul
 ===============
 
 .. autofunction:: ttnn.matmul

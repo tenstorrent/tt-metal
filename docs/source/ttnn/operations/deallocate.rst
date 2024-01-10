@@ -1,4 +1,4 @@
-TTNN.DEALLOCATE
+ttnn.deallocate
 ===============
 
 .. autofunction:: ttnn.deallocate

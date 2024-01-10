@@ -1,4 +1,4 @@
-TTNN.RESHAPE
+ttnn.reshape
 ===============
 
 .. autofunction:: ttnn.reshape

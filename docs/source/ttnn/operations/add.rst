@@ -1,4 +1,4 @@
-TTNN.ADD
+ttnn.add
 ===============
 
 .. autofunction:: ttnn.add
