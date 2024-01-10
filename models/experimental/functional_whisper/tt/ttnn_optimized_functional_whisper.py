@@ -455,4 +455,8 @@ def custom_preprocessor(torch_model, name):
 
         parameters["out_proj"]["weight"] = preprocess_linear_weight(torch_model.out_proj.weight, dtype=ttnn.bfloat16)
         parameters["out_proj"]["bias"] = preprocess_linear_bias(torch_model.out_proj.bias, dtype=ttnn.bfloat16)
+    elif name == "encoder.embed_positions" and isinstance(torch_model, torch.nn.Embedding):
+        embeddings = ttnn.from_torch(torch_model.weight, dtype=ttnn.bfloat16)
+        embeddings = ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
+        parameters["weight"] = embeddings
     return parameters
