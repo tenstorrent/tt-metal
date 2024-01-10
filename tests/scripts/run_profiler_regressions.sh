@@ -13,7 +13,7 @@ run_profiling_test(){
     echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
 
     source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
+    export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py -vvv
 
@@ -31,7 +31,7 @@ run_profiling_test(){
 
 run_post_proc_test(){
     source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
+    export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
 
     pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_logs.py -vvv
     pytest $PROFILER_TEST_SCRIPTS_ROOT/test_unaryop_profiler.py -vvv

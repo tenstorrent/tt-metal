@@ -54,7 +54,7 @@ jobs:
       - name: Activate env and run release tests - host
         shell: bash
         run: |
-          export PYTHONPATH=$(pwd)
+          export PYTHONPATH=$(pwd):$(pwd)/ttnn
           source tests/end_to_end_tests/env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_host_side
   test-eager-package-silicon:
@@ -93,6 +93,6 @@ jobs:
       - name: Activate env and run release tests - silicon
         shell: bash
         run: |
-          export PYTHONPATH=$(pwd)
+          export PYTHONPATH=$(pwd):$(pwd)/ttnn
           source tests/end_to_end_tests/env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.runner-hw-info.arch }} --pipeline-type eager_package_silicon

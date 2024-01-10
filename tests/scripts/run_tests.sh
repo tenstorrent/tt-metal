@@ -86,7 +86,7 @@ run_frequent_pipeline_tests() {
     make tests
 
     source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
+    export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
 
     # Please put model runs in here from now on - thank you
     ./tests/scripts/run_models.sh
@@ -238,7 +238,7 @@ validate_and_set_env_vars() {
     fi
 
     if [[ -z "$PYTHONPATH" ]]; then
-        export PYTHONPATH=$TT_METAL_HOME
+        export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
     fi
 }
 
