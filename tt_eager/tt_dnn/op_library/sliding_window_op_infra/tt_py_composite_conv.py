@@ -112,6 +112,10 @@ def determine_parallel_config(
             max_grid_size["y"],
         ]  # for 1d systolic array, we don't need to provide actual grid size because tensor sharding deterimines that automatically
         num_cores_nhw = actual_num_cores
+        grid_size = [
+            max_grid_size["x"],
+            math.ceil(num_cores_nhw / max_grid_size["x"]),
+        ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
     else:
         actual_num_cores_x = find_closest_largest_divisor_with_num_padding(
             conv_out_2d_matrix_height_ntiles, max_grid_size["x"]
@@ -725,6 +729,7 @@ class TTPyCompositeConv(TTPyOp):
         num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
         num_cores_w = self.sliding_window_op_params.num_cores_w
         num_cores_h = self.sliding_window_op_params.num_cores_h
+
         input_channels = self.input_tensor_shape[3]
         act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
         grid_size = (num_cores_w, num_cores_h)

@@ -43,6 +43,8 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
         # rn50 layer4
         (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False),
         (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False),
+        # sd conv with padded channel size
+        (1, 512, 512, 32, 32, 3, 3, 1, 1, 1, 1, False),
     ),
 )
 @pytest.mark.parametrize(
