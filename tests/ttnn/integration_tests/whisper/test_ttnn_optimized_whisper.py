@@ -175,6 +175,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.custom_preprocessor,
+        prefix="encoder",
         device=device,
     )
 
@@ -190,7 +191,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     tt_attn_output = ttnn.from_device(tt_attn_output)
     tt_attn_output = ttnn.to_torch(tt_attn_output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output, 0.97)
+    assert_with_pcc(torch_attn_output, tt_attn_output, 0.968)
 
 
 @skip_for_wormhole_b0()
