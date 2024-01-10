@@ -414,6 +414,8 @@ TTL_BINARY_FUNCTIONS = [
     ("logical_and", ttl.tensor.logical_and, torch.logical_and),
     ("logical_or", ttl.tensor.logical_or, torch.logical_or),
     ("logical_xor", ttl.tensor.logical_xor, torch.logical_xor),
+    ("max", ttl.tensor.max, torch.max),
+    ("min", ttl.tensor.min, torch.min),
     ("nextafter", ttl.tensor.nextafter, torch.nextafter),
     # TODO: Fix outer op
     # ("outer", ttl.tensor.outer, torch.outer),

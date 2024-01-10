@@ -300,3 +300,39 @@ class TestEltwiseBinary:
         output_tensor = ttnn.to_torch(output_tensor)
 
         assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+    def test_max(self, input_shape_a, input_shape_b, device):
+        torch_a = torch.rand(input_shape_a, dtype=torch.bfloat16)
+        torch_b = torch.rand(input_shape_b, dtype=torch.bfloat16)
+
+        torch_output_tensor = torch.max(torch_a, torch_b)
+
+        a = ttnn.from_torch(torch_a)
+        b = ttnn.from_torch(torch_b)
+
+        a = ttnn.to_device(a, device)
+        b = ttnn.to_device(b, device)
+
+        output_tensor = ttnn.max(a, b)
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+    def test_min(self, input_shape_a, input_shape_b, device):
+        torch_a = torch.rand(input_shape_a, dtype=torch.bfloat16)
+        torch_b = torch.rand(input_shape_b, dtype=torch.bfloat16)
+
+        torch_output_tensor = torch.min(torch_a, torch_b)
+
+        a = ttnn.from_torch(torch_a)
+        b = ttnn.from_torch(torch_b)
+
+        a = ttnn.to_device(a, device)
+        b = ttnn.to_device(b, device)
+
+        output_tensor = ttnn.min(a, b)
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
