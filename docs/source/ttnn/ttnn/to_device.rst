@@ -1,3 +1,5 @@
+.. _ttnn.to_device:
+
 ttnn.to_device
 ===============
 

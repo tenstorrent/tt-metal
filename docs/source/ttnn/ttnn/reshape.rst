@@ -1,3 +1,5 @@
+.. _ttnn.reshape:
+
 ttnn.reshape
 ===============
 
