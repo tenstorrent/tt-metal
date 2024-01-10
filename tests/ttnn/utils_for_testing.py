@@ -10,7 +10,7 @@ from loguru import logger
 from models.utility_functions import comp_pcc
 
 
-def print_comparison(message, expected_pytorch_result, actual_pytorch_result):
+def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)
     messages.append("Expected")
@@ -25,7 +25,7 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
-    assert pcc_passed, print_comparison(pcc_message, expected_pytorch_result, actual_pytorch_result)
+    assert pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
 def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
@@ -35,7 +35,7 @@ def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
             f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
         )
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
-    return pcc_passed, pcc_message
+    return pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
 def set_slow_dispatch_mode(set_var):

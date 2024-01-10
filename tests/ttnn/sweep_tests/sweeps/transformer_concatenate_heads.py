@@ -29,7 +29,7 @@ def run(
     batch_size, num_heads, sequence_size, head_size, input_dtype, input_memory_config, output_memory_config, *, device
 ):
     input_shape = (batch_size, num_heads, sequence_size, head_size)
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = ttnn.transformer._torch_concatenate_heads(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(

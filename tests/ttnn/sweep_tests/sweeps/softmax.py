@@ -28,11 +28,11 @@ def skip(**_):
 def run(batch_sizes, height, width, dim, input_dtype, input_memory_config, output_memory_config, *, device):
     input_shape = (*batch_sizes, height, width)
 
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch.softmax(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, dtype=input_dtype, memory_config=input_memory_config
+        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config
     )
 
     output_tensor = ttnn.softmax(input_tensor, dim=dim, memory_config=output_memory_config)

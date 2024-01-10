@@ -37,7 +37,7 @@ def run(
     device,
 ):
     input_shape = (batch_size, num_heads, sequence_size, target_sequence_size)
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = ttnn.transformer._torch_attention_softmax(
         torch_input_tensor,
         head_size=None,
