@@ -8,23 +8,27 @@ Tensor
 .. toctree::
    :maxdepth: 1
 
-   ttnn/to_device
-   ttnn/to_layout
-   ttnn/to_torch
-   ttnn/from_device
    ttnn/from_torch
+   ttnn/to_torch
+   ttnn/to_device
+   ttnn/from_device
+   ttnn/to_layout
+   ttnn/dump_tensor
+   ttnn/load_tensor
    ttnn/deallocate
+   ttnn/reallocate
 
 Operations
 ************
 
-Matrix Multiply
-~~~~~~~~~~~~~~~~~
+Matrix Multiplication
+~~~~~~~~~~~~~~~~~~~~~
 
 .. toctree::
    :maxdepth: 1
 
    ttnn/matmul
+   ttnn/linear
 
 
 Pointwise
