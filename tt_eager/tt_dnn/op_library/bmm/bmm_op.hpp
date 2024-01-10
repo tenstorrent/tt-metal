@@ -75,8 +75,8 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
     return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config, .output_dtype=input_tensor_a.dtype()}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
@@ -291,6 +291,7 @@ struct Matmul {
     const MathFidelity math_fidelity;
     const bool fp32_dest_acc_en;
     const bool math_approx_mode;
+    const bool packer_l1_acc;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -322,9 +323,10 @@ inline Tensor matmul(
     std::optional<const DataType> output_dtype=std::nullopt,
     const MathFidelity math_fidelity = MathFidelity::LoFi,
     const bool fp32_dest_acc_en = false,
-    const bool math_approx_mode = true
+    const bool math_approx_mode = true,
+    const bool packer_l1_acc = false
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity, fp32_dest_acc_en, math_approx_mode}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
 inline Tensor matmul(
@@ -335,12 +337,13 @@ inline Tensor matmul(
     std::optional<const DataType> output_dtype=std::nullopt,
     const MathFidelity math_fidelity = MathFidelity::LoFi,
     const bool fp32_dest_acc_en = false,
-    const bool math_approx_mode = true
+    const bool math_approx_mode = true,
+    const bool packer_l1_acc = false
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity, fp32_dest_acc_en, math_approx_mode}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
 
-Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, const MathFidelity math_fidelity = MathFidelity::LoFi, const bool fp32_dest_acc_en = false, const bool math_approx_mode = true);
+Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, const MathFidelity math_fidelity = MathFidelity::LoFi, const bool fp32_dest_acc_en = false, const bool math_approx_mode = true, const bool packer_l1_acc = false);
 
 }  // namespace primary
 
