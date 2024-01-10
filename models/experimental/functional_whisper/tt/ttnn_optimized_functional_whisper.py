@@ -58,7 +58,6 @@ def split_query_key_value_and_split_heads(
     output = ttnn.transformer.split_query_key_value_and_split_heads(
         fused_qkv,
         num_heads=encoder_attention_heads,
-        core_grid=(batch_size, 12),
         memory_config=WHISPER_MEMORY_CONFIG,
     )
     return output
