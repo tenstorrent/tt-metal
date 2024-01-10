@@ -149,6 +149,8 @@ Unary Operations
 
 .. autofunction:: ttnn.triu
 
+.. autofunction:: ttnn.tilize_with_zero_padding
+
 .. autofunction:: ttnn.mean_hw
 
 .. autofunction:: ttnn.std_hw
