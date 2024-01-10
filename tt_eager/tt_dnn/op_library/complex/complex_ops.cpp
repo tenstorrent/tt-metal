@@ -144,7 +144,7 @@ ComplexTensor conj(const ComplexTensor& input, const MemoryConfig& output_mem_co
 }
 
 Tensor angle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return neg( atan2(input[1],input[0],output_mem_config), output_mem_config );
+    return atan2(input[0],input[1],output_mem_config);
 }
 
 Tensor complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
