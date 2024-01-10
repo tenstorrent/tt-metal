@@ -119,7 +119,7 @@ def matmul(
     core_grid: Optional[Tuple[int, int]] = None,
 ) -> Tensor:
     """
-    matmul(input_tensor_a: Tensor, input_tensor_b: Tensor, *, memory_config: MemoryConfig=DRAM_MEMORY_CONFIG, core_grid: Optional[Tuple[int, int]] = None) -> Tensor
+    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: MemoryConfig=DRAM_MEMORY_CONFIG, core_grid: Optional[Tuple[int, int]] = None) -> ttnn.Tensor
 
     Returns the matrix product of two tensors.
 
@@ -152,8 +152,8 @@ def matmul(
         The 1-dimensional dot product version of this function is currently returning the Tensor with a non-empty shape. This is expected to be fixed in an upcomming release.
 
     Arguments:
-        * :attr:`input_tensor_a` (Tensor): the first tensor to be multiplied
-        * :attr:`input_tensor_b` (Tensor): the second tensor to be multiplied
+        * :attr:`input_tensor_a` (ttnn.Tensorensor): the first tensor to be multiplied
+        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
 
     Example::
 
@@ -423,13 +423,13 @@ def linear(
     activation: Optional[str] = None,
 ) -> Tensor:
     """
-    linear(input_tensor_a: Tensor, input_tensor_b: Tensor, *, bias: Optional[Tensor] = None, memory_config: MemoryConfig=DRAM_MEMORY_CONFIG, dtype: Optional[DataType] = None, core_grid: Optional[Tuple[int, int]] = None, activation: Optional[str] = None) -> Tensor
+    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: MemoryConfig=DRAM_MEMORY_CONFIG, dtype: Optional[DataType] = None, core_grid: Optional[Tuple[int, int]] = None, activation: Optional[str] = None) -> ttnn.Tensor
 
     Returns the linear transformation of the inputs
 
     Arguments:
-        * :attr:`input_tensor_a` (Tensor): the first tensor to be multiplied
-        * :attr:`input_tensor_b` (Tensor): the second tensor to be multiplied
+        * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied
+        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
 
     Example::
         >>> # batched matrix x broadcasted matrix
@@ -651,7 +651,7 @@ def add(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     r"""
-    add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float]=1) -> Tensor
+    add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, alpha: Union[int, float]=1) -> ttnn.Tensor
 
     Adds :attr:`input_tensor_b`, scaled by :attr:`alpha`, to :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
@@ -662,7 +662,7 @@ def add(
 
     Args:
         * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
     Keyword args:
         :attr:`alpha` (Number): the multiplier for :attr:`input_tensor_b`.
@@ -799,7 +799,7 @@ def sub(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     r"""
-    sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float]=1) -> Tensor:
+    sub(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, alpha: Union[int, float]=1) -> ttnn.Tensor:
 
     Subtracts :attr:`input_tensor_b`, scaled by :attr:`alpha`, from :attr:`input_tensor_a`.
 
@@ -810,7 +810,7 @@ def sub(
 
     Args:
         * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to subtract from :attr:`input_tensor_a`.
 
     Keyword args:
         :attr:`alpha` (Number): the multiplier for :attr:`input_tensor_b`.
@@ -932,7 +932,7 @@ def _torch_mul(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
 @decorate_operation(torch_function=_torch_mul)
 def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
-    mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+    mul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor) -> ttnn.Tensor
 
     Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
 
@@ -943,7 +943,7 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryCon
 
     Args:
         * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to multiply with :attr:`input_tensor_a`.
 
     Example::
 
@@ -1068,7 +1068,7 @@ def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], *
 @decorate_operation(torch_function=_torch_reshape)
 def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
     r"""
-    reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor
+    reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
 
     Reshape :attr:`input_tensor` into :attr:`shape`.
 
@@ -1173,7 +1173,7 @@ def _torch_permute(input_tensor: Tensor, order: Tuple[int, ...], **_):
 @decorate_operation(torch_function=_torch_permute)
 def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
     r"""
-    permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor
+    permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
 
     Permutes :attr:`input_tensor` using :attr:`order`.
 
@@ -1312,7 +1312,7 @@ def _torch_softmax(input_tensor: Tensor, dim: int, **_):
 @decorate_operation(torch_function=_torch_softmax)
 def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
-    softmax(input_tensor: Tensor, dim: int) -> Tensor
+    softmax(input_tensor: ttnn.Tensor, dim: int) -> ttnn.Tensor
 
     Compute softmax over :attr:`input_tensor` along :attr:`dim`.
 
@@ -1390,7 +1390,7 @@ def layer_norm(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     r"""
-    layer_norm(input_tensor: Tensor) -> Tensor
+    layer_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
 
     Compute layer_norm over :attr:`input_tensor`.
 
@@ -1426,7 +1426,7 @@ def layer_norm(
 
 def rms_norm(input_tensor: Tensor, weight: Tensor, *, epsilon: float = 1e-6) -> Tensor:
     r"""
-    rms_norm(input_tensor: Tensor) -> Tensor
+    rms_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
 
     Compute rms_norm over :attr:`input_tensor`.
 

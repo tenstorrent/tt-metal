@@ -97,7 +97,7 @@ def from_torch(
     memory_config: Optional[MemoryConfig] = None,
 ) -> Tensor:
     """
-    from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None) -> Tensor
+    from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None) -> ttnn.Tensor
 
     Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
 
@@ -153,7 +153,7 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
 @decorate_operation()
 def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG):
     """
-    to_device(tensor: ttnn.Tensor, device: tt_lib.device.Device, dtype: Optional[DataType] = None) -> Tensor
+    to_device(tensor: ttnn.Tensor, device: tt_lib.device.Device, dtype: Optional[DataType] = None) -> ttnn.Tensor
 
     Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
     The tensor may be placed in DRAM or L1 memory.
@@ -184,7 +184,7 @@ def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFI
 @decorate_operation()
 def from_device(tensor):
     """
-    from_device(tensor: ttnn.Tensor) -> Tensor
+    from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
 
     Copies the `ttnn.Tensor` :attr:`tensor` to the host.
 
@@ -210,7 +210,7 @@ def from_device(tensor):
 @decorate_operation()
 def to_layout(tensor, layout: Layout):
     """
-    to_layout(tensor: ttnn.Tensor, layout: Layout) -> Tensor
+    to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 
     Organizes the `ttnn.Tensor` :attr:`tensor` into eiter ROW_MAJOR_LAYOUT or TILE_LAYOUT.
 
