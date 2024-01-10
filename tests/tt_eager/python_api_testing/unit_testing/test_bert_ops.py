@@ -215,6 +215,7 @@ def test_bert_linear(
 
 
 @pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
 @pytest.mark.parametrize(
     "fidelity",
@@ -247,7 +248,7 @@ def test_bert_linear(
         (True, True, False, 2688, 1024, 1024, None),
         (True, False, True, 2688, 1024, 1024, None),
         (True, False, False, 2688, 1024, 1024, None),
-        # # # in1-L1-ff1
+        # # # # in1-L1-ff1
         (False, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
         (False, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
         (False, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
@@ -288,6 +289,7 @@ def test_bert_linear_batch7(
     in1_in_dram,
     has_bias,
     fp32_acc_mode,
+    packer_l1_acc,
     M,
     K,
     N,
@@ -298,7 +300,6 @@ def test_bert_linear_batch7(
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
     grid_size = (8, 7)
-    # grid_size = (2, 2)
 
     in0_block_h = M // grid_size[1] // 32
     in0_block_w = K // grid_size[0] // 32
@@ -340,23 +341,12 @@ def test_bert_linear_batch7(
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    if in0_sharded:
-        in0_t = torch2tt_tensor(
-            in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
-    else:
-        in0_t = torch2tt_tensor(
-            in0, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
-
-    if in1_in_dram:
-        in1_t = torch2tt_tensor(
-            in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
-    else:
-        in1_t = torch2tt_tensor(
-            in1, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
+    in0_t = torch2tt_tensor(
+        in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
+    in1_t = torch2tt_tensor(
+        in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
     bias_t = pad_by_zero(
@@ -392,6 +382,7 @@ def test_bert_linear_batch7(
             output_mem_config=output_mem_config,
             math_fidelity=fidelity,
             fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -401,6 +392,7 @@ def test_bert_linear_batch7(
             output_mem_config=output_mem_config,
             math_fidelity=fidelity,
             fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
         )
 
     if out_sharded:
