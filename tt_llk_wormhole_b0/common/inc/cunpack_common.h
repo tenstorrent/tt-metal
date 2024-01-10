@@ -233,13 +233,23 @@ namespace ckernel::unpacker
       uint32_t fp32_dest_acc_en = (is_fp32_dest_acc_en) ? (1) : (0);
       uint32_t int8_math_enabled = ((uint)unpA_dst_format == (uint)DataFormat::Int8) ||
                                    ((uint)unpB_dst_format == (uint)DataFormat::Int8) ||
+                                   ((uint)unpA_dst_format == (uint)DataFormat::UInt8) ||
+                                   ((uint)unpB_dst_format == (uint)DataFormat::UInt8) ||
                                    ((uint)unpA_dst_format == (uint)DataFormat::Int32) ||
                                    ((uint)unpB_dst_format == (uint)DataFormat::Int32);
 
-      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
+      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK |
+                                       ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
       alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpA_dst_format;
       alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format;
 
+      if ((uint)unpA_src_format == (uint)DataFormat::UInt8) {
+         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
+      }
+      if ((uint)unpB_src_format == (uint)DataFormat::UInt8) {
+         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcBUnsigned = 1;
+      }
+      
       // FP32 accumulation and SFPU to read dest as FP32
       // NOTE: This assumes these config fields are adjacent and in same register!!
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_FORMAT_SPEC_REG0_SrcA_ADDR32);
