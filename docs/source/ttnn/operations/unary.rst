@@ -41,6 +41,10 @@ Unary Operations
 
 .. autofunction:: ttnn.expm1
 
+.. autofunction:: ttnn.geglu
+
+.. autofunction:: ttnn.glu
+
 .. autofunction:: ttnn.hardshrink
 
 .. autofunction:: ttnn.hardsigmoid
@@ -105,6 +109,8 @@ Unary Operations
 
 .. autofunction:: ttnn.recip
 
+.. autofunction:: ttnn.reglu
+
 .. autofunction:: ttnn.relu
 
 .. autofunction:: ttnn.relu6
@@ -128,6 +134,8 @@ Unary Operations
 .. autofunction:: ttnn.sqrt
 
 .. autofunction:: ttnn.square
+
+.. autofunction:: ttnn.swiglu
 
 .. autofunction:: ttnn.swish
 

@@ -10,7 +10,12 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from ttnn.unary import TTL_UNARY_FUNCTIONS, TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER, REDUCE_UNARY_FUNCTIONS
+from ttnn.unary import (
+    TTL_UNARY_FUNCTIONS,
+    TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER,
+    REDUCE_UNARY_FUNCTIONS,
+    TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER,
+)
 from ttnn.createops import TTL_CREATE_FUNCTIONS, TTL_CREATE_FUNCTIONS_WITH_FLOAT_PARAMETER
 
 TTL_FUNCTIONS = (
@@ -18,6 +23,7 @@ TTL_FUNCTIONS = (
     + TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER
     + TTL_CREATE_FUNCTIONS
     + TTL_CREATE_FUNCTIONS_WITH_FLOAT_PARAMETER
+    + TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER
 )
 
 
@@ -48,6 +54,14 @@ SECOND_PARAM = [
     "full",
     "softshrink",
 ]
+
+ACTIVATION = [
+    "geglu",
+    "glu",
+    "reglu",
+    "swiglu",
+]
+
 custom_range = {"atanh": (-1.0, +1.0)}
 # override pcc
 pcc = {"exp2": 0.987, "atan": 0.978, "tanhshrink": 0.93, "digamma": 0.96}
@@ -76,9 +90,9 @@ pcc = {"exp2": 0.987, "atan": 0.978, "tanhshrink": 0.93, "digamma": 0.96}
         "exp",
         "exp2",
         "expm1",
-        # "geglu",
+        "geglu",
         "gelu",
-        # "glu",
+        "glu",
         "hardshrink",
         "hardsigmoid",
         "hardswish",
@@ -113,7 +127,7 @@ pcc = {"exp2": 0.987, "atan": 0.978, "tanhshrink": 0.93, "digamma": 0.96}
         "prelu",
         "rad2deg",
         "recip",
-        # "reglu",
+        "reglu",
         "relu",
         "relu6",
         "rsqrt",
@@ -125,7 +139,7 @@ pcc = {"exp2": 0.987, "atan": 0.978, "tanhshrink": 0.93, "digamma": 0.96}
         "sinh",
         "sqrt",
         "square",
-        # "swiglu",
+        "swiglu",
         "swish",
         "tan",
         "tanh",
@@ -155,7 +169,7 @@ def test_unary(device, unary_fn, h, w):
     torch.manual_seed(0)
 
     low, high = custom_range.get(unary_fn, (0, 1))
-    torch_input_tensor = low + torch.rand((h, w), dtype=torch.bfloat16) * (high - low)
+    torch_input_tensor = low + torch.rand((1, 1, h, w), dtype=torch.bfloat16) * (high - low)
     if unary_fn in ["lgamma", "digamma", "polygamma", "recip"]:
         torch_input_tensor += 10.0
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -181,6 +195,11 @@ def test_unary(device, unary_fn, h, w):
         if torch_ref_fn:
             torch_output_tensor = torch_ref_fn(torch_input_tensor, arg)
         output_tensor = ttnn_unary_fn(input_tensor, arg)
+    elif unary_fn in ACTIVATION:
+        arg = -1
+        if torch_ref_fn:
+            torch_output_tensor = torch_ref_fn(torch_input_tensor, arg)
+        output_tensor = ttnn_unary_fn(input_tensor, arg)
     else:
         if torch_ref_fn:
             torch_output_tensor = torch_ref_fn(torch_input_tensor)
@@ -191,5 +210,5 @@ def test_unary(device, unary_fn, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     if unary_fn in REDUCE_UNARY_FUNCTIONS:
-        output_tensor = output_tensor[0, 0, 0, 0].reshape(1, 1)
+        output_tensor = output_tensor[0, 0, 0, 0].reshape(1, 1, 1, 1)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc.get(unary_fn, 0.99))
