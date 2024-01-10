@@ -102,7 +102,7 @@ def sweep(sweep_file_name, run, skip, parameters, *, device):
 def _run_single_test(run, skip, parameters, index, *, device):
     permutation = list(permutations(parameters))[index]
     pretty_printed_parameters = ",\n".join(f"\t{key}={value}" for key, value in permutation.items())
-    logger.info(f"Reproducing sweep results at index {index}:\n{{{pretty_printed_parameters}}}")
+    logger.info(f"Running sweep test at index {index}:\n{{{pretty_printed_parameters}}}")
     if skip(**permutation):
         return "skipped", None
     passed, message = run(**permutation, device=device)
@@ -130,21 +130,51 @@ def run_single_test(test_name, index, *, device):
     return status, message
 
 
-def run_all_tests():
+def run_all_tests(*, device):
     logger.info(f"Deleting old sweep results in {SWEEP_RESULTS_DIR}")
     if SWEEP_RESULTS_DIR.exists():
         for file_name in SWEEP_RESULTS_DIR.glob("*.csv"):
             file_name.unlink()
 
-    device = ttnn.open(0)
     for file_name in sorted(SWEEP_SOURCES_DIR.glob("*.py")):
         logger.info(f"Running {file_name}")
         sweep_module = SourceFileLoader("sweep_module", str(file_name)).load_module()
         sweep(file_name, sweep_module.run, sweep_module.skip, sweep_module.parameters, device=device)
-    ttnn.close(device)
 
 
-def print_report():
+def run_failed_and_crashed_tests(*, device, stepwise, exclude):
+    keep_running = True
+    for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
+        test_name = file_name.stem
+        if test_name in exclude:
+            continue
+
+        if not keep_running:
+            break
+
+        df = pd.read_csv(file_name)
+        failed = (df["status"] == "failed").sum()
+        crashed = (df["status"] == "crashed").sum()
+        if failed == 0 and crashed == 0:
+            continue
+
+        for index, row in enumerate(df.itertuples()):
+            if row.status not in {"failed", "crashed"}:
+                continue
+
+            status, message = run_single_test(file_name.stem, index, device=device)
+            logger.info(status)
+            if status in {"failed", "crashed"} and stepwise:
+                keep_running = False
+                break
+
+            df.at[index, "status"] = status
+            df.at[index, "message"] = message
+
+        df.to_csv(file_name)
+
+
+def print_summary():
     stats_df = pd.DataFrame(columns=["name", "passed", "failed", "skipped", "crashed"])
 
     def add_row(df, name):
@@ -165,33 +195,23 @@ def print_report():
     print(stats_df)
 
 
-def run_failed_and_crashed_tests(*, device, exclude):
-    keep_running = True
+def print_detailed_report():
     for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
-        test_name = file_name.stem
-        if test_name in exclude:
-            continue
-
-        if not keep_running:
-            break
-
+        name = file_name.stem
         df = pd.read_csv(file_name)
-        failed = (df["status"] == "failed").sum()
-        crashed = (df["status"] == "crashed").sum()
-        if failed == 0 and crashed == 0:
-            continue
-
         for index, row in enumerate(df.itertuples()):
-            if row.status not in {"failed", "crashed"}:
-                continue
+            if row.status in {"failed", "crashed"}:
+                print(f"{name}@{index}: {row.status}")
+                print(f"\t{row.exception}")
+            elif row.status == "skipped":
+                print(f"{name}@{index}: {row.status}")
+            else:
+                print(f"{name}@{index}: {row.status}")
+        print()
 
-            status, _ = run_single_test(file_name.stem, index, device=device)
-            logger.info(status)
-            if status in {"failed", "crashed"}:
-                keep_running = False
-                break
 
-            df.at[index, "status"] = status
-            df.at[index, "message"] = None
-
-        df.to_csv(file_name)
+def print_report(*, detailed=False):
+    if detailed:
+        print_detailed_report()
+    else:
+        print_summary()

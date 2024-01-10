@@ -45,7 +45,12 @@ def run(
 ):
     input_shape = (*batch_sizes, height, width)
 
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    low = -0.1
+    high = 0.1
+    if ttnn_function in {ttnn.rsqrt}:
+        low = 0.0
+
+    torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
     torch_output_tensor = torch_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
