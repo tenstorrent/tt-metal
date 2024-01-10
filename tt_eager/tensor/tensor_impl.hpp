@@ -756,11 +756,10 @@ Tensor pad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_shape, con
 
 template <typename T>
 inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
-
-    auto input_buffer = owned_buffer::get_as<T>(tensor);
+    const auto input_tensor_shape = tensor.shape();
+    const auto input_tensor_strides = tensor.strides();
 
     // Check if tensor start and end indices are within input tensor shape
-    const Shape& input_tensor_shape = tensor.shape();
     TT_ASSERT(output_tensor_start[0] < input_tensor_shape[0]);
     TT_ASSERT(output_tensor_end[0] < input_tensor_shape[0]);
     TT_ASSERT(output_tensor_start[1] < input_tensor_shape[1]);
@@ -784,21 +783,41 @@ inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, cons
         output_tensor_end[3] - output_tensor_start[3] + 1,
     };
 
-    const Shape input_tensor_strides = tensor.strides();
-
-    auto output_buffer = owned_buffer::create<T>(compute_volume(output_tensor_shape));
-    auto output_index = 0;
-    for(auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
-        for(auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
-            for(auto dim2 = output_tensor_start[2]; dim2 <= output_tensor_end[2]; dim2++) {
-                for(auto dim3 = output_tensor_start[3]; dim3 <= output_tensor_end[3]; dim3++) {
-                    auto input_index = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 + input_tensor_strides[0] * dim0;
-                    output_buffer[output_index++] = input_buffer[input_index];
+    auto unpad =
+        [&input_tensor_shape, &input_tensor_strides, &output_tensor_shape, &output_tensor_start, &output_tensor_end](
+            const auto& input_buffer) {
+            auto output_buffer = owned_buffer::create<T>(compute_volume(output_tensor_shape));
+            auto output_index = 0;
+            for (auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
+                for (auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
+                    for (auto dim2 = output_tensor_start[2]; dim2 <= output_tensor_end[2]; dim2++) {
+                        for (auto dim3 = output_tensor_start[3]; dim3 <= output_tensor_end[3]; dim3++) {
+                            auto input_index = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 +
+                                               input_tensor_strides[0] * dim0;
+                            output_buffer[output_index++] = input_buffer[input_index];
+                        }
+                    }
                 }
             }
-        }
-    }
+            return output_buffer;
+        };
 
+    auto output_buffer = std::visit(
+        [&unpad](auto&& storage) -> owned_buffer::Buffer<T> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                const auto input_data = owned_buffer::get_as<T>(storage.buffer);
+                return unpad(input_data);
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
+                return unpad(input_data);
+            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        tensor.storage());
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
