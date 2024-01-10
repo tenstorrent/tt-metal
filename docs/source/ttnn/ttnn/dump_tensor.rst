@@ -1,3 +1,5 @@
+.. _ttnn.dump_tensor:
+
 ttnn.dump_tensor
 ================
 

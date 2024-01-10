@@ -1,3 +1,5 @@
+.. _ttnn.gelu:
+
 ttnn.gelu
 ===============
 

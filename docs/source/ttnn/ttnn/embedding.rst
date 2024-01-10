@@ -1,3 +1,5 @@
+.. _ttnn.embedding:
+
 ttnn.embedding
 ===============
 

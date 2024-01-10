@@ -1,3 +1,5 @@
+.. _ttnn.permute:
+
 ttnn.permute
 ===============
 

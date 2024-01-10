@@ -1,3 +1,5 @@
+.. _ttnn.matmul:
+
 ttnn.matmul
 ===============
 

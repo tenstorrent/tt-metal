@@ -1,3 +1,5 @@
+.. _ttnn.linear:
+
 ttnn.linear
 ===============
 

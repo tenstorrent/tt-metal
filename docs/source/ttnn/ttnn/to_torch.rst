@@ -1,3 +1,5 @@
+.. _ttnn.to_torch:
+
 ttnn.to_torch
 ===============
 

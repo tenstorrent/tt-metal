@@ -1,3 +1,5 @@
+.. _ttnn.softmax:
+
 ttnn.softmax
 ===============
 

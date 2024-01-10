@@ -1,3 +1,5 @@
+.. _ttnn.reallocate:
+
 ttnn.reallocate
 ===============
 
