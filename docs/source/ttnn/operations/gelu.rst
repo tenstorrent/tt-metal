@@ -1,4 +1,4 @@
-TTNN.GELU
+ttnn.gelu
 ===============
 
 .. autofunction:: ttnn.gelu

@@ -1,4 +1,4 @@
-TTNN.MUL
+ttnn.mul
 ===============
 
 .. autofunction:: ttnn.mul

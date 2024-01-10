@@ -2,9 +2,7 @@
 
 TTNN is a Python library that provides a launching point for learning the APIs within ``TT-METAL``.
 The TTNN library assumes the user is familiar with [PyTorch](https://pytorch.org) and provides
-operations that easily translate PyTorch tensors to and from ``ttnn.Tensor``(s).
-TTNN's primary dependency is the Python libray tt_lib within the tt_eager subproject.  This code has been tested
-with PyTorch 1.13.
+operations that easily translate PyTorch tensors to and from ``ttnn.Tensor``(s).   This library is an application programming interface intended for Tenstorrent device operations with a primary dependency on the Python libray tt_lib within the tt_eager subproject.  This code has been tested with PyTorch 1.13.
 
 We trust that this library will be a valuable guide to helping you on your journey to take full advantage of our devices!
 
@@ -17,23 +15,26 @@ followed the instructions for [installing and building the software](https://git
 
 
 #### Here are a few key differences with the operations we currently support compared to their equivalents in PyTorch
+* shape
+    * Unlike PyTorch, the shape class maintains both the intended shape and the shape including padding.
+    * When moving between row major and tile layout via the ttnn.to_layout(...) function, the last two dimensions are automatically padded and unpadded as necessary.
 * matmul
     * The tensors must be moved to device before the operation can be done.
-    * The last two dimensions must be a multiple of 32 if the multiplication is to work on the device.  For example a tensor of (1, 1, 3, 4) would not be successfully multiplied to another tensor.  Instead, the developer is currently expected to adjust the tensor to be viable in a device multiplication.
-    * Results from a matmul will not have the exact same precision. Instead of PyTorch allclose, we used a pearson correlation coefficient to verify the results.
+    * The last two dimensions must be a multiple of 32 if the multiplication is to work on the device.  For example, a tensor with shape (1, 1, 3, 4) would not be successfully multiplied to another tensor with tile layout (ttnn.TILE_LAYOUT).  For these reason the to_layout function will automatically add padding to the last two dimensions so that the height and width dimensions are a multiples of 32 and ready for a device multiplication.
+    * Results from a matmul will not have the exact same precision. The order of operations are likely to be different even when comparing dytypes of bfloat16.  Instead of PyTorch allclose, we often use a pearson correlation coefficient to verify the results.
     * The dot product is not fully supported yet and unfortunately returns a Tensor with a shape.
 * add
     * The tensors must be moved to device before the operation can be done.
-* subtract
+* subtract.
+    * Broadcasting is only suported in the last two dimensions (ie the height and width dimensions).
     * The tensors must be moved to device before the operation can be done.
 * reshape
     * The last two dimensions in the reshape must be a multiple of 32 when using the tensor on a device.
     * When converting a tt tensor to a PyTorch tensor, the 3rd and 4th dimensions must be a multiple of 32 or the operation will default to using the PyTorch implementation.
-    * Using the single argument -1 in reshape is not supported.
 * transpose
     * There is no transpose method.  Please use permute instead.
 * permute
-    * When using the ttnn library, the operation requires the first parameter to to be the tensor and the next to be the new order of dimensions within a parenthesis.
+    * When using the ttnn library, the operation requires the first parameter to be the tensor and the next to be the new order of dimensions within a parenthesis.
 
 #### Frequently asked questions
 * What if my device hangs?
@@ -46,7 +47,7 @@ followed the instructions for [installing and building the software](https://git
     * TODO : address converting from int in data type for torch tensors to ttnn.uint32
     * TODO : mention how ttnn.blfloat32 is not supported on device
 * Is slicing available?
-    * Slicing is supported.  At the moment this feature falls back to using PyTorch slicing.
+    * Slicing is supported.  At the moment this feature falls back to using PyTorch slicing on the host.
     * Example:
         * tensor1 = ttnn.from_torch(torch.randn(3,3))
         * print(tensor1[:1])

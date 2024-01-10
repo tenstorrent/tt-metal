@@ -1,4 +1,4 @@
-TTNN.PERMUTE
+ttnn.permute
 ===============
 
 .. autofunction:: ttnn.permute

@@ -23,7 +23,7 @@ Welcome to TT-Metalium documentation!
    :caption: TTNN
 
    ttnn/about
-   ttnn/operations
+   ttnn/ttnn
    ttnn/tutorials
    ttnn/dependencies/index.rst
 
