@@ -392,6 +392,71 @@ def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function)
     return binary_function
 
 
+def register_ttl_outer_function(name, ttl_binary_function, torch_function):
+    def _torch_binary(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+        import torch
+        import ttnn
+
+        input_tensor_a = ttnn.from_device(input_tensor_a)
+        input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_a = ttnn.to_torch(input_tensor_a)
+
+        input_tensor_b = ttnn.from_device(input_tensor_b)
+        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_b = ttnn.to_torch(input_tensor_b)
+        assert torch_function, f"Torch function not implemented for {str(ttl_binary_function)}"
+        return torch_function(input_tensor_a, input_tensor_b)
+
+    @decorate_operation(torch_function=_torch_binary, name=name)
+    def binary_function(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
+        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+            {name}(\\mathrm{{input\\_tensor_a}}_i)
+            {name}(\\mathrm{{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+            >>> print(output)
+            Tensor([ 2, 2], dtype=bfloat16 )
+
+        """
+        shape_a = [input_tensor_a.shape[0], input_tensor_a.shape[1], input_tensor_a.shape[2], input_tensor_a.shape[3]]
+        shape_b = [input_tensor_b.shape[0], input_tensor_b.shape[1], input_tensor_b.shape[2], input_tensor_b.shape[3]]
+
+        if not (shape_a.count(1) == 3) or not (shape_b.count(1) == 3):
+            raise RuntimeError("both input_tensors, 3 dimensions are required to be 1 for outer product!")
+
+        if not isinstance(input_tensor_a, Tensor) or not isinstance(input_tensor_b, Tensor):
+            raise TypeError("Expected both arguments to be a ttnn.Tensor")
+
+        if has_storage_type_of(input_tensor_a, DEVICE_STORAGE_TYPE) or has_storage_type_of(
+            input_tensor_b, DEVICE_STORAGE_TYPE
+        ):
+            raise RuntimeError("Outer op: input_tensors should not be on device!")
+
+        ttl_input_tensor_a = input_tensor_a.value
+        ttl_input_tensor_b = input_tensor_b.value
+
+        ttl_output_tensor = ttl_binary_function(ttl_input_tensor_a, ttl_input_tensor_b)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        return output_tensor
+
+    setattr(THIS_MODULE, name, binary_function)
+    __all__.append(name)
+    return binary_function
+
+
 # register functions
 
 
@@ -417,8 +482,6 @@ TTL_BINARY_FUNCTIONS = [
     ("max", ttl.tensor.max, torch.max),
     ("min", ttl.tensor.min, torch.min),
     ("nextafter", ttl.tensor.nextafter, torch.nextafter),
-    # TODO: Fix outer op
-    # ("outer", ttl.tensor.outer, torch.outer),
     ("squared_difference", ttl.tensor.squared_difference, torch_squared_difference),
     ("xlogy", ttl.tensor.xlogy, torch.xlogy),
 ]
@@ -460,3 +523,11 @@ TTL_FUNCTION_LOSS = [
 
 for binary_function_name, ttl_binary_function, torch_function in TTL_FUNCTION_LOSS:
     register_ttl_binary_loss_function(binary_function_name, ttl_binary_function, torch_function)
+
+
+TTL_FUNCTION_OUTER = [
+    ("outer", ttl.tensor.outer, torch.outer),
+]
+
+for binary_function_name, ttl_binary_function, torch_function in TTL_FUNCTION_OUTER:
+    register_ttl_outer_function(binary_function_name, ttl_binary_function, torch_function)
