@@ -33,4 +33,4 @@ Binary Operations
 
 .. autofunction:: ttnn.subalpha
 
-.. autofunction:: ttnn.xlogy3
+.. autofunction:: ttnn.xlogy
