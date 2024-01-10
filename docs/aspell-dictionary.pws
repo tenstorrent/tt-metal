@@ -1,4 +1,4 @@
-personal_ws-1.1 en 507
+personal_ws-1.1 en 517
 ABI
 ADDI
 API
@@ -269,9 +269,11 @@ funcs
 gcc
 gdb
 gdb's
+geglu
 gelu
 genindex
 gez
+glu
 grayskull
 grey
 gt
@@ -395,6 +397,7 @@ rdiv
 real
 recip
 reconfig
+reglu
 regs
 reigster
 relu
@@ -454,6 +457,7 @@ subalpha
 submodule
 subvec
 sudo
+swiglu
 swish
 sys
 tan
