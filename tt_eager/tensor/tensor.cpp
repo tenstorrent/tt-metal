@@ -176,7 +176,6 @@ Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_s
 
 Tensor Tensor::unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const {
     ZoneScoped;
-    TT_ASSERT(this->storage_type() == StorageType::OWNED && "Tensor must be on host for unpadding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
 }
