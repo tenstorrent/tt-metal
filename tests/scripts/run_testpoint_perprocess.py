@@ -52,7 +52,7 @@ def run_testpoints_per_process(args: argparse.Namespace, data: dict):
 
     cd $TT_METAL_HOME
 
-    export PYTHONPATH=$TT_METAL_HOME
+    export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
 
     """
 

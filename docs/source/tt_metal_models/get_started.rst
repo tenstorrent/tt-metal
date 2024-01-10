@@ -20,7 +20,7 @@ Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 
 ::
 
-    export PYTHONPATH=$(pwd)
+    export PYTHONPATH=$(pwd):$(pwd)/ttnn
 
 Running an example model
 ------------------------
