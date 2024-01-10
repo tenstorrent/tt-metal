@@ -19,10 +19,6 @@ Complex Operations
 
 .. autofunction:: ttnn.abs
 
-Experimental Operations
-=======================
-
 .. autofunction:: ttnn.angle
-
 
 .. autofunction:: ttnn.polar
