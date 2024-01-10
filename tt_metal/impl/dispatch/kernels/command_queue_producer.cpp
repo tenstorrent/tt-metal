@@ -63,8 +63,8 @@ void kernel_main() {
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
-        relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
+        program_consumer_cb(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
+        relay_command(db_buf_switch, consumer_noc_encoding);
         if (stall) {
             while (*db_semaphore_addr != 2)
                 ;
@@ -78,7 +78,7 @@ void kernel_main() {
         noc_async_write_barrier();  // Barrier for now
 
         // Fetch data and send to the consumer
-        produce<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        produce(
             command_ptr,
             num_buffer_transfers,
             sharded_buffer_num_cores,

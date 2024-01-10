@@ -5,6 +5,7 @@
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
+// #include "debug/dprint.h"
 
 CQReadInterface cq_read_interface;
 
@@ -25,9 +26,9 @@ void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const 
     cq_read_interface.issue_fifo_limit = (issue_region_rd_ptr + issue_region_size) >> 4;
     cq_read_interface.issue_fifo_rd_toggle = 0;
 
-    DPRINT << "issue_fifo_rd_ptr: " << cq_read_interface.issue_fifo_rd_ptr
-           << " issue_fifo_size: " << cq_read_interface.issue_fifo_size
-           << " issue_fifo_limit: " << cq_read_interface.issue_fifo_limit << ENDL();
+    // DPRINT << "issue_fifo_rd_ptr: " << cq_read_interface.issue_fifo_rd_ptr
+    //        << " issue_fifo_size: " << cq_read_interface.issue_fifo_size
+    //        << " issue_fifo_limit: " << cq_read_interface.issue_fifo_limit << ENDL();
 }
 
 FORCE_INLINE
@@ -48,7 +49,7 @@ FORCE_INLINE
 void notify_host_of_issue_queue_read_pointer() {
     // These are the PCIE core coordinates
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | get_compile_time_arg_val(0);  // For now, we are writing to host hugepages at offset
-    uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);;
+    uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);
     volatile tt_l1_ptr uint32_t* issue_rd_ptr_addr = get_cq_issue_read_ptr();
     issue_rd_ptr_addr[0] = issue_rd_ptr_and_toggle;
     noc_async_write(CQ_ISSUE_READ_PTR, pcie_address, 4);
@@ -86,12 +87,15 @@ void program_local_cb(uint32_t data_section_addr, uint32_t num_pages, uint32_t p
     cb_interface[cb_id].fifo_page_size = page_size >> 4;
 }
 
-template <uint32_t consumer_cmd_base_address, uint32_t consumer_data_buffer_size>
-FORCE_INLINE void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
+FORCE_INLINE
+void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
     /*
         This API programs the double-buffered CB space of the consumer. This API should be called
         before notifying the consumer that data is available.
     */
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
+
     uint32_t acked_addr = get_db_cb_ack_addr(db_buf_switch);
     uint32_t recv_addr = get_db_cb_recv_addr(db_buf_switch);
     uint32_t num_pages_addr = get_db_cb_num_pages_addr(db_buf_switch);
@@ -105,7 +109,7 @@ FORCE_INLINE void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_
 
     uint32_t rd_ptr_addr = get_db_cb_rd_ptr_addr(db_buf_switch);
     uint32_t wr_ptr_addr = get_db_cb_wr_ptr_addr(db_buf_switch);
-    uint32_t cb_start_addr = get_db_buf_addr<consumer_cmd_base_address, consumer_data_buffer_size>(db_buf_switch);
+    uint32_t cb_start_addr = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
     reinterpret_cast<volatile uint32_t*>(rd_ptr_addr)[0] = cb_start_addr >> 4;
     reinterpret_cast<volatile uint32_t*>(wr_ptr_addr)[0] = cb_start_addr >> 4;
 
@@ -171,18 +175,19 @@ void multicore_cb_push_back(uint64_t consumer_noc_encoding, uint32_t consumer_fi
     noc_semaphore_set_remote(uint32_t(CQ_CONSUMER_CB_RECV_PTR), consumer_noc_encoding | pages_recv_addr);
 }
 
-template <uint32_t cmd_base_address, uint32_t consumer_data_buffer_size>
-FORCE_INLINE void relay_command(bool db_buf_switch, uint64_t consumer_noc_encoding) {
+FORCE_INLINE
+void relay_command(bool db_buf_switch, uint64_t consumer_noc_encoding) {
     /*
         Relays the current command to the consumer.
     */
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
 
-    uint64_t consumer_command_slot_addr = consumer_noc_encoding | get_command_slot_addr<cmd_base_address, consumer_data_buffer_size>(db_buf_switch);
+    uint64_t consumer_command_slot_addr = consumer_noc_encoding | get_command_slot_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
     noc_async_write(L1_UNRESERVED_BASE, consumer_command_slot_addr, DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
     noc_async_write_barrier();
 }
 
-template <uint32_t consumer_cmd_base_address, uint32_t consumer_data_buffer_size>
 void produce(
     volatile tt_l1_ptr uint32_t* command_ptr, uint32_t num_srcs, uint32_t sharded_buffer_num_cores, uint32_t page_size, uint32_t producer_cb_size, uint32_t producer_cb_num_pages,
     uint32_t consumer_cb_size, uint32_t consumer_cb_num_pages, uint64_t consumer_noc_encoding, uint32_t producer_consumer_transfer_num_pages, bool db_buf_switch) {
@@ -193,8 +198,11 @@ void produce(
         the consumer. It continues like this in a loop, context switching between pulling in data and
         writing to the consumer.
     */
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
+
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
-    uint32_t l1_consumer_fifo_limit = get_db_buf_addr<consumer_cmd_base_address, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size;
+    uint32_t l1_consumer_fifo_limit = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size;
 
     bool sharded = sharded_buffer_num_cores > 1;
 
