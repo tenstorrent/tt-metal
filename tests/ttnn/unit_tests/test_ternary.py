@@ -53,6 +53,31 @@ class TestEltwiseTernary:
 
         ttnn.close(device)
 
+    @pytest.mark.parametrize("low", [1.0])
+    @pytest.mark.parametrize("high", [3.0])
+    def test_ttnn_clip(self, input_shapes, low, high):
+        device_id = 0
+        device = ttnn.open(device_id)
+
+        torch.manual_seed(0)
+
+        torch_a = torch.rand(input_shapes, dtype=torch.bfloat16)
+
+        a = ttnn.from_torch(torch_a)
+
+        a = ttnn.to_device(a, device)
+
+        output = ttnn.clip(a, low, high)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+
+        assert_with_pcc(torch.clip(torch_a, min=low, max=high), from_device(output))
+
+        print(f"shape: {output.shape}")
+        print(f"dtype: {output.dtype}")
+        print(f"layout: {output.layout}")
+
+        ttnn.close(device)
+
     def test_ttnn_mac(self, input_shapes):
         device_id = 0
         device = ttnn.open(device_id)

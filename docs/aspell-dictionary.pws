@@ -199,6 +199,7 @@ cin
 ckernel
 ckernels
 cli
+clip
 clone
 codebase
 concat
@@ -467,6 +468,7 @@ teardown
 tensix
 tgz
 tilize
+tilize_with_zero_padding
 tilized
 tilizing
 tmp

@@ -16,6 +16,9 @@ from ttnn.tensor import (
 )
 import torch
 import torch.nn.functional as F
+from tt_lib.utils import (
+    _nearest_32 as nearest_32,
+)
 
 THIS_MODULE = sys.modules[__name__]
 
@@ -50,6 +53,64 @@ def register_ttl_unary_function(name, ttl_unary_function, torch_function):
 
         output_tensor = Tensor(ttl_output_tensor)
         output_tensor = reshape(output_tensor, original_shape)
+        return output_tensor
+
+    unary_function.__name__ = f"ttnn.{name}"
+    unary_function.__doc__ = f"""{name}(input_tensor: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {name}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.{name}(tensor)
+
+        """
+    setattr(THIS_MODULE, name, unary_function)
+    __all__.append(name)
+    return unary_function
+
+
+def register_ttl_unary_function_with_tilized_reshape(name, ttl_unary_function, torch_function):
+    def _torch_unary(input_tensor: Tensor, **_):
+        import torch
+        import ttnn
+
+        input_tensor = ttnn.from_device(input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.to_torch(input_tensor)
+        assert torch_function, f"Torch function not implemented for {str(ttl_unary_function)}"
+        return torch_function(input_tensor)
+
+    @decorate_operation(torch_function=_torch_unary, name=name)
+    def unary_function(input_tensor: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
+        original_shape = input_tensor.shape
+        input_tensor = _reshape_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
+        if not isinstance(input_tensor, Tensor):
+            raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
+
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        print(original_shape)
+        new_shape = list(original_shape)
+        if new_shape[-1] % 32 != 0:
+            new_shape[-1] = original_shape[-1] + (32 - (original_shape[-1] % 32))
+        if new_shape[-2] % 32 != 0:
+            new_shape[-2] = original_shape[-2] + (32 - (original_shape[-2] % 32))
+        required_new_shape = tuple(new_shape)
+        output_tensor = reshape(output_tensor, required_new_shape)
         return output_tensor
 
     unary_function.__name__ = f"ttnn.{name}"
@@ -259,6 +320,26 @@ def torch_std_hw(x, *args, **kwargs):
 
 def torch_mean_hw(x, *args, **kwargs):
     return torch.mean(x, [-1, -2], keepdim=True)
+
+
+def torch_tilize_with_zero_padding(_t: torch.Tensor):
+    return F.pad(
+        _t,
+        (
+            0,
+            nearest_32(_t.size(dim=-1)) - _t.size(dim=-1),
+            0,
+            nearest_32(_t.size(dim=-2)) - _t.size(dim=-2),
+        ),
+    )
+
+
+TTL_UNARY_FUNCTIONS_WITH_TILIZED_RESHAPE = [
+    ("tilize_with_zero_padding", ttl.tensor.tilize_with_zero_padding, torch_tilize_with_zero_padding),
+]
+
+for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_TILIZED_RESHAPE:
+    register_ttl_unary_function_with_tilized_reshape(unary_function_name, ttl_unary_function, torch_function)
 
 
 TTL_UNARY_FUNCTIONS = [

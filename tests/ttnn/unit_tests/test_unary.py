@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.unary import (
     TTL_UNARY_FUNCTIONS,
     TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER,
+    TTL_UNARY_FUNCTIONS_WITH_TILIZED_RESHAPE,
     REDUCE_UNARY_FUNCTIONS,
     TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER,
 )
@@ -21,6 +22,7 @@ from ttnn.createops import TTL_CREATE_FUNCTIONS, TTL_CREATE_FUNCTIONS_WITH_FLOAT
 TTL_FUNCTIONS = (
     TTL_UNARY_FUNCTIONS
     + TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER
+    + TTL_UNARY_FUNCTIONS_WITH_TILIZED_RESHAPE
     + TTL_CREATE_FUNCTIONS
     + TTL_CREATE_FUNCTIONS_WITH_FLOAT_PARAMETER
     + TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER
@@ -40,6 +42,7 @@ SHAPE_OPS = [
     "full",
     "empty",
 ]
+
 SECOND_PARAM = [
     "elu",
     "pow",
@@ -161,9 +164,10 @@ pcc = {"exp2": 0.987, "atan": 0.978, "tanhshrink": 0.93, "digamma": 0.96}
         "softsign",
         "softplus",
         "softshrink",
+        "tilize_with_zero_padding",
     ],
 )
-@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("h", [31, 32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_unary(device, unary_fn, h, w):
     torch.manual_seed(0)
