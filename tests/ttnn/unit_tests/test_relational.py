@@ -13,6 +13,27 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # gt
 @pytest.mark.parametrize("symbolic", [True, False])
+@pytest.mark.parametrize("scalar_value", [-6.0])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [4])
+def test_gt_scalar_tensor(device, scalar_value, h, w, symbolic):
+    torch_input_tensor_a = torch.full((h, w), scalar_value)
+    torch_input_tensor_b = torch.randint(-10, 10, size=(h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.gt(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    if not symbolic:
+        output_tensor = ttnn.gt(scalar_value, input_tensor)
+    else:
+        output_tensor = scalar_value > input_tensor
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("symbolic", [True, False])
 @pytest.mark.parametrize("scalar_input_tensor_b", [-6.0])
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
@@ -59,6 +80,27 @@ def test_gt(device, n, c, h, w, symbolic):
 
 
 # gte
+@pytest.mark.parametrize("symbolic", [True, False])
+@pytest.mark.parametrize("scalar_value", [-6.0])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [4])
+def test_gte_scalar_tensor(device, scalar_value, h, w, symbolic):
+    torch_input_tensor_a = torch.full((h, w), scalar_value)
+    torch_input_tensor_b = torch.randint(-10, 10, size=(h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a >= torch_input_tensor_b
+
+    input_tensor = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    if not symbolic:
+        output_tensor = ttnn.gte(scalar_value, input_tensor)
+    else:
+        output_tensor = scalar_value >= input_tensor
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
 @pytest.mark.parametrize("symbolic", [True, False])
 @pytest.mark.parametrize("scalar_input_tensor_b", [-6.0])
 @pytest.mark.parametrize("h", [1])
@@ -107,6 +149,27 @@ def test_gte(device, n, c, h, w, symbolic):
 
 # eq
 @pytest.mark.parametrize("symbolic", [True, False])
+@pytest.mark.parametrize("scalar_value", [-6.0])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [4])
+def test_eq_scalar_tensor(device, scalar_value, h, w, symbolic):
+    torch_input_tensor_a = torch.full((h, w), scalar_value)
+    torch_input_tensor_b = torch.randint(-10, 10, size=(h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.eq(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    if not symbolic:
+        output_tensor = ttnn.eq(scalar_value, input_tensor)
+    else:
+        output_tensor = scalar_value == input_tensor
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("symbolic", [True, False])
 @pytest.mark.parametrize("scalar_input_tensor_b", [-6.0])
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
@@ -154,6 +217,27 @@ def test_eq(device, n, c, h, w, symbolic):
 
 
 # lt
+@pytest.mark.parametrize("symbolic", [True, False])
+@pytest.mark.parametrize("scalar_value", [-6.0])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [4])
+def test_lt_scalar_tensor(device, scalar_value, h, w, symbolic):
+    torch_input_tensor_a = torch.full((h, w), scalar_value)
+    torch_input_tensor_b = torch.randint(-10, 10, size=(h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.lt(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    if not symbolic:
+        output_tensor = ttnn.lt(scalar_value, input_tensor)
+    else:
+        output_tensor = scalar_value < input_tensor
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
 @pytest.mark.parametrize("symbolic", [True, False])
 @pytest.mark.parametrize("scalar_input_tensor_b", [-6.0])
 @pytest.mark.parametrize("h", [1])
@@ -205,6 +289,27 @@ def test_lt(device, n, c, h, w, symbolic):
 
 # ne
 @pytest.mark.parametrize("symbolic", [True, False])
+@pytest.mark.parametrize("scalar_value", [-6.0])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [4])
+def test_ne_scalar_tensor(device, scalar_value, h, w, symbolic):
+    torch_input_tensor_a = torch.full((h, w), scalar_value)
+    torch_input_tensor_b = torch.randint(-10, 10, size=(h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.ne(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    if not symbolic:
+        output_tensor = ttnn.ne(scalar_value, input_tensor)
+    else:
+        output_tensor = scalar_value != input_tensor
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("symbolic", [True, False])
 @pytest.mark.parametrize("scalar_input_tensor_b", [-6.0])
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
@@ -254,6 +359,27 @@ def test_ne(device, n, c, h, w, symbolic):
 
 
 # lte
+@pytest.mark.parametrize("symbolic", [True, False])
+@pytest.mark.parametrize("scalar_value", [-6.0])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [4])
+def test_lte_scalar_tensor(device, scalar_value, h, w, symbolic):
+    torch_input_tensor_a = torch.full((h, w), scalar_value)
+    torch_input_tensor_b = torch.randint(-10, 10, size=(h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a <= torch_input_tensor_b
+
+    input_tensor = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    if not symbolic:
+        output_tensor = ttnn.lte(scalar_value, input_tensor)
+    else:
+        output_tensor = scalar_value <= input_tensor
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
 @pytest.mark.parametrize("symbolic", [True, False])
 @pytest.mark.parametrize("scalar_input_tensor_b", [-6.0])
 @pytest.mark.parametrize("h", [1])
