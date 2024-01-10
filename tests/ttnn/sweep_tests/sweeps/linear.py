@@ -55,7 +55,9 @@ def run(
         torch_bias = torch_random((n_size,), -0.1, 0.1, dtype=torch.float32)
     else:
         torch_bias = None
-    torch_output_tensor = torch.nn.functional.linear(torch_input_tensor_a, torch_input_tensor_b, bias=torch_bias)
+    torch_output_tensor = torch.nn.functional.linear(
+        torch_input_tensor_a, torch_input_tensor_b.T.contiguous(), bias=torch_bias
+    )
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

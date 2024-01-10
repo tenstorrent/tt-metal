@@ -1276,16 +1276,20 @@ def softmax(
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
 
-    ttl_input_tensor = input_tensor.value
     is_padded_and_using_tile = (
         input_tensor.layout == ttnn.TILE_LAYOUT
         and list(input_tensor.shape)[-2:] != list(input_tensor.shape.padded())[-2:]
     )
     if not is_padded_and_using_tile and dim == rank - 1:
+        ttl_input_tensor = input_tensor.value
         # TODO: #4599 Research why softmax appears to not be stable when using a padded ttnn.TILE_LAYOUT
         ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
     else:
         dim_4D = dim + 4 - rank
+
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        ttl_input_tensor = input_tensor.value
+
         ttl_output_tensor = ttl.operations.primary.moreh_softmax(
             ttl_input_tensor, dim=dim_4D, output_mem_config=memory_config
         )
