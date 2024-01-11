@@ -308,7 +308,7 @@ class TTPyCompositeConv(TTPyOp):
         is_1d_systolic,
         reader_patterns_cache,
         bias: ttl.tensor.Tensor = None,
-        conv_blocking_and_parallelization_config_override={},
+        conv_blocking_and_parallelization_config_override=None,
         fuse_relu=False,
         weights_dtype=None,
         output_dtype=None,
@@ -325,6 +325,8 @@ class TTPyCompositeConv(TTPyOp):
             assert (
                 key == "conv" or key == "halo"
             ), f"reader_patterns_cache should have 1 of the following keys only - conv or halo. Found key - {key}"
+        if conv_blocking_and_parallelization_config_override is None:
+            conv_blocking_and_parallelization_config_override = {}
         for key in conv_blocking_and_parallelization_config_override:
             assert (
                 key in TTPyCompositeConv.config_keys
@@ -722,12 +724,6 @@ class TTPyCompositeConv(TTPyOp):
             else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             ttl.tensor.BufferType.L1,
         )
-        # print("input_shape=", self.input_tensor_shape)
-        # print("shard_shape=", shard_shape)
-        # print("shard_spec=", mem_config)
-        # print("num_cores_nhw=", num_cores_nhw)
-        # print("num_cores_h=", num_cores_h)
-        # print("num_cores_w=", num_cores_w)
         conv_input_on_device = conv_input.to(self.device, mem_config, shard_spec)
         return conv_input_on_device
 
