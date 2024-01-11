@@ -12,6 +12,7 @@
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
+constexpr uint32_t MIN_KERNEL_SIZE_BYTES = 32;  // overhead
 constexpr uint32_t MAX_KERNEL_SIZE_K = 16;
 constexpr uint32_t DEFAULT_KERNEL_SIZE_K = 1;
 constexpr uint32_t MAX_CBS = 32;
@@ -27,12 +28,15 @@ using namespace tt;
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;
 CoreRange workers_g = {{0, 0}, {0, 0}};;
-uint32_t size_g;
+uint32_t kernel_size_g;
+uint32_t kernel_cycles_g;
 uint32_t n_cbs_g;
 uint32_t n_args_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
 bool trisc_enabled_g;
+bool lazy_g;
+bool time_just_finish_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -42,14 +46,17 @@ void init(int argc, char **argv) {
         log_info(LogTest, "Usage:");
         log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "  -s: size of kernels in bytes (default {}, max {})", DEFAULT_KERNEL_SIZE_K, MAX_KERNEL_SIZE_K * 1024);
+        log_info(LogTest, "  -s: size of kernels in powers of 2 bytes (default {}, min {}, max {})", DEFAULT_KERNEL_SIZE_K * 1024, MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_K * 1024);
         log_info(LogTest, "  -x: X end of core range (default {})", 1);
         log_info(LogTest, "  -y: Y end of core range (default {})", 1);
         log_info(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
-        log_info(LogTest, "  -b: disable brisc kernel");
-        log_info(LogTest, "  -n: disable ncrisc kernel");
-        log_info(LogTest, "  -t: disable trisc kernels");
+        log_info(LogTest, "  -r: run kernels for exactly <n> cycles (default 0)");
+        log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
+        log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
+        log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
+        log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
+        log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         exit(0);
     }
 
@@ -57,25 +64,19 @@ void init(int argc, char **argv) {
     uint32_t core_y = test_args::get_command_option_uint32(input_args, "-y", 1);
     warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
-    size_g = test_args::get_command_option_uint32(input_args, "-s", DEFAULT_KERNEL_SIZE_K);
+    kernel_size_g = test_args::get_command_option_uint32(input_args, "-s", DEFAULT_KERNEL_SIZE_K * 1024);
     n_cbs_g = test_args::get_command_option_uint32(input_args, "-c", 0);
     n_args_g = test_args::get_command_option_uint32(input_args, "-a", 0);
-    if (size_g > MAX_KERNEL_SIZE_K * 1024) {
+    lazy_g = test_args::has_command_option(input_args, "-z");
+    time_just_finish_g = test_args::has_command_option(input_args, "-f");
+    kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-r", 0);
+    if (kernel_size_g > MAX_KERNEL_SIZE_K * 1024) {
         log_fatal("CB count must be 0..{}", MAX_KERNEL_SIZE_K * 1024);
         exit(0);
     }
-
-    // Kernel only supports certain sizes, snap to them
-    if (size_g < 256) size_g = 16;
-    else if (size_g < 512) size_g = 256;
-    else if (size_g < 1024) size_g = 512;
-    else {
-        for (int i = 2; i < 16; i++) {
-            if (size_g < 1024 * i) {
-                size_g = 1024 * (i - 1);
-                break;
-            }
-        }
+    if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
+        log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
+        exit(0);
     }
     if (n_cbs_g > MAX_CBS) {
         log_fatal("CB count must be 0..{}", MAX_CBS);
@@ -117,8 +118,11 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
         std::map<string, string> pad_defines = {
-            {"KERNEL_BYTES", std::to_string(size_g)}
+            {"KERNEL_BYTES", std::to_string(kernel_size_g)}
         };
+        if (kernel_cycles_g != 0) {
+            pad_defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(kernel_cycles_g)));
+        }
 
         vector<uint32_t> args;
         args.resize(n_args_g);
@@ -159,20 +163,29 @@ int main(int argc, char **argv) {
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
             EnqueueProgram(cq, program, false);
-            Finish(cq);
+        }
+        Finish(cq);
+
+        if (lazy_g) {
+            tt_metal::detail::SetLazyCommandQueueMode(true);
         }
 
         auto start = std::chrono::system_clock::now();
         for (int i = 0; i < iterations_g; i++) {
             EnqueueProgram(cq, program, false);
         }
+        if (time_just_finish_g) {
+            start = std::chrono::system_clock::now();
+        }
         Finish(cq);
         auto end = std::chrono::system_clock::now();
 
-        log_info(LogTest, "Kernel size: {}", size_g);
         log_info(LogTest, "Grid: ({}-{})", workers_g.start.str(), workers_g.end.str());
+        log_info(LogTest, "Kernel size: {}", kernel_size_g);
+        log_info(LogTest, "Kernel cycles: {}", kernel_cycles_g);
         log_info(LogTest, "CBs: {}", n_cbs_g);
         log_info(LogTest, "Args: {}", n_args_g);
+        log_info(LogTest, "Lazy: {}", lazy_g);
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
