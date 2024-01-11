@@ -43,7 +43,7 @@ void kernel_main() {
     constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
+    // constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
     // TODO delete unused: get_compile_time_arg_val(7); (8), (9)
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on them
     constexpr uint32_t window_outer                        = get_compile_time_arg_val(10);
@@ -207,7 +207,7 @@ void kernel_main() {
 
                 cb_reserve_back(cb_id_act, act_block_num_tiles_read);
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-                uint32_t reader_offset = act_l1_read_addr + (reader_offsets_ptr[reader_offset_idx] << log_base_2_of_conv_act_size_c_bytes);
+                uint32_t reader_offset = act_l1_read_addr + (reader_offsets_ptr[reader_offset_idx] * conv_act_c_read_bytes);
                 // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
                 for (uint32_t bhd = 0; bhd < act_block_h_datums_read; bhd++) {
                     // local read from reader_index + reader_offset;
@@ -215,11 +215,11 @@ void kernel_main() {
                     uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                     uint32_t reader_idx_2 = two_reader_indices >> 16;
 
-                    act_l1_offset = reader_offset + (reader_idx_1 << log_base_2_of_conv_act_size_c_bytes);
+                    act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
                     noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                     l1_write_addr_act += coalesced_read_bytes;
 
-                    act_l1_offset = reader_offset + (reader_idx_2 << log_base_2_of_conv_act_size_c_bytes);
+                    act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
                     noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                     l1_write_addr_act += coalesced_read_bytes;
 
@@ -264,7 +264,7 @@ void kernel_main() {
                     // and if window_inner is const this loop should be removed by the compiler
                     for (uint32_t inner = 0; inner < window_inner; inner++) {
                         // local read from reader_index + reader_offset;
-                        act_l1_offset = act_l1_read_addr + ((packed_reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes);
+                        act_l1_offset = act_l1_read_addr + ((packed_reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) * conv_act_c_read_bytes);
                         noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                         l1_write_addr_act += conv_act_c_read_bytes;
 
