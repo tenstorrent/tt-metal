@@ -622,15 +622,30 @@ def test_resnet50_conv(
             num_cores_nhw=num_cores_nhw,
         )
         is_1d_systolic = act_c_num_blocks == 1
+        reader_patterns_cache = {}
+
+        tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+            conv_weight_pyt.reshape(-1).tolist(),
+            conv_weight_pyt.shape,
+            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
+        tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+            conv_bias_pyt.reshape(-1).tolist(),
+            conv_bias_pyt.shape,
+            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
 
         conv = TTPyCompositeConv(
             sliding_window_op_params,
-            conv_weight_pyt.reshape(-1).tolist(),
+            tt_tensor_conv_weight,
             K,
             C,
             device,
             is_1d_systolic,
-            conv_bias_pyt.reshape(-1).tolist(),
+            reader_patterns_cache,
+            bias=tt_tensor_conv_bias,
             conv_blocking_and_parallelization_config_override=config_override,
             weights_dtype=weights_dtype,
             output_dtype=activations_dtype,
@@ -711,7 +726,9 @@ def test_resnet50_conv(
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 
-        TTPyCompositeConv.clear_static_cache_maps()
+        assert len(reader_patterns_cache) == 2
+        assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
+        reader_patterns_cache.clear()
 
         # Compare baseline against golden
         assert out_result_baseline.shape == out_golden.shape

@@ -21,17 +21,19 @@ import struct
 
 
 class TTPyUntilizeWithHalo(TTPyOp):
-    # cache map for kernel configs corresponding to unique sliding window op params
-    # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), window_hw: tuple(int, int), input_nhw: tuple(int, int, int), num_cores_nhw: int)
-    static_kernel_configs_cache_map = {}
-
-    def __init__(self, device, sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig, pad_val=0x0):
+    def __init__(
+        self,
+        device,
+        sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig,
+        halo_reader_patterns_cache,
+        pad_val=0x0,
+    ):
         self.sliding_window_op_params = sliding_window_op_params
         self.device = device
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
-        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params)
-        assert sliding_window_op_params_hash in TTPyUntilizeWithHalo.static_kernel_configs_cache_map
-        utwh_kernel_configs = TTPyUntilizeWithHalo.static_kernel_configs_cache_map[sliding_window_op_params_hash]
+        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache)
+        assert sliding_window_op_params_hash in halo_reader_patterns_cache
+        utwh_kernel_configs = halo_reader_patterns_cache[sliding_window_op_params_hash]
 
         ncores_w = sliding_window_op_params.num_cores_w
         ncores_h = sliding_window_op_params.num_cores_h
@@ -78,9 +80,10 @@ class TTPyUntilizeWithHalo(TTPyOp):
         self.utwh = utwh_
 
     # override abstract methods from base class TTPyOp
-    @classmethod
-    def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params):
-        if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
+    def set_op_configs(
+        self, device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache
+    ):
+        if sliding_window_op_params_hash not in halo_reader_patterns_cache:
             stride_h = sliding_window_op_params.stride_h
             stride_w = sliding_window_op_params.stride_w
             pad_h = sliding_window_op_params.pad_h
@@ -240,7 +243,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             # print("gen rr data config tt tensor")
             rr_data_tensor = gen_config_tt_tensors_uint16(rr_data)
 
-            cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = {
+            halo_reader_patterns_cache[sliding_window_op_params_hash] = {
                 "local_pad_tensor": local_pad_tensor,
                 "local_data_tensor": local_data_tensor,
                 "ll_data_tensor": ll_data_tensor,
