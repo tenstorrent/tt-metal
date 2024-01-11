@@ -1,5 +1,5 @@
 Tutorials
-=========
+#########
 
 This is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
 notebooks can be found under https://github.com/tenstorrent-metal/tt-metal/tree/main/ttnn/tutorials.

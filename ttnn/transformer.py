@@ -64,7 +64,7 @@ def split_query_key_value_and_split_heads(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """
-    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads: int, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[Tensor, Tensor, Tensor]
+    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads: int, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
 
     Splits tensor of shape [batch_size, sequence_size, 3 * hidden_size] into 3 tensors (Query, Key, Value) of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes them, to make them ready for computing attention scores. Equivalent pytorch code:
 
@@ -177,7 +177,7 @@ def attention_softmax(
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     """
-    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> ttnn.Tensor
+    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
 
     Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax
 
@@ -218,7 +218,7 @@ def attention_softmax_(
     attention_mask: Optional[Tensor],
 ) -> Tensor:
     """
-    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> ttnn.Tensor
+    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
 
     Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax. In-Place.
 

@@ -131,7 +131,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
         return output_tensor
 
     unary_function.__name__ = f"ttnn.{name}"
-    unary_function.__doc__ = f"""{name}(input_tensor: Tensor) -> Tensor
+    unary_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor) -> ttnn.Tensor
 
         Applies {name} to :attr:`input_tensor` element-wise.
 

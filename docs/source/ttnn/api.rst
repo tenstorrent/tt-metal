@@ -1,6 +1,5 @@
 API
-===
-
+###
 
 Tensor
 ******
@@ -19,10 +18,10 @@ Tensor
    ttnn/reallocate
 
 Operations
-************
+**********
 
 Matrix Multiplication
-~~~~~~~~~~~~~~~~~~~~~
+=====================
 
 .. toctree::
    :maxdepth: 1
@@ -30,21 +29,40 @@ Matrix Multiplication
    ttnn/matmul
    ttnn/linear
 
+Pointwise Unary
+================
 
-Pointwise
-~~~~~~~~~~~~~~~~~
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/exp
+   ttnn/gelu
+   ttnn/pow
+   ttnn/relu
+   ttnn/rsqrt
+   ttnn/softmax
+   ttnn/tanh
+
+Pointwise Binary
+================
 
 .. toctree::
    :maxdepth: 1
 
    ttnn/add
-   ttnn/gelu
    ttnn/mul
-   ttnn/softmax
    ttnn/sub
 
-Transformations
-~~~~~~~~~~~~~~~~~
+Reduction
+=========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/mean
+
+Data Movement
+=============
 
 .. toctree::
    :maxdepth: 1
@@ -52,8 +70,28 @@ Transformations
    ttnn/permute
    ttnn/reshape
 
+Normalization
+=============
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/layer_norm
+   ttnn/rms_norm
+
+Transformer
+===========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/transformer/split_query_key_value_and_split_heads
+   ttnn/transformer/concatenate_heads
+   ttnn/transformer/attention_softmax
+   ttnn/transformer/attention_softmax_
+
 Embedding
-~~~~~~~~~~~~~~~~~
+=========
 
 .. toctree::
    :maxdepth: 1
