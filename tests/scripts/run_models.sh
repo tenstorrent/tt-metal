@@ -5,7 +5,7 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 cd $TT_METAL_HOME
-export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
+export PYTHONPATH=$TT_METAL_HOME
 
 if [[ $ARCH_NAME == "grayskull" ]]; then
   # TODO(arakhmati): Run ttnn tests only on graskull until the issue with ttnn.reshape on wormhole is resolved

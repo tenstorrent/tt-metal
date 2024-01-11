@@ -18,7 +18,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
 fi
 
 cd $TT_METAL_HOME
-export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
+export PYTHONPATH=$TT_METAL_HOME
 
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsDirectSendAllConnectedChips"
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsSendInterleavedBufferAllConnectedChips"

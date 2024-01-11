@@ -33,13 +33,7 @@ def get_environment() -> dict:
             {
                 "TT_METAL_ENV": "dev",
                 "TT_METAL_HOME": os.environ["TT_METAL_HOME"],
-                "PYTHONPATH": ":".join(
-                    [
-                        os.environ["TT_METAL_HOME"],
-                        os.environ["TT_METAL_HOME"] + "/ttnn",
-                        os.environ.get("PYTHONPATH", ""),
-                    ]
-                ),
+                "PYTHONPATH": os.environ["TT_METAL_HOME"] + ":" + os.environ.get("PYTHONPATH", ""),
                 # "ARCH_NAME": "",
             }
         )
@@ -86,7 +80,7 @@ class BashScript:
     export OLDPWD=/home/tt-admin/muthu-tt-metal/build/test/tt_metal
     source ./build/python_env/bin/activate
     cd ${TT_METAL_HOME}
-    export PYTHONPATH=${TT_METAL_HOME}:${TT_METAL_HOME}/ttnn:${PYTHONPATH}
+    export PYTHONPATH=${TT_METAL_HOME}:${PYTHONPATH}
     (python_env) tt-admin@e09cs04:~/muthu-tt-metal$
     """
 

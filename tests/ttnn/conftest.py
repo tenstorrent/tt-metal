@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
-import os
-
-sys.path.insert(0, os.environ["TT_METAL_HOME"] + "/ttnn/")
-
 from types import ModuleType
 
 import pytest
