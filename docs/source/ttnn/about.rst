@@ -7,6 +7,3 @@ operations that easily translate `PyTorch <https://pytorch.org/>`_ tensors to ``
 TTNN's primary dependency is :doc:`TT-LIB </ttnn/dependencies/tt_lib>`.
 
 We trust that this library will be valuable to helping you on your journey to take full advantage of our devices!
-
-
-:ref:`ttnn.to_device<ttnn.to_device>`
