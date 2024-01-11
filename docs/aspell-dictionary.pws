@@ -303,6 +303,8 @@ ios
 ipynb
 isclose
 isfinite
+is_real
+is_imag
 isinf
 isnan
 isneginf

@@ -238,6 +238,14 @@ def torch_imag(a):
     return a.imag
 
 
+def torch_is_real(a):
+    return a.imag == 0
+
+
+def torch_is_imag(a):
+    return a.real == 0
+
+
 def torch_angle(a):
     return a.angle()
 
@@ -266,6 +274,8 @@ TTL_COMPLEX_UNARY_FUNCTIONS = [
     ("complex_angle", ttl.tensor.angle, torch_angle),
     ("complex_conj", ttl.tensor.conj, torch_conj),
     ("complex_polar", ttl.tensor.polar, torch.polar),
+    ("complex_is_real", ttl.tensor.is_real, torch_is_real),
+    ("complex_is_imag", ttl.tensor.is_imag, torch_is_imag),
 ]
 
 for complex_function_name, ttl_complex_function, torch_function in TTL_COMPLEX_UNARY_FUNCTIONS:
