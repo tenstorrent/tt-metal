@@ -1,4 +1,4 @@
-personal_ws-1.1 en 517
+personal_ws-1.1 en 518
 ABI
 ADDI
 API
@@ -304,8 +304,6 @@ ios
 ipynb
 isclose
 isfinite
-is_real
-is_imag
 isinf
 isnan
 isneginf
@@ -470,7 +468,6 @@ teardown
 tensix
 tgz
 tilize
-tilize_with_zero_padding
 tilized
 tilizing
 tmp

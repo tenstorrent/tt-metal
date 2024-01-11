@@ -17,7 +17,7 @@ Complex Operations
 
 .. autofunction:: ttnn.conj
 
-.. autofunction:: ttnn.abs
+.. autofunction:: ttnn.complex_abs
 
 .. autofunction:: ttnn.angle
 

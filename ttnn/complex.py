@@ -28,6 +28,10 @@ class ComplexTensor:
         self.real = real
         self.imag = imag
 
+    @property
+    def shape(self):
+        return self.real.shape
+
     def as_ttl_complex_tensor(self):
         return ttl.tensor.complex_tensor(self.real.value, self.imag.value)
 
@@ -151,8 +155,10 @@ def register_ttl_complex_unary_function(name, ttl_complex_function, torch_functi
         return torch_function(input_tensor)
 
     @decorate_operation(torch_function=_torch_complex, name=name)
-    def complex_function(input_tensor_a: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
-        f"""{name}(input_tensor: Tensor) -> Tensor
+    def complex_function(
+        input_tensor_a: ComplexTensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
+    ) -> Union[Tensor, ComplexTensor]:
+        f"""{name}(input_tensor: ComplexTensor) -> Union[Tensor,ComplexTensor]
 
         Applies {name} to :attr:`input_tensor` element-wise.
 
@@ -269,14 +275,22 @@ for complex_function_name, ttl_complex_function, torch_function in TTL_COMPLEX_B
 TTL_COMPLEX_UNARY_FUNCTIONS = [
     ("complex_abs", ttl.tensor.complex_abs, torch_cabs),
     ("complex_recip", ttl.tensor.complex_recip, torch_crecip),
-    ("complex_real", ttl.tensor.real, torch_real),
-    ("complex_imag", ttl.tensor.imag, torch_imag),
-    ("complex_angle", ttl.tensor.angle, torch_angle),
-    ("complex_conj", ttl.tensor.conj, torch_conj),
-    ("complex_polar", ttl.tensor.polar, torch.polar),
-    ("complex_is_real", ttl.tensor.is_real, torch_is_real),
-    ("complex_is_imag", ttl.tensor.is_imag, torch_is_imag),
+    ("real", ttl.tensor.real, torch_real),
+    ("imag", ttl.tensor.imag, torch_imag),
+    ("angle", ttl.tensor.angle, torch_angle),
+    ("conj", ttl.tensor.conj, torch_conj),
+    ("polar", ttl.tensor.polar, torch.polar),
+    ("is_real", ttl.tensor.is_real, torch_is_real),
+    ("is_imag", ttl.tensor.is_imag, torch_is_imag),
 ]
 
 for complex_function_name, ttl_complex_function, torch_function in TTL_COMPLEX_UNARY_FUNCTIONS:
     register_ttl_complex_unary_function(complex_function_name, ttl_complex_function, torch_function)
+
+ComplexTensor.abs = complex_abs
+ComplexTensor.recip = complex_recip
+ComplexTensor.angle = angle
+ComplexTensor.conj = conj
+ComplexTensor.polar = polar
+ComplexTensor.is_real = is_real
+ComplexTensor.is_imag = is_imag
