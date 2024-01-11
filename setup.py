@@ -172,7 +172,7 @@ setup(
         "tt_lib.models": "models",
         "tt_lib.scripts": "scripts",
         "tt_lib.tt_eager.tt_dnn": "tt_eager/tt_dnn",
-        "ttnn": "ttnn/ttnn",
+        "ttnn": "ttnn",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
