@@ -8,6 +8,7 @@ include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \
 		 tests/tt_metal/test_bmm \
+		 tests/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch \
 		 tests/tt_metal/perf_microbenchmark/matmul/matmul_global_l1 \
 		 tests/tt_metal/perf_microbenchmark/matmul/matmul_local_l1 \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 \

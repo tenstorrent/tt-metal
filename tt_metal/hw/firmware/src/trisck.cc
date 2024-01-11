@@ -31,8 +31,14 @@ volatile tt_reg_ptr uint * pc_buf_base = reinterpret_cast<volatile uint *>(PC_BU
 
 void kernel_launch()
 {
+#if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+#ifdef KERNEL_RUN_TIME
+    ckernel::wait(KERNEL_RUN_TIME);
+#endif
+#else
     tt_l1_ptr uint *local_l1_start_addr = (tt_l1_ptr uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     firmware_kernel_common_init(local_l1_start_addr);
 
     run_kernel();
+#endif
 }

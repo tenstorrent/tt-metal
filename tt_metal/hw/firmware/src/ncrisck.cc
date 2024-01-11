@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "risc_common.h"
+#include "tensix.h"
+#include "tensix_types.h"
+#include "noc.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "stream_io_map.h"
@@ -13,6 +16,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
 #include "tensix_functions.h"
+#include "c_tensix_core.h"
 
 #include "kernel.cpp"
 
@@ -24,6 +28,12 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 
 void kernel_launch() {
 
+#if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+#ifdef KERNEL_RUN_TIME
+    uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
+    while (c_tensix_core::read_wall_clock() < KERNEL_RUN_TIME);
+#endif
+#else
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE);
 
     noc_local_state_init(noc_index);
@@ -31,4 +41,5 @@ void kernel_launch() {
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+#endif
 }

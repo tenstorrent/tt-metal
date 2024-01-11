@@ -282,12 +282,11 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program, const Cor
         // only supporting enqueue program for cq 0 on a device.
         // kg.launch_msg.dispatch_core_x = dispatch_core.x;
         // kg.launch_msg.dispatch_core_y = dispatch_core.y;
+        static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
         uint32_t *launch_message_data = (uint32_t *)&kg.launch_msg;
-        program_pages[program_page_idx] = launch_message_data[0];
-        program_pages[program_page_idx + 1] = launch_message_data[1];
-        program_pages[program_page_idx + 2] = launch_message_data[2];
-        program_pages[program_page_idx + 3] = launch_message_data[3];
-        // program_pages[program_page_idx + 4] = launch_message_data[4];
+        for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
+            program_pages[program_page_idx + i] = launch_message_data[i];
+        }
         program_page_idx += sizeof(launch_msg_t) / sizeof(uint32_t);
     }
 

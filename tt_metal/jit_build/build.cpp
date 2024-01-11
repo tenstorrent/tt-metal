@@ -94,6 +94,10 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
 
+    if (tt::llrt::OptionsG.get_kernels_nullified()) {
+        this->defines_ += "-DDEBUG_NULL_KERNELS ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     this->includes_ = string("") +

@@ -463,10 +463,12 @@ namespace tt::tt_metal{
                     CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
 
                     std::map<string, string> producer_defines = {
+                        {"DISPATCH_KERNEL", "1"},
                         {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
                         {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
                     };
                     std::map<string, string> consumer_defines = {
+                        {"DISPATCH_KERNEL", "1"},
                         {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
                         {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
                     };
