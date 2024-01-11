@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import sys
 import tt_lib as ttl
-from ttnn.common import make_class_member_fn
 from ttnn.core import reshape, _reshape_to_4D
 from ttnn.decorators import decorate_operation
 from typing import Union
@@ -100,6 +99,7 @@ def register_ttl_ternary_function(name, ttl_ternary_function, torch_function):
 
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
+    return ternary_function
 
 
 def register_ttl_unary_function_with_two_float_parameters(name, ttl_unary_function, torch_function):
@@ -156,6 +156,7 @@ def register_ttl_unary_function_with_two_float_parameters(name, ttl_unary_functi
 
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
+    return ternary_function
 
 
 def register_ttl_ternary_function_with_float_parameter(name, ttl_ternary_function, torch_function):
@@ -237,6 +238,7 @@ def register_ttl_ternary_function_with_float_parameter(name, ttl_ternary_functio
 
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
+    return ternary_function
 
 
 # register functions
@@ -269,4 +271,8 @@ TTL_UNARY_FUNCTIONS_WITH_TWO_FLOAT_PARAMETERS = [
 for ternary_function_name, ttl_ternary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_TWO_FLOAT_PARAMETERS:
     register_ttl_unary_function_with_two_float_parameters(ternary_function_name, ttl_ternary_function, torch_function)
 
-make_class_member_fn(Tensor, locals(), __all__, 3)
+Tensor.mac = mac
+Tensor.where = where
+Tensor.addcmul = addcmul
+Tensor.addcdiv = addcdiv
+Tensor.clip = clip

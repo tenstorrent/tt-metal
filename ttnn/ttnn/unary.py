@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import sys
 import tt_lib as ttl
-from ttnn.common import make_class_member_fn
 from ttnn.core import reshape, _reshape_to_4D
 from ttnn.decorators import decorate_operation
 from typing import Union
@@ -185,6 +184,7 @@ def register_ttl_unary_function_reduce(name, ttl_unary_function, torch_function)
 
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
+    return unary_function
 
 
 def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function, torch_function):
@@ -239,6 +239,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function, t
 
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
+    return unary_function
 
 
 def register_ttl_activation_function_with_dim_parameter(name, ttl_activation_function, torch_function):
@@ -543,5 +544,102 @@ TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER = [
 for unary_function_name, ttl_unary_function, torch_function in TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER:
     register_ttl_activation_function_with_dim_parameter(unary_function_name, ttl_unary_function, torch_function)
 
-
-make_class_member_fn(Tensor, locals(), __all__, 1)
+Tensor.tilize_with_zero_padding = tilize_with_zero_padding
+Tensor.exp = exp
+Tensor.tanh = tanh
+Tensor.gelu = gelu
+Tensor.relu = relu
+Tensor.rsqrt = rsqrt
+Tensor.abs = abs
+Tensor.acos = acos
+Tensor.acosh = acosh
+Tensor.asin = asin
+Tensor.asinh = asinh
+Tensor.atan = atan
+Tensor.atanh = atanh
+Tensor.cbrt = cbrt
+Tensor.clone = clone
+Tensor.cos = cos
+Tensor.cosh = cosh
+Tensor.deg2rad = deg2rad
+Tensor.digamma = digamma
+Tensor.erf = erf
+Tensor.erfc = erfc
+Tensor.erfinv = erfinv
+Tensor.exp = exp
+Tensor.exp2 = exp2
+Tensor.expm1 = expm1
+Tensor.gelu = gelu
+Tensor.hardsigmoid = hardsigmoid
+Tensor.hardswish = hardswish
+Tensor.hardtanh = hardtanh
+Tensor.i0 = i0
+Tensor.identity = identity
+Tensor.isfinite = isfinite
+Tensor.isinf = isinf
+Tensor.isnan = isnan
+Tensor.isneginf = isneginf
+Tensor.isposinf = isposinf
+Tensor.lerp = lerp
+Tensor.lgamma = lgamma
+Tensor.log = log
+Tensor.logical_not_unary = logical_not_unary
+Tensor.log10 = log10
+Tensor.log1p = log1p
+Tensor.log2 = log2
+Tensor.log_sigmoid = log_sigmoid
+Tensor.mish = mish
+Tensor.move = move
+Tensor.multigammaln = multigammaln
+Tensor.neg = neg
+Tensor.rad2deg = rad2deg
+Tensor.recip = recip
+Tensor.relu = relu
+Tensor.relu6 = relu6
+Tensor.rsqrt = rsqrt
+Tensor.sigmoid = sigmoid
+Tensor.sign = sign
+Tensor.silu = silu
+Tensor.sin = sin
+Tensor.sinh = sinh
+Tensor.sqrt = sqrt
+Tensor.square = square
+Tensor.swish = swish
+Tensor.tan = tan
+Tensor.tanh = tanh
+Tensor.tanhshrink = tanhshrink
+Tensor.var_hw = var_hw
+Tensor.mean_hw = mean_hw
+Tensor.std_hw = std_hw
+Tensor.normalize_hw = normalize_hw
+Tensor.normalize_global = normalize_global
+Tensor.ones_like = ones_like
+Tensor.zeros_like = zeros_like
+Tensor.softsign = softsign
+Tensor.softplus = softplus
+Tensor.pow = pow
+Tensor.elu = elu
+Tensor.relu_max = relu_max
+Tensor.relu_min = relu_min
+Tensor.threshold = threshold
+Tensor.leaky_relu = leaky_relu
+Tensor.hardshrink = hardshrink
+Tensor.heaviside = heaviside
+Tensor.prelu = prelu
+Tensor.polygamma = polygamma
+Tensor.logit = logit
+Tensor.logical_ori = logical_ori
+Tensor.logical_andi = logical_andi
+Tensor.logical_xori = logical_xori
+Tensor.logical_noti = logical_noti
+Tensor.rdiv = rdiv
+Tensor.rsub = rsub
+Tensor.rpow = rpow
+Tensor.tril = tril
+Tensor.triu = triu
+Tensor.full_like = full_like
+Tensor.softshrink = softshrink
+Tensor.geglu = geglu
+Tensor.glu = glu
+Tensor.reglu = reglu
+Tensor.swiglu = swiglu

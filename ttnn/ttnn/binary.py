@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import sys
 import tt_lib as ttl
-from ttnn.common import make_class_member_fn
 from ttnn.core import reshape, _reshape_to_4D
 from ttnn.decorators import decorate_operation
 from typing import Union
@@ -606,5 +605,24 @@ TTL_FUNCTION_CONCAT = [
 for binary_function_name, ttl_binary_function, torch_function in TTL_FUNCTION_CONCAT:
     register_ttl_concat_function(binary_function_name, ttl_binary_function, torch_function)
 
-
-make_class_member_fn(Tensor, locals(), __all__, 2)
+Tensor.atan2 = atan2
+Tensor.hypot = hypot
+Tensor.ldexp = ldexp
+Tensor.logaddexp = logaddexp
+Tensor.logaddexp2 = logaddexp2
+Tensor.logical_and = logical_and
+Tensor.logical_or = logical_or
+Tensor.logical_xor = logical_xor
+Tensor.max = max
+Tensor.min = min
+Tensor.nextafter = nextafter
+Tensor.squared_difference = squared_difference
+Tensor.xlogy = xlogy
+Tensor.addalpha = addalpha
+Tensor.subalpha = subalpha
+Tensor.assign = assign
+Tensor.isclose = isclose
+Tensor.maeloss = maeloss
+Tensor.mseloss = mseloss
+Tensor.outer = outer
+Tensor.concat = concat
