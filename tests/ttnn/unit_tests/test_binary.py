@@ -336,3 +336,21 @@ class TestEltwiseBinary:
         output_tensor = ttnn.to_torch(output_tensor)
 
         assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+    @pytest.mark.parametrize("dim", [0, 1, 2, 3])
+    def test_concat(self, input_shape_a, input_shape_b, dim, device):
+        torch_a = torch.rand(input_shape_a, dtype=torch.bfloat16)
+        torch_b = torch.rand(input_shape_b, dtype=torch.bfloat16)
+
+        a = ttnn.from_torch(torch_a)
+        b = ttnn.from_torch(torch_b)
+
+        a = ttnn.to_device(a, device)
+        b = ttnn.to_device(b, device)
+
+        output_tensor = ttnn.concat(a, b, dim=dim)
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        torch_output_tensor = torch.cat([torch_a, torch_b], dim)
+        assert_with_pcc(torch_output_tensor, output_tensor, 1.0)
