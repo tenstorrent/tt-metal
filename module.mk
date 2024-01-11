@@ -141,7 +141,8 @@ LIBS_TO_BUILD += \
 	tools \
 	tt_metal \
 	tracy \
-	tt_eager
+	tt_eager \
+	ttnn \
 
 # These must be in dependency order (enforces no circular deps)
 include $(UMD_HOME)/device/module.mk
@@ -150,6 +151,7 @@ include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/tt_eager/module.mk
 include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/tests/module.mk
+include $(TT_METAL_HOME)/ttnn/module.mk
 
 # only include these modules if we're in development
 ifdef TT_METAL_ENV_IS_DEV
@@ -158,7 +160,7 @@ endif
 
 build: $(LIBS_TO_BUILD)
 
-clean: set_up_kernels/clean eager_package/clean
+clean: set_up_kernels/clean eager_package/clean ttnn/clean
 	test -d build && find build  -mindepth 1 -maxdepth 1 ! -path "build/python_env" -exec rm -rf {} + || true
 	rm -rf dist/
 
