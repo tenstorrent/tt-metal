@@ -6,6 +6,14 @@ import torch
 import ttnn
 import pytest
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def from_device(tensor: ttnn.Tensor):
+    tensor = ttnn.from_device(tensor)
+    tensor = ttnn.to_torch(tensor)
+    return tensor
+
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -38,6 +46,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a > torch_b).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_gte(self, input_shapes):
@@ -61,6 +70,8 @@ class TestEltwiseRelational:
         print(f"dtype: {output.dtype}")
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
+
+        assert_with_pcc((torch_a >= torch_b).to(torch.bfloat16), from_device(output))
 
         ttnn.close(device)
 
@@ -86,6 +97,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a == torch_b).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_lt(self, input_shapes):
@@ -110,6 +122,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a < torch_b).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_lte(self, input_shapes):
@@ -134,6 +147,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a <= torch_b).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_ne(self, input_shapes):
@@ -158,6 +172,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a != torch_b).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_gtz(self, input_shapes):
@@ -179,6 +194,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a > 0).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_gez(self, input_shapes):
@@ -200,6 +216,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a >= 0).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_eqz(self, input_shapes):
@@ -221,6 +238,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a == 0).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_ltz(self, input_shapes):
@@ -242,6 +260,7 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a < 0).to(torch.bfloat16), from_device(output))
         ttnn.close(device)
 
     def test_ttnn_nez(self, input_shapes):
@@ -263,4 +282,5 @@ class TestEltwiseRelational:
         print(f"layout: {output.layout}")
         # print(f"first row: {output[:1]}")
 
+        assert_with_pcc((torch_a != 0).to(torch.bfloat16), from_device(output))
         ttnn.close(device)

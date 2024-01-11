@@ -7,7 +7,6 @@ import ttnn
 import pytest
 from math import pi
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_complex
-from models.utility_functions import ttl_complex_2_torch_complex
 
 
 def make_complex(input_shapes, low, high, device):
@@ -27,7 +26,7 @@ def make_complex(input_shapes, low, high, device):
     return a, b, torch_a, torch_b
 
 
-def run_test_with(input_shapes, ttnn_complex_fn, ref_fn, low, high, unary=False, skip_assertion=False):
+def run_test_with(input_shapes, ttnn_complex_fn, ref_fn, low, high, unary=False):
     device_id = 0
     device = ttnn.open(device_id)
 
@@ -58,9 +57,6 @@ def run_test_with(input_shapes, ttnn_complex_fn, ref_fn, low, high, unary=False,
         print(f"shape: {output.shape}")
         print(f"dtype: {output.dtype}")
         print(f"layout: {output.layout}")
-
-    if skip_assertion:
-        pytest.skip("test is not compared to golden values")
 
     if unary:
         assert torch.isclose(output, ref_fn(torch_a), 1e-1).all()

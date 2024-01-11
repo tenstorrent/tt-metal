@@ -6,6 +6,14 @@ import torch
 import ttnn
 import pytest
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def from_device(tensor: ttnn.Tensor):
+    tensor = ttnn.from_device(tensor)
+    tensor = ttnn.to_torch(tensor)
+    return tensor
+
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -37,6 +45,8 @@ class TestEltwiseTernary:
         output = ttnn.where(a, b, c)
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
 
+        assert_with_pcc(torch.where(torch_a.to(torch.bool), torch_b, torch_c).to(torch.bfloat16), from_device(output))
+
         print(f"shape: {output.shape}")
         print(f"dtype: {output.dtype}")
         print(f"layout: {output.layout}")
@@ -64,6 +74,8 @@ class TestEltwiseTernary:
         output = ttnn.mac(a, b, c)
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
 
+        assert_with_pcc(torch_a * torch_b + torch_c, from_device(output))
+
         print(f"shape: {output.shape}")
         print(f"dtype: {output.dtype}")
         print(f"layout: {output.layout}")
@@ -79,7 +91,7 @@ class TestEltwiseTernary:
 
         torch_a = torch.rand(input_shapes, dtype=torch.bfloat16)
         torch_b = torch.rand(input_shapes, dtype=torch.bfloat16)
-        torch_c = torch.rand(input_shapes, dtype=torch.bfloat16)
+        torch_c = 10 + torch.rand(input_shapes, dtype=torch.bfloat16)
 
         a = ttnn.from_torch(torch_a)
         b = ttnn.from_torch(torch_b)
@@ -91,6 +103,8 @@ class TestEltwiseTernary:
 
         output = ttnn.addcdiv(a, b, c, value)
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+
+        assert_with_pcc(torch.addcdiv(torch_a, torch_b, torch_c), from_device(output))
 
         print(f"shape: {output.shape}")
         print(f"dtype: {output.dtype}")
@@ -119,6 +133,8 @@ class TestEltwiseTernary:
 
         output = ttnn.addcmul(a, b, c, value)
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+
+        assert_with_pcc(torch.addcmul(torch_a, torch_b, torch_c), from_device(output))
 
         print(f"shape: {output.shape}")
         print(f"dtype: {output.dtype}")
