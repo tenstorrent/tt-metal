@@ -68,6 +68,10 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #endif
 
+#if SFPU_OP_DROPOUT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/dropout.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif

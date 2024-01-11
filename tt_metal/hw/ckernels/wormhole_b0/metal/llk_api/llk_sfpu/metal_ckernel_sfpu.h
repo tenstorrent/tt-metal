@@ -189,6 +189,7 @@ inline void calculate_dropout(uint prob, uint scale)
     // SFPU microcode
 
     vUInt rand = l_reg[LRegs::LReg3];
+    vUInt probv = prob;
 
     #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
@@ -200,7 +201,7 @@ inline void calculate_dropout(uint prob, uint scale)
         ////////////////////////
         // Drop samples
         ///////////////////////
-        v_if (rand < prob) {
+        v_if (rand < probv) {
             dst_reg[0] = vConst0;
         }
         v_endif;
