@@ -61,32 +61,35 @@ void kernel_main() {
             out_noc_addr = get_noc_addr(core_offset_out_row_id + out_row_id, s_out);
             #endif
 
-            // tile 0
-            // face 0
-            // write 16 elements from face0 // 32B
-            noc_async_write(out_l1_read_addr, out_noc_addr, 32);
-            out_noc_addr += 32;
+            noc_async_write(out_l1_read_addr, out_noc_addr, 128);
+            out_noc_addr += 128;
 
-            // face 1
-            out_l1_read_addr += 512; // go to face 1
-            noc_async_write(out_l1_read_addr, out_noc_addr, 32);
-            out_noc_addr += 32;
+            // // tile 0
+            // // face 0
+            // // write 16 elements from face0 // 32B
+            // noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+            // out_noc_addr += 32;
 
-            // go to tile 1
-            out_l1_read_addr += 512 + 1024;
+            // // face 1
+            // out_l1_read_addr += 512; // go to face 1
+            // noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+            // out_noc_addr += 32;
 
-            // face 0
-            // write 16 elements from face0 // 32B
-            noc_async_write(out_l1_read_addr, out_noc_addr, 32);
-            out_noc_addr += 32;
+            // // go to tile 1
+            // out_l1_read_addr += 512 + 1024;
 
-            // face 1
-            out_l1_read_addr += 512; // go to face 1
-            noc_async_write(out_l1_read_addr, out_noc_addr, 32);
-            out_noc_addr += 32;
+            // // face 0
+            // // write 16 elements from face0 // 32B
+            // noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+            // out_noc_addr += 32;
 
-            // go to next tile in the block (next channel)
-            out_l1_read_addr += 512 + 1024;
+            // // face 1
+            // out_l1_read_addr += 512; // go to face 1
+            // noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+            // out_noc_addr += 32;
+
+            // // go to next tile in the block (next channel)
+            // out_l1_read_addr += 512 + 1024;
 
             ++ out_row_id;
         }

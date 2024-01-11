@@ -212,16 +212,8 @@ def test_run_max_pool(
         )
         .to(ttl.tensor.Layout.TILE)
         .to(device, sharded_mem_config, shard_spec)
-        # .to(device, interleaved_mem_config)
     )
     ttact_sharded = ttact_tilize
-    # ttact_sharded = ttl.tensor.interleaved_to_sharded(
-    #     ttact_tilize,
-    #     grid_size,
-    #     [in_nhw // ncores_nhw, act_padded.shape[-1]],
-    #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-    #     ttl.tensor.ShardOrientation.ROW_MAJOR,
-    # )
     assert in_h * in_w == act_shape_padded[-2]
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
     halo_reader_patterns_cache = {}
@@ -235,7 +227,6 @@ def test_run_max_pool(
 
     out_padded = max_pool(out_untilize)
 
-    # out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     # Clear the cache maps
@@ -259,19 +250,10 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    # print(f"{out_pytorch[0][0]}")
-    # print(f"{out_pytorch[0][1]}")
-    # print(f"{out_pytorch[0][2]}")
-    # print(f"{out_pytorch[0][3]}")
-    # print(f"{out_pytorch[0][32]}")
-    # print(f"{golden_pytorch[0][0]}")
-    # print(f"{golden_pytorch[0][32]}")
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")
 
-    # print(f'OUTPUT: {out_pytorch[0,:,:,:]}')
-    # print(f'GOLDEN: {golden_pytorch}')
     # torch.save(out_pytorch, "output.pt")
     # torch.save(golden_pytorch, "golden.pt")
 

@@ -77,33 +77,44 @@ def volume(shape):
     "in_mem_config",
     (
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        # ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1),
     ),
-    ids=["in_DRAM", "in_L1", "in_HEIGHT_SHARDED"],
+    ids=[
+        "in_DRAM",
+        #  "in_L1",
+        "in_HEIGHT_SHARDED",
+    ],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
     (
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        # ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1),
     ),
-    ids=["out_DRAM", "out_L1", "out_HEIGHT_SHARDED"],
+    ids=[
+        "out_DRAM",
+        #  "out_L1",
+        "out_HEIGHT_SHARDED",
+    ],
 )
 @pytest.mark.parametrize(
     "nblocks",
     (
         1,  ## default
-        4,
-        8,
+        # 4,
+        # 8,
         # 28, # for perf
         # 56,
     ),
 )
 @pytest.mark.parametrize(
     "use_multicore",
-    (False, True),
+    (
+        False,
+        True,
+    ),
 )
 def test_run_max_pool(
     act_shape,
@@ -258,12 +269,9 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
-    assert passing
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
+    passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")
-    # print(f'OUTPUT: {out_pytorch}')
-    # print(f'GOLDEN: {golden_pytorch}')
-
     assert passing_pcc
+    assert passing

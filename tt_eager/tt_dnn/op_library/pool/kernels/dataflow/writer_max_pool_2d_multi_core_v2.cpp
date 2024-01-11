@@ -38,7 +38,6 @@ void kernel_main() {
     uint32_t core_offset_out_row_id = get_arg_val<uint32_t>(4);
     uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(5);
 
-    uint32_t out_row_id = 0;
     uint64_t out_noc_addr;
     constexpr uint32_t sharded_out_cb_id = tt::CB::c_out1;
     out_noc_addr = get_noc_addr(get_read_ptr(sharded_out_cb_id));
@@ -87,8 +86,6 @@ void kernel_main() {
 
         //     // go to next tile in the block (next channel)
         //     out_l1_read_addr += 512 + 1024;
-
-        //     ++ out_row_id;
         // }
         noc_async_write_barrier();
 

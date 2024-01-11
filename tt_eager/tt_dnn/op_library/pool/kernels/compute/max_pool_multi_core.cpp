@@ -106,7 +106,7 @@ inline void reduce_h(uint32_t out_nelems,
                      uint32_t out_ntiles_c,
                      uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
-    reduce_init_delta_no_pack<false>(PoolType::MAX, ReduceDim::REDUCE_COL);
+    reduce_init_delta_no_pack();
     pack_untilize_dst_init_short<in_ntiles_c>();
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
     tile_regs_acquire();
