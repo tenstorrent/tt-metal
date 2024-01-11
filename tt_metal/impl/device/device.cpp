@@ -260,10 +260,7 @@ void Device::clear_l1_state() {
 }
 
 void Device::initialize_command_queue() {
-    std::cout << "Initializing command queue for device " << this->id() << std::endl;
-    if (not this->is_mmio_capable()) {
-        TT_ASSERT(this->num_hw_cqs() == 1, "Only support one hardware command queue for fast dispatch on remote device");
-    }
+    TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     this->sysmem_manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
@@ -277,9 +274,6 @@ void Device::initialize_command_queue() {
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
         pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(cq_id) + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)) >> 4;
-
-        std::cout << "Writing HOST_CQ_ISSUE_READ_PTR " << pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] << " and HOST_CQ_COMPLETION_WRITE_PTR " << pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)]
-                  << " to channel " << channel << " at address " << cq_id * cq_size << std::endl;
 
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, mmio_device_id, channel);
     }

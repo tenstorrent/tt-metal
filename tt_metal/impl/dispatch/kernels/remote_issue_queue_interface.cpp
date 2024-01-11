@@ -90,10 +90,7 @@ void kernel_main() {
             ;  // Check that there is space in the consumer
         // program_consumer_cb(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
         // relay_command(db_buf_switch, consumer_noc_encoding);
-        // if (stall) {
-        //     while (*db_semaphore_addr != 2)
-        //         ;
-        // }
+
         // Decrement the semaphore value
         noc_semaphore_inc(producer_noc_encoding | uint32_t(db_semaphore_addr), -1);  // Two's complement addition
         noc_async_write_barrier();

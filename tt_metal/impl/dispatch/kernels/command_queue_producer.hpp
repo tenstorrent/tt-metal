@@ -5,7 +5,6 @@
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
-// #include "debug/dprint.h"
 
 CQReadInterface cq_read_interface;
 
@@ -25,10 +24,6 @@ void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const 
     cq_read_interface.issue_fifo_size = issue_region_size >> 4;
     cq_read_interface.issue_fifo_limit = (issue_region_rd_ptr + issue_region_size) >> 4;
     cq_read_interface.issue_fifo_rd_toggle = 0;
-
-    // DPRINT << "issue_fifo_rd_ptr: " << cq_read_interface.issue_fifo_rd_ptr
-    //        << " issue_fifo_size: " << cq_read_interface.issue_fifo_size
-    //        << " issue_fifo_limit: " << cq_read_interface.issue_fifo_limit << ENDL();
 }
 
 FORCE_INLINE

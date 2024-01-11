@@ -25,9 +25,6 @@ struct CQWriteInterface {
     uint32_t completion_fifo_wr_toggle;
 };
 
-extern CQReadInterface cq_read_interface;   // set up in command_queue_producer
-extern CQWriteInterface cq_write_interface; // set up in command_queue_consumer
-
 struct CBInterface {
     uint32_t fifo_size;
     uint32_t fifo_limit; // range is inclusive of the limit

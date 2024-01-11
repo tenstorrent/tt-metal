@@ -51,9 +51,6 @@ inline uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t c
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
     // no need to account for channle in the cq offset here just use offset using cq_id ? ...
     static constexpr bool add_channel_offset = false;
-    std::cout << "Reading cq issue read ptr for device " << chip_id
-              << " from addr: " << HOST_CQ_ISSUE_READ_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)
-              << " at channel: " << channel << std::endl;
     tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_READ_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
@@ -68,9 +65,6 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
     // no need to account for channle in the cq offset here just use offset using cq_id ? ...
     static constexpr bool add_channel_offset = false;
-    std::cout << "Reading cq completion write ptr for device " << chip_id
-              << " from addr: " << HOST_CQ_COMPLETION_WRITE_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size)
-              << " at channel: " << channel << std::endl;
     tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_WRITE_PTR + get_cq_offset<add_channel_offset>(channel, cq_id, cq_size), mmio_device_id, channel);
     if (not addr_16B) {
         return recv << 4;
@@ -99,17 +93,6 @@ struct SystemMemoryCQInterface {
 
         this->completion_fifo_rd_ptr = this->issue_fifo_limit;
         this->completion_fifo_rd_toggle = 0;
-
-        std::cout << "System Memory CQ Interface" << std::endl;
-        std::cout << "\tcommand_issue_region_size: " << command_issue_region_size
-                  << " command_completion_region_size: " << command_completion_region_size
-                  << " issue_fifo_size: " << issue_fifo_size
-                  << " issue_fifo_limit: " << issue_fifo_limit
-                  << " offset: " << offset
-                  << " issue_fifo_wr_ptr: " << issue_fifo_wr_ptr
-                  << " completion_fifo_size: " << completion_fifo_size
-                  << " completion_fifo_limit: " << completion_fifo_limit
-                  << " completion_fifo_rd_ptr: " << completion_fifo_rd_ptr << std::endl;
     }
 
     // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B aligned and remaining space is dedicated for completion queue
@@ -224,7 +207,6 @@ class SystemMemoryManager {
         // this->cq_sysmem_start gives start of hugepage for a given channel from perspective of host
         //  but all rd/wr pointers include channel offset from address 0 to match device side pointers
         //  so channel offset needs to be subtracted to get address relative to channel
-        std::cout << "memcopy to address cq_sysmem_start + " << (write_ptr - this->channel_offset) << std::endl;
         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         memcpy(user_scratchspace, data, size_in_bytes);
@@ -234,7 +216,6 @@ class SystemMemoryManager {
         const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
         uint32_t write_ptr_and_toggle =
             cq_interface.issue_fifo_wr_ptr | (cq_interface.issue_fifo_wr_toggle << 31);
-        // std::cout << "Sending " << (cq_interface.issue_fifo_wr_ptr << 4) << " to device" << std::endl;
         this->fast_write_callable(this->issue_byte_addrs[cq_id], 4, (uint8_t*)&write_ptr_and_toggle, this->m_dma_buf_size);
         tt_driver_atomics::sfence();
     }
