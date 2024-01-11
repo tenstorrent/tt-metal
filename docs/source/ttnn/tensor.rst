@@ -1,5 +1,5 @@
 Tensor
-=======
+######
 
 
 A :class:`ttnn.Tensor` is a multi-dimensional matrix containing elements of a single data type.
@@ -78,7 +78,7 @@ Row major layout has the consecutive elements of a row next to each other.
 
 In tile layout, the elements themselves are placed within a 32x32 square called a tile.
 The tiles themselves are then still stored in a row-major order. In order to transition to TILE_LAYOUT, :ref:`ttnn.to_layout<ttnn.to_layout>` can be used.
-WHen the height or width of the tensor are not divisible by 32, padding is automatically provided.
+When the height or width of the tensor are not divisible by 32, padding is automatically provided.
 
 .. figure:: images/tensor_with_tile_layout.png
     :align: center
@@ -101,7 +101,7 @@ ttnn supports the following data types:
 
 
 .. note::
-    `ttnn.Tensor` uses a minimum of 4 bytes to store a row of the tensor on the device.
+    :class:`ttnn.Tensor` uses a minimum of 4 bytes to store a row of the tensor on the device.
     That means that the minimum width of a tensor on the device is as follows:
 
     .. list-table:: Minimum width of a tensor on the device
@@ -131,7 +131,7 @@ Storage
 
 **BORROWED**
 
-    The buffer of the tensor is on the host and it was borrowed from `torch` / `numpy` / an external buffer.
+    The buffer of the tensor is on the host and it was borrowed from ``torch`` / ``numpy`` / an external buffer.
 
 **DEVICE**
 
@@ -156,7 +156,7 @@ Memory Config
     TODO: Add documentation for sharded memory configs
 
 APIs
-***************
+****
 
 .. autoclass:: ttnn.Tensor
     :members:

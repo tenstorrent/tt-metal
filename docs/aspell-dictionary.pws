@@ -1,4 +1,4 @@
-personal_ws-1.1 en 432
+personal_ws-1.1 en 446
 ABI
 ADDI
 API
@@ -10,6 +10,7 @@ BRISC
 BRISCs
 BUF
 BUFs
+BertIntermediate
 BinaryOpType
 BorrowedStorage
 BufferType
@@ -27,6 +28,7 @@ CloseDevice
 CommandQueue
 CompileProgram
 ComputeConfig
+Configs
 ConfigureDeviceWithProgram
 CoreCoord
 CoreRange
@@ -104,6 +106,7 @@ POPC
 PUSHC
 PYTHONPATH
 ParallelizationStrategyEnum
+Pointwise
 PoolType
 Profiler
 ProgramWithCallbacks
@@ -126,6 +129,7 @@ SFPU's
 SIMD
 SPDX
 SetRuntimeArgs
+Sharded
 ShardedBufferConfig
 SliceRange
 TRISC
@@ -188,6 +192,7 @@ cli
 codebase
 concat
 config
+configs
 const
 constexpr
 coord
@@ -203,6 +208,7 @@ datacopy
 dataflow
 datatypes
 deallocate
+deallocation
 debiases
 dec
 defaultfloat
@@ -238,6 +244,7 @@ exexp
 exman
 expm
 fb
+finetuned
 fno
 fp
 funcs
@@ -316,11 +323,15 @@ onboarding
 parallelization
 parallelizes
 param
+pcc
 perf
 performant
+phiyodr
 phyiscally
+png
 pragma
 pre
+preprocess
 profiler
 ptr
 pwd
@@ -340,6 +351,7 @@ relu
 repo
 resnet
 riscv
+rms
 rmsg
 rsqrt
 rst
@@ -360,6 +372,7 @@ sfpassign
 sfpi
 sfpu
 sgn
+sharded
 shflror
 shflshr
 shft
@@ -406,6 +419,7 @@ ublocks
 ui
 uint
 unary
+undoc
 unicast
 uninit
 unpad
