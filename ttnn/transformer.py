@@ -133,6 +133,8 @@ def split_query_key_value_and_split_heads(
         ttl_input_tensor = input_tensor.value
 
         if kv_input_tensor is not None:
+            _, sequence_size, _ = kv_input_tensor.shape
+            _, sequence_size_padded, _ = kv_input_tensor.shape.padded()
             desired_shape = Shape(
                 [batch_size, 1, sequence_size, hidden_size * 2],
                 [batch_size, 1, sequence_size_padded, hidden_size * 2],
