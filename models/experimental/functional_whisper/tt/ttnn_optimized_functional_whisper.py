@@ -26,75 +26,53 @@ def dropout(hidden_states, p, training):
     return hidden_states
 
 
-def calculate_key_values(config, key_value_states, *, parameters):
-    bsz, tgt_len, hidden_size = key_value_states.shape
-    bsz, tgt_len_padded, hidden_size_padded = key_value_states.shape.padded()
-    head_size = hidden_size // config.encoder_attention_heads
+# def calculate_key_values(config, key_value_states, *, parameters):
+#     bsz, tgt_len, hidden_size = key_value_states.shape
+#     bsz, tgt_len_padded, hidden_size_padded = key_value_states.shape.padded()
+#     head_size = hidden_size // config.encoder_attention_heads
 
-    fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
-    fused_qkv = ttnn.reshape(fused_qkv, shape=(bsz, tgt_len_padded, 2, config.encoder_attention_heads, head_size))
-    key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :]
-
-    desired_shape = ttnn.Shape(
-        [bsz, tgt_len, config.encoder_attention_heads, head_size],
-        [bsz, tgt_len_padded, config.encoder_attention_heads, head_size],
-    )
-    key_states = ttnn.reshape(key_states, shape=desired_shape)
-    key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-
-    value_states = ttnn.reshape(value_states, shape=desired_shape)
-    value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-
-    return key_states, value_states
-
-
-def split_query_key_value_and_split_heads(
-    config, fused_qkv: ttnn.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    head_size = config.d_model // config.encoder_attention_heads
-    batch_size, *_, _, three_times_hidden_size = fused_qkv.shape.padded()
-    hidden_size = three_times_hidden_size // 3
-    encoder_attention_heads = hidden_size // head_size
-    output = ttnn.transformer.split_query_key_value_and_split_heads(
-        fused_qkv,
-        num_heads=encoder_attention_heads,
-        memory_config=WHISPER_MEMORY_CONFIG,
-    )
-    return output
-
-
-# # Example: Below function will be replaced by the split_query_key_value_and_split_heads above
-# def split_query_key_value_and_split_heads(
-#     config, fused_qkv: ttnn.Tensor
-# ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-#     head_size = config.d_model // config.encoder_attention_heads
-#     batch_size, *_, seq_length, three_times_hidden_size = fused_qkv.shape
-#     batch_size, *_, padded_seq_length, three_times_hidden_size = fused_qkv.shape.padded()
-#     hidden_size = three_times_hidden_size // 3
-#     encoder_attention_heads = hidden_size // head_size
-
-#     fused_qkv = ttnn.reshape(fused_qkv, shape=(batch_size, padded_seq_length, 3, encoder_attention_heads, head_size))
-#     query_states, key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :], fused_qkv[..., 2, :, :]
+#     fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
+#     fused_qkv = ttnn.reshape(fused_qkv, shape=(bsz, tgt_len_padded, 2, config.encoder_attention_heads, head_size))
+#     key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :]
 
 #     desired_shape = ttnn.Shape(
-#         [batch_size, seq_length, encoder_attention_heads, head_size],
-#         [batch_size, padded_seq_length, encoder_attention_heads, head_size],
+#         [bsz, tgt_len, config.encoder_attention_heads, head_size],
+#         [bsz, tgt_len_padded, config.encoder_attention_heads, head_size],
 #     )
-#     query_states = ttnn.reshape(query_states, shape=desired_shape)
-#     query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-
 #     key_states = ttnn.reshape(key_states, shape=desired_shape)
 #     key_states = ttnn.permute(key_states, (0, 2, 1, 3))
 
 #     value_states = ttnn.reshape(value_states, shape=desired_shape)
 #     value_states = ttnn.permute(value_states, (0, 2, 1, 3))
 
-#     return query_states, key_states, value_states
+#     return key_states, value_states
+
+
+def calculate_key_values(config, query_states, key_value_states, *, parameters):
+    fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
+    head_size = config.d_model // config.encoder_attention_heads
+    batch_size, *_, _, two_times_hidden_size = fused_kv.shape.padded()
+    hidden_size = two_times_hidden_size // 2
+    encoder_attention_heads = hidden_size // head_size
+    return ttnn.transformer.split_query_key_value_and_split_heads(
+        query_states,
+        kv_input_tensor=fused_kv,
+        num_heads=encoder_attention_heads,
+        memory_config=WHISPER_MEMORY_CONFIG,
+    )
 
 
 def calculate_query_key_values(config, hidden_states, *, parameters):
     fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
-    return split_query_key_value_and_split_heads(config, fused_qkv)
+    head_size = config.d_model // config.encoder_attention_heads
+    batch_size, *_, _, three_times_hidden_size = fused_qkv.shape.padded()
+    hidden_size = three_times_hidden_size // 3
+    encoder_attention_heads = hidden_size // head_size
+    return ttnn.transformer.split_query_key_value_and_split_heads(
+        fused_qkv,
+        num_heads=encoder_attention_heads,
+        memory_config=WHISPER_MEMORY_CONFIG,
+    )
 
 
 def whisper_attention(config, hidden_states, attention_mask, key_value_states=None, *, parameters):
@@ -106,13 +84,10 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
         query_states = (hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias) * scaling
-        query_states_shape = ttnn.Shape(
-            [bsz, tgt_len, config.encoder_attention_heads, head_size],
-            [bsz, padded_tgt_len, config.encoder_attention_heads, head_size],
+        query_states, key_states, value_states = calculate_key_values(
+            config, query_states, key_value_states, parameters=parameters
         )
-        query_states = ttnn.reshape(query_states, shape=query_states_shape)
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-        key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
+        key_states = ttnn.permute(key_states, (0, 1, 3, 2))
         padded_key_value_tgt_len = key_states.shape.padded()[2]
         key_value_tgt_len = key_states.shape[2]
     else:
