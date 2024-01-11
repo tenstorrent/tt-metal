@@ -283,9 +283,6 @@ def determine_per_core_block_config(
 
 
 class TTPyCompositeConv(TTPyOp):
-    # cache map for kernel configs corresponding to unique sliding window op params
-    # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), filter_hw: tuple(int, int), input_nhw: tuple(int, int, int), num_cores_nhw: int)
-    static_kernel_configs_cache_map = {}
     config_keys = [
         "num_cores_nhw",
         "grid_size",
@@ -304,12 +301,13 @@ class TTPyCompositeConv(TTPyOp):
     def __init__(
         self,
         sliding_window_op_params: Union[SlidingWindowOpParams, SlidingWindowOpParamsWithParallelConfig],
-        weight: List[Union[int, float]],  # should user send TT tensor as weight tensor
+        weight: ttl.tensor.Tensor,  # should user send TT tensor as weight tensor
         output_channels,
         input_channels,
         device,
         is_1d_systolic,
-        bias,
+        reader_patterns_cache,
+        bias: ttl.tensor.Tensor = None,
         conv_blocking_and_parallelization_config_override={},
         fuse_relu=False,
         weights_dtype=None,
@@ -317,6 +315,16 @@ class TTPyCompositeConv(TTPyOp):
         math_fidelity=None,
         move_utwh_output=False,
     ):
+        if len(reader_patterns_cache) == 0:
+            reader_patterns_cache["conv"] = {}
+            reader_patterns_cache["halo"] = {}
+        else:
+            assert len(reader_patterns_cache) == 2
+            assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
+        for key in reader_patterns_cache:
+            assert (
+                key == "conv" or key == "halo"
+            ), f"reader_patterns_cache should have 1 of the following keys only - conv or halo. Found key - {key}"
         for key in conv_blocking_and_parallelization_config_override:
             assert (
                 key in TTPyCompositeConv.config_keys
@@ -405,49 +413,52 @@ class TTPyCompositeConv(TTPyOp):
             1,
             1,
         ]
-        # set_op_configs populates static_kernel_configs_cache_map[sliding_window_op_params_hash] with conv_reader_indices sharded tensor
+        # set_op_configs populates reader_patterns_cache["conv"][sliding_window_op_params_hash] with conv_reader_indices sharded tensor
         self.set_op_configs(
-            device,
+            self.device,
             sliding_window_op_params_hash,
             sliding_window_op_params,
             conv_params,
             not is_1d_systolic,
+            reader_patterns_cache["conv"],
         )
-        conv_reader_indices = TTPyCompositeConv.static_kernel_configs_cache_map[sliding_window_op_params_hash]
+        assert sliding_window_op_params_hash in reader_patterns_cache["conv"]
+        conv_reader_indices = reader_patterns_cache["conv"][sliding_window_op_params_hash]
 
         self.set_op_weights_biases(
             weight,
             conv_params,
-            device,
+            self.device,
             self.opt_conv_block_conf_auto.act_block_w_ntiles,
             self.opt_conv_block_conf_auto.weight_block_w_ntiles,
             self.opt_conv_parall_conf_auto,
             self.opt_conv_block_conf_auto,
-            bias,
             fuse_relu,
             output_mem_config,
-            self.input_tensor_shape,
-            weights_dtype,
             output_dtype,
             math_fidelity,
             conv_reader_indices,
+            bias=bias,
+            weights_dtype=weights_dtype,
         )
 
         # create untilize with halo op
-        self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, self.sliding_window_op_params)
+        self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
+            device, self.sliding_window_op_params, reader_patterns_cache["halo"]
+        )
 
     # override abstract methods from base class TTPyOp
-    @classmethod
     def set_op_configs(
-        cls,
+        self,
         device,
         sliding_window_op_params_hash,
         sliding_window_op_params,
         conv_params,
         conv_is_2d,
+        conv_reader_patterns_cache,
     ):
         # TODO: Need way of hashing sliding_window_op_params
-        if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
+        if sliding_window_op_params_hash not in conv_reader_patterns_cache:
             # TODO: Need to clean up sliding_window_op_params and conv_params (they are basically the same)
             stride_h = sliding_window_op_params.stride_h
             stride_w = sliding_window_op_params.stride_w
@@ -533,26 +544,25 @@ class TTPyCompositeConv(TTPyOp):
             mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
             conv_reader_indices_sharded_tensor = conv_reader_indices_tt_tensor.to(device, mem_config, shard_spec)
 
-            cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = conv_reader_indices_sharded_tensor
+            conv_reader_patterns_cache[sliding_window_op_params_hash] = conv_reader_indices_sharded_tensor
 
     # TODO: Maybe need to have this be more general to settting up conv
     def set_op_weights_biases(
         self,
-        weight: List[Union[int, float]],
+        weight: ttl.tensor.Tensor,
         conv_params,
         device,
         weight_block_h_ntiles,
         weight_block_w_ntiles,
         opt_conv_parall_conf,
         opt_conv_block_conf,
-        bias,
         fuse_relu,
         output_mem_config,
-        input_tensor_shape,
-        weights_dtype,
         output_dtype,
         math_fidelity,
         conv_reader_indices,
+        weights_dtype=None,
+        bias=None,
     ):
         assert len(conv_params) == 10
         K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
@@ -561,12 +571,15 @@ class TTPyCompositeConv(TTPyOp):
 
         weights_shape = [K, C, R, S]
         weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
+        if weights_dtype is None:
+            weights_dtype = weight.dtype()
         weights_untiled_dtype = (
             weights_dtype if weights_dtype != ttl.tensor.DataType.BFLOAT8_B else ttl.tensor.DataType.FLOAT32
         )
-        weight_untiled = ttl.tensor.Tensor(
-            weight, weights_shape, weights_untiled_dtype, ttl.tensor.Layout.ROW_MAJOR
-        ).pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
+        assert weight.layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert weight.dtype() == weights_untiled_dtype
+        assert weight.shape() == weights_shape
+        weight_untiled = weight.pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
         # for conv op, pad the weights to block shape
         weight_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(
             weight_untiled,
@@ -575,18 +588,20 @@ class TTPyCompositeConv(TTPyOp):
             output_dtype=weights_dtype,
         )
         weight_on_device = weight_tiled_.to(device)
-        bias_shape = [1, 1, 1, K]
-        assert K % (weight_block_w_ntiles * 32) == 0
-        bias_channels_padded_shape = [1, 1, 32, _nearest_32(K)]
-        bias = (
-            torch.nn.functional.pad(torch.Tensor(bias).reshape(bias_shape), (0, _nearest_32(K) - K, 0, 31))
-            .flatten()
-            .tolist()
-        )
-        bias_ = ttl.tensor.Tensor(bias, bias_channels_padded_shape, weights_dtype, ttl.tensor.Layout.ROW_MAJOR).to(
-            ttl.tensor.Layout.TILE
-        )
-        bias_on_device = bias_.to(device)
+        bias_on_device = None
+        if bias is not None:
+            bias_shape = [1, 1, 1, K]
+            assert bias.layout() == ttl.tensor.Layout.ROW_MAJOR
+            assert bias.dtype() == weights_untiled_dtype
+            assert bias.shape() == bias_shape
+
+            assert K % (weight_block_w_ntiles * 32) == 0
+            bias_channels_padded_shape = [1, 1, 32, _nearest_32(K)]
+            bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
+            # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
+            bias_untiled = bias_untiled.to_torch()
+            bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
+            bias_on_device = bias_.to(device)
 
         def conv_(activation):
             return ttl.tensor.optimized_conv(
@@ -630,11 +645,6 @@ class TTPyCompositeConv(TTPyOp):
 
     def __call__(self, activation):
         return self.conv(activation)
-
-    @classmethod
-    def clear_static_cache_maps(cls):
-        TTPyCompositeConv.static_kernel_configs_cache_map = {}
-        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
 
     def get_parallelization_config(self):
         return self.opt_conv_parall_conf_auto

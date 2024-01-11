@@ -224,25 +224,23 @@ def test_run_max_pool(
     # )
     assert in_h * in_w == act_shape_padded[-2]
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
-
-    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, pad_val=pad_val)
+    halo_reader_patterns_cache = {}
+    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
+        device, sliding_window_op_params, halo_reader_patterns_cache, pad_val=pad_val
+    )
     out_untilize = tt_py_untilize_with_halo_op(ttact_sharded)
     ttact_sharded.deallocate()
-
-    max_pool = TTPyMaxPool(
-        sliding_window_op_params,
-        device,
-        grid_size,
-    )
+    max_pool_reader_patterns_cache = {}
+    max_pool = TTPyMaxPool(sliding_window_op_params, device, grid_size, max_pool_reader_patterns_cache)
 
     out_padded = max_pool(out_untilize)
 
     # out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
-    # Clear the static cache map
-    TTPyMaxPool.static_kernel_configs_cache_map = {}
-    TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
+    # Clear the cache maps
+    halo_reader_patterns_cache.clear()
+    max_pool_reader_patterns_cache.clear()
 
     out_shape_padded = out_padded.shape()
     out_pytorch_padded = out_padded.to_torch().reshape(tuple(out_shape_padded))  ## N, 1, HW, C

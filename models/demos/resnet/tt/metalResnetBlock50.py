@@ -969,6 +969,7 @@ class Bottleneck:
         model_config=None,
         conv_halo=False,
         conv_2d=False,
+        reader_patterns_cache={},
     ) -> None:
         super().__init__()
         self.device = device
@@ -1159,15 +1160,32 @@ class Bottleneck:
                 and self.module_input_shape[3] == 256
             ):
                 move_utwh_output = True
+            tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+                conv2_weight.reshape(-1).tolist(),
+                conv2_weight.shape,
+                model_config["WEIGHTS_DTYPE"]
+                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                else tt_lib.tensor.DataType.FLOAT32,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            )
+            tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+                conv2_bias.tolist(),
+                [1, 1, 1, conv2_bias.shape[-1]],
+                model_config["WEIGHTS_DTYPE"]
+                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                else tt_lib.tensor.DataType.FLOAT32,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            )
             self.conv2 = TTPyCompositeConv(
                 sliding_window_op_params,
-                conv2_weight.reshape(-1).tolist(),
+                tt_tensor_conv_weight,
                 width,
                 width,
                 self.device,
                 not conv_2d,
-                conv2_bias.tolist(),
+                reader_patterns_cache,
                 conv_blocking_and_parallelization_config_override=config_override,
+                bias=tt_tensor_conv_bias,
                 fuse_relu=True,
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
@@ -1302,6 +1320,7 @@ class ResNet(nn.Module):
         self.batch_size = batch_size
         self.sharded = sharded
         self.model_config = model_config
+        self.reader_patterns_cache = {}
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
@@ -1450,15 +1469,32 @@ class ResNet(nn.Module):
                 "num_cores_nhw": self.first_conv_num_cores_nhw,
             }
 
+            tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+                conv1_weight.reshape(-1).tolist(),
+                conv1_weight.shape,
+                model_config["WEIGHTS_DTYPE"]
+                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                else tt_lib.tensor.DataType.FLOAT32,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            )
+            tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+                conv1_bias.tolist(),
+                [1, 1, 1, conv1_bias.shape[-1]],
+                model_config["WEIGHTS_DTYPE"]
+                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
+                else tt_lib.tensor.DataType.FLOAT32,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            )
             self.conv1 = TTPyCompositeConv(
                 sliding_window_op_params,
-                conv1_weight.reshape(-1).tolist(),
+                tt_tensor_conv_weight,
                 self.inplanes,
                 16,
                 self.device,
                 True,
-                conv1_bias.tolist(),
+                self.reader_patterns_cache,
                 conv_blocking_and_parallelization_config_override=config_override,
+                bias=tt_tensor_conv_bias,
                 fuse_relu=True,
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
@@ -1506,9 +1542,12 @@ class ResNet(nn.Module):
                 num_cores_w=grid_size[0],
                 num_cores_nhw=self.first_conv_num_cores_nhw,
             )
-
-            self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(self.device, max_pool_op_params, pad_val=0xF7FF)
-            self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, grid_size)
+            assert "halo" in self.reader_patterns_cache
+            self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(
+                self.device, max_pool_op_params, self.reader_patterns_cache["halo"], pad_val=0xF7FF
+            )
+            self.max_pool_reader_patterns_cache = {}
+            self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, grid_size, self.max_pool_reader_patterns_cache)
         else:
             self.maxpool = TtMaxPool(
                 self.device,
@@ -1639,9 +1678,9 @@ class ResNet(nn.Module):
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
     def __del__(self):
-        # Need to clear global static configs for each Resnet run
-        TTPyCompositeConv.clear_static_cache_maps()
-        TTPyMaxPool.static_kernel_configs_cache_map = {}
+        # Need to clear global configs for each Resnet run
+        self.reader_patterns_cache.clear()
+        self.max_pool_reader_patterns_cache.clear()
 
     def _make_layer(
         self,
@@ -1847,6 +1886,7 @@ class ResNet(nn.Module):
                 model_config=model_config,
                 conv_halo=conv_halo,
                 conv_2d=conv_2d,
+                reader_patterns_cache=self.reader_patterns_cache,
             )
         )
         self.inplanes = planes * block.expansion
@@ -1872,6 +1912,7 @@ class ResNet(nn.Module):
                     model_config=model_config,
                     conv_halo=conv_halo,
                     conv_2d=conv_2d,
+                    reader_patterns_cache=self.reader_patterns_cache,
                 )
             )
         last_layer_shape = layers[-1].conv3_output_shape

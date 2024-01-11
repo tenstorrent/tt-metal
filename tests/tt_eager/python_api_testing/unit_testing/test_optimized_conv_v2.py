@@ -137,14 +137,30 @@ def test_optimized_conv_v2(
         input_w=input_width,
     )
 
+    reader_patterns_cache = {}
+
+    tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+        conv_weight_pyt.reshape(-1).tolist(),
+        conv_weight_pyt.shape,
+        weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
+        tt_lib.tensor.Layout.ROW_MAJOR,
+    )
+    tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+        conv_bias_pyt.reshape(-1).tolist(),
+        conv_bias_pyt.shape,
+        weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
+        tt_lib.tensor.Layout.ROW_MAJOR,
+    )
+
     conv = TTPyCompositeConv(
         sliding_window_op_params,
-        conv_weight_pyt.reshape(-1).tolist(),
+        tt_tensor_conv_weight,
         output_channels,
         input_channels,
         device,
         is_1d_systolic,
-        conv_bias_pyt.reshape(-1).tolist(),
+        reader_patterns_cache,
+        bias=tt_tensor_conv_bias,
         weights_dtype=weights_dtype,
         output_dtype=activations_dtype,
         math_fidelity=math_fidelity,
@@ -172,8 +188,6 @@ def test_optimized_conv_v2(
     # NHWC to NCHW
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
-
-    TTPyCompositeConv.clear_static_cache_maps()
 
     if math_fidelity == tt_lib.tensor.MathFidelity.LoFi and activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
         pcc = 0.998

@@ -22,22 +22,22 @@ import torch
 
 
 class TTPyMaxPool(TTPyOp):
-    # cache map for kernel configs corresponding to unique sliding window op params
-    # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), window_hw: tuple(int, int), input_nhw: tuple(int, int, int), ncores_nhw: int)
-    static_kernel_configs_cache_map = {}
-
     def __init__(
         self,
         sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig,
         device,
         grid_size,
+        reader_patterns_cache,
         output_mem_config=None,
     ):
         self.sliding_window_op_params = sliding_window_op_params
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
-        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params, grid_size)
-        reader_indices = TTPyMaxPool.static_kernel_configs_cache_map[sliding_window_op_params_hash]
+        self.set_op_configs(
+            device, sliding_window_op_params_hash, sliding_window_op_params, grid_size, reader_patterns_cache
+        )
+        assert sliding_window_op_params_hash in reader_patterns_cache
+        reader_indices = reader_patterns_cache[sliding_window_op_params_hash]
 
         self.set_op_weights_biases(
             sliding_window_op_params,
@@ -46,9 +46,10 @@ class TTPyMaxPool(TTPyOp):
         )
 
     # override abstract methods from base class TTPyOp
-    @classmethod
-    def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params, grid_size):
-        if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
+    def set_op_configs(
+        self, device, sliding_window_op_params_hash, sliding_window_op_params, grid_size, reader_patterns_cache
+    ):
+        if sliding_window_op_params_hash not in reader_patterns_cache:
             stride_h = sliding_window_op_params.stride_h
             stride_w = sliding_window_op_params.stride_w
             pad_h = sliding_window_op_params.pad_h
@@ -131,7 +132,7 @@ class TTPyMaxPool(TTPyOp):
             mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(device, mem_config, shard_spec)
 
-            cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = reader_indices_sharded_tensor
+            reader_patterns_cache[sliding_window_op_params_hash] = reader_indices_sharded_tensor
 
         return
 
