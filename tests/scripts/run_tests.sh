@@ -243,7 +243,7 @@ validate_and_set_env_vars() {
 }
 
 set_up_chdir() {
-    cd $TT_METAL_HOME
+    cd $PYTHONPATH
 }
 
 main() {
