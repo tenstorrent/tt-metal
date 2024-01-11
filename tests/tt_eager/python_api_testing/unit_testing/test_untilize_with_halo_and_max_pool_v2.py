@@ -283,8 +283,8 @@ def test_run_max_pool(
     isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch, atol=atol))
     isequal = torch.equal(out_pytorch, golden_pytorch)
 
-    # assert passing_pcc
-    # assert allclose
-    # assert isclose
-    # if dtype == ttl.tensor.DataType.BFLOAT16:
-    #     assert isequal
+    assert passing_pcc
+    assert allclose
+    assert isclose
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        assert isequal
