@@ -26,7 +26,12 @@ uint8_t noc_index = NOC_INDEX;
 
 void kernel_launch() {
 
-#if !defined(DEBUG_NULL_KERNELS) || defined(DISPATCH_KERNEL)
+#if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+#ifdef KERNEL_RUN_TIME
+    uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
+    while (c_tensix_core::read_wall_clock() < end_time);
+#endif
+#else
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE);
 
     noc_local_state_init(noc_index);
