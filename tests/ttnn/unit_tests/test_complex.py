@@ -135,3 +135,23 @@ class TestUnaryComplex:
             high=2 * pi,
             unary=True,
         )
+
+    def test_ttnn_complex_is_real(self, input_shapes):
+        run_test_with(
+            input_shapes,
+            ttnn.complex_is_real,
+            lambda _a: (_a.imag == 0).to(torch.bfloat16),
+            low=-100,
+            high=100,
+            unary=True,
+        )
+
+    def test_ttnn_complex_is_imag(self, input_shapes):
+        run_test_with(
+            input_shapes,
+            ttnn.complex_is_imag,
+            lambda _a: (_a.real == 0).to(torch.bfloat16),
+            low=-100,
+            high=100,
+            unary=True,
+        )

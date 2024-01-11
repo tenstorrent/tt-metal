@@ -22,3 +22,7 @@ Complex Operations
 .. autofunction:: ttnn.angle
 
 .. autofunction:: ttnn.polar
+
+.. autofunction:: ttnn.is_real
+
+.. autofunction:: ttnn.is_imag
