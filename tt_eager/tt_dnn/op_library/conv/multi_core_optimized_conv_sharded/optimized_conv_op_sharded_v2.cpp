@@ -640,8 +640,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         TT_ASSERT(false, "Sharded input not supported for this conv yet!");
     }
 
-    TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
-
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> writer_rt_args;
@@ -649,9 +647,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
-    // For new reader_with_indices, this is used to calculate offset so use actual read_bytes along c
-    // For old readers, this is used for bank page size for interleaved; offset is from conv_act_c_read_bytes
-    uint32_t log_base_2_of_conv_act_size_c_bytes = std::log2(conv_act_c_read_bytes);
     reader_compile_time_args = {(uint32_t)
         (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t) stride_h,
@@ -659,12 +654,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         (uint32_t) conv_act_size_w,
         (uint32_t) conv_output_size_w,
         (uint32_t) conv_act_c_read_bytes,
-        (uint32_t) log_base_2_of_conv_act_size_c_bytes,
-
-        // unused, TODO: delete
-        (uint32_t) extra_padding_for_32B_alignment,
-        (uint32_t) (conv_act_size_c/act_block_w_datums),
-        (uint32_t) act_block_w_datums * a.element_size(),
 
         (uint32_t) window_outer,
         (uint32_t) window_inner,
@@ -714,9 +703,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         std::vector<uint32_t> split_reader_args = {
             (uint32_t) act_block_h_datums,
             (uint32_t) act_block_num_tiles / conv_act_c_blocks,
-            (uint32_t) log_base_2_of_conv_act_size_c_bytes,
-            (uint32_t) weight_size_w << log_base_2_of_conv_act_size_c_bytes, // coalesced_read_bytes
-            (uint32_t) (conv_act_size_w + 2 * pad_w) << log_base_2_of_conv_act_size_c_bytes, // window_outer_offset
+            (uint32_t) weight_size_w * conv_act_c_read_bytes, // coalesced_read_bytes
+            (uint32_t) (conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes, // window_outer_offset
         };
         writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }

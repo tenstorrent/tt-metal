@@ -43,15 +43,13 @@ void kernel_main() {
     constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
-    // constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
-    // TODO delete unused: get_compile_time_arg_val(7); (8), (9)
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on them
-    constexpr uint32_t window_outer                        = get_compile_time_arg_val(10);
-    constexpr uint32_t window_inner                        = get_compile_time_arg_val(11);
-    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(12);
-    constexpr uint32_t act_block_num_tiles                 = get_compile_time_arg_val(13);
-    constexpr uint32_t weight_size_w_compile_time_arg      = get_compile_time_arg_val(14);
-    constexpr uint32_t conv_act_size_w_padded              = get_compile_time_arg_val(15);
+    constexpr uint32_t window_outer                        = get_compile_time_arg_val(6);
+    constexpr uint32_t window_inner                        = get_compile_time_arg_val(7);
+    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(8);
+    constexpr uint32_t act_block_num_tiles                 = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_size_w_compile_time_arg      = get_compile_time_arg_val(10);
+    constexpr uint32_t conv_act_size_w_padded              = get_compile_time_arg_val(11);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
