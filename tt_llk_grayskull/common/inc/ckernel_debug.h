@@ -64,10 +64,62 @@ typedef union
 {
     uint32_t val;
     dbg_array_rd_cmd_t f;
-} dbg_array_rd_cmd_u;
+} dbg_array_rd_cmd_u; 
 
-inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, uint32_t *rd_data)
+typedef struct
 {
+    uint32_t unp : 2;
+    uint32_t pack : 4;
+    uint32_t reserved : 26;
+} dbg_soft_reset_t;
+
+typedef union
+{
+    uint32_t val;
+    dbg_soft_reset_t f;
+} dbg_soft_reset_u;;
+
+template <ThreadId thread_id> 
+inline void dbg_thread_halt() {
+    static_assert((thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId), "Invalid thread id set in dbg_wait_for_thread_idle(...)");
+
+    if constexpr (thread_id == ThreadId::UnpackThreadId) {
+        // Wait for all instructions on the running thread to complete
+        tensix_sync();
+        // Notify math thread that unpack thread is idle
+        mailbox_write(ThreadId::MathThreadId, 1);
+        // Wait for math thread to complete debug dump 
+        volatile uint32_t temp = mailbox_read(ThreadId::MathThreadId);
+    } else if constexpr (thread_id == ThreadId::MathThreadId) {
+        // Wait for all instructions on the running thread to complete
+        tensix_sync();
+        // Wait for unpack thread to complete
+        volatile uint32_t temp = mailbox_read(ThreadId::UnpackThreadId);
+        // Wait for previous packs to finish 
+        while (semaphore_read(semaphore::MATH_PACK) > 0) { }; 
+    }
+}
+
+template <ThreadId thread_id> 
+inline void dbg_thread_unhalt() {
+    static_assert((thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId), "Invalid thread id set in dbg_wait_for_thread_idle(...)");
+
+    if constexpr (thread_id == ThreadId::MathThreadId) {
+        // Reset pack 0 (workaround)
+        dbg_soft_reset_u dbg_soft_reset;
+        dbg_soft_reset.val = 0;
+        dbg_soft_reset.f.pack = 1;
+        reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, dbg_soft_reset.val);
+        wait(5);
+        dbg_soft_reset.val = 0;
+        reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, dbg_soft_reset.val);
+
+        // Unhalt unpack thread
+        mailbox_write(ThreadId::UnpackThreadId, 1);
+    }
+}
+
+inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, uint32_t *rd_data) {
     dbg_array_rd_en_u dbg_array_rd_en;
     dbg_array_rd_en.val = 0;
     dbg_array_rd_en.f.en = 0x1;
@@ -99,6 +151,7 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
     dbg_array_rd_en.val = 0;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
+
 }
   
 } // namespace ckernel
