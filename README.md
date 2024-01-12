@@ -205,7 +205,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 export ARCH_NAME=<arch name>
 export TT_METAL_HOME=<this repo dir>
-export PYTHONPATH=<this repo dir>
+export PYTHONPATH=<this repo dir>:$TT_METAL_HOME/ttnn
 export TT_METAL_ENV=dev
 ```
 
@@ -244,7 +244,7 @@ If you're setting up an environment from source, you must further set up and
 activate the environment with:
 
 ```
-export PYTHONPATH=<this repo dir>
+export PYTHONPATH=<this repo dir>:$TT_METAL_HOME/ttnn
 export TT_METAL_ENV=dev
 source build/python_env/bin/activate
 ```
@@ -275,7 +275,7 @@ make tests
    ```
 3. If you have any issues with import paths for python libraries include the following environment variable,
    ```
-   $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}
+   $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}:${TT_METAL_HOME}/ttnn
    ```
 
 ## Documentation

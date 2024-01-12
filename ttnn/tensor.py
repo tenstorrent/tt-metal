@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import io
 import pathlib
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union
 
 import tt_lib as ttl
-
 from ttnn.decorators import decorate_operation
-
 
 Device = ttl.device.Device
 
@@ -35,6 +32,10 @@ TILE_LAYOUT = Layout.TILE
 StorageType = ttl.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
+LossMode = ttl.tensor.LossReductionMode
+LOSS_MODE_NONE = LossMode.NONE
+LOSS_MODE_SUM = LossMode.SUM
+LOSS_MODE_MEAN = LossMode.MEAN
 
 TILE_SIZE = 32
 

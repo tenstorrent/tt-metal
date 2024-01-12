@@ -7,7 +7,7 @@ import json
 
 import torch
 
-from models.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc, comp_allclose
 
 
 def torch_random(shape, low, high, dtype):
@@ -39,6 +39,14 @@ def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
     )
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     return pcc_passed, pcc_message
+
+
+def assert_with_allclose(expected_pytorch_result, actual_pytorch_result, atol=4, rtol=1e-1):
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
+    pcc_passed, pcc_message = comp_allclose(expected_pytorch_result, actual_pytorch_result, atol, rtol)
+    assert pcc_passed, print_comparison(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
 def update_process_id():

@@ -1,4 +1,4 @@
-TTNN.EMBEDDING
-===============
+Embedding
+=========
 
 .. autofunction:: ttnn.embedding
