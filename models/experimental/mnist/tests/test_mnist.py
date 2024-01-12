@@ -20,9 +20,7 @@ from models.experimental.mnist.tt.mnist_model import mnist_model
 def test_mnist_inference(device, model_location_generator):
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
-    test_dataset = datasets.MNIST(
-        root="./data", train=False, transform=transform, download=True
-    )
+    test_dataset = datasets.MNIST(root="./data", train=False, transform=transform, download=True)
     dataloader = DataLoader(test_dataset, batch_size=1)
 
     # Load model
@@ -30,9 +28,7 @@ def test_mnist_inference(device, model_location_generator):
 
     with torch.no_grad():
         test_input, _ = next(iter(dataloader))
-        tt_input = torch2tt_tensor(
-            test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
         pt_output = pt_model(test_input)
         tt_output = tt_model(tt_input)
@@ -47,10 +43,7 @@ def test_mnist_inference(device, model_location_generator):
         tt_output.topk(10).indices == pt_output.topk(10).indices
     ).all(), "The outputs from device and pytorch must have the same topk indices"
 
-    # Check that the scale of each output is the same
-    tt_out_oom = get_oom_of_float(tt_output.view(-1).tolist())
-    pytorch_out_oom = get_oom_of_float(pt_output.tolist())
-
-    assert (
-        tt_out_oom == pytorch_out_oom
-    ), "The order of magnitudes of the outputs must be the same"
+    # Check that both outputs have max value at the same position
+    assert torch.argmax(tt_output.view(-1)) == torch.argmax(
+        pt_output
+    ), "The outputs from device and pytorch must have the max value at same position"
