@@ -51,6 +51,7 @@ def test_transformer_attention_softmax(
     output_tensor = ttnn.transformer.attention_softmax(
         input_tensor, head_size=None, attention_mask=None, memory_config=output_memory_config
     )
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     # TODO(arakhmati): attention_softmax should be more accurate
@@ -82,6 +83,7 @@ def test_transformer_concatenate_heads(
     )
 
     output_tensor = ttnn.transformer.concatenate_heads(input_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
@@ -117,8 +119,11 @@ def test_transformer_split_query_key_value_and_split_heads(
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
         input_tensor, num_heads=num_heads
     )
+    query_tensor = ttnn.from_device(query_tensor)
     query_tensor = ttnn.to_torch(query_tensor)
+    key_tensor = ttnn.from_device(key_tensor)
     key_tensor = ttnn.to_torch(key_tensor)
+    value_tensor = ttnn.from_device(value_tensor)
     value_tensor = ttnn.to_torch(value_tensor)
 
     assert_with_pcc(torch_query_tensor, query_tensor, 0.999)
