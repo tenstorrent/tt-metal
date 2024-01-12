@@ -337,15 +337,21 @@ void DeviceProfiler::dumpResultToFile(
 
     tracy::TTDeviceEvent event = tracy::TTDeviceEvent(runID, chip_id, core_x, core_y, risc_num, timer_id);
 
-    if (device_data.find (event) != device_data.end())
+    if (device_data.find (runID) != device_data.end())
     {
-        ZoneScopedNC("eventFound",tracy::Color::Green);
-        device_data.at(event).push_back(timestamp);
+        if (device_data[runID].find (event) != device_data[runID].end())
+        {
+            device_data[runID].at(event)=timestamp;
+        }
+        else
+        {
+            device_data[runID].emplace(event,timestamp);
+        }
     }
     else
     {
-        ZoneScopedNC("eventNotFound",tracy::Color::Red);
-        device_data.emplace(event,std::list<uint64_t>{timestamp});
+        std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp> eventMap = {{event,timestamp}};
+        device_data.emplace(runID, eventMap);
     }
 
     static int i = 0;
@@ -493,20 +499,20 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
     int count = 0;
     std::set<uint32_t> rows;
     std::set<uint32_t> cols;
-    for (auto& data: device_data)
+    for (auto& run: device_data)
     {
-        uint64_t threadID = data.first.get_thread_id();
-        uint64_t row = data.first.core_y;
-        uint64_t col = data.first.core_x;
-        uint64_t risc = data.first.risc;
-        uint64_t markerID = data.first.marker;
-        uint64_t runID = data.first.run_num;
-
-        cols.insert(col);
-        rows.insert(row);
-        if (markerID == 1 )
+        for (auto& data: run.second)
         {
-            for (auto event : data.second)
+            uint64_t threadID = data.first.get_thread_id();
+            uint64_t row = data.first.core_y;
+            uint64_t col = data.first.core_x;
+            uint64_t risc = data.first.risc;
+            uint64_t markerID = data.first.marker;
+            uint64_t runID = data.first.run_num;
+
+            cols.insert(col);
+            rows.insert(row);
+            if (markerID == 1 )
             {
                 switch (risc)
                 {

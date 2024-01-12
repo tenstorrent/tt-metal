@@ -125,7 +125,7 @@ class DeviceProfiler {
         ~DeviceProfiler();
 
         // Map for storing dvice data
-        std::map<tracy::TTDeviceEvent, std::list<uint64_t>, tracy::TTDeviceEvent_cmp> device_data;
+        std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> device_data;
 
         //TracyContext
         TracyCLCtx tracyTTCtx;
