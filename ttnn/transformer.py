@@ -99,9 +99,24 @@ def split_query_key_value_and_split_heads(
     if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
         raise RuntimeError("input_tensor must be on device!")
 
-    batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-    _, sequence_size_padded, three_times_hidden_size_padded = input_tensor.shape.padded()
+    if kv_input_tensor is not None:
+        batch_size, sequence_size, hidden_size = input_tensor.shape
+        _, sequence_size_padded, hidden_size_padded = input_tensor.shape.padded()
+        if kv_input_tensor.shape != (batch_size, sequence_size, hidden_size * 2):
+            raise RuntimeError(
+                "kv_input_tensor must be of shape (batch_size, sequence_size, hidden_size * 2) when input_tensor is of shape (batch_size, sequence_size, hidden_size)"
+            )
+    else:
+        batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
+        _, sequence_size_padded, three_times_hidden_size_padded = input_tensor.shape.padded()
+        hidden_size = three_times_hidden_size // 3
+        hidden_size_padded = three_times_hidden_size_padded // 3
+    head_size = hidden_size // num_heads
+
     if input_tensor.shape == (batch_size, 384, 1024 * 3):
+        if kv_input_tensor is not None:
+            raise RuntimeError("kv_input_tensor must be None when input_tensor is of shape (batch_size, 384, 1024 * 3)")
+
         input_tensor = reshape(
             input_tensor,
             Shape(
@@ -121,28 +136,34 @@ def split_query_key_value_and_split_heads(
         query, key, value = query_key_value
         return query, key, value
     else:
-        batch_size, sequence_size, hidden_size = input_tensor.shape
-        input_tensor = reshape(
-            input_tensor,
-            Shape(
-                [batch_size, 1, sequence_size, three_times_hidden_size],
-                [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
-            ),
-        )
-
-        ttl_input_tensor = input_tensor.value
-
         if kv_input_tensor is not None:
-            _, sequence_size, _ = kv_input_tensor.shape
-            _, sequence_size_padded, _ = kv_input_tensor.shape.padded()
+            input_tensor = reshape(
+                input_tensor,
+                Shape(
+                    [batch_size, 1, sequence_size, hidden_size],
+                    [batch_size, 1, sequence_size_padded, hidden_size_padded],
+                ),
+            )
+
+            _, kv_sequence_size, _ = kv_input_tensor.shape
+            _, kv_sequence_size, _ = kv_input_tensor.shape.padded()
             desired_shape = Shape(
-                [batch_size, 1, sequence_size, hidden_size * 2],
-                [batch_size, 1, sequence_size_padded, hidden_size * 2],
+                [batch_size, 1, kv_sequence_size, hidden_size * 2],
+                [batch_size, 1, kv_sequence_size, hidden_size_padded * 2],
             )
             kv_input_tensor = reshape(kv_input_tensor, desired_shape)
             ttl_kv_input_tensor = kv_input_tensor.value
         else:
+            input_tensor = reshape(
+                input_tensor,
+                Shape(
+                    [batch_size, 1, sequence_size, three_times_hidden_size],
+                    [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
+                ),
+            )
             ttl_kv_input_tensor = None
+
+        ttl_input_tensor = input_tensor.value
 
         query_key_value = ttl.tensor.nlp_create_qkv_heads(
             ttl_input_tensor,
@@ -152,22 +173,23 @@ def split_query_key_value_and_split_heads(
         )
         query_key_value = (Tensor(ttl_tensor) for ttl_tensor in query_key_value)
         query, key, value = query_key_value
-        unfused_hidden_size = query.shape[-1]
+
+        head_size = hidden_size // num_heads
         query = reshape(
             query,
             Shape(
-                [batch_size, num_heads, sequence_size, unfused_hidden_size],
-                [batch_size, num_heads, sequence_size_padded, unfused_hidden_size],
+                [batch_size, num_heads, sequence_size, head_size],
+                [batch_size, num_heads, sequence_size_padded, head_size],
             ),
         )
         key = reshape(
             key,
             Shape(
-                [batch_size, num_heads, unfused_hidden_size, sequence_size],
+                [batch_size, num_heads, head_size, sequence_size],
                 [
                     batch_size,
                     num_heads,
-                    unfused_hidden_size,
+                    head_size,
                     sequence_size_padded,
                 ],
             ),
@@ -175,8 +197,8 @@ def split_query_key_value_and_split_heads(
         value = reshape(
             value,
             Shape(
-                [batch_size, num_heads, sequence_size, unfused_hidden_size],
-                [batch_size, num_heads, sequence_size_padded, unfused_hidden_size],
+                [batch_size, num_heads, sequence_size, head_size],
+                [batch_size, num_heads, sequence_size_padded, head_size],
             ),
         )
 

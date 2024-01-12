@@ -177,162 +177,6 @@ def _reshape_to_4D(tensor):
 
 
 @decorate_operation()
-def to_layout(tensor, layout: Layout):
-    """
-    to_layout(tensor: ttnn.Tensor, layout: Layout) -> Tensor
-
-    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
-    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
-    padded where the width and height become multiples of 32.
-    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
-
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
-
-    Example::
-        >>> device_id = 0
-        >>> device = ttnn.open(device_id)
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-        >>> print(tensor[0,0,:3])
-        Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 )
-    """
-
-    def requires_padding_change(layout, shape):
-        intended_shape = list(shape)[-2:]
-        padded_shape = list(shape.padded())[-2:]
-        if layout == ROW_MAJOR_LAYOUT and intended_shape != padded_shape:
-            return True
-        if (
-            layout == TILE_LAYOUT
-            and intended_shape == padded_shape
-            and (len(intended_shape) < 2 or intended_shape[-1] % TILE_SIZE != 0 or intended_shape[-2] % TILE_SIZE != 0)
-        ):
-            return True
-        else:
-            return False
-
-    necessary_to_change_padding = requires_padding_change(layout, tensor.shape)
-    layout_change_needed = tensor.layout != layout
-    if not necessary_to_change_padding and not layout_change_needed:
-        return tensor
-    is_on_device = has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE)
-
-    def unpad_with_pytorch(ttnn_tensor):
-        current_shape = list(ttnn_tensor.shape.padded())
-        desired_shape = list(ttnn_tensor.shape)
-        ttl_tensor = ttnn_tensor.value
-        if ttnn_tensor.layout != ROW_MAJOR_LAYOUT:
-            ttl_tensor = ttl_tensor.to(ROW_MAJOR_LAYOUT)
-        tensor = ttl_tensor.to_torch()
-        for dim in range(len(current_shape)):
-            if current_shape[dim] > desired_shape[dim]:
-                slicing = [slice(None)] * len(tensor.shape)
-                slicing[dim] = slice(None, desired_shape[dim])
-                tensor = tensor[slicing]
-
-        return from_torch(tensor)
-
-    intended_shape = tuple(tensor.shape)
-
-    def impl(tensor, layout):
-        # nonlocal layout_change_needed, necessary_to_change_padding, is_on_device
-        input_tensor = tensor
-
-        if layout_change_needed and not necessary_to_change_padding:
-            ttl_tensor = tensor.value
-            if is_on_device:
-                if layout == ROW_MAJOR_LAYOUT:
-                    return Tensor(ttl.tensor.untilize(ttl_tensor))
-                elif layout == TILE_LAYOUT:
-                    return Tensor(ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config()))
-                else:
-                    raise RuntimeError(f"Unsupported layout: {layout}")
-            else:
-                return Tensor(ttl_tensor.to(layout))
-
-        if layout == ROW_MAJOR_LAYOUT:
-            ttl_input_tensor = input_tensor.value
-            if is_on_device:
-                *_, width = input_tensor.shape
-                if layout_change_needed and width % 2 == 0:  # Can only unpad to row major tensor of even width
-                    input_tensor = _reshape_to_4D(input_tensor)
-                    intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
-                    ttl_input_tensor = input_tensor.value
-                    output_tensor = Tensor(
-                        ttl.tensor.untilize_with_unpadding(
-                            ttl_input_tensor,
-                            (0, 0, 0, 0),
-                            intended_4D_shape,
-                        )
-                    )
-                else:
-                    input_tensor = from_device(input_tensor)
-                    if layout_change_needed:
-                        input_tensor = Tensor(input_tensor.value.to(layout))
-                    batch_shape_dim = list(input_tensor.shape)[:-2]
-                    batch_padded_dim = list(input_tensor.shape.padded())[:-2]
-                    if batch_shape_dim == batch_padded_dim:
-                        input_tensor = _reshape_to_4D(input_tensor)
-                        input_tensor = Tensor(
-                            input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
-                        )
-                        ttl_input_tensor = input_tensor.value
-                        output_tensor = Tensor(ttl_input_tensor.unpad_from_tile(list(input_tensor.shape)))
-                    else:
-                        output_tensor = unpad_with_pytorch(input_tensor)
-            else:
-                if necessary_to_change_padding:
-                    input_tensor = _reshape_to_4D(input_tensor)
-                    input_tensor = Tensor(
-                        input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
-                    )
-                    ttl_input_tensor = input_tensor.value
-                    output_tensor = Tensor(ttl_input_tensor.unpad_from_tile(list(input_tensor.shape)))
-                elif layout_change_needed:
-                    output_tensor = Tensor(
-                        input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
-                    )
-
-            output_tensor = _reshape(output_tensor, intended_shape)
-            return output_tensor
-        elif layout == TILE_LAYOUT:
-            if len(tensor.shape) > 1:
-                *original_batch_sizes, height, width = tensor.shape
-            else:
-                height = 1
-                *original_batch_sizes, width = tensor.shape
-            pad_h = (TILE_SIZE - height % TILE_SIZE) % TILE_SIZE
-            pad_w = (TILE_SIZE - width % TILE_SIZE) % TILE_SIZE
-            padded_height = height + pad_h
-            padded_width = width + pad_w
-            tensor = _reshape_to_4D(tensor)
-            *batch_sizes, _, _ = tensor.shape
-            ttl_input_tensor = tensor.value
-            if tensor.layout == ROW_MAJOR_LAYOUT and is_on_device:
-                tensor = Tensor(
-                    ttl.tensor.tilize_with_val_padding(
-                        ttl_input_tensor,
-                        batch_sizes + [padded_height, padded_width],
-                        [0, 0, 0, 0],
-                        0,
-                    )
-                )
-            elif tensor.layout == ROW_MAJOR_LAYOUT:
-                tensor = Tensor(
-                    ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
-                )
-            tensor = _reshape(
-                tensor,
-                Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
-            )
-            return tensor
-
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(tensor, layout)
-
-
-@decorate_operation()
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[DataType] = None,
@@ -395,9 +239,6 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
-
-    if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
-        tensor = from_device(tensor)
 
     if tensor.layout != ROW_MAJOR_LAYOUT:
         tensor = to_layout(tensor, ROW_MAJOR_LAYOUT)
@@ -494,6 +335,160 @@ def deallocate(tensor: Tensor) -> None:
         tensor.value.deallocate(force=True)
 
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
+
+
+@decorate_operation()
+def to_layout(tensor, layout: Layout):
+    """
+    to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
+
+    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
+    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
+    padded where the width and height become multiples of 32.
+    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
+
+    Args:
+        * :attr:`tensor`: the ttnn.Tensor
+        * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
+
+    Example::
+        >>> device_id = 0
+        >>> device = ttnn.open(device_id)
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+        >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+        >>> print(tensor[0,0,:3])
+        Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 )
+    """
+
+    def requires_padding_change(layout, shape):
+        intended_shape = list(shape)[-2:]
+        padded_shape = list(shape.padded())[-2:]
+        if layout == ROW_MAJOR_LAYOUT and intended_shape != padded_shape:
+            return True
+        elif (
+            layout == TILE_LAYOUT
+            and intended_shape == padded_shape
+            and (len(intended_shape) < 2 or intended_shape[-1] % TILE_SIZE != 0 or intended_shape[-2] % TILE_SIZE != 0)
+        ):
+            return True
+        else:
+            return False
+
+    necessary_to_change_padding = requires_padding_change(layout, tensor.shape)
+    layout_change_needed = tensor.layout != layout
+    if not necessary_to_change_padding and not layout_change_needed:
+        return tensor
+    is_on_device = has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE)
+
+    def unpad_with_pytorch(ttnn_tensor):
+        current_shape = list(ttnn_tensor.shape.padded())
+        desired_shape = list(ttnn_tensor.shape)
+        ttl_tensor = ttnn_tensor.value
+        if ttnn_tensor.layout != ROW_MAJOR_LAYOUT:
+            ttl_tensor = ttl_tensor.to(ROW_MAJOR_LAYOUT)
+        tensor = ttl_tensor.to_torch()
+        for dim in range(len(current_shape)):
+            if current_shape[dim] > desired_shape[dim]:
+                slicing = [slice(None)] * len(tensor.shape)
+                slicing[dim] = slice(None, desired_shape[dim])
+                tensor = tensor[slicing]
+
+        return from_torch(tensor)
+
+    intended_shape = tuple(tensor.shape)
+
+    # nonlocal layout_change_needed, necessary_to_change_padding, is_on_device
+    input_tensor = tensor
+
+    if layout_change_needed and not necessary_to_change_padding:
+        ttl_tensor = tensor.value
+        if is_on_device:
+            if layout == ROW_MAJOR_LAYOUT:
+                return Tensor(ttl.tensor.untilize(ttl_tensor))
+            elif layout == TILE_LAYOUT:
+                return Tensor(ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config()))
+            else:
+                raise RuntimeError(f"Unsupported layout: {layout}")
+        else:
+            return Tensor(ttl_tensor.to(layout))
+
+    if layout == ROW_MAJOR_LAYOUT:
+        ttl_input_tensor = input_tensor.value
+        if is_on_device:
+            *_, width = input_tensor.shape
+            if layout_change_needed and width % 2 == 0:  # Can only unpad to row major tensor of even width
+                input_tensor = _reshape_to_4D(input_tensor)
+                intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
+                ttl_input_tensor = input_tensor.value
+                output_tensor = Tensor(
+                    ttl.tensor.untilize_with_unpadding(
+                        ttl_input_tensor,
+                        (0, 0, 0, 0),
+                        intended_4D_shape,
+                    )
+                )
+            else:
+                input_tensor = from_device(input_tensor)
+                if layout_change_needed:
+                    input_tensor = Tensor(input_tensor.value.to(layout))
+                batch_shape_dim = list(input_tensor.shape)[:-2]
+                batch_padded_dim = list(input_tensor.shape.padded())[:-2]
+                if batch_shape_dim == batch_padded_dim:
+                    input_tensor = _reshape_to_4D(input_tensor)
+                    input_tensor = Tensor(
+                        input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
+                    )
+                    ttl_input_tensor = input_tensor.value
+                    output_tensor = Tensor(ttl_input_tensor.unpad_from_tile(list(input_tensor.shape)))
+                else:
+                    output_tensor = unpad_with_pytorch(input_tensor)
+        else:
+            if necessary_to_change_padding:
+                input_tensor = _reshape_to_4D(input_tensor)
+                input_tensor = Tensor(input_tensor.value if not layout_change_needed else input_tensor.value.to(layout))
+                ttl_input_tensor = input_tensor.value
+                output_tensor = Tensor(ttl_input_tensor.unpad_from_tile(list(input_tensor.shape)))
+            elif layout_change_needed:
+                output_tensor = Tensor(
+                    input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
+                )
+
+        output_tensor = _reshape(output_tensor, intended_shape)
+        return output_tensor
+    elif layout == TILE_LAYOUT:
+        if len(tensor.shape) > 1:
+            *original_batch_sizes, height, width = tensor.shape
+        else:
+            original_batch_sizes = []
+            height = 1
+            (width,) = tensor.shape
+        pad_h = (TILE_SIZE - height % TILE_SIZE) % TILE_SIZE
+        pad_w = (TILE_SIZE - width % TILE_SIZE) % TILE_SIZE
+        padded_height = height + pad_h
+        padded_width = width + pad_w
+        tensor = _reshape_to_4D(tensor)
+        *batch_sizes, _, _ = tensor.shape
+        ttl_input_tensor = tensor.value
+        if tensor.layout == ROW_MAJOR_LAYOUT and is_on_device:
+            tensor = Tensor(
+                ttl.tensor.tilize_with_val_padding(
+                    ttl_input_tensor,
+                    batch_sizes + [padded_height, padded_width],
+                    [0, 0, 0, 0],
+                    0,
+                )
+            )
+        elif tensor.layout == ROW_MAJOR_LAYOUT:
+            tensor = Tensor(
+                ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
+            )
+        tensor = _reshape(
+            tensor,
+            Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
+        )
+        return tensor
+    else:
+        raise RuntimeError(f"Unsupported layout: {layout}")
 
 
 def _torch_identity(input_tensor):

@@ -12,11 +12,11 @@ import tt_lib as ttl
 from ttnn.tensor import (
     Shape,
     Tensor,
-    to_layout,
     from_torch,
     to_torch,
     to_device,
     from_device,
+    to_layout,
     DataType,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
