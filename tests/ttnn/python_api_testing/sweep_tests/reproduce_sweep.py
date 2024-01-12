@@ -11,7 +11,7 @@ import pandas as pd
 import ttnn
 
 
-from tests.ttnn.sweep_tests.sweep import reproduce, SWEEP_SOURCES_DIR, SWEEP_RESULTS_DIR
+from tests.ttnn.python_api_testing.sweep_tests.sweep import reproduce, SWEEP_SOURCES_DIR, SWEEP_RESULTS_DIR
 
 
 def main():

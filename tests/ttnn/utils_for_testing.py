@@ -4,9 +4,9 @@
 
 import os
 import json
-
 import torch
 
+from loguru import logger
 from models.utility_functions import comp_pcc
 
 
@@ -39,6 +39,18 @@ def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
     )
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     return pcc_passed, pcc_message
+
+
+def set_slow_dispatch_mode(set_var):
+    prev_value = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+
+    if set_var != "" and set_var is not None:
+        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = set_var
+        logger.info("Setting slow dispatch mode")
+    else:
+        logger.info("Setting fast dispatch mode")
+
+    return prev_value
 
 
 def update_process_id():
