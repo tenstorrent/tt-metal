@@ -74,7 +74,6 @@ def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
                     if not matches:
                         import ttnn
 
-                        USE_TORCH_OUTPUT_IF_MISMATCHES = True
                         if USE_TORCH_OUTPUT_IF_MISMATCHES:
                             logger.warning(f"{function_name}: Comparing against PyTorch failed, using PyTorch output")
                             if not isinstance(output, ttnn.Tensor):
