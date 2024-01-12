@@ -27,8 +27,6 @@ Unary Operations
 
 .. autofunction:: ttnn.digamma
 
-.. autofunction:: ttnn.elu
-
 .. autofunction:: ttnn.erf
 
 .. autofunction:: ttnn.erfc
@@ -40,18 +38,6 @@ Unary Operations
 .. autofunction:: ttnn.exp2
 
 .. autofunction:: ttnn.expm1
-
-.. autofunction:: ttnn.geglu
-
-.. autofunction:: ttnn.glu
-
-.. autofunction:: ttnn.hardshrink
-
-.. autofunction:: ttnn.hardsigmoid
-
-.. autofunction:: ttnn.hardswish
-
-.. autofunction:: ttnn.hardtanh
 
 .. autofunction:: ttnn.heaviside
 
@@ -67,8 +53,6 @@ Unary Operations
 
 .. autofunction:: ttnn.isposinf
 
-.. autofunction:: ttnn.leaky_relu
-
 .. autofunction:: ttnn.lgamma
 
 .. autofunction:: ttnn.log
@@ -78,10 +62,6 @@ Unary Operations
 .. autofunction:: ttnn.log1p
 
 .. autofunction:: ttnn.log2
-
-.. autofunction:: ttnn.log_sigmoid
-
-.. autofunction:: ttnn.logit
 
 .. autofunction:: ttnn.logical_andi
 
@@ -93,15 +73,11 @@ Unary Operations
 
 .. autofunction:: ttnn.logical_xori
 
-.. autofunction:: ttnn.mish
-
 .. autofunction:: ttnn.neg
 
 .. autofunction:: ttnn.polygamma
 
 .. autofunction:: ttnn.pow
-
-.. autofunction:: ttnn.prelu
 
 .. autofunction:: ttnn.rad2deg
 
@@ -109,23 +85,13 @@ Unary Operations
 
 .. autofunction:: ttnn.recip
 
-.. autofunction:: ttnn.reglu
-
-.. autofunction:: ttnn.relu
-
-.. autofunction:: ttnn.relu6
-
 .. autofunction:: ttnn.rpow
 
 .. autofunction:: ttnn.rsqrt
 
 .. autofunction:: ttnn.rsub
 
-.. autofunction:: ttnn.sigmoid
-
 .. autofunction:: ttnn.sign
-
-.. autofunction:: ttnn.silu
 
 .. autofunction:: ttnn.sin
 
@@ -135,15 +101,9 @@ Unary Operations
 
 .. autofunction:: ttnn.square
 
-.. autofunction:: ttnn.swiglu
-
-.. autofunction:: ttnn.swish
-
 .. autofunction:: ttnn.tan
 
 .. autofunction:: ttnn.tanh
-
-.. autofunction:: ttnn.tanhshrink
 
 .. autofunction:: ttnn.tril
 
@@ -151,18 +111,4 @@ Unary Operations
 
 .. autofunction:: ttnn.tilize_with_zero_padding
 
-.. autofunction:: ttnn.mean_hw
-
-.. autofunction:: ttnn.std_hw
-
-.. autofunction:: ttnn.var_hw
-
-.. autofunction:: ttnn.normalize_hw
-
-.. autofunction:: ttnn.normalize_global
-
 .. autofunction:: ttnn.softsign
-
-.. autofunction:: ttnn.softplus
-
-.. autofunction:: ttnn.softshrink

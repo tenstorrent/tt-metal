@@ -7,8 +7,6 @@ Binary Operations
 
 .. autofunction:: ttnn.atan2
 
-.. autofunction:: ttnn.concat
-
 .. autofunction:: ttnn.isclose
 
 .. autofunction:: ttnn.hypot
@@ -25,13 +23,9 @@ Binary Operations
 
 .. autofunction:: ttnn.logical_xor
 
-.. autofunction:: ttnn.maeloss
-
 .. autofunction:: ttnn.max
 
 .. autofunction:: ttnn.min
-
-.. autofunction:: ttnn.mseloss
 
 .. autofunction:: ttnn.nextafter
 

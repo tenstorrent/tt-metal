@@ -46,27 +46,6 @@ def register_ttl_binary_function(name, ttl_binary_function, torch_function):
     def binary_function(
         input_tensor_a: Tensor, input_tensor_b: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
     ) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-
-        """
         if not (input_tensor_a.shape == input_tensor_b.shape):
             raise RuntimeError("input_tensors must be of same size!")
 
@@ -91,8 +70,28 @@ def register_ttl_binary_function(name, ttl_binary_function, torch_function):
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+
+        """
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_binary_function_with_float_parameter(name, ttl_binary_function, torch_function):
@@ -118,28 +117,6 @@ def register_ttl_binary_function_with_float_parameter(name, ttl_binary_function,
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b, 2.0)
-            >>> print(output)
-            Tensor([ -3, -2], dtype=bfloat16 )
-
-        """
-
         if not (input_tensor_a.shape == input_tensor_b.shape):
             raise RuntimeError("input_tensors must be of same size!")
 
@@ -166,8 +143,28 @@ def register_ttl_binary_function_with_float_parameter(name, ttl_binary_function,
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor, parameter: float) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i, parameter)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, 2.0)
+        """
+
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_assign_function(name, ttl_binary_function, torch_function):
@@ -187,27 +184,6 @@ def register_ttl_assign_function(name, ttl_binary_function, torch_function):
 
     @decorate_operation(torch_function=_torch_binary, name=name)
     def binary_function(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 2, 2], dtype=bfloat16 )
-
-        """
         if not (input_tensor_a.shape == input_tensor_b.shape):
             raise RuntimeError("input_tensors must be of same size!")
 
@@ -232,8 +208,28 @@ def register_ttl_assign_function(name, ttl_binary_function, torch_function):
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+
+        """
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_function, torch_function):
@@ -261,28 +257,6 @@ def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_functi
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b, 0.4 , 0.1)
-            >>> print(output)
-            Tensor([ -3, -2], dtype=bfloat16 )
-
-        """
-
         if not (input_tensor_a.shape == input_tensor_b.shape):
             raise RuntimeError("input_tensors must be of same size!")
 
@@ -309,8 +283,28 @@ def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_functi
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor, rtol: float, atol: float, equal_nan: bool ) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, 0.4 , 0.1, True)
+
+        """
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function):
@@ -336,28 +330,6 @@ def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function)
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b, 0.4 , 0.1)
-            >>> print(output)
-            Tensor([ -3, -2], dtype=bfloat16 )
-
-        """
-
         if not (input_tensor_a.shape == input_tensor_b.shape):
             raise RuntimeError("input_tensors must be of same size!")
 
@@ -383,8 +355,28 @@ def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function)
         output_tensor = Tensor(ttl_output_tensor)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor, mode: LossMode) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, mode)
+        """
+
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_outer_function(name, ttl_binary_function, torch_function):
@@ -404,27 +396,6 @@ def register_ttl_outer_function(name, ttl_binary_function, torch_function):
 
     @decorate_operation(torch_function=_torch_binary, name=name)
     def binary_function(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 2, 2], dtype=bfloat16 )
-
-        """
         shape_a = [input_tensor_a.shape[0], input_tensor_a.shape[1], input_tensor_a.shape[2], input_tensor_a.shape[3]]
         shape_b = [input_tensor_b.shape[0], input_tensor_b.shape[1], input_tensor_b.shape[2], input_tensor_b.shape[3]]
 
@@ -447,8 +418,29 @@ def register_ttl_outer_function(name, ttl_binary_function, torch_function):
         output_tensor = Tensor(ttl_output_tensor)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+
+        """
+
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_concat_function(name, ttl_binary_function, torch_function):
@@ -474,28 +466,6 @@ def register_ttl_concat_function(name, ttl_binary_function, torch_function):
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {name}(\\mathrm{{input\\_tensor_a}}_i)
-            {name}(\\mathrm{{input\\_tensor_b}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 2, 2], dtype=bfloat16 )
-
-        """
-
         original_shape = input_tensor_a.shape
         input_tensor_a = _reshape_to_4D(input_tensor_a)
         input_tensor_b = _reshape_to_4D(input_tensor_b)
@@ -518,8 +488,28 @@ def register_ttl_concat_function(name, ttl_binary_function, torch_function):
         output_tensor = Tensor(ttl_output_tensor)
         return output_tensor
 
+    binary_function.__name__ = f"ttnn.{name}"
+    binary_function.__doc__ = f"""{name}(input_tensor_a: Tensor, input_tensor_b: Tensor, dim: int) -> Tensor
+
+        Applies {name} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+             \\texttt{{{name}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, dim)
+
+        """
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 # register functions

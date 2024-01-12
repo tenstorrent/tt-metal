@@ -1,4 +1,4 @@
-personal_ws-1.1 en 518
+personal_ws-1.1 en 520
 ABI
 ADDI
 API
@@ -157,6 +157,7 @@ abs
 acc
 acos
 acosh
+activations
 add
 addalpha
 addcdiv
@@ -405,6 +406,7 @@ relu
 repo
 resnet
 riscv
+rms
 rmsg
 rpow
 rsqrt
