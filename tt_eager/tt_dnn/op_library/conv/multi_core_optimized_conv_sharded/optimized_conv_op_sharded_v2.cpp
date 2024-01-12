@@ -703,6 +703,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         std::vector<uint32_t> split_reader_args = {
             (uint32_t) act_block_h_datums,
             (uint32_t) act_block_num_tiles / conv_act_c_blocks,
+            (uint32_t) conv_act_c_read_bytes,
             (uint32_t) weight_size_w * conv_act_c_read_bytes, // coalesced_read_bytes
             (uint32_t) (conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes, // window_outer_offset
         };

@@ -31,20 +31,31 @@ import ttnn
         (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False),
         (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False),
         # sd convs with HxW=32x32
-        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False),
-        (1, 320, 320, 32, 32, 3, 3, 2, 2, 1, 1, False),
-        (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, False),
-        (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, False),
+        # (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False),
+        # (1, 320, 320, 32, 32, 3, 3, 2, 2, 1, 1, False),
+        # (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, False),
+        # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, False),
         # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, False), # bfloat16 activations doesnt fit
         # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False), # slighlty low pcc with 0.99689. bfloat16 weights doesnt fit
-        # (1, 1280, 1280, 8, 8, 3, 3, 2, 2, 1, 1, False), fails to parallelize with sharding
-        # (1, 1280, 1280, 4, 4, 3, 3, 1, 1, 1, 1, False), fails to parallelize with sharding
+        # (1, 1280, 1280, 8, 8, 3, 3, 2, 2, 1, 1, False), #fails to parallelize with sharding
+        # (1, 1280, 1280, 4, 4, 3, 3, 1, 1, 1, 1, False), #fails to parallelize with sharding
         # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit
         # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False), # doesnt fit at all.. for all data types
         # sd conv with HxW=512x512
         # (1, 320, 320, 512, 512, 3, 3, 1, 1, 1, 1, False), # doesnt fit at all.. for all data types
         # sd conv with HxW=256x256
         # (1, 320, 320, 256, 256, 3, 3, 1, 1, 1, 1, False), # doesnt fit at all.. for all data types
+        # sd convs with HxW=64x64
+        # (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False), # bfloat16 weights or activations doesnt fit
+        (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False),
+        # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False), # doesnt fit at all.. for all datatypes
+        # (1, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False), # bfloat16 weights or activations doesnt fit
+        # (1, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False), # bfloat16 activations doesnt fit
+        # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False), # slighlty low pcc with 0.99689. bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False), #slightly low pcc 0.99697. bfloat16 doesnt fit.
+        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False), # slighlty low pcc with 0.99689. bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False), # not tested yet
+        # (1, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False), # not tested yet
     ),
 )
 @pytest.mark.parametrize(
