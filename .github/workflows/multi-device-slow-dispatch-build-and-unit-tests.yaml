@@ -3,7 +3,7 @@ name: "[post-commit] all - Slow Dispatch multi-Nebula post-commit main build and
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1,5,7,9,14,17,21 * * *"
+    - cron: "0 1,7,9,14,17,21 * * *"
     - cron: "0 5 * * *"
 
 jobs:
