@@ -32,8 +32,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     // Try printing on all ethernet cores on this device
     int count = 0;
     for (const auto& core : device->get_active_ethernet_cores()) {
-    // Set up program and command queue
-    Program program = Program();
+        // Set up program and command queue
+        Program program = Program();
 
         // Create the kernel
         KernelHandle erisc_kernel_id = CreateKernel(
