@@ -2,12 +2,12 @@ name: "[post-commit] all - Slow Dispatch multi-Nebula post-commit main build and
 
 on:
   workflow_dispatch:
-  workflow_call:
   schedule:
     - cron: "0 1,5,7,9,14,17,21 * * *"
+    - cron: "0 5 * * *"
 
 jobs:
-  build-and-unit-tests:
+  build-and-unit-tests-multi-device:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -15,7 +15,9 @@ jobs:
       matrix:
         runner-info: [
           # N300 2x2
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-2", "multi-chip-num-chips-4"]},
+          {name: "n300-2x2", arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-2", "multi-chip-num-chips-4"], nightly: false},
+          # N300 2x4
+          {name: "n300-2x4", arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"], nightly: true},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -24,17 +26,26 @@ jobs:
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
+      - id: get-continue-running
+        name: Deduce whether to continue running
+        run: |
+          echo "continue-running=${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 5 * * *' && matrix.runner-info.nightly || !matrix.runner-info.nightly }}" >> "$GITHUB_OUTPUT"
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         with:
           token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Set up dyanmic env vars for build
+        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
+        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: make build
       - name: Build tt-metal CPP tests
+        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: make tests
       - name: Run pre/post regression tests
+        if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         timeout-minutes: 30
         run: |
           source build/python_env/bin/activate
