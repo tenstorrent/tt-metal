@@ -44,4 +44,4 @@ dynamic = ["version"]
 
 [tool.black]
 line-length = 120
-include = '^.*(ttnn|tests/scripts|tests/ttnn)/.*\.py$'
+include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|tt_eager/tt_lib)/.*\.py$'

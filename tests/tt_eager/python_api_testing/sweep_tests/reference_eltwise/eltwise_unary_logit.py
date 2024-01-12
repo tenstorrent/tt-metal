@@ -26,9 +26,7 @@ def custom_logit(input, value):
     out1 = torch.where(
         mask_condition1,
         input / (1 - input),
-        torch.where(
-            mask_condition2, value / (1 - value), (1 - value) / (1 - (1 - value))
-        ),
+        torch.where(mask_condition2, value / (1 - value), (1 - value) / (1 - (1 - value))),
     )
     out2 = torch.log(out1)
 

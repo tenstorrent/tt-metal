@@ -12,9 +12,7 @@ from loguru import logger
 import pytest
 
 
-@pytest.mark.parametrize(
-    "input_shape", [torch.Size([1, 3, 6, 4]), torch.Size([3, 2, 65, 10])]
-)
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 3, 6, 4]), torch.Size([3, 2, 65, 10])])
 @pytest.mark.parametrize("fill_value", [13.8, 5.5, 31, 0.1])
 def test_full_fallback(input_shape, fill_value, device):
     torch.manual_seed(1234)

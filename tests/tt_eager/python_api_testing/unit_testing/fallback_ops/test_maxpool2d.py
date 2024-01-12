@@ -35,9 +35,7 @@ def test_MaxPool2d_fallback(
     torch.manual_seed(1234)
 
     x = torch.randn(input_shape).bfloat16().float()
-    pt_nn = torch.nn.MaxPool2d(
-        kernel_size, stride, padding, dilation, return_indices, ceil_mode
-    )
+    pt_nn = torch.nn.MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)
     pt_out = pt_nn(x)
 
     # Test on host RM

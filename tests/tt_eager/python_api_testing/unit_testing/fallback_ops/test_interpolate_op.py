@@ -49,9 +49,7 @@ def test_pad_fallback(
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.fallback_ops.interpolate(
-        t0, size, scale_factor, mode, align_corners, recompute_scale_factor, antialias
-    )
+    t1 = ttl.fallback_ops.interpolate(t0, size, scale_factor, mode, align_corners, recompute_scale_factor, antialias)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)

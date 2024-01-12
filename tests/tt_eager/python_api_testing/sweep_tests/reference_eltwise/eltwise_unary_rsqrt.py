@@ -8,6 +8,7 @@ import numpy as np
 
 torch.manual_seed(2)
 
+
 def rsqrt(x, iterations):
     y = 1.0 / x
     condition = (x > 0) & (x < 1)
@@ -15,6 +16,7 @@ def rsqrt(x, iterations):
     for _ in range(iterations):
         y = y * (1.5 - 0.5 * x * y * y)  # Newton-Raphson iteration
     return y
+
 
 n = np.linspace(0, 10, 100)
 n = torch.from_numpy(n)
