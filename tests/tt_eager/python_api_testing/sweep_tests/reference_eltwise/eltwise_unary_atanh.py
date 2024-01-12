@@ -8,8 +8,9 @@ import torch
 
 
 def custom_atanh_formula(x):
-  # 0.5 * ln((1 + x) / (1 - x))
-  return 0.5 * np.log((x+1) * (1/(1-x)))
+    # 0.5 * ln((1 + x) / (1 - x))
+    return 0.5 * np.log((x + 1) * (1 / (1 - x)))
+
 
 x = np.linspace(-100, 100, 10000)
 

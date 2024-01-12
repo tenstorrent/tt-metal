@@ -6,10 +6,11 @@ import torch
 import math
 import matplotlib.pyplot as plt
 
+
 def erfinv_approx(x):
     a_for_erf = 0.140012
-    b = -4.5469 - ( torch.log(1.0 - x**2)*0.5 )
-    return torch.sign(x) * torch.sqrt(b + torch.sqrt(b**2 - torch.log(1.0 - x**2) * 7.1427 ))
+    b = -4.5469 - (torch.log(1.0 - x**2) * 0.5)
+    return torch.sign(x) * torch.sqrt(b + torch.sqrt(b**2 - torch.log(1.0 - x**2) * 7.1427))
 
 
 x = torch.linspace(-1, 1, 200)
@@ -24,7 +25,7 @@ for i in range(len(x)):
 z = erfinv_result
 z1 = erfinv_pytorch_result
 
-plt.plot(x, z, '--g', label="custom_erfinv")
-plt.plot(x, z1, '+r', label="erfinv")
-plt.legend(loc='upper center')
+plt.plot(x, z, "--g", label="custom_erfinv")
+plt.plot(x, z1, "+r", label="erfinv")
+plt.legend(loc="upper center")
 plt.show()

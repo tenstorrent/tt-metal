@@ -37,9 +37,7 @@ def test_BatchNorm_fallback(
     r_m = torch.randn([1, 1, 1, num_features]).bfloat16().float()
     r_v = torch.randn([1, 1, 1, num_features]).bfloat16().float()
     n_b_t = torch.randint(0, 200, [1, 1, 1, 1]).bfloat16().float()
-    pt_nn = torch.nn.BatchNorm2d(
-        num_features, eps, momentum, affine, track_running_stats
-    )
+    pt_nn = torch.nn.BatchNorm2d(num_features, eps, momentum, affine, track_running_stats)
     pt_nn.weight = torch.nn.Parameter(w.reshape([num_features]))
     pt_nn.bias = torch.nn.Parameter(b.reshape([num_features]))
     pt_nn.running_mean = r_m.reshape([num_features])

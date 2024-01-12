@@ -8,9 +8,11 @@ import numpy as np
 
 torch.manual_seed(2)
 
+
 def logical_and(x, y):
     mul = torch.mul(x, y)
     return torch.where(mul != 0, True, False)
+
 
 x = np.linspace(1, 10, 100)
 x = torch.from_numpy(x)

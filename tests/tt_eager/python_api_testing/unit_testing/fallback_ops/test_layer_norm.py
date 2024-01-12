@@ -81,22 +81,12 @@ import pytest
         ),
     ),
 )
-def test_layer_norm_fallback(
-    input_shape, weight_shape, bias_shape, normalized_shape, eps, on_device, device
-):
+def test_layer_norm_fallback(input_shape, weight_shape, bias_shape, normalized_shape, eps, on_device, device):
     torch.manual_seed(1234)
 
     x = torch.randn(input_shape).bfloat16().float()
-    w = (
-        torch.randn(weight_shape).bfloat16().float()
-        if weight_shape is not None
-        else weight_shape
-    )
-    b = (
-        torch.randn(bias_shape).bfloat16().float()
-        if bias_shape is not None
-        else bias_shape
-    )
+    w = torch.randn(weight_shape).bfloat16().float() if weight_shape is not None else weight_shape
+    b = torch.randn(bias_shape).bfloat16().float() if bias_shape is not None else bias_shape
     pt_out = torch.nn.functional.layer_norm(
         x,
         normalized_shape,
@@ -237,9 +227,7 @@ def test_LayerNorm_fallback(
     if on_device:
         b0 = b0.to(device)
 
-    tt_nn = ttl.fallback_ops.LayerNorm(
-        w0, b0, normalized_shape, eps, elementwise_affine
-    )
+    tt_nn = ttl.fallback_ops.LayerNorm(w0, b0, normalized_shape, eps, elementwise_affine)
     t1 = tt_nn(t0)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
