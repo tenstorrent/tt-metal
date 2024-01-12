@@ -13,7 +13,6 @@
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
 constexpr uint32_t MIN_KERNEL_SIZE_BYTES = 32;  // overhead
-constexpr uint32_t MAX_KERNEL_SIZE_K = 16;
 constexpr uint32_t DEFAULT_KERNEL_SIZE_K = 1;
 constexpr uint32_t MAX_CBS = 32;
 constexpr uint32_t MAX_ARGS = 255;
@@ -32,6 +31,7 @@ uint32_t kernel_size_g;
 uint32_t kernel_cycles_g;
 uint32_t n_cbs_g;
 uint32_t n_args_g;
+uint32_t n_sems_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
 bool trisc_enabled_g;
@@ -46,11 +46,12 @@ void init(int argc, char **argv) {
         log_info(LogTest, "Usage:");
         log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "  -s: size of kernels in powers of 2 bytes (default {}, min {}, max {})", DEFAULT_KERNEL_SIZE_K * 1024, MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_K * 1024);
-        log_info(LogTest, "  -x: X end of core range (default {})", 1);
-        log_info(LogTest, "  -y: Y end of core range (default {})", 1);
+        log_info(LogTest, "  -s: size of kernels in powers of 2 bytes (default {}, min {})", DEFAULT_KERNEL_SIZE_K * 1024, MIN_KERNEL_SIZE_BYTES);
+        log_info(LogTest, "  -x: X end of inclusive core range (default {})", 0);
+        log_info(LogTest, "  -y: Y end of inclusive core range (default {})", 0);
         log_info(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
+        log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
         log_info(LogTest, "  -r: run kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
         log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
@@ -60,20 +61,17 @@ void init(int argc, char **argv) {
         exit(0);
     }
 
-    uint32_t core_x = test_args::get_command_option_uint32(input_args, "-x", 1);
-    uint32_t core_y = test_args::get_command_option_uint32(input_args, "-y", 1);
+    uint32_t core_x = test_args::get_command_option_uint32(input_args, "-x", 0);
+    uint32_t core_y = test_args::get_command_option_uint32(input_args, "-y", 0);
     warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     kernel_size_g = test_args::get_command_option_uint32(input_args, "-s", DEFAULT_KERNEL_SIZE_K * 1024);
     n_cbs_g = test_args::get_command_option_uint32(input_args, "-c", 0);
     n_args_g = test_args::get_command_option_uint32(input_args, "-a", 0);
+    n_sems_g = test_args::get_command_option_uint32(input_args, "-S", 0);
     lazy_g = test_args::has_command_option(input_args, "-z");
     time_just_finish_g = test_args::has_command_option(input_args, "-f");
     kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-r", 0);
-    if (kernel_size_g > MAX_KERNEL_SIZE_K * 1024) {
-        log_fatal("CB count must be 0..{}", MAX_KERNEL_SIZE_K * 1024);
-        exit(0);
-    }
     if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -84,6 +82,10 @@ void init(int argc, char **argv) {
     }
     if (n_args_g > MAX_ARGS) {
         log_fatal("CB count must be 0..{}", MAX_ARGS);
+        exit(0);
+    }
+    if (n_sems_g > NUM_SEMAPHORES) {
+        log_fatal("Sem count must be 0..{}", NUM_SEMAPHORES);
         exit(0);
     }
 
@@ -122,6 +124,10 @@ int main(int argc, char **argv) {
         };
         if (kernel_cycles_g != 0) {
             pad_defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(kernel_cycles_g)));
+        }
+
+        for (uint32_t i = 0; i < n_sems_g; i++) {
+            tt_metal::CreateSemaphore(program, workers_g, 3);
         }
 
         vector<uint32_t> args;
@@ -185,6 +191,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Kernel cycles: {}", kernel_cycles_g);
         log_info(LogTest, "CBs: {}", n_cbs_g);
         log_info(LogTest, "Args: {}", n_args_g);
+        log_info(LogTest, "Sems: {}", n_sems_g);
         log_info(LogTest, "Lazy: {}", lazy_g);
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
@@ -197,15 +204,13 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass);
-
     tt::llrt::OptionsG.set_kernels_nullified(false);
 
-    return 0;
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+        return 0;
+    } else {
+        log_fatal(LogTest, "Test Failed\n");
+        return 1;
+    }
 }
