@@ -85,6 +85,14 @@ Unary Operations
 
 .. autofunction:: ttnn.recip
 
+.. autofunction:: ttnn.reglu
+
+.. autofunction:: ttnn.relu
+
+.. autofunction:: ttnn.relu6
+
+.. autofunction:: ttnn.repeat
+
 .. autofunction:: ttnn.rpow
 
 .. autofunction:: ttnn.rsqrt

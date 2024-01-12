@@ -8,6 +8,7 @@ from ttnn.decorators import decorate_operation
 from typing import Union
 from ttnn.tensor import (
     Tensor,
+    Shape,
     has_storage_type_of,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
@@ -22,6 +23,55 @@ from tt_lib.utils import (
 THIS_MODULE = sys.modules[__name__]
 
 __all__ = []
+
+
+def register_ttl_function_with_shape(name, ttl_unary_function, torch_function):
+    def _torch_unary(input_tensor: Tensor, repeat, **_):
+        assert torch_function, f"Torch function not implemented for {str(ttl_unary_function)}"
+        return torch_function(input_tensor, repeat)
+
+    @decorate_operation(torch_function=_torch_unary, name=name)
+    def unary_function(
+        input_tensor: Tensor,
+        repeat: Shape,
+        *,
+        memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+    ) -> Tensor:
+        f"""{name}(input_tensor: Tensor, repeat: tuple) -> Tensor
+
+        Generates a Tensor of {name} with attributes :attr:`input_tensor` and  :attr:`repeat`.
+
+        .. math::
+            {name}(\\mathrm{{input\\_tensor}}_i)
+            {name}(\\mathrm{{input\\_shape}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+            * :attr:`repeat`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor, repeat)
+            >>> print(output)
+
+        """
+
+        input_tensor = _reshape_to_4D(input_tensor)
+        if not isinstance(input_tensor, Tensor):
+            raise TypeError("Expected to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError("input_tensors must be on device!")
+
+        ttl_input_tensor = input_tensor.value
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, repeat, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        return output_tensor
+
+    setattr(THIS_MODULE, name, unary_function)
+    __all__.append(name)
 
 
 def register_ttl_unary_function(name, ttl_unary_function, torch_function):
@@ -544,6 +594,18 @@ TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER = [
 for unary_function_name, ttl_unary_function, torch_function in TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER:
     register_ttl_activation_function_with_dim_parameter(unary_function_name, ttl_unary_function, torch_function)
 
+
+def torch_repeat(x, repeat, *args, **kwargs):
+    return x.repeat(*repeat)
+
+
+TTL_UNARY_FUNCTIONS_WITH_SHAPE = [
+    ("repeat", ttl.tensor.repeat, torch_repeat),
+]
+
+for unary_function_name, ttl_unary_function, torch_function in TTL_UNARY_FUNCTIONS_WITH_SHAPE:
+    register_ttl_function_with_shape(unary_function_name, ttl_unary_function, torch_function)
+
 Tensor.tilize_with_zero_padding = tilize_with_zero_padding
 Tensor.exp = exp
 Tensor.tanh = tanh
@@ -621,6 +683,7 @@ Tensor.pow = pow
 Tensor.elu = elu
 Tensor.relu_max = relu_max
 Tensor.relu_min = relu_min
+Tensor.repeat = repeat
 Tensor.threshold = threshold
 Tensor.leaky_relu = leaky_relu
 Tensor.hardshrink = hardshrink

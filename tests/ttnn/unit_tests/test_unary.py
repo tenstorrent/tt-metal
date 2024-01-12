@@ -14,6 +14,7 @@ from ttnn.unary import (
     TTL_UNARY_FUNCTIONS,
     TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER,
     TTL_UNARY_FUNCTIONS_WITH_TILIZED_RESHAPE,
+    TTL_UNARY_FUNCTIONS_WITH_SHAPE,
     REDUCE_UNARY_FUNCTIONS,
     TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER,
 )
@@ -23,6 +24,7 @@ TTL_FUNCTIONS = (
     TTL_UNARY_FUNCTIONS
     + TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER
     + TTL_UNARY_FUNCTIONS_WITH_TILIZED_RESHAPE
+    + TTL_UNARY_FUNCTIONS_WITH_SHAPE
     + TTL_CREATE_FUNCTIONS
     + TTL_CREATE_FUNCTIONS_WITH_FLOAT_PARAMETER
     + TTL_ACTIVATION_FUNCTIONS_WITH_DIM_PARAMETER
@@ -165,6 +167,7 @@ pcc = {"exp2": 0.987, "atan": 0.978, "tanhshrink": 0.93, "digamma": 0.96}
         "softplus",
         "softshrink",
         "tilize_with_zero_padding",
+        "repeat",
     ],
 )
 @pytest.mark.parametrize("h", [31, 32])
@@ -204,6 +207,11 @@ def test_unary(device, unary_fn, h, w):
         if torch_ref_fn:
             torch_output_tensor = torch_ref_fn(torch_input_tensor, arg)
         output_tensor = ttnn_unary_fn(input_tensor, arg)
+    elif unary_fn in "repeat":
+        repeat = (1, 2, 1, 1)
+        if torch_ref_fn:
+            torch_output_tensor = torch_ref_fn(torch_input_tensor, repeat)
+        output_tensor = ttnn_unary_fn(input_tensor, repeat)
     else:
         if torch_ref_fn:
             torch_output_tensor = torch_ref_fn(torch_input_tensor)
