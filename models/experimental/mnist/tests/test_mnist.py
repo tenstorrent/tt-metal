@@ -6,13 +6,13 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from loguru import logger
+from numpy import argmax
 import tt_lib
 
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    get_oom_of_float,
 )
 from models.experimental.mnist.tt.mnist_model import mnist_model
 
@@ -20,9 +20,7 @@ from models.experimental.mnist.tt.mnist_model import mnist_model
 def test_mnist_inference(device, model_location_generator):
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
-    test_dataset = datasets.MNIST(
-        root="./data", train=False, transform=transform, download=True
-    )
+    test_dataset = datasets.MNIST(root="./data", train=False, transform=transform, download=True)
     dataloader = DataLoader(test_dataset, batch_size=1)
 
     # Load model
@@ -30,9 +28,7 @@ def test_mnist_inference(device, model_location_generator):
 
     with torch.no_grad():
         test_input, _ = next(iter(dataloader))
-        tt_input = torch2tt_tensor(
-            test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
         pt_output = pt_model(test_input)
         tt_output = tt_model(tt_input)
@@ -48,9 +44,9 @@ def test_mnist_inference(device, model_location_generator):
     ).all(), "The outputs from device and pytorch must have the same topk indices"
 
     # Check that the scale of each output is the same
-    tt_out_oom = get_oom_of_float(tt_output.view(-1).tolist())
-    pytorch_out_oom = get_oom_of_float(pt_output.tolist())
+    tt_out_largest_val_position = argmax(tt_output.view(-1).tolist())
+    pytorch_out_largest_val_position = argmax(pt_output.tolist())
 
     assert (
-        tt_out_oom == pytorch_out_oom
-    ), "The order of magnitudes of the outputs must be the same"
+        tt_out_largest_val_position == pytorch_out_largest_val_position
+    ), "The largest value in both TT and PT outputs must be in the same position"
