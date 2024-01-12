@@ -19,8 +19,8 @@ MODEL_NAME = "openai/whisper-tiny.en"
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
-@pytest.mark.parametrize("key_value_states", [False, True])
-def test_whisper_attention(model_name, batch_size, sequence_size, key_value_states):
+@pytest.mark.parametrize("use_key_value_states", [False, True])
+def test_whisper_attention(model_name, batch_size, sequence_size, use_key_value_states):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = (
@@ -31,21 +31,17 @@ def test_whisper_attention(model_name, batch_size, sequence_size, key_value_stat
         .eval()
     )
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.bfloat16)
-    if key_value_states:
-        name = "encoder_attn"
+    if use_key_value_states:
         key_value_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.bfloat16)
     else:
-        name = ""
         key_value_states = None
     torch_output = model(torch_hidden_states, key_value_states=key_value_states)
-
-    def my_adjusted_custom_preprocessor(model, ignored_name):
-        return torch_functional_whisper.custom_preprocessor(model, name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=my_adjusted_custom_preprocessor,
+        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
+        prefix="encoder_attn" if use_key_value_states else "",
     )
 
     attention_mask = None
@@ -67,13 +63,12 @@ def test_encoder_layer(model_name, batch_size, sequence_size):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).to(torch.bfloat16).eval()
 
-    num_heads = config.encoder_attention_heads
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.bfloat16)
 
     attention_mask = None
     layer_head_mask = None
-    torch_attn_output = model(torch_hidden_states, attention_mask, layer_head_mask)
+    torch_output = model(torch_hidden_states, attention_mask, layer_head_mask)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -81,8 +76,8 @@ def test_encoder_layer(model_name, batch_size, sequence_size):
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
 
-    tt_attn_output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
-    assert_with_pcc(torch_attn_output[0], tt_attn_output)
+    output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
+    assert_with_pcc(torch_output[0], output)
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
@@ -94,14 +89,11 @@ def test_encoder(model_name, batch_size, feature_size, sequence_length):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).to(torch.bfloat16).eval()
 
-    num_heads = config.encoder_attention_heads
-    embed_dim = config.d_model
-
     torch_hidden_states = torch_random((batch_size, feature_size, sequence_length), -0.1, 0.1, dtype=torch.bfloat16)
 
     attention_mask = None
     head_mask = None
-    torch_attn_output = model(torch_hidden_states, attention_mask, head_mask)
+    torch_output = model(torch_hidden_states, attention_mask, head_mask)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -114,9 +106,9 @@ def test_encoder(model_name, batch_size, feature_size, sequence_length):
         parameters=parameters,
     )
 
-    tt_attn_output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
+    output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
 
-    assert_with_pcc(torch_attn_output[0], tt_attn_output)
+    assert_with_pcc(torch_output[0], output)
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
@@ -128,7 +120,6 @@ def test_decoder_layer(model_name, batch_size, sequence_size):
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).to(torch.bfloat16).eval()
     model = model.to(torch.bfloat16)
 
-    num_heads = config.encoder_attention_heads
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, 32, embed_dim), -0.1, 0.1, dtype=torch.bfloat16)
 
@@ -137,7 +128,7 @@ def test_decoder_layer(model_name, batch_size, sequence_size):
     attention_mask = torch_random((batch_size, 1, 32, 32), -0.1, 0.1, dtype=torch.bfloat16)
     layer_head_mask = None
     cross_attn_layer_head_mask = None
-    torch_attn_output = model(torch_hidden_states, attention_mask, layer_head_mask, cross_attn_layer_head_mask)
+    torch_output = model(torch_hidden_states, attention_mask, layer_head_mask, cross_attn_layer_head_mask)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -145,11 +136,11 @@ def test_decoder_layer(model_name, batch_size, sequence_size):
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
 
-    tt_attn_output = torch_functional_whisper.decoder_layer(
+    output = torch_functional_whisper.decoder_layer(
         config, torch_hidden_states, attention_mask, torch_encoder_hidden_states, parameters=parameters
     )
 
-    assert_with_pcc(torch_attn_output[0], tt_attn_output, 0.94)
+    assert_with_pcc(torch_output[0], output, 0.94)
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
@@ -169,7 +160,7 @@ def test_decoder(model_name, batch_size, sequence_size):
     attention_mask = None
     head_mask = None
     cross_attn_layer_head_mask = None
-    torch_attn_output = model(
+    torch_output = model(
         decoder_input_ids, attention_mask, torch_encoder_hidden_states, head_mask, cross_attn_layer_head_mask
     )
 
@@ -183,7 +174,7 @@ def test_decoder(model_name, batch_size, sequence_size):
         decoder_input_ids, attention_mask, parameters=parameters
     )
 
-    tt_attn_output = torch_functional_whisper.decoder(
+    output = torch_functional_whisper.decoder(
         config,
         hidden_states=decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
@@ -191,7 +182,7 @@ def test_decoder(model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
-    assert_with_pcc(torch_attn_output[0], tt_attn_output)
+    assert_with_pcc(torch_output[0], output)
 
 
 # Verify that the torch functional model matches exactly the default model.
@@ -214,8 +205,6 @@ def test_torch_whisper():
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
-    embed_dim = config.d_model
-    num_heads = config.encoder_attention_heads
 
     attention_mask = None
     (input_embeds, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(

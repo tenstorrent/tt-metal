@@ -429,8 +429,6 @@ def whisper(config, input_embeds, decoder_hidden_states, decoder_attention_mask,
 def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, transformers.models.whisper.modeling_whisper.WhisperAttention):
-        height, width = torch_model.k_proj.weight.shape
-
         if "encoder_attn" in name:
             parameters = {"key_value": {}, "q_proj": {}, "out_proj": {}}
             preprocessed_weight = torch.cat([torch_model.k_proj.weight, torch_model.v_proj.weight], dim=0)
@@ -483,7 +481,7 @@ if __name__ == "__main__":
 
     # Sanity check the torch functional approach
     parameters = preprocess_model_parameters(
-        f"torch-{model_name}",
+        f"torch_{model_name}",
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         convert_to_ttnn=lambda *_: False,
