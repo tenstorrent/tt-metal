@@ -267,6 +267,9 @@ namespace ckernel::unpacker
 
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
+      uint32_t src_zeroflags_disable = ((uint)unpA_dst_format == (uint)DataFormat::UInt16) || ((uint)unpB_dst_format == (uint)DataFormat::UInt16);
+      cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(src_zeroflags_disable);
+
       t6_mutex_release(mutex::REG_RMW);
 
       // Set tile descriptor
