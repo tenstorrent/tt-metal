@@ -18,8 +18,8 @@ def test_reshape(h, w):
     torch_output_tensor = torch_input_tensor.reshape(w, h)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
-    output_tensor = ttnn.reshape(input_tensor, (w, h))
-    output_tensor = ttnn.to_torch(output_tensor)
+    tt_output_tensor = ttnn.reshape(input_tensor, (w, h))
+    output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     assert torch.allclose(torch_output_tensor, output_tensor)
@@ -32,8 +32,8 @@ def test_reshape_negative_1(h, w):
     torch_output_tensor = torch_input_tensor.reshape(-1)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
-    output_tensor = ttnn.reshape(input_tensor, (-1,))
-    output_tensor = ttnn.to_torch(output_tensor)
+    tt_output_tensor = ttnn.reshape(input_tensor, (-1,))
+    output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     assert torch.allclose(torch_output_tensor, output_tensor)
@@ -48,8 +48,8 @@ def test_reshape_in_4D(n, c, h, w):
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
-    output_tensor = ttnn.reshape(input_tensor, (h, w, n, c))
-    output_tensor = ttnn.to_torch(output_tensor)
+    tt_output_tensor = ttnn.reshape(input_tensor, (h, w, n, c))
+    output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     assert torch.allclose(torch_output_tensor, output_tensor)
