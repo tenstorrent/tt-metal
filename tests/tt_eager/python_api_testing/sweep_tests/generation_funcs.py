@@ -1629,3 +1629,30 @@ def gen_power_fp_args(
         dtype,
     ):
         yield input_info
+
+
+def gen_isclose_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    rtol_low=1e-7,
+    rtol_high=1e-5,
+    atol_low=1e-9,
+    atol_high=1e-7,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+        if input_info is not None:
+            if dtype.is_floating_point:
+                rtol = torch.tensor(1, dtype=dtype).uniform_(rtol_low, rtol_low).item()
+            else:
+                rtol = torch.tensor(1, dtype=dtype).random_(rtol_low, rtol_low).item()
+
+            if dtype.is_floating_point:
+                atol = torch.tensor(1, dtype=dtype).uniform_(atol_low, atol_low).item()
+            else:
+                atol = torch.tensor(1, dtype=dtype).random_(atol_low, atol_low).item()
+
+            input_info.update({"rtol": rtol, "atol": atol, "equal_nan": False})
+            yield input_info

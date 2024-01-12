@@ -8,9 +8,10 @@ import torch
 
 
 def custom_isnan(x):
-  return torch.where(x == float('nan'), True, False)
+    return torch.where(x == float("nan"), True, False)
 
-x = torch.tensor([1.0, 2.0, float('inf'), 5.0, float('-inf'), 6.0, float('nan'), 8.0, 9.0, 10.0])
+
+x = torch.tensor([1.0, 2.0, float("inf"), 5.0, float("-inf"), 6.0, float("nan"), 8.0, 9.0, 10.0])
 t_out = torch.isnan(x)
 cust_out_formula = custom_isnan(x)
 

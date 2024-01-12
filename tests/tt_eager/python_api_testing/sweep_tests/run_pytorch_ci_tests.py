@@ -85,7 +85,5 @@ def run_single_pytorch_test(
         if value is not None:
             os.environ[key] = value
 
-    assert (
-        test_pass
-    ), f"{test_name} test failed with input shape {input_shapes}. {test_output}"
+    assert test_pass, f"{test_name} test failed with input shape {input_shapes}. {test_output}"
     logger.info(f"{test_name} test passed with input shape {input_shapes}.")

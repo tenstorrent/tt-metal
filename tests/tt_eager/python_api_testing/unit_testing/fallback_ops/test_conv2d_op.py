@@ -72,11 +72,7 @@ def test_conv2d_fallback(
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()
-    b = (
-        torch.randn(bias_shape).bfloat16().float()
-        if bias_shape is not None
-        else bias_shape
-    )
+    b = torch.randn(bias_shape).bfloat16().float() if bias_shape is not None else bias_shape
     pt_out = torch.conv2d(
         x,
         w,
@@ -211,11 +207,7 @@ def test_Conv2d_fallback(
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()
-    b = (
-        torch.randn(bias_shape).bfloat16().float()
-        if bias_shape is not None
-        else bias_shape
-    )
+    b = torch.randn(bias_shape).bfloat16().float() if bias_shape is not None else bias_shape
     pt_nn = torch.nn.Conv2d(
         in_channels,
         out_channels,
@@ -230,13 +222,9 @@ def test_Conv2d_fallback(
 
     pt_nn.weight = torch.nn.Parameter(w)
     if not bias and bias_shape is not None:
-        logger.warning(
-            "Bias set to false but trying to set a bias tensor, Ignoring specified bias tensor"
-        )
+        logger.warning("Bias set to false but trying to set a bias tensor, Ignoring specified bias tensor")
     if bias:
-        pt_nn.bias = (
-            torch.nn.Parameter(b.reshape((b.shape[-1]))) if b is not None else b
-        )
+        pt_nn.bias = torch.nn.Parameter(b.reshape((b.shape[-1]))) if b is not None else b
 
     pt_out = pt_nn(x)
 
