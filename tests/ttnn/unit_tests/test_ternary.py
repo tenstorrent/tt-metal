@@ -166,3 +166,34 @@ class TestEltwiseTernary:
         print(f"layout: {output.layout}")
 
         ttnn.close(device)
+
+    @pytest.mark.parametrize(
+        "repeat",
+        [2, 3, 4, 5],
+    )
+    @pytest.mark.parametrize(
+        "dim",
+        [0, 2, -4, -2, 1, 3],
+    )
+    def test_ttnn_repeat_interleave(self, input_shapes, repeat, dim):
+        device_id = 0
+        device = ttnn.open(device_id)
+
+        torch.manual_seed(0)
+
+        torch_a = torch.rand(input_shapes, dtype=torch.bfloat16)
+
+        a = ttnn.from_torch(torch_a)
+
+        a = ttnn.to_device(a, device)
+
+        output = ttnn.repeat_interleave(a, repeat, dim)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+
+        assert_with_pcc(torch.repeat_interleave(torch_a, repeats=repeat, dim=dim), from_device(output))
+
+        print(f"shape: {output.shape}")
+        print(f"dtype: {output.dtype}")
+        print(f"layout: {output.layout}")
+
+        ttnn.close(device)

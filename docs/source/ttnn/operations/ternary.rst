@@ -8,3 +8,5 @@ Ternary Operations
 .. autofunction:: ttnn.addcdiv
 
 .. autofunction:: ttnn.where
+
+.. autofunction:: ttnn.repeat_interleave
