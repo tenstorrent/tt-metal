@@ -125,7 +125,7 @@ def determine_parallel_config(
         per_core_out_matrix_width_ntiles = (int)(conv_out_2d_matrix_width_ntiles / actual_num_cores_y)
         grid_size = [actual_num_cores_x, actual_num_cores_y]
         num_cores_nhw = actual_num_cores_x
-
+    print("grid_size=", grid_size)
     if "grid_size" in config_override:
         if config_override["grid_size"][0] != grid_size[0]:
             grid_size_x_override = config_override["grid_size"][0]
