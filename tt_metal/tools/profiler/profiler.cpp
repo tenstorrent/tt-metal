@@ -188,11 +188,11 @@ void DeviceProfiler::readRiscProfilerResults(
         std::cout <<  std::endl;
         std::cout <<  std::endl;
     }
-    //std::cout << "Control Buffer :" << control_buffer [0] << "," << control_buffer [5] << "," << std::endl;
-    //std::cout << "Control Buffer :" << control_buffer [1] << "," << control_buffer [6] << "," << std::endl;
-    //std::cout << "Control Buffer :" << control_buffer [2] << "," << control_buffer [7] << "," << std::endl;
-    //std::cout << "Control Buffer :" << control_buffer [3] << "," << control_buffer [8] << "," << std::endl;
-    //std::cout << "Control Buffer :" << control_buffer [4] << "," << control_buffer [9] << "," << std::endl;
+    std::cout << "Control Buffer :" << control_buffer [0] << "," << control_buffer [5] << "," << std::endl;
+    std::cout << "Control Buffer :" << control_buffer [1] << "," << control_buffer [6] << "," << std::endl;
+    std::cout << "Control Buffer :" << control_buffer [2] << "," << control_buffer [7] << "," << std::endl;
+    std::cout << "Control Buffer :" << control_buffer [3] << "," << control_buffer [8] << "," << std::endl;
+    std::cout << "Control Buffer :" << control_buffer [4] << "," << control_buffer [9] << "," << std::endl;
 
     std::cout << "\nDRAM SIZE PER RISC :" << PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC << " L1 SIZE :" << PROFILER_L1_VECTOR_SIZE << std::endl;
     }
@@ -206,6 +206,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
+                log_warning("Profiler DRAM buffers were full, markers were dropped! worker core {}, {}, bufferEndIndex = {}, host_size = {}",worker_core.x, worker_core.y,bufferEndIndex , PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC );
                 bufferEndIndex = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
             }
 
@@ -235,7 +236,7 @@ void DeviceProfiler::readRiscProfilerResults(
                 else
                 {
                     uint32_t time_H = profile_buffer[index] & 0x0000FFFF;
-                    if (time_H)
+                    //if (time_H)
                     {
                         uint32_t marker = (profile_buffer[index] & 0x00070000) >> 16;
                         uint32_t riscNumReadts = (profile_buffer[index] & 0x00380000) >> 19;
@@ -319,13 +320,40 @@ void DeviceProfiler::dumpResultToFile(
         int risc_num_read_ts,
         uint32_t timer_id,
         uint64_t timestamp){
-    ZoneScoped;
+    //ZoneScoped;
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
     //TODO(MO) : use enums here
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
+    constexpr int DRAM_ROW = 6;
+    if (core_y > DRAM_ROW) {
+        core_y = core_y - 2;
+    } else {
+        core_y--;
+    }
+    core_x--;
+
+    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(runID, chip_id, core_x, core_y, risc_num, timer_id);
+
+    if (device_data.find (event) != device_data.end())
+    {
+        ZoneScopedNC("eventFound",tracy::Color::Green);
+        device_data.at(event).push_back(timestamp);
+    }
+    else
+    {
+        ZoneScopedNC("eventNotFound",tracy::Color::Red);
+        device_data.emplace(event,std::list<uint64_t>{timestamp});
+    }
+
+    static int i = 0;
+    if (core_x == 6 && core_y == 9)
+    {
+    }
+
+    firstTimestamp(timestamp);
 
     if (new_log || !std::filesystem::exists(log_path))
     {
@@ -347,28 +375,6 @@ void DeviceProfiler::dumpResultToFile(
         log_file.open(log_path, std::ios_base::app);
     }
 
-    constexpr int DRAM_ROW = 6;
-    if (core_y > DRAM_ROW) {
-        core_y = core_y - 2;
-    } else {
-        core_y--;
-    }
-    core_x--;
-
-    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(chip_id, core_x, core_y, risc_num, timer_id);
-
-    if (device_data.find (event) != device_data.end())
-    {
-        ZoneScopedNC("eventFound",tracy::Color::Green);
-        device_data.at(event).push_back(timestamp);
-    }
-    else
-    {
-        ZoneScopedNC("eventNotFound",tracy::Color::Red);
-        device_data.emplace(event,std::list<uint64_t>{timestamp});
-    }
-
-    firstTimestamp(timestamp);
 
     log_file << runID << ", " << chip_id;
     log_file << ", " << core_x << ", " << core_y;
@@ -483,37 +489,36 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
 
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
-    static int BR_COUNTER = 0;
-    static int NC_COUNTER = 0;
-    static int T0_COUNTER = 0;
-    static int T1_COUNTER = 0;
-    static int T2_COUNTER = 0;
-
+    int brisc_count = 0;
+    int count = 0;
+    std::set<uint32_t> rows;
+    std::set<uint32_t> cols;
     for (auto& data: device_data)
     {
-        ZoneScopedNC("Marker",tracy::Color::Red);
         uint64_t threadID = data.first.get_thread_id();
         uint64_t row = data.first.core_y;
         uint64_t col = data.first.core_x;
         uint64_t risc = data.first.risc;
         uint64_t markerID = data.first.marker;
+        uint64_t runID = data.first.run_num;
 
-        if (row == 0 && col == 0 && markerID == 1)
+        cols.insert(col);
+        rows.insert(row);
+        if (markerID == 1 )
         {
-            int i = 1;
             for (auto event : data.second)
             {
                 switch (risc)
                 {
                     case 0:
                         {
+                            brisc_count++;
                             TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Red3,threadID);
                             {
                                 TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Red2,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
+                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                             }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
-                            BR_COUNTER ++;
+                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                         }
                         break;
                     case 1:
@@ -521,10 +526,9 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                             TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Green4,threadID);
                             {
                                 TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Green3,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
+                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                             }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
-                            NC_COUNTER ++;
+                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                         }
                         break;
                     case 2:
@@ -532,10 +536,9 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                             TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Blue4,threadID);
                             {
                                 TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Blue3,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
+                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                             }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
-                            T0_COUNTER ++;
+                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                         }
                         break;
                     case 3:
@@ -543,10 +546,9 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                             TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Purple3,threadID);
                             {
                                 TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Purple2,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
+                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                             }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
-                            T1_COUNTER ++;
+                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                         }
                         break;
                     case 4:
@@ -554,10 +556,9 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                             TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Yellow4,threadID);
                             {
                                 TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Yellow3,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,0));
+                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                             }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(device_id,row,col,risc,1));
-                            T2_COUNTER ++;
+                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                         }
                         break;
 
@@ -568,6 +569,19 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
         }
     }
 
+    //std::cout << "Brisc Count" << brisc_count << std::endl;
+
+    //for (auto& row: rows)
+    //{
+        //std::cout << row << ",";
+    //}
+    //std::cout << std::endl;
+
+    //for (auto& col: cols)
+    //{
+        //std::cout << col << ",";
+    //}
+    //std::cout << std::endl;
     TracyCLCollect(tracyTTCtx, device_data);
 
 #endif

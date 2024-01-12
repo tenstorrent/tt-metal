@@ -43,7 +43,7 @@ constexpr static std::uint32_t PRINT_BUFFER_T1 = PRINT_BUFFER_T0 + PRINT_BUFFER_
 constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_SIZE; // TRISC2
 constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_SIZE; // BRISC
 
-//TODO:(MO) Chang to num elem
+//TODO:(MO) Change to num elem
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_MARKER_BYTES_SIZE = PROFILER_L1_MARKER_UINT32_SIZE * sizeof(uint32_t);
 
@@ -68,7 +68,7 @@ constexpr static std::uint32_t PROFILER_L1_END_ADDRESS = PROFILER_L1_BUFFER_CONT
 constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 constexpr static std::uint32_t PROFILER_CORE_COUNT = 120;
 constexpr static std::uint32_t PROFILER_DRAM_BANK_COUNT = 8;
-constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1100;
+constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 450;
 
 constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_L1_MARKER_UINT32_SIZE * (PROFILER_L1_PROGRAM_ID_COUNT +  PROFILER_L1_GUARANTEED_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;
 constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
