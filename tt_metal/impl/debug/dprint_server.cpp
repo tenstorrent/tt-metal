@@ -42,15 +42,19 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return *reinterpret_cast<float*>(&val);
 }
 
-static inline uint32_t GetBaseAddr(int hart_id, bool is_eth_core) {
+static inline uint32_t GetBaseAddr(int chip_id, const CoreCoord &core, int hart_id) {
     // For tensix cores, compute the buffer address for the requested hart.
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
     // Ethernet cores have a different address mapping
-    if (is_eth_core)
+    if (tt::llrt::is_ethernet_core(core, chip_id))
         base_addr = eth_l1_mem::address_map::PRINT_BUFFER_ER;
 
     return base_addr;
+}
+
+static inline int GetNumRiscs(int chip_id, const CoreCoord &core) {
+    return (tt::llrt::is_ethernet_core(core, chip_id))? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
 }
 
 // A null stream for when the print server is muted.
@@ -123,7 +127,6 @@ private:
     // A map from Device -> Core Range, which is used to determine which cores on which devices
     // to scan for print data. Also a lock for editing it.
     std::map<Device*, vector<CoreCoord>> device_to_core_range_;
-    std::map<Device*, set<CoreCoord>> device_to_eth_cores_; // Also track which coords are eth cores.
     std::mutex device_to_core_range_lock_;
 
     // Polls specified cores/harts on all attached devices and prints any new print data. This
@@ -139,8 +142,7 @@ private:
         int chip_id,
         const CoreCoord& core,
         int hart_index,
-        bool new_data_this_iter,
-        bool is_eth_core
+        bool new_data_this_iter
     );
 };
 
@@ -195,9 +197,9 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
-void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled, bool is_eth_core) {
+void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = GetBaseAddr(hart_id, is_eth_core);
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
@@ -209,9 +211,9 @@ void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enable
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(int chip_id, const CoreCoord& core, int hart_id, bool is_eth_core) {
+bool CheckInitMagicCleared(int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = GetBaseAddr(hart_id, is_eth_core);
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
     auto result = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, 4);
@@ -278,7 +280,7 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
 void DebugPrintServerContext::AttachDevice(Device* device) {
     chip_id_t device_id = device->id();
 
-    // A set of all valid prinatble cores, used for checking the user input. Note that the coords
+    // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are physical, which matches the user input for configuring the print server.
     set<CoreCoord> all_printable_cores;
     // The set of all printable cores is Tensix + Eth cores
@@ -290,12 +292,10 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
             all_printable_cores.insert(worker_core);
         }
     }
-    set<CoreCoord> all_eth_cores;
-    for (const auto& eth_core : device->get_active_ethernet_cores()) {
+    for (const auto& eth_core : device->ethernet_cores()) {
         CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        all_eth_cores.insert(physical_core);
+        all_printable_cores.insert(physical_core);
     }
-    all_printable_cores.insert(all_eth_cores.begin(), all_eth_cores.end());
 
     // Core range depends on whether dprint_all_cores flag is set.
     vector<CoreCoord> print_cores_sanitized;
@@ -327,20 +327,18 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
     for (auto core : all_printable_cores) {
-        bool is_eth_core = (all_eth_cores.count(core) > 0);
-        int hart_count = (is_eth_core)? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+        int hart_count = GetNumRiscs(device_id, core);
         for (int hart_index = 0; hart_index < hart_count; hart_index++) {
-            WriteInitMagic(device_id, core, hart_index, false, is_eth_core);
+            WriteInitMagic(device_id, core, hart_index, false);
         }
     }
     // Write print enable magic for the cores the user specified.
     uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
     for (auto core : print_cores_sanitized) {
-        bool is_eth_core = (all_eth_cores.count(core) > 0);
-        int hart_count = (is_eth_core)? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+        int hart_count = GetNumRiscs(device_id, core);
         for (int hart_index = 0; hart_index < hart_count; hart_index++) {
             if (hart_mask & (1<<hart_index)) {
-                WriteInitMagic(device_id, core, hart_index, true, is_eth_core);
+                WriteInitMagic(device_id, core, hart_index, true);
             }
         }
     }
@@ -349,7 +347,6 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     device_to_core_range_lock_.lock();
     TT_ASSERT(device_to_core_range_.count(device) == 0, "Device {} added to DPRINT server more than once!", device_id);
     device_to_core_range_[device] = print_cores_sanitized;
-    device_to_eth_cores_[device] = all_eth_cores;
     device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 } // AttachDevice
@@ -382,11 +379,10 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     int chip_id,
     const CoreCoord& core,
     int hart_id,
-    bool new_data_this_iter,
-    bool is_eth_core
+    bool new_data_this_iter
 ) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = GetBaseAddr(hart_id, is_eth_core);
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
@@ -607,31 +603,26 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
 
         // Make a copy of the device->core map, so that it can be modified while polling.
         std::map<Device*, vector<CoreCoord>> device_to_core_range_copy;
-        std::map<Device*, set<CoreCoord>> device_to_eth_cores_copy;
         device_to_core_range_lock_.lock();
         device_to_core_range_copy = device_to_core_range_;
-        device_to_eth_cores_copy = device_to_eth_cores_;
         device_to_core_range_lock_.unlock();
 
         // Flag for whether any new print data was found in this round of polling.
         bool new_data_this_iter = false;
         for (auto& device_and_cores : device_to_core_range_copy) {
             chip_id_t chip_id = device_and_cores.first->id();
-            set<CoreCoord>& eth_cores = device_to_eth_cores_copy.at(device_and_cores.first);
             for (auto core: device_and_cores.second) {
-                bool is_eth_core = (eth_cores.count(core) > 0);
-                int hart_count = (is_eth_core)? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+                int hart_count = GetNumRiscs(chip_id, core);
                 for (int hart_index = 0; hart_index < hart_count; hart_index++) {
                     if (hart_mask & (1<<hart_index)) {
-                        if (!CheckInitMagicCleared(chip_id, core, hart_index, is_eth_core))
+                        if (!CheckInitMagicCleared(chip_id, core, hart_index))
                             continue;
 
                         new_data_this_iter |= PeekOneHartNonBlocking(
                             chip_id,
                             core,
                             hart_index,
-                            new_data_this_iter,
-                            is_eth_core
+                            new_data_this_iter
                         );
 
                         // If this read detected a print hang, stop processing prints.
