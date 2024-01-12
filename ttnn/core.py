@@ -1412,103 +1412,6 @@ def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_M
     return output_tensor
 
 
-def _torch_layer_norm(input_tensor: Tensor, *, epsilon=1e-12, residual_input_tensor=None, weight=None, bias=None, **_):
-    import torch
-
-    input_tensor = from_device(input_tensor)
-    input_tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
-    input_tensor = to_torch(input_tensor)
-
-    if residual_input_tensor is not None:
-        residual_input_tensor = from_device(residual_input_tensor)
-        residual_input_tensor = to_layout(residual_input_tensor, ROW_MAJOR_LAYOUT)
-        residual_input_tensor = to_torch(residual_input_tensor)
-        input_tensor += residual_input_tensor
-
-    if weight is not None:
-        weight = from_device(weight)
-        weight = to_layout(weight, ROW_MAJOR_LAYOUT)
-        weight = to_torch(weight)
-        if len(weight.shape) == 2:
-            weight = weight[0]
-
-    if bias is not None:
-        bias = from_device(bias)
-        bias = to_layout(bias, ROW_MAJOR_LAYOUT)
-        bias = to_torch(bias)
-        if len(bias.shape) == 2:
-            bias = bias[0]
-
-    return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
-
-
-@decorate_operation(torch_function=_torch_layer_norm)
-def layer_norm(
-    input_tensor: Tensor,
-    *,
-    epsilon: float = 1e-12,
-    residual_input_tensor: Optional[Tensor] = None,
-    weight: Optional[Tensor] = None,
-    bias: Optional[Tensor] = None,
-    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-) -> Tensor:
-    r"""
-    layer_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
-
-    Compute layer_norm over :attr:`input_tensor`.
-
-    """
-
-    original_shape = input_tensor.shape
-    input_tensor = _reshape_to_4D(input_tensor)
-    if residual_input_tensor is not None:
-        residual_input_tensor = _reshape_to_4D(residual_input_tensor)
-    if weight is not None:
-        weight = _reshape_to_4D(weight)
-    if bias is not None:
-        bias = _reshape_to_4D(bias)
-
-    ttl_input_tensor = input_tensor.value
-    residual_input_tensor = residual_input_tensor.value if residual_input_tensor is not None else None
-    ttl_weight = weight.value if weight is not None else None
-    ttl_bias = bias.value if bias is not None else None
-
-    if residual_input_tensor is not None:
-        output_tensor = ttl.tensor.add_layernorm(
-            ttl_input_tensor, residual_input_tensor, epsilon, ttl_weight, ttl_bias, output_mem_config=memory_config
-        )
-    else:
-        output_tensor = ttl.tensor.layernorm(
-            ttl_input_tensor, epsilon, ttl_weight, ttl_bias, output_mem_config=memory_config
-        )
-
-    output_tensor = Tensor(output_tensor)
-    output_tensor = reshape(output_tensor, original_shape)
-    return output_tensor
-
-
-def rms_norm(input_tensor: Tensor, weight: Tensor, *, epsilon: float = 1e-6) -> Tensor:
-    r"""
-    rms_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
-
-    Compute rms_norm over :attr:`input_tensor`.
-
-    """
-
-    original_shape = input_tensor.shape
-    input_tensor = _reshape_to_4D(input_tensor)
-    weight = _reshape_to_4D(weight)
-
-    ttl_input_tensor = input_tensor.value
-    ttl_weight = weight.value
-    ttl_output_tensor = ttl.tensor.rmsnorm(ttl_input_tensor, epsilon, ttl_weight)
-
-    output_tensor = Tensor(ttl_output_tensor)
-    output_tensor = reshape(output_tensor, original_shape)
-
-    return output_tensor
-
-
 def _torch_mean(input_tensor: Tensor, dim: int, keepdim=False, **_):
     import torch
 
@@ -1580,8 +1483,6 @@ __all__ = [
     "permute",
     "embedding",
     "softmax",
-    "layer_norm",
-    "rms_norm",
     "mean",
     "pad_to_tile",
     "unpad_from_tile",

@@ -240,6 +240,9 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
 
+    if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+        tensor = from_device(tensor)
+
     if tensor.layout != ROW_MAJOR_LAYOUT:
         tensor = to_layout(tensor, ROW_MAJOR_LAYOUT)
 

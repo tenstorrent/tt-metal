@@ -55,8 +55,6 @@ from ttnn.core import (
     unpad_from_tile,
     # fused operations
     softmax,
-    layer_norm,
-    rms_norm,
     # reduction operations
     mean,
 )
@@ -68,6 +66,12 @@ from ttnn.unary import (
     rsqrt,
     relu,
     pow,
+)
+
+from ttnn.normalization import (
+    layer_norm,
+    rms_norm,
+    group_norm,
 )
 
 import ttnn.decorators
