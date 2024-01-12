@@ -19,3 +19,9 @@ Operations
    operations/to_device
    operations/to_layout
    operations/to_torch
+   operations/unary
+   operations/binary
+   operations/relational
+   operations/ternary
+   operations/creationops
+   operations/complex

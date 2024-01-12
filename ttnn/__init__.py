@@ -29,6 +29,10 @@ from ttnn.tensor import (
     load_tensor,
     dump_tensor,
     has_storage_type_of,
+    LossMode,
+    LOSS_MODE_NONE,
+    LOSS_MODE_SUM,
+    LOSS_MODE_MEAN,
 )
 
 from ttnn.core import (
@@ -56,9 +60,22 @@ from ttnn.core import (
     rms_norm,
     # reduction operations
     mean,
+    # relational operations
+    gt,
+    gte,
+    eq,
+    ne,
+    lt,
+    lte,
 )
 
 from ttnn.unary import *
+from ttnn.binary import *
+from ttnn.relational import *
+from ttnn.ternary import *
+from ttnn.createops import *
+from ttnn.complex import *
+
 
 import ttnn.decorators
 import ttnn.transformer

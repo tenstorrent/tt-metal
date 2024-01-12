@@ -6,9 +6,8 @@ import math
 import pathlib
 from typing import Optional, Tuple, Union
 
-
 import tt_lib as ttl
-
+from ttnn.decorators import decorate_operation
 from ttnn.tensor import (
     Shape,
     Tensor,
@@ -26,7 +25,6 @@ from ttnn.tensor import (
     TILE_SIZE,
     has_storage_type_of,
 )
-from ttnn.decorators import decorate_operation
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
@@ -1110,18 +1108,15 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
 
     ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
 
-    if input_tensor.is_contiguous():
-        if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            # Page size depends on the width, so only modify the shape if the width is the same
-            if input_tensor.shape[-1] == shape[-1]:
-                return ttnn_reshape(input_tensor, shape)
-        else:
+    # Page size depends on the width, so only modify the shape if the width is the same
+    if input_tensor.shape[-1] == shape[-1]:
+        if input_tensor.is_contiguous():
             return ttnn_reshape(input_tensor, shape)
 
-    if input_tensor.layout == TILE_LAYOUT:
-        *_, new_height, new_width = tuple(shape.padded())
-        if new_height % TILE_SIZE == 0 and new_width % TILE_SIZE == 0:
-            return ttnn_reshape(input_tensor, shape)
+        if input_tensor.layout == TILE_LAYOUT:
+            *_, new_height, new_width = tuple(shape.padded())
+            if new_height % TILE_SIZE == 0 and new_width % TILE_SIZE == 0:
+                return ttnn_reshape(input_tensor, shape)
 
     if (
         has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE)
@@ -1207,7 +1202,7 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
     elif len(input_tensor.shape) < 4:
         original_shape = tuple(input_tensor.shape)
-        desired_shape = tuple([original_shape[i] for i in order])
+        desired_shape = tuple(original_shape[i] for i in order)
         input_tensor = _reshape_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
         new_order = order
@@ -1506,6 +1501,590 @@ def mean(input_tensor: Tensor, dim: Union[int, Tuple[int]], keepdim: bool = Fals
     return output_tensor
 
 
+def _torch_gt(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a > input_tensor_b
+
+
+@decorate_operation(torch_function=_torch_gt)
+def gt(
+    input_tensor_a: Union[Tensor, int, float],
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
+    gt(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *) -> Tensor:
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than  :attr:`input_tensor_a`.
+
+    Example::
+
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.gt(tensor1, tensor2)
+        >>> print(output)
+        Tensor([ 1, 1], dtype=bfloat16 )
+    """
+
+    if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.gt(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a.value
+
+    if not has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if _is_scalar(input_tensor_b):
+        tensor_b = ttl.tensor.full_like(ttl_input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.gt(
+                ttl_input_tensor_a,
+                tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b.shape
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
+            raise RuntimeError("input_tensor_a must be on device!")
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    ttl_input_tensor_b = input_tensor_b.value
+
+    output_tensor = Tensor(
+        ttl.tensor.gt(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            output_mem_config=memory_config,
+        )
+    )
+
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+def _torch_gte(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a >= input_tensor_b
+
+
+@decorate_operation(torch_function=_torch_gte)
+def gte(
+    input_tensor_a: Union[Tensor, int, float],
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
+    gte(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *) -> Tensor:
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find greater than or equal to :attr:`input_tensor_a`.
+
+    Example::
+
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.gte(tensor1, tensor2)
+        >>> print(output)
+        Tensor([ 1, 1], dtype=bfloat16 )
+    """
+    if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.gte(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a.value
+
+    if not has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if _is_scalar(input_tensor_b):
+        tensor_b = ttl.tensor.full_like(ttl_input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.gte(
+                ttl_input_tensor_a,
+                tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b.shape
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
+            raise RuntimeError("input_tensor_a must be on device!")
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    ttl_input_tensor_b = input_tensor_b.value
+
+    output_tensor = Tensor(
+        ttl.tensor.gte(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            output_mem_config=memory_config,
+        )
+    )
+
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+def _torch_eq(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a == input_tensor_b
+
+
+@decorate_operation(torch_function=_torch_eq)
+def eq(
+    input_tensor_a: Union[Tensor, int, float],
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
+    eq(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *) -> Tensor:
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find equal to  :attr:`input_tensor_a`.
+
+    Example::
+
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 1), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.eq(tensor1, tensor2)
+        >>> print(output)
+        Tensor([ 0, 1], dtype=bfloat16 )
+    """
+
+    if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.eq(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a.value
+
+    if not has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if _is_scalar(input_tensor_b):
+        tensor_b = ttl.tensor.full_like(ttl_input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.eq(
+                ttl_input_tensor_a,
+                tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b.shape
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
+            raise RuntimeError("input_tensor_a must be on device!")
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    ttl_input_tensor_b = input_tensor_b.value
+
+    output_tensor = Tensor(
+        ttl.tensor.eq(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            output_mem_config=memory_config,
+        )
+    )
+
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+def _torch_ne(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    return not _torch_eq(input_tensor_a, input_tensor_b, **_)
+
+
+@decorate_operation(torch_function=_torch_ne)
+def ne(
+    input_tensor_a: Union[Tensor, int, float],
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
+    ne(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *) -> Tensor:
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find not equal to :attr:`input_tensor_a`.
+
+    Example::
+
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 1), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.ne(tensor1, tensor2)
+        >>> print(output)
+        Tensor([ 1, 0], dtype=bfloat16 )
+    """
+
+    if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.ne(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a.value
+
+    if not has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if _is_scalar(input_tensor_b):
+        tensor_b = ttl.tensor.full_like(ttl_input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.ne(
+                ttl_input_tensor_a,
+                tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b.shape
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
+            raise RuntimeError("input_tensor_a must be on device!")
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    ttl_input_tensor_b = input_tensor_b.value
+
+    output_tensor = Tensor(
+        ttl.tensor.ne(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            output_mem_config=memory_config,
+        )
+    )
+
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+def _torch_lt(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a < input_tensor_b
+
+
+@decorate_operation(torch_function=_torch_lt)
+def lt(
+    input_tensor_a: Union[Tensor, int, float],
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
+    lt(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *) -> Tensor:
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find lesser than :attr:`input_tensor_a`.
+
+    Example::
+
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.lt(tensor1, tensor2)
+        >>> print(output)
+        Tensor([ 0, 0], dtype=bfloat16 )
+    """
+
+    if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.lt(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a.value
+
+    if not has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if _is_scalar(input_tensor_b):
+        tensor_b = ttl.tensor.full_like(ttl_input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.lt(
+                ttl_input_tensor_a,
+                tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b.shape
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
+            raise RuntimeError("input_tensor_a must be on device!")
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    ttl_input_tensor_b = input_tensor_b.value
+
+    output_tensor = Tensor(
+        ttl.tensor.lt(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            output_mem_config=memory_config,
+        )
+    )
+
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+def _torch_lte(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
+    input_tensor_a = from_device(input_tensor_a)
+    input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
+    input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
+
+    if not _is_scalar(input_tensor_b):
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+        input_tensor_b = from_device(input_tensor_b)
+        input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
+        input_tensor_b = to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+    return input_tensor_a <= input_tensor_b
+
+
+@decorate_operation(torch_function=_torch_lte)
+def lte(
+    input_tensor_a: Union[Tensor, int, float],
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
+    lte(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *) -> Tensor:
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a` (Tensor or Number).
+        * :attr:`input_tensor_b` (Tensor or Number): the tensor or number to find lesser than or equal :attr:`input_tensor_a`.
+
+    Example::
+
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.lte(tensor1, tensor2)
+        >>> print(output)
+        Tensor([ 0, 0], dtype=bfloat16 )
+    """
+    if _is_scalar(input_tensor_a) and isinstance(input_tensor_b, Tensor):
+        tensor_a = ttl.tensor.full_like(input_tensor_b, input_tensor_a, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.lte(
+                tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    if _is_scalar(input_tensor_a) and _is_scalar(input_tensor_b):
+        raise TypeError("Expected any one argument to be a ttnn.Tensor")
+
+    original_shape = input_tensor_a.shape
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a.value
+
+    if not has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if _is_scalar(input_tensor_b):
+        tensor_b = ttl.tensor.full_like(ttl_input_tensor_a, input_tensor_b, output_mem_config=memory_config)
+        output_tensor = Tensor(
+            ttl.tensor.lte(
+                ttl_input_tensor_a,
+                tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
+        return reshape(output_tensor, original_shape)
+    elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b.shape
+        input_tensor_b = _reshape_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
+            raise RuntimeError("input_tensor_a must be on device!")
+    else:
+        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
+
+    ttl_input_tensor_b = input_tensor_b.value
+
+    output_tensor = Tensor(
+        ttl.tensor.lte(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            output_mem_config=memory_config,
+        )
+    )
+
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
+
+
+Tensor.__gt__ = gt
+Tensor.__ge__ = gte
+Tensor.__eq__ = eq
+Tensor.__ne__ = ne
+Tensor.__lt__ = lt
+Tensor.__le__ = lte
+
 __all__ = [
     "matmul",
     "add",
@@ -1520,4 +2099,10 @@ __all__ = [
     "layer_norm",
     "rms_norm",
     "mean",
+    "gt",
+    "gte",
+    "eq",
+    "ne",
+    "lt",
+    "lte",
 ]
