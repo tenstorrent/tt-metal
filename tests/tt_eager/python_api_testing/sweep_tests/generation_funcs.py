@@ -9,6 +9,7 @@ from functools import lru_cache
 import tt_lib as ttl
 import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
+from loguru import logger
 
 # torch.testing.get_all_dtypes()
 supported_dtypes = {
@@ -373,12 +374,12 @@ def sanitize_args(input_shapes, input_setup):
 
         if (
             (
-                input_setup[i]["layout"] == ttl.tensor.Layout.TILE and (shape[2] % 32 != 0 or shape[3] % 32 != 0)
+                input_setup[i]["layout"] == ttl.tensor.Layout.TILE and (shape[-2] % 32 != 0 or shape[-1] % 32 != 0)
             )  # Shape cannot be tilized
             or (
                 input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
                 and input_setup[i]["input_mem_config"] != None
-                and shape[3] % 2 != 0
+                and shape[-1] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
                 input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
@@ -440,6 +441,15 @@ def gen_dtype_layout_device(
                 )
 
     return result
+
+
+def gen_dtype_layout_device_dont_sanitize(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def sanitize_args_layernorm(
@@ -578,7 +588,12 @@ def gen_permute_args(
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
 ):
-    for permute_dims in permutations([0, 1, 2, 3]):
+    dim_to_permute = []
+
+    for i in range(len(input_shapes[0])):
+        dim_to_permute.append(i)
+
+    for permute_dims in permutations(dim_to_permute):
         for input_info in gen_dtype_layout_device(
             input_shapes,
             dtypes,
@@ -626,15 +641,28 @@ def _get_factors(i, s):
 
 
 @lru_cache(maxsize=5000)
-def _gen_reshape_args_from_volume(volume, step):
+def _gen_reshape_args_from_volume(volume, step, out_dims=4):
     shapes = []
-    for w in _get_factors(volume, step):
-        v = volume // w
-        for h in _get_factors(v, step):
-            v2 = v // h
+
+    if out_dims == 4:
+        for w in _get_factors(volume, step):
+            v = volume // w
+            for h in _get_factors(v, step):
+                v2 = v // h
+                for c in _get_factors(v2, 1):
+                    b = v2 // c
+                    shapes.append({"reshape_dims": (b, c, h, w)})
+    elif out_dims == 3:
+        for h in _get_factors(volume, step):
+            v2 = volume // h
             for c in _get_factors(v2, 1):
                 b = v2 // c
-                shapes.append({"reshape_dims": [b, c, h, w]})
+                shapes.append({"reshape_dims": (b, c, h)})
+    elif out_dims == 2:
+        for c in _get_factors(volume, 1):
+            b = volume // c
+            shapes.append({"reshape_dims": (b, c)})
+
     return shapes
 
 
@@ -645,17 +673,20 @@ def gen_reshape_args(
     mem_configs=[[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]],
     max_out_shapes=2,
 ):
-    vol = input_shapes[0][0] * input_shapes[0][1] * input_shapes[0][2] * input_shapes[0][3]
+    vol = 1
 
-    out_shapes = _gen_reshape_args_from_volume(vol, step=1)
+    for x in input_shapes[0]:
+        vol *= x
+
+    out_shapes = _gen_reshape_args_from_volume(vol, step=1, out_dims=len(input_shapes[0]))
     random.shuffle(out_shapes)
     n_out_shapes_used = 0
 
     for reshape_dims in out_shapes:
-        if reshape_dims["reshape_dims"][2] % 32 != 0:
+        if reshape_dims["reshape_dims"][-2] % 32 != 0:
             continue
 
-        if reshape_dims["reshape_dims"][3] % 32 != 0:
+        if reshape_dims["reshape_dims"][-1] % 32 != 0:
             continue
 
         for input_info in gen_dtype_layout_device(
@@ -1651,3 +1682,12 @@ def gen_isclose_args(
 
             input_info.update({"rtol": rtol, "atol": atol, "equal_nan": False})
             yield input_info
+
+            
+def gen_ttnn_layernorm_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
