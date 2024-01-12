@@ -38,4 +38,45 @@ Tensor groupnorm(
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
+
+
+namespace operations {
+
+    using namespace tt_metal;
+namespace primary {
+struct GroupNormShardedMultiCoreProgramConfig {
+    CoreCoord compute_with_storage_grid_size;
+    MathFidelity math_fidelity;
+    DataType im_data_format;
+    DataType out_data_format;
+    bool inplace;
+
+    tt::stl::reflection::Attributes attributes() const;
+};
+
+struct GroupNorm {
+    float eps;
+    uint32_t num_groups;
+    uint32_t batch;
+    MemoryConfig output_mem_config;
+    tt::operations::primary::GroupNormShardedMultiCoreProgramConfig program_config;
+
+    void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor> &output_tensors
+    ) const;
+    tt::stl::reflection::Attributes attributes() const;
+};
+
+inline Tensor groupnorm(const Tensor &a, const uint32_t num_groups, uint32_t batch, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const GroupNormShardedMultiCoreProgramConfig& program_config = GroupNormShardedMultiCoreProgramConfig{}) {
+    return operation::run(GroupNorm{.eps=eps, .num_groups=num_groups, .batch=batch, .output_mem_config=output_mem_config, .program_config=program_config}, {a}, {gamma, beta}).at(0);
+}
+
+
+}   // namespace primary
+}   // namespace operations
 }  // namespace tt

@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
 #include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
+#include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 
 namespace py = pybind11;
 
@@ -583,6 +584,32 @@ void py_module(py::module& m_primary) {
         py::arg("nesterov").noconvert(),
         py::arg("momentum_initialized").noconvert(),
         "Performs a SGD operation.");
+
+    py::class_<GroupNormShardedMultiCoreProgramConfig>(m_primary, "GroupNormShardedMultiCoreProgramConfig")
+        .def(
+            py::init<CoreCoord, MathFidelity, DataType, DataType, bool>(),
+            py::kw_only(),
+            py::arg("compute_with_storage_grid_size"),
+            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+            py::arg("im_data_format").noconvert() = DataType::BFLOAT16,
+            py::arg("out_data_format").noconvert() = DataType::BFLOAT16,
+            py::arg("inplace").noconvert() = false
+        );
+
+    m_primary.def(
+        "groupnorm",
+        &groupnorm,
+        py::arg("input").noconvert(),
+        py::arg("num_groups").noconvert(),
+        py::arg("batch").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("program_config").noconvert() = GroupNormShardedMultiCoreProgramConfig{},
+        R"doc(
+            Performs a groupnorm operation, returna a output tensor the same shape as input.
+        )doc");
 }
 
 }  // namespace
