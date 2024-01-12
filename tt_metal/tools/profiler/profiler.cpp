@@ -487,6 +487,16 @@ void DeviceProfiler::dumpResults (
 #endif
 }
 
+template <std::size_t N>
+constexpr std::array<char, N+3> PrependName(const char (&str)[N])
+{
+    std::array<char, N+3> ret{'F','W','_'};
+    for (std::size_t i = 0; i < N; i++)
+        ret[i+1] = str[i];
+    return ret;
+}
+
+
 
 void DeviceProfiler::pushTracyDeviceResults(int device_id)
 {
@@ -495,7 +505,8 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
 
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
 
-    int brisc_count = 0;
+    static constexpr auto numberString = PrependName("4");
+
     int count = 0;
     std::set<uint32_t> rows;
     std::set<uint32_t> cols;
@@ -518,13 +529,12 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
                 {
                     case 0:
                         {
-                            brisc_count++;
-                            TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Red3,threadID);
+                            TracyCLZoneTransient(tracyTTCtx, briscFWScope, fmt::format("FW-{}",runID).c_str(), true, threadID);
                             {
                                 TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Red2,threadID);
                                 TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                             }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
+                            briscFWScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                         }
                         break;
                     case 1:
@@ -575,7 +585,6 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
         }
     }
 
-    //std::cout << "Brisc Count" << brisc_count << std::endl;
 
     //for (auto& row: rows)
     //{

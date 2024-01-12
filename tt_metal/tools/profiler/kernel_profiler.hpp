@@ -108,7 +108,6 @@ namespace kernel_profiler{
 
     inline __attribute__((always_inline)) void mark_time(uint32_t timer_id)
     {
-        return;
 #if defined(PROFILE_KERNEL)
         //TODO(MO): Add drop counter to control register
         if (wIndex < PROFILER_L1_VECTOR_SIZE)
@@ -124,7 +123,7 @@ namespace kernel_profiler{
             uint32_t index = wIndex;
 
             //TODO(MO): Clean up magic numbers
-            buffer[index] = (0x80000000 | (time_H & 0x0000FFFF) | (timer_id << 16));
+            buffer[index] = (0x80000000 | (time_H & 0x0000FFFF) | (((buffer[ID_LH] << 3) | timer_id) << 16));
             buffer[index+1] = time_L;
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
         }

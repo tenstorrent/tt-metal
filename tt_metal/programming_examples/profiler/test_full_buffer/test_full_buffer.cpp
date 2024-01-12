@@ -25,7 +25,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count)
         {"LOOP_SIZE", std::to_string(loop_size)}
     };
 
-    if (run_count % 3 | !(run_count % 4))
+    //if (run_count % 3 | !(run_count % 4))
     {
         tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
             program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
@@ -33,7 +33,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count)
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = kernel_defines});
     }
 
-    if (run_count % 4 | !(run_count % 3))
+    //if (run_count % 4 | !(run_count % 3))
     {
         tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
             program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
@@ -41,7 +41,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count)
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = kernel_defines});
     }
 
-    if (run_count % 5)
+    //if (run_count % 5)
     {
         vector<uint32_t> trisc_kernel_args = {};
         tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
@@ -66,8 +66,8 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        constexpr int device_loop_count = 0;
-        constexpr int host_loop_count = 600;
+        constexpr int device_loop_count = 1000;
+        constexpr int host_loop_count = 200;
 
         for (int i = 0; i < host_loop_count; i ++)
         {
