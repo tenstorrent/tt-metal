@@ -4,18 +4,16 @@
 
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 
-#include "tt_metal/host_api.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
 
 using namespace tt::constants;
 
 namespace tt {
 
 namespace tt_metal {
-
 
 void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -34,6 +32,7 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     uint32_t seq_len = input_tensor.shape()[-2];
     uint32_t B = input_tensor.shape()[0];
     uint32_t X = input_tensor.shape()[-1];
+    TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.shape() == sin.shape(), "Cos and Sin dims must match");
     TT_FATAL(cos.shape()[0] == 1 && cos.shape()[1] == 1 && cos.shape()[-1] == X, "Cos dims must match input dims");
     if (this->token_idx.has_value()) {
@@ -41,27 +40,70 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     } else {
         TT_FATAL(cos.shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+        TT_FATAL(input_tensor.shard_spec().value().shard_shape[1] == input_tensor.shape()[-1]);
+        // Require even work division for now
+        TT_FATAL(
+            (input_tensor.volume() / input_tensor.shape()[-1]) % input_tensor.shard_spec().value().shard_shape[0] == 0);
+        if (this->output_mem_config.is_sharded()) {
+            TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+        }
+    } else if (this->output_mem_config.is_sharded()) {
+        TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+    } else {
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+    }
 }
 
-std::vector<Shape> RotaryEmbedding::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Shape> RotaryEmbedding::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.shape();
     if (!this->token_idx.has_value()) {
-        shape[-2] = this->seq_len;
+        shape[-2] = round_up(this->seq_len, TILE_HEIGHT);
     }
     return {shape};
 }
 
-std::vector<Tensor> RotaryEmbedding::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = this->compute_output_shapes(input_tensors)[0];
-    output_shape[-2] = round_up(output_shape[-2], TILE_HEIGHT);
-    return {create_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config)};
+    if (this->output_mem_config.is_sharded()) {
+        ShardSpec shard_spec{.shard_grid = CoreRangeSet({}), .shard_shape = {0, 0}};
+        if (input_tensor.is_sharded()) {
+            shard_spec = input_tensor.shard_spec().value();
+        } else {
+            uint32_t num_blocks = input_tensor.volume() / input_tensor.shape()[-1] / TILE_HEIGHT;
+            auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+            uint32_t num_grid_cores = core_grid.x * core_grid.y;
+            uint32_t num_cores = 0;
+            for (uint32_t i = num_grid_cores; i > 0; --i) {
+                if (num_blocks % i == 0) {
+                    num_cores = i;
+                    break;
+                }
+            }
+            uint32_t Ht = div_up(num_blocks, num_cores);
+            shard_spec.shard_grid = num_cores_to_corerange_set(num_cores, core_grid, true);
+            shard_spec.shard_shape = {Ht * TILE_HEIGHT, input_tensor.shape()[-1]};
+            shard_spec.shard_orientation = ShardOrientation::ROW_MAJOR;
+        }
+        return {create_sharded_device_tensor(
+            output_shape,
+            input_tensor.dtype(),
+            input_tensor.layout(),
+            input_tensor.device(),
+            this->output_mem_config,
+            shard_spec)};
+    } else {
+        return {create_device_tensor(
+            output_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config)};
+    }
 }
 
-operation::ProgramWithCallbacks RotaryEmbedding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks RotaryEmbedding::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
@@ -76,15 +118,14 @@ operation::ProgramWithCallbacks RotaryEmbedding::create_program(const std::vecto
     }
 }
 
-
-RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_strategy(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     uint32_t num_rows = input_tensor.volume() / input_tensor.shape()[-1] / TILE_HEIGHT;
-    if(num_rows > 1) {
-           return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
-    }
-    else {
-       return RotaryEmbeddingOpParallelizationStrategy::SINGLE_CORE;
+    if (num_rows > 1 || input_tensor.is_sharded() || this->output_mem_config.is_sharded()) {
+        return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
+    } else {
+        return RotaryEmbeddingOpParallelizationStrategy::SINGLE_CORE;
     }
 }
 
@@ -96,8 +137,7 @@ tt::stl::reflection::Attributes RotaryEmbedding::attributes() const {
     };
 }
 
-const operation::Hash RotaryEmbedding::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
+const operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     return operation::hash_operation<RotaryEmbedding>(this->seq_len, this->output_mem_config, input_tensors);
 }
 
