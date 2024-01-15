@@ -134,7 +134,7 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
     uint32_t Wt = shape[3]/TILE_WIDTH;
     uint32_t Ht = shape[2]/TILE_HEIGHT;
     uint32_t NC = shape[1]*shape[0];
-    if((NC * Wt > 1 || input_tensor.is_sharded()) and this->dim == ReduceOpDim::H){
+    if((NC * Wt > 1 || (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.is_sharded())) and this->dim == ReduceOpDim::H){
         return ReduceOpParallelizationStrategy::MULTI_CORE_H;
     }else if(NC * Ht > 1 and this->dim == ReduceOpDim::W){
         return ReduceOpParallelizationStrategy::MULTI_CORE_W;
@@ -167,7 +167,7 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         Device * device;
 
         // Get the device
-        if (input_tensor.storage_type() == StorageType::OWNED) {
+        if (input_tensor.storage_type() != StorageType::DEVICE) {
             device = AutoFormat::GetDefaultDevice();
             TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
         } else {
@@ -215,7 +215,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
-      if (is_arch_whb0(input_tensor.device()->arch())) {
+      if (is_arch_whb0(input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch())) {
         Tensor output = transpose(input_tensor, -1, -2, output_mem_config);
         output = sum(output, 2, output_mem_config);
         return transpose(output, -1, -2, output_mem_config);
@@ -230,7 +230,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
     Device * device;
 
     // Get the device
-    if (input_tensor.storage_type() == StorageType::OWNED) {
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {

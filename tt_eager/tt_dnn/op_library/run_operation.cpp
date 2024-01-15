@@ -270,7 +270,7 @@ std::vector<Tensor> run_without_autoformat(
     std::vector<Tensor> input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
-        if (input_tensor.storage_type() == StorageType::OWNED) {
+        if (input_tensor.storage_type() != StorageType::DEVICE) {
             input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
         } else {
             input_tensors_on_dev.push_back(input_tensor);
@@ -279,7 +279,7 @@ std::vector<Tensor> run_without_autoformat(
     std::vector<std::optional<const Tensor>> optional_input_tensors_on_dev;
     optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
     for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() == StorageType::OWNED) {
+        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() != StorageType::DEVICE) {
             optional_input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
         } else {
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
@@ -331,12 +331,15 @@ std::vector<Tensor> run_with_autoformat(
 
     auto output_tensors = run(operation, formatted_input_tensors, formatted_optional_input_tensors);
 
-    std::vector<Tensor> formatted_output_tensors;
-    formatted_output_tensors.reserve(output_tensors.size());
-    for (auto i = 0; i < output_tensors.size(); i++) {
-        formatted_output_tensors.push_back(AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, Layout::TILE));
+    TT_ASSERT(output_tensors.size() == output_shapes.size());
+
+    formatted_input_tensors.clear();
+    formatted_optional_input_tensors.clear();
+
+    for (auto i = 0; i < output_tensors.size(); ++i) {
+        output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, Layout::TILE);
     }
-    return formatted_output_tensors;
+    return output_tensors;
 }
 
 std::vector<Tensor> run_with_autoformat(
@@ -351,19 +354,22 @@ std::vector<Tensor> run_with_autoformat(
 
     auto output_shapes = operation.compute_output_shapes(input_tensors);
 
+    TT_ASSERT(input_tensors.size() == input_formatting.size());
+    TT_ASSERT(optional_input_tensors.size() == optional_input_formatting.size());
+
     std::vector<Tensor> formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
-    for (uint32_t i = 0; i < input_tensors.size(); i++) {
+    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
         formatted_input_tensors.push_back(AutoFormat::format_input_tensor(input_tensors[i], device, input_formatting[i].pad_shape, input_formatting[i].pad_value, input_formatting[i].target_layout));
     }
 
     std::vector<std::optional<const Tensor>> formatted_optional_input_tensors;
     formatted_optional_input_tensors.reserve(optional_input_tensors.size());
-    for (uint32_t i = 0; i < optional_input_tensors.size(); i++) {
+    for (uint32_t i = 0; i < optional_input_tensors.size(); ++i) {
         if (optional_input_tensors[i].has_value()) {
             auto& input_tensor = optional_input_tensors[i].value();
-            TT_ASSERT(optional_input_formatting.at(i).has_value());
-            auto& input_formatting = optional_input_formatting.at(i).value();
+            TT_ASSERT(optional_input_formatting[i].has_value());
+            auto& input_formatting = optional_input_formatting[i].value();
             formatted_optional_input_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, device, input_formatting.pad_shape, input_formatting.pad_value, input_formatting.target_layout));
         } else {
             formatted_optional_input_tensors.push_back(optional_input_tensors[i]);
@@ -372,13 +378,17 @@ std::vector<Tensor> run_with_autoformat(
 
     auto output_tensors = run(operation, formatted_input_tensors, formatted_optional_input_tensors);
 
-    std::vector<Tensor> formatted_output_tensors;
-    formatted_output_tensors.reserve(output_tensors.size());
-    for (auto i = 0; i < output_tensors.size(); i++) {
-        formatted_output_tensors.push_back(AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, output_layouts[i]));
+    TT_ASSERT(output_tensors.size() == output_shapes.size());
+    TT_ASSERT(output_tensors.size() == output_layouts.size());
+
+    formatted_input_tensors.clear();
+    formatted_optional_input_tensors.clear();
+
+    for (auto i = 0; i < output_tensors.size(); ++i) {
+        output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, output_layouts[i]);
     }
 
-    return formatted_output_tensors;
+    return output_tensors;
 }
 
 }
