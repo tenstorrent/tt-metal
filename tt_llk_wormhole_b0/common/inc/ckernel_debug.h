@@ -115,6 +115,9 @@ inline void dbg_thread_unhalt() {
         dbg_soft_reset.val = 0;
         reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, dbg_soft_reset.val);
 
+        // Wait for all instructions to complete
+        tensix_sync();
+
         // Unhalt unpack thread
         mailbox_write(ThreadId::UnpackThreadId, 1);
     }
@@ -147,14 +150,17 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 0); // Save dest addr 0 to LREG_3
+        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 0); // Save dest addr 0 (even cols) to LREG_3
+        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_3
+
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
         // Move to the last used bank
         TTI_CLEARDVALID(1,0);
 
         // Copy single row from SrcA[4+row_addr] to dest location 0
         // First 4 rows in SrcA are not used
-        TT_MOVDBGA2D(0, 4+row_addr, 0, p_mova2d::MOV_1_ROW, 0); 
+        TT_MOVDBGA2D(0, row_addr, 0, p_mova2d::MOV_1_ROW, 0); 
 
         // Wait for TT instructions to complete
         tensix_sync();
@@ -211,7 +217,8 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
 
     // Restore dest row
     if (array_id == dbg_array_id::SRCA) {
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 0); // Restore dest addr 0 from LREG_3
+        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 0); // Restore dest addr 0 (even cols) from LREG_3
+        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_3
         // Move to the current bank
         TTI_CLEARDVALID(1,0);
     }
