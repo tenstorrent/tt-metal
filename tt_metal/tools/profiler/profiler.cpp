@@ -504,12 +504,11 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
     tracyTTCtx->PopulateCLContext( smallest_timestamp, 1000.f / (float)device_core_frequency);
 
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
+    uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4};
+    uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3};
 
     static constexpr auto numberString = PrependName("4");
 
-    int count = 0;
-    std::set<uint32_t> rows;
-    std::set<uint32_t> cols;
     for (auto& run: device_data)
     {
         for (auto& data: run.second)
@@ -521,82 +520,17 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
             uint64_t markerID = data.first.marker;
             uint64_t runID = data.first.run_num;
 
-            cols.insert(col);
-            rows.insert(row);
             if (markerID == 1 )
             {
-                switch (risc)
+                TracyCLZoneTransient(tracyTTCtx, FWScope, fmt::format("{}-FW",riscName[risc]).c_str(), FWColors[risc], true, threadID);
                 {
-                    case 0:
-                        {
-                            TracyCLZoneTransient(tracyTTCtx, briscFWScope, fmt::format("FW-{}",runID).c_str(), true, threadID);
-                            {
-                                TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Red2,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
-                            }
-                            briscFWScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
-                        }
-                        break;
-                    case 1:
-                        {
-                            TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Green4,threadID);
-                            {
-                                TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Green3,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
-                            }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
-                        }
-                        break;
-                    case 2:
-                        {
-                            TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Blue4,threadID);
-                            {
-                                TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Blue3,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
-                            }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
-                        }
-                        break;
-                    case 3:
-                        {
-                            TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Purple3,threadID);
-                            {
-                                TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Purple2,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
-                            }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
-                        }
-                        break;
-                    case 4:
-                        {
-                            TracyCLZoneC(tracyTTCtx, "FW", tracy::Color::Yellow4,threadID);
-                            {
-                                TracyCLZoneC(tracyTTCtx, "KERNEL", tracy::Color::Yellow3,threadID);
-                                TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
-                            }
-                            TracyCLZoneSetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
-                        }
-                        break;
-
-                    default:
-                        break;
+                    TracyCLZoneTransient(tracyTTCtx, KernelScope, fmt::format("{}-Kernel",riscName[risc]).c_str(), KernelColors[risc], true, threadID);
+                    KernelScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
                 }
+                FWScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
             }
         }
     }
-
-
-    //for (auto& row: rows)
-    //{
-        //std::cout << row << ",";
-    //}
-    //std::cout << std::endl;
-
-    //for (auto& col: cols)
-    //{
-        //std::cout << col << ",";
-    //}
-    //std::cout << std::endl;
     TracyCLCollect(tracyTTCtx, device_data);
 
 #endif
