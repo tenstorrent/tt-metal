@@ -255,13 +255,13 @@ class EnqueueProgramCommand : public Command {
     Device* device;
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
-    const Program& program;
+    Program& program;
     SystemMemoryManager& manager;
     bool stall;
     std::optional<std::reference_wrapper<Trace>> trace = {};
 
    public:
-    EnqueueProgramCommand(uint32_t command_queue_id, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall, std::optional<std::reference_wrapper<Trace>> trace);
+    EnqueueProgramCommand(uint32_t command_queue_id, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, Program& program, bool stall, std::optional<std::reference_wrapper<Trace>> trace);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 

@@ -12,7 +12,7 @@ class DeviceCommand {
    public:
     DeviceCommand();
 
-    enum class TransferType : uint8_t { RUNTIME_ARGS, CB_CONFIGS, PROGRAM_PAGES, GO_SIGNALS, NUM_TRANSFER_TYPES };
+    enum class TransferType : uint8_t { PROGRAM_PAGES, RUNTIME_ARGS, CB_CONFIGS, GO_SIGNALS, NUM_TRANSFER_TYPES };
 
     // Constants
     //TODO: investigate other num_cores

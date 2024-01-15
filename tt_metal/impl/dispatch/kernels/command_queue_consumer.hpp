@@ -280,15 +280,15 @@ void write_and_launch_program(
         bool multicast = true;
         switch (transfer_type_idx) {
             DeviceCommand::TransferType transfer_type;
+            case (uint32_t) DeviceCommand::TransferType::PROGRAM_PAGES:
+                num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_program_pages_idx];
+                break;
             case (uint32_t) DeviceCommand::TransferType::RUNTIME_ARGS:
                 multicast = false;
                 num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_runtime_arg_pages_idx];
                 break;
             case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
                 num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_cb_config_pages_idx];
-                break;
-            case (uint32_t) DeviceCommand::TransferType::PROGRAM_PAGES:
-                num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_program_pages_idx];
                 break;
             case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS:
                 num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_go_signal_pages_idx];
