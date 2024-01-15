@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+
 namespace eth_l1_mem {
 
 
@@ -34,13 +36,17 @@ struct address_map {
   //    -  53 * 1024 eth app reserved buffer space
   //    - 106 * 1024 L1 unreserved buffer space
   static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
-  static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 16;
-  static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 48;
+  static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 32;
+  static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 32;
 
   static constexpr std::int32_t ERISC_BARRIER_BASE = TILE_HEADER_BUFFER_BASE;
   static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = ERISC_BARRIER_BASE + ERISC_BARRIER_SIZE;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
-  static constexpr std::int32_t ERISC_L1_ARG_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
+  static constexpr std::uint32_t SEMAPHORE_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
+
+  static constexpr uint32_t CQ_CONSUMER_CB_BASE = SEMAPHORE_BASE + SEMAPHORE_SIZE;  // SIZE from shared common addr
+
+  static constexpr std::int32_t ERISC_L1_ARG_BASE = CQ_CONSUMER_CB_BASE + 7 * L1_ALIGNMENT;
 
   static constexpr std::int32_t ERISC_APP_RESERVED_BASE = TILE_HEADER_BUFFER_BASE + 1024;
   static constexpr std::int32_t ERISC_APP_RESERVED_SIZE = 53 * 1024;

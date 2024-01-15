@@ -112,9 +112,19 @@ static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) =
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 #endif
 
+enum EthRouterMode : uint32_t {
+    FD_SRC = 0,
+    FD_DST = 1,
+    SD = 2,
+};
+
 struct routing_info_t {
     volatile uint32_t routing_enabled;
     volatile uint32_t routing_mode;
-    volatile uint32_t unused_arg0;
-    volatile uint32_t unused_arg1;
+    volatile uint32_t connected_chip_id;
+    volatile uint32_t dispatch_core_xy;
+    volatile uint32_t fd_buffer_msgs_sent;
+    uint32_t reserved_0_;
+    uint32_t reserved_1_;
+    uint32_t reserved_2_;
 };
