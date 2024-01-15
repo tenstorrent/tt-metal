@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        with:
+          fetch-tags: true
       - name: Get is-release-candidate
         id: get-is-release-candidate
         run: |
