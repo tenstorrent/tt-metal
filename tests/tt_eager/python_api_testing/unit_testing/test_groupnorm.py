@@ -2,16 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-import time
-import os
+
 from loguru import logger
 import pytest
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
 
 import torch
 

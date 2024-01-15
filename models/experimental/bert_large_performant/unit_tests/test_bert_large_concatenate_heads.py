@@ -2,14 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 from loguru import logger
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
-
-import numpy as np
 
 import tt_lib as ttl
 from models.utility_functions import (

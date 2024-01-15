@@ -2,13 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 import pytest
-
-from pathlib import Path
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 import torch
 

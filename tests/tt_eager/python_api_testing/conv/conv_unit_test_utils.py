@@ -2,12 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 import torch
 import tt_lib as ttl
 from tt_lib.utils import _nearest_32, _nearest_y

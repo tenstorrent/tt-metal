@@ -2,14 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
+
 from loguru import logger
 
-import numpy as np
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 # TODO: need to use old style of importing until
 # the rest of the unit tests have been uplifted
@@ -21,8 +16,6 @@ from models.utility_functions import (
     comp_pcc,
 )
 import torch
-import sys
-import numpy
 import pytest
 import os
 
