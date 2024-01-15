@@ -51,9 +51,9 @@ if [ -z "$tags_at_head" ]; then
   all_rc_tags=false
 fi
 
-# WAIT WE MUST CONSIDER REPLAY OF RELEASE PIPELINE, probably ok because we just
-# redo jobs that failed only per tag...
-#
+# We considered issues that could arise by replaying a release pipeline, but
+# probably ok because we just redo jobs that failed only per tag...
+
 # If there are any tags in release_candidate mode, then we should not generate
 # any candidates because there are no releases created based off it
 if $release_candidate; then
