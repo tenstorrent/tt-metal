@@ -123,10 +123,8 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             noc_async_write_barrier();
 
             db_cb_config_t *eth_db_cb_config =
-                (db_cb_config_t
-                     *)(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
-            const db_cb_config_t *remote_db_cb_config =
-                (db_cb_config_t *)(CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
+                get_local_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
+            const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
             volatile tt_l1_ptr uint32_t *command_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t *>(command_start_addr);
             volatile tt_l1_ptr CommandHeader *header = (CommandHeader *)command_ptr;
