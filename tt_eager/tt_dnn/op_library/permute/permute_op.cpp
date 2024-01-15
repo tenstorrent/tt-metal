@@ -24,7 +24,7 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
     Device * device;
 
     // Get the device
-    if (a.storage_type() == StorageType::OWNED) {
+    if (a.storage_type() != StorageType::DEVICE) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
@@ -110,11 +110,7 @@ Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConf
     std::vector<uint32_t> seq_dims(dims.size());
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
     if (normalized_dims == seq_dims) {
-        if (a.memory_config() != output_mem_config) {
-            return clone(a, output_mem_config);
-        } else {
-            return a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(a, output_mem_config);
     }
     return operation::decorate_as_composite(__func__, permute_)(a, normalized_dims, output_mem_config);
 }

@@ -6,6 +6,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
@@ -21,8 +22,18 @@ namespace tt {
 namespace tt_metal {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const MemoryConfig& mem_config) {
-    if (input.storage_type() == StorageType::OWNED) {
+    if (input.storage_type() != StorageType::DEVICE) {
         return data_transfer_to_device(input, device, mem_config);
+    } else {
+        return input;
+    }
+}
+
+Tensor AutoFormat::move_tensor_to_mem_config(const Tensor &input, const MemoryConfig& mem_config) {
+    if (input.storage_type() != StorageType::DEVICE) {
+        return data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
+    } else if (input.memory_config() != mem_config) {
+        return clone(input, mem_config);
     } else {
         return input;
     }
@@ -165,7 +176,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
 
     // Send formatted_output to device if possible
     // Check that shape is supported on device
-    if (formatted_output.storage_type() == StorageType::OWNED) {
+    if (formatted_output.storage_type() != StorageType::DEVICE) {
         if (AutoFormat::legal_device_shape(formatted_output.shape(), formatted_output.layout())) {
             formatted_output = AutoFormat::move_tensor_to_device(formatted_output, device, mem_config);
         }

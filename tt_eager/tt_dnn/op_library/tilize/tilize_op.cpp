@@ -89,11 +89,7 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_confi
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
-        if (input_tensor_a.memory_config() != output_mem_config) {
-            return clone(input_tensor_a, output_mem_config);
-        } else {
-            return input_tensor_a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
     return operation::run_without_autoformat(Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.dtype()), use_multicore}, {input_tensor_a}).at(0);
 }
@@ -190,11 +186,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
-        if (input_tensor_a.memory_config() != output_mem_config) {
-            return clone(input_tensor_a, output_mem_config);
-        } else {
-            return input_tensor_a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
     auto shape = input_tensor_a.shape();
 

@@ -102,11 +102,7 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         log_warning("Perf warning: Trying to untilize non-tilized data.");
-        if (input_tensor_a.memory_config() != output_mem_config) {
-            return clone(input_tensor_a, output_mem_config);
-        } else {
-            return input_tensor_a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
     return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore, use_pack_untilize}, {input_tensor_a}).at(0);
 }
@@ -220,11 +216,7 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output
     if (input_tensor_a.layout() != Layout::TILE) {
         if (input_tensor_a.shape() == output_tensor_shape) {
             log_warning("Perf warning: Untilize with unpadding called on already untilized tensor of target shape");
-            if (input_tensor_a.memory_config() != output_mem_config) {
-                return clone(input_tensor_a, output_mem_config);
-            } else {
-                return input_tensor_a;
-            }
+            return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
         } else {
             TT_ASSERT(false, "Cannot untilize and unpad input which is not tilized");
         }

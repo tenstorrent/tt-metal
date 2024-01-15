@@ -131,7 +131,7 @@ const operation::Hash Unpad::compute_program_hash (
 
 }
 
-Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config) {
+Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     auto input_tensor_shape = input_tensor_a.shape();
@@ -142,20 +142,16 @@ Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, con
         output_tensor_end[3] - output_tensor_start[3] + 1,
     };
     if (input_tensor_a.shape() == output_tensor_shape) {
-        if (input_tensor_a.memory_config() != mem_config) {
-            return clone(input_tensor_a, mem_config);
-        } else {
-            return input_tensor_a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
 
-    return operation::run_without_autoformat(Unpad{output_tensor_start, output_tensor_end, mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Unpad{output_tensor_start, output_tensor_end, output_mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a}).at(0);
 
 }
 
 void UnpadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED);
+    TT_FATAL(input_tensor.storage_type() != StorageType::DEVICE);
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR);
 
     TT_FATAL(this->output_tensor_start[0] < input_tensor.shape()[0]);

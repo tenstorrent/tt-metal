@@ -293,33 +293,12 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
     SplitLastDimTwoChunksTiled op(mem_config);
 
-    tt_metal::Device *device;
-
-    // Get the device
-    if (input_tensor.storage_type() == StorageType::OWNED) {
-        device = AutoFormat::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input_tensor.device();
-    }
-
     auto input_shape = input_tensor.shape();
-    TT_ASSERT(input_shape[-1] % TILE_WIDTH == 0, "Split last dim currently only supported tile sized widths");
+    TT_FATAL(input_shape[-1] % TILE_WIDTH == 0, "Split last dim currently only supported tile sized widths");
 
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);
-    if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
-        return operation::run(op, {input_tensor});
-    } else {
-        auto device = input_tensor.device();
-        auto output_shape = op.compute_output_shapes({input_tensor}).at(0);
-        const auto padded_tensor =
-            AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, 0.0, Layout::TILE);
-        auto output_tensors = operation::run(op, {padded_tensor});
-        for (auto &output_tensor : output_tensors) {
-            output_tensor = AutoFormat::format_output_tensor(output_tensor, output_shape, device, Layout::TILE);
-        }
-        return output_tensors;
-    }
+    FormatParams input_format_params = {.pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    return operation::run_with_autoformat(op, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
 }
 
 std::vector<Tensor> split_dim_two_chunks_tiled(

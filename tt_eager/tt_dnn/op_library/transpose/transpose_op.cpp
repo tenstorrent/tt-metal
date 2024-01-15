@@ -167,11 +167,7 @@ Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const Me
         (normalized_dim1 == normalized_dim2) ||
         (a.shape()[normalized_dim1] == 1 && a.shape()[normalized_dim2] == 1)
     ) {
-        if (a.memory_config() != output_mem_config) {
-            return clone(a, output_mem_config);
-        } else {
-            return a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(a, output_mem_config);
     }
 
     if ( normalized_dim1 > normalized_dim2 ) {
