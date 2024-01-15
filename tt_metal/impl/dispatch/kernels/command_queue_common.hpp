@@ -5,7 +5,6 @@
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
-static constexpr uint32_t l1_db_cb_addr_offset = 7 * 16;
 static constexpr uint32_t NUM_COMMAND_SLOTS = 2;
 
 #define ATTR_ALIGNL1 __attribute__((aligned(L1_ALIGNMENT)))
@@ -19,49 +18,6 @@ struct db_cb_config_t {
     volatile uint32_t wr_ptr ATTR_ALIGNL1;      // 16B
 };
 static constexpr uint32_t l1_db_cb_addr_offset = sizeof(db_cb_config_t);
-
-// TODO: refactor consumer kernels and remove the following functions
-FORCE_INLINE
-uint32_t get_db_cb_l1_base(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset);
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_ack_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset);
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_recv_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + 16);
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_num_pages_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + 32);
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_page_size_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + 48);
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_total_size_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + 64);
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_rd_ptr_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + 80);
-
-}
-
-FORCE_INLINE
-uint32_t get_db_cb_wr_ptr_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + CQ_START);
-}
-
 
 template <uint32_t cmd_base_address, uint32_t consumer_data_buffer_size>
 FORCE_INLINE uint32_t get_command_slot_addr(bool db_buf_switch) {
@@ -85,13 +41,15 @@ void db_acquire(volatile uint32_t* semaphore, uint64_t noc_encoding) {
 }
 
 // Local refers to the core that is calling this function
-db_cb_config_t* get_local_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+    // TODO: remove multiply here
     db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
     return db_cb_config;
 }
 
 // Remote refers to any other core on the same chip
-const db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+tt_l1_ptr const db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+    // TODO: remove multiply here
     const db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
     return db_cb_config;
 }
