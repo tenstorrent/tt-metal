@@ -87,7 +87,7 @@ void kernel_main() {
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        program_consumer_cb_2(
+        program_consumer_cb(
             db_cb_config,
             eth_db_cb_config,
             db_buf_switch,
