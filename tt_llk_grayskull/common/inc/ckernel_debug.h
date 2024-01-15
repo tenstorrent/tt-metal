@@ -114,6 +114,9 @@ inline void dbg_thread_unhalt() {
         dbg_soft_reset.val = 0;
         reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, dbg_soft_reset.val);
 
+        // Wait for all instructions to complete
+        tensix_sync();
+
         // Unhalt unpack thread
         mailbox_write(ThreadId::UnpackThreadId, 1);
     }
