@@ -2,6 +2,10 @@ name: Package and release
 
 on:
   workflow_dispatch:
+  schedule:
+    # Create rc every day at EOD of PST Mon-Wed + night of Sunday to kick off
+    # releases for beginning of work week
+    - cron: "0 1 * * 1,2,3,4"
 
 permissions:
   contents: write
