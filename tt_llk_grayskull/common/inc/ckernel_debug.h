@@ -120,6 +120,45 @@ inline void dbg_thread_unhalt() {
 }
 
 inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, uint32_t *rd_data) {
+
+    // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode) 
+    std::uint32_t dest_offset = 0;
+    if ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1) || (array_id == dbg_array_id::DEST)) {
+        dest_offset = (dest_offset_id == 1) ? DEST_REGISTER_HALF_SIZE : 0;
+    }
+
+    // WWhen SrcA array is selected we need to copy row from src register into dest to be able to dump data
+    // Dump from SrcA array is not supported 
+    // Save dest row to SFPU register 
+    // Move SrcA into dest row 
+    // Dump dest row 
+    // Restore dest row
+
+    // Save dest row
+    if ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) {
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 0, .cr = 0},
+        }
+        .set(ADDR_MOD_0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0); // Save dest addr 0 to LREG_3
+
+        // Copy single row from SrcA[4+row_addr] to dest location 0
+        // First 4 rows in SrcA are not used
+        TT_MOVDBGA2D(p_mova2d::MOV_1_ROW, 0, 4+row_addr, 0); 
+
+        // Wait for TT instructions to complete
+        tensix_sync();
+    }
+
+    // Get actual row address and array id used in hw
+    std::uint32_t hw_row_addr = ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) ? 0 :
+                                 ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr);
+
+    std::uint32_t hw_array_id = ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) ? dbg_array_id::DEST : array_id;                             
+
     dbg_array_rd_en_u dbg_array_rd_en;
     dbg_array_rd_en.val = 0;
     dbg_array_rd_en.f.en = 0x1;
@@ -127,8 +166,8 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
 
     dbg_array_rd_cmd_u dbg_array_rd_cmd;
     dbg_array_rd_cmd.val = 0;
-    dbg_array_rd_cmd.f.row_addr = row_addr;
-    dbg_array_rd_cmd.f.array_id = array_id;
+    dbg_array_rd_cmd.f.row_addr = hw_row_addr;
+    dbg_array_rd_cmd.f.array_id = hw_array_id;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
 
     dbg_bus_cntl_u dbg_bus_cntl;
@@ -151,6 +190,11 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
     dbg_array_rd_en.val = 0;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
+
+    // Restore dest row
+    if ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) {
+        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0); // Restore dest addr 0 from LREG_3
+    }
 
 }
   
