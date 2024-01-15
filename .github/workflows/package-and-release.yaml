@@ -18,6 +18,8 @@ jobs:
       is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
       should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Get is-release-candidate
         id: get-is-release-candidate
         run: |
