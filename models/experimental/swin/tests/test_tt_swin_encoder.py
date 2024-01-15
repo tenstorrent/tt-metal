@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
+
 import torch
 import pytest
 from loguru import logger
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -60,9 +57,7 @@ def test_swin_encoder_inference(device, pcc, reset_seeds):
     # Compare outputs
     tt_output_torch = tt_to_torch_tensor(tt_output.last_hidden_state)
     tt_output_torch = tt_output_torch.squeeze(0)
-    does_pass, pcc_message = comp_pcc(
-        torch_output.last_hidden_state, tt_output_torch, pcc
-    )
+    does_pass, pcc_message = comp_pcc(torch_output.last_hidden_state, tt_output_torch, pcc)
 
     logger.info(comp_allclose(torch_output.last_hidden_state, tt_output_torch))
     logger.info(pcc_message)

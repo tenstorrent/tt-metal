@@ -16,9 +16,6 @@ from functools import partial
 import tt_lib
 from itertools import permutations, product
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 

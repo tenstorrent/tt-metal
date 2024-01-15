@@ -6,12 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -49,9 +43,7 @@ def test_Yolov5_detection_model(device):
     data = None
     half = False
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model
 
     torch.manual_seed(0)

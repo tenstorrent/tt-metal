@@ -3,23 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
-import numpy as np
-
-import tt_lib as ttl
-from tt_lib.utils import (
-    tilize_to_list,
-    tilize,
-    untilize,
-    _nearest_32,
-    _nearest_y,
-    convert_weights_2d_matrix,
-)
 from models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
