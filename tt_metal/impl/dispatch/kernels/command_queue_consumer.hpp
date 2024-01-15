@@ -35,45 +35,36 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
 }
 
 FORCE_INLINE
-void multicore_cb_wait_front(bool db_buf_switch, int32_t num_pages) {
+void multicore_cb_wait_front(db_cb_config_t* db_cb_config, int32_t num_pages) {
     DEBUG_STATUS('C', 'R', 'B', 'W');
-
-    uint32_t pages_acked = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_ack_addr(db_buf_switch));
-    volatile tt_l1_ptr uint32_t* pages_received_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_recv_addr(db_buf_switch));
 
     uint16_t pages_received;
     do {
-        pages_received = uint16_t(*pages_received_ptr) - pages_acked;
+        pages_received = uint16_t(db_cb_config->recv - db_cb_config->ack);
     } while (pages_received < num_pages);
     DEBUG_STATUS('C', 'R', 'B', 'D');
 }
 
 void multicore_cb_pop_front(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
     uint64_t producer_noc_encoding,
-    bool db_buf_switch,
-    uint32_t fifo_limit,
-    uint32_t fifo_size,
-    uint32_t num_pages,
+    uint32_t consumer_fifo_limit,
+    uint32_t num_to_write,
     uint32_t page_size) {
-    volatile tt_l1_ptr uint32_t* CQ_CONSUMER_CB_ACK_PTR = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_ack_addr(db_buf_switch));
-    volatile tt_l1_ptr uint32_t* CQ_CONSUMER_CB_READ_PTR =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch));
+    db_cb_config->ack += num_to_write;
+    db_cb_config->rd_ptr += page_size * num_to_write;
 
-    *CQ_CONSUMER_CB_ACK_PTR += num_pages;
-    *CQ_CONSUMER_CB_READ_PTR += (page_size * num_pages) >> 4;
-
-    if ((*CQ_CONSUMER_CB_READ_PTR << 4) > fifo_limit) {
-        *CQ_CONSUMER_CB_READ_PTR -= fifo_size >> 4;
+    if ((db_cb_config->rd_ptr << 4) > consumer_fifo_limit) {
+        db_cb_config->rd_ptr -= db_cb_config->total_size;
     }
 
-    uint32_t pages_ack_addr = get_db_cb_ack_addr(db_buf_switch);
-    noc_semaphore_set_remote(uint32_t(CQ_CONSUMER_CB_ACK_PTR), producer_noc_encoding | pages_ack_addr);
+    uint32_t pages_ack_addr = (uint32_t)(&(remote_db_cb_config->ack));
+    noc_semaphore_set_remote((uint32_t)(&(db_cb_config->ack)), producer_noc_encoding | pages_ack_addr);
 }
 
 FORCE_INLINE
-uint32_t get_read_ptr(bool db_buf_switch) {
-    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
-}
+uint32_t get_read_ptr(db_cb_config_t* db_cb_config) { return (db_cb_config->rd_ptr) << 4; }
 
 inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_WRITE_PTR);
@@ -132,16 +123,14 @@ void completion_queue_push_back(const uint32_t completion_queue_start_addr, uint
 
 template <uint32_t host_completion_queue_write_ptr_addr>
 FORCE_INLINE void write_buffers(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
     volatile tt_l1_ptr uint32_t* command_ptr,
     const uint32_t completion_queue_start_addr,
     uint32_t num_destinations,
     uint32_t sharded_buffer_num_cores,
-    uint32_t consumer_cb_size,
-    uint32_t consumer_cb_num_pages,
     uint64_t producer_noc_encoding,
-    uint32_t producer_consumer_transfer_num_pages,
-    bool db_buf_switch) {
-
+    uint32_t producer_consumer_transfer_num_pages) {
     bool sharded = sharded_buffer_num_cores > 1;
 
     for (uint32_t i = 0; i < num_destinations; i++) {
@@ -152,8 +141,8 @@ FORCE_INLINE void write_buffers(
         const uint32_t dst_page_index = command_ptr[7];
 
         uint32_t num_to_write;
-        uint32_t src_addr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
-        uint32_t l1_consumer_fifo_limit = src_addr + consumer_cb_size - 1;
+        uint32_t src_addr = get_read_ptr(db_cb_config);
+        uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size << 4) - 1;
 
         BufferType buffer_type = (BufferType)dst_buf_type;
         Buffer buffer;
@@ -172,17 +161,17 @@ FORCE_INLINE void write_buffers(
         uint32_t end_page_id = page_id + num_pages;
         while (page_id < end_page_id) {
             num_to_write = min(end_page_id - page_id, producer_consumer_transfer_num_pages);
-            multicore_cb_wait_front(db_buf_switch, num_to_write);
-            uint32_t src_addr = get_read_ptr(db_buf_switch);
+            multicore_cb_wait_front(db_cb_config, num_to_write);
+            uint32_t src_addr = get_read_ptr(db_cb_config);
             buffer.noc_async_write_buffer(src_addr, page_id, num_to_write);
             noc_async_writes_flushed();
             multicore_cb_pop_front(
+                db_cb_config,
+                remote_db_cb_config,
                 producer_noc_encoding,
-                db_buf_switch,
                 l1_consumer_fifo_limit,
-                consumer_cb_size,
                 num_to_write,
-                page_size);
+                db_cb_config->page_size);
             page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
@@ -222,19 +211,17 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
 
 template <bool multicast>
 FORCE_INLINE void program_page_transfer(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
     volatile tt_l1_ptr uint32_t*& command_ptr,
     uint64_t producer_noc_encoding,
-    uint32_t consumer_cb_size,
-    uint32_t consumer_cb_num_pages,
     uint32_t producer_consumer_transfer_num_pages,
-    bool db_buf_switch,
     uint32_t num_pages_in_transfer) {
-
-    uint32_t l1_consumer_fifo_limit = get_read_ptr(db_buf_switch) + consumer_cb_size - 1;
+    uint32_t l1_consumer_fifo_limit = get_read_ptr(db_cb_config) + (db_cb_config->total_size << 4) - 1;
     for (uint32_t page_idx = 0; page_idx < num_pages_in_transfer;) {
         uint32_t num_to_write = min(num_pages_in_transfer - page_idx, producer_consumer_transfer_num_pages);
-        multicore_cb_wait_front(db_buf_switch, num_to_write);
-        uint32_t src_addr = get_read_ptr(db_buf_switch);
+        multicore_cb_wait_front(db_cb_config, num_to_write);
+        uint32_t src_addr = get_read_ptr(db_cb_config);
         for (uint32_t i = 0; i < num_to_write; i++) {
             write_program_page<multicast>(src_addr, command_ptr, i == num_to_write - 1);
             src_addr += DeviceCommand::PROGRAM_PAGE_SIZE;
@@ -242,26 +229,24 @@ FORCE_INLINE void program_page_transfer(
         page_idx += num_to_write;
         noc_async_writes_flushed();
         multicore_cb_pop_front(
+            db_cb_config,
+            remote_db_cb_config,
             producer_noc_encoding,
-            db_buf_switch,
             l1_consumer_fifo_limit,
-            consumer_cb_size,
             num_to_write,
-            DeviceCommand::PROGRAM_PAGE_SIZE);
+            (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
     }
 }
 
 FORCE_INLINE
 void write_and_launch_program(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
     uint32_t program_transfer_start_addr,
     uint32_t num_pages,
     volatile tt_l1_ptr uint32_t*& command_ptr,
     uint64_t producer_noc_encoding,
-    uint32_t consumer_cb_size,
-    uint32_t consumer_cb_num_pages,
-    uint32_t producer_consumer_transfer_num_pages,
-    bool db_buf_switch) {
-
+    uint32_t producer_consumer_transfer_num_pages) {
     if (not num_pages) {
         return;
     }
@@ -296,9 +281,21 @@ void write_and_launch_program(
         }
 
         if (multicast) {
-            program_page_transfer<true>(command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch, num_pages_in_transfer);
+            program_page_transfer<true>(
+                db_cb_config,
+                remote_db_cb_config,
+                command_ptr,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages,
+                num_pages_in_transfer);
         } else {
-            program_page_transfer<false>(command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch, num_pages_in_transfer);
+            program_page_transfer<false>(
+                db_cb_config,
+                remote_db_cb_config,
+                command_ptr,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages,
+                num_pages_in_transfer);
         }
     }
 }

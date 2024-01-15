@@ -52,16 +52,34 @@ void kernel_main() {
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
         uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
 
+        db_cb_config_t *db_cb_config = (db_cb_config_t *)(CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
+        const db_cb_config_t *remote_db_cb_config =
+            (db_cb_config_t *)(CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
             cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
             cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
             notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
         } else if (is_program) {
-            write_and_launch_program(program_transfer_start_addr, num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch);
+            write_and_launch_program(
+                db_cb_config,
+                remote_db_cb_config,
+                program_transfer_start_addr,
+                num_pages,
+                command_ptr,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages);
             wait_for_program_completion(num_workers);
         } else {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
-            write_buffers<host_completion_queue_write_ptr_addr>(command_ptr, completion_queue_start_addr, num_buffer_transfers,  sharded_buffer_num_cores, consumer_cb_size, consumer_cb_num_pages, producer_noc_encoding, producer_consumer_transfer_num_pages, db_buf_switch);
+            write_buffers<host_completion_queue_write_ptr_addr>(
+                db_cb_config,
+                remote_db_cb_config,
+                command_ptr,
+                completion_queue_start_addr,
+                num_buffer_transfers,
+                sharded_buffer_num_cores,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages);
         }
 
         if (finish) {

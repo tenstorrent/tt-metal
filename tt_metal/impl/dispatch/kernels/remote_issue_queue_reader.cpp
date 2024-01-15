@@ -71,7 +71,7 @@ void kernel_main() {
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        program_consumer_cb_2(
+        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(
             db_cb_config,
             eth_db_cb_config,
             db_buf_switch,
@@ -79,7 +79,8 @@ void kernel_main() {
             consumer_cb_num_pages,
             page_size,
             consumer_cb_size);
-        relay_command(db_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
+        relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(
+            db_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
         // Decrement the semaphore value
         noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | uint32_t(db_semaphore_addr), -1);  // Two's complement addition
         noc_async_write_barrier();
@@ -89,7 +90,7 @@ void kernel_main() {
         noc_async_write_barrier();  // Barrier for now
 
         // Fetch data and send to the consumer
-        produce_for_eth_src_router(
+        produce_for_eth_src_router<consumer_cmd_base_addr, consumer_data_buffer_size>(
             command_ptr,
             num_buffer_transfers,
             sharded_buffer_num_cores,

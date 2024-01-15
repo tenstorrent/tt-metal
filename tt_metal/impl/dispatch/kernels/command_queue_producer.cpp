@@ -54,6 +54,9 @@ void kernel_main() {
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
         uint32_t finish = command_ptr[DeviceCommand::finish_idx];
 
+        db_cb_config_t *db_cb_config = (db_cb_config_t *)(CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
+        const db_cb_config_t *remote_db_cb_config =
+            (db_cb_config_t *)(CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
             cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
@@ -65,7 +68,14 @@ void kernel_main() {
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
+        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(
+            db_cb_config,
+            remote_db_cb_config,
+            db_buf_switch,
+            consumer_noc_encoding,
+            consumer_cb_num_pages,
+            page_size,
+            consumer_cb_size);
         relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         if (stall) {
             while (*db_semaphore_addr != 2)
@@ -84,14 +94,13 @@ void kernel_main() {
             command_ptr,
             num_buffer_transfers,
             sharded_buffer_num_cores,
-            page_size,
             producer_cb_size,
             producer_cb_num_pages,
-            consumer_cb_size,
-            consumer_cb_num_pages,
             consumer_noc_encoding,
             producer_consumer_transfer_num_pages,
-            db_buf_switch);
+            db_buf_switch,
+            db_cb_config,
+            remote_db_cb_config);
 
         issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
