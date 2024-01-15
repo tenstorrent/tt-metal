@@ -226,8 +226,8 @@ void DeviceProfiler::readRiscProfilerResults(
                 else if (newRunStart)
                 {
                     //TODO(MO): Cleanup magic numbers
-                    riscNumRead = profile_buffer[index] & 0x07;
-                    coreFlatIDRead = (profile_buffer[index] & 0x3F8) >> 3;
+                    riscNumRead = profile_buffer[index] & 0x7;
+                    coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
 
                     runCounterRead = profile_buffer[index + 1];
 
@@ -235,12 +235,12 @@ void DeviceProfiler::readRiscProfilerResults(
                 }
                 else
                 {
-                    uint32_t time_H = profile_buffer[index] & 0x0000FFFF;
-                    //if (time_H)
+                    uint32_t time_H = profile_buffer[index] & 0xFFF;
+                    if (time_H)
                     {
-                        uint32_t marker = (profile_buffer[index] & 0x00070000) >> 16;
-                        uint32_t riscNumReadts = (profile_buffer[index] & 0x00380000) >> 19;
-                        uint32_t coreFlatIDReadts = (profile_buffer[index] & 0x7FC00000) >> 22;
+                        uint32_t marker = (profile_buffer[index] >> 12) & 0xFF ;
+                        uint32_t riscNumReadts = (profile_buffer[index] >> 20) & 0x7;
+                        uint32_t coreFlatIDReadts = (profile_buffer[index] >> 23) & 0xFF;
                         uint32_t time_L = profile_buffer[index + 1];
 
 
@@ -335,7 +335,14 @@ void DeviceProfiler::dumpResultToFile(
     }
     core_x--;
 
+    static uint32_t customMarkerCount = 0;
+
     tracy::TTDeviceEvent event = tracy::TTDeviceEvent(runID, chip_id, core_x, core_y, risc_num, timer_id);
+    if (timer_id > PROFILER_L1_GUARANTEED_MARKER_COUNT)
+    {
+        customMarkerCount ++;
+        event.marker = (uint64_t(customMarkerCount) << 32 ) | timer_id;
+    }
 
     if (device_data.find (runID) != device_data.end())
     {
@@ -484,6 +491,8 @@ void DeviceProfiler::dumpResults (
             profile_buffer,
             worker_core);
     }
+    pushTracyDeviceResults();
+    device_data.clear();
 #endif
 }
 
@@ -498,7 +507,7 @@ constexpr std::array<char, N+3> PrependName(const char (&str)[N])
 
 
 
-void DeviceProfiler::pushTracyDeviceResults(int device_id)
+void DeviceProfiler::pushTracyDeviceResults()
 {
 #if defined(PROFILER)
     tracyTTCtx->PopulateCLContext( smallest_timestamp, 1000.f / (float)device_core_frequency);
@@ -506,14 +515,34 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
     uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4};
     uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3};
+    uint32_t customColors[] = {tracy::Color::Orange2, tracy::Color::Cyan3, tracy::Color::Orchid1, tracy::Color::Plum1, tracy::Color::PaleTurquoise2};
 
     static constexpr auto numberString = PrependName("4");
 
+
     for (auto& run: device_data)
     {
+        std::unordered_map<uint32_t, std::vector<tracy::TTDeviceEvent>> customMarkers;
         for (auto& data: run.second)
         {
             uint64_t threadID = data.first.get_thread_id();
+            uint64_t markerID = data.first.marker;
+            if (markerID > PROFILER_L1_GUARANTEED_MARKER_COUNT)
+            {
+                if (customMarkers.find (threadID) != customMarkers.end())
+                {
+                    customMarkers[threadID].push_back(data.first);
+                }
+                else
+                {
+                    customMarkers.emplace(threadID, (std::vector<tracy::TTDeviceEvent>){data.first});
+                }
+            }
+        }
+        for (auto& data: run.second)
+        {
+            uint64_t threadID = data.first.get_thread_id();
+            uint64_t device_id = data.first.chip_id;
             uint64_t row = data.first.core_y;
             uint64_t col = data.first.core_x;
             uint64_t risc = data.first.risc;
@@ -522,16 +551,29 @@ void DeviceProfiler::pushTracyDeviceResults(int device_id)
 
             if (markerID == 1 )
             {
-                TracyCLZoneTransient(tracyTTCtx, FWScope, fmt::format("{}-FW",riscName[risc]).c_str(), FWColors[risc], true, threadID);
+                TracyCLZoneTransient(tracyTTCtx, FWScope, fmt::format("{} FW",riscName[risc]).c_str(), FWColors[risc], true, threadID);
                 {
-                    TracyCLZoneTransient(tracyTTCtx, KernelScope, fmt::format("{}-Kernel",riscName[risc]).c_str(), KernelColors[risc], true, threadID);
-                    KernelScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
+                    TracyCLZoneTransient(tracyTTCtx, KernelScope, fmt::format("{} Kernel",riscName[risc]).c_str(), KernelColors[risc], true, threadID);
+                    for (auto &customMarker : customMarkers[threadID])
+                    {
+                        uint64_t actualMarkerID = (customMarker.marker << 32) >> 32;
+                        TracyCLZoneTransient(
+                                tracyTTCtx,
+                                customMarkerScope,
+                                fmt::format("{}",actualMarkerID).c_str(),
+                                customColors[actualMarkerID % (sizeof(customColors) / sizeof(uint32_t))],
+                                true,
+                                threadID);
+                        customMarkerScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,customMarker.marker));
+                    }
+
+                    KernelScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
                 }
-                FWScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,1));
+                FWScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
             }
+            TracyCLCollect(tracyTTCtx, device_data);
         }
     }
-    TracyCLCollect(tracyTTCtx, device_data);
 
 #endif
 }

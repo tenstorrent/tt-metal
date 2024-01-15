@@ -94,8 +94,8 @@ void DumpDeviceProfileResults(Device *device, const std::unordered_map<CoreType,
                 device->worker_cores_from_logical_cores(logical_cores.at(CoreType::WORKER));
             tt_metal_device_profiler.dumpResults(device, worker_cores_used_in_program);
         }
-        tt_metal_device_profiler.pushTracyDeviceResults(device_id);
-        tt_metal_device_profiler.device_data.clear();
+        //tt_metal_device_profiler.pushTracyDeviceResults();
+        //tt_metal_device_profiler.device_data.clear();
     }
 #endif
 }

@@ -146,7 +146,7 @@ class DeviceProfiler {
         void dumpResults(Device *device, const vector<CoreCoord> &worker_cores);
 
         //Push device results to tracy
-        void pushTracyDeviceResults(int device_id);
+        void pushTracyDeviceResults();
 };
 
 }  // namespace tt_metal

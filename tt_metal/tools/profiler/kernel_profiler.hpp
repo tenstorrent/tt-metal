@@ -90,11 +90,11 @@ namespace kernel_profiler{
         trisc1Buffer[ID_LL] = runCounter;
         trisc2Buffer[ID_LL] = runCounter;
 
-        briscBuffer [ID_LH] = ((core_flat_id & 0x7F) << 3) | 0;
-        ncriscBuffer[ID_LH] = ((core_flat_id & 0x7F) << 3) | 1;
-        trisc0Buffer[ID_LH] = ((core_flat_id & 0x7F) << 3) | 2;
-        trisc1Buffer[ID_LH] = ((core_flat_id & 0x7F) << 3) | 3;
-        trisc2Buffer[ID_LH] = ((core_flat_id & 0x7F) << 3) | 4;
+        briscBuffer [ID_LH] = ((core_flat_id & 0xFF) << 3) | 0;
+        ncriscBuffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 1;
+        trisc0Buffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 2;
+        trisc1Buffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 3;
+        trisc2Buffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 4;
         //briscBuffer[ID_LH] =  ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | briscKernelID;
         //ncriscBuffer[ID_LH] = ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | ncriscKernelID;
         //trisc0Buffer[ID_LH] = ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | triscsKernelID;
@@ -123,7 +123,7 @@ namespace kernel_profiler{
             uint32_t index = wIndex;
 
             //TODO(MO): Clean up magic numbers
-            buffer[index] = (0x80000000 | (time_H & 0x0000FFFF) | (((buffer[ID_LH] << 3) | timer_id) << 16));
+            buffer[index] = 0x80000000 | ((buffer[ID_LH] & 0x7FF) << 20) | ((timer_id & 0xFF) << 12) | (time_H & 0xFFF);
             buffer[index+1] = time_L;
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
         }
@@ -143,7 +143,7 @@ namespace kernel_profiler{
         volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(profilerBuffer);
 
         //TODO(MO): Clean up magic numbers
-        buffer[index] = (0x80000000 | (time_H & 0x0000FFFF) | (((buffer[ID_LH] << 3) | ((index - FW_START + 2) >> 1)) << 16));
+        buffer[index] = 0x80000000 | ((buffer[ID_LH] & 0x7FF) << 20) | ((((index - FW_START + 2) >> 1) & 0xFF) << 12) | (time_H & 0xFFF);
         buffer[index+1] = time_L;
 #endif //PROFILE_KERNEL
     }
