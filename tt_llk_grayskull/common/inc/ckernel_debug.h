@@ -12,10 +12,8 @@ namespace ckernel
 
 struct dbg_array_id
 {
-    constexpr static uint32_t SRCA_B0 = 0; // SrcA Bank0 
-    constexpr static uint32_t SRCA_B1 = 8; // SrcA Bank1
-    constexpr static uint32_t SRCB_B0 = 1; // SrcB Bank0
-    constexpr static uint32_t SRCB_B1 = 9; // SrcB Bank1
+    constexpr static uint32_t SRCA = 0; // SrcA last used bank
+    constexpr static uint32_t SRCB = 1; // SrcB last used bank
     constexpr static uint32_t DEST = 2; // Dest acc
 };
 
@@ -23,6 +21,7 @@ struct dbg_daisy_id
 {
     constexpr static uint32_t INSTR_ISSUE_0 = 4; 
     constexpr static uint32_t INSTR_ISSUE_1 = 5; 
+    constexpr static uint32_t INSTR_ISSUE_2 = 6; 
 };
 
 typedef struct
@@ -56,7 +55,8 @@ typedef union
 typedef struct
 {
     uint32_t row_addr : 16;
-    uint32_t array_id : 4;
+    uint32_t array_id : 3;
+    uint32_t bank_id  : 1;
     uint32_t reserved : 12;
 } dbg_array_rd_cmd_t;
 
@@ -123,27 +123,33 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
 
     // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode) 
     std::uint32_t dest_offset = 0;
-    if ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1) || (array_id == dbg_array_id::DEST)) {
+    if (array_id == dbg_array_id::DEST) {
         dest_offset = (dest_offset_id == 1) ? DEST_REGISTER_HALF_SIZE : 0;
     }
 
-    // WWhen SrcA array is selected we need to copy row from src register into dest to be able to dump data
-    // Dump from SrcA array is not supported 
-    // Save dest row to SFPU register 
-    // Move SrcA into dest row 
-    // Dump dest row 
-    // Restore dest row
+    std::uint32_t srcb_bank_id = 0;
 
     // Save dest row
-    if ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) {
+    if (array_id == dbg_array_id::SRCA) {
+        // WWhen SrcA array is selected we need to copy row from src register into dest to be able to dump data
+        // Dump from SrcA array is not supported 
+        // Save dest row to SFPU register 
+        // Move SrcA into dest row 
+        // Dump dest row 
+        // Restore dest row
         addr_mod_t{
             .srca = {.incr = 0, .clr = 0, .cr = 0},
             .srcb = {.incr = 0, .clr = 0, .cr = 0},
             .dest = {.incr = 0, .clr = 0, .cr = 0},
         }
         .set(ADDR_MOD_0);
+
+        // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
         TTI_SFPLOAD(p_sfpu::LREG3, 0, 0); // Save dest addr 0 to LREG_3
+
+        // Move to the last used bank
+        TTI_CLEARDVALID(1,0);
 
         // Copy single row from SrcA[4+row_addr] to dest location 0
         // First 4 rows in SrcA are not used
@@ -151,13 +157,26 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
 
         // Wait for TT instructions to complete
         tensix_sync();
+    } else if (array_id == dbg_array_id::SRCB) {
+        // Get last used bank id via debug bus
+        dbg_bus_cntl_u dbg_bus_cntl;
+        dbg_bus_cntl.val = 0;
+        dbg_bus_cntl.f.rd_sel = 10; // Read bits 159:144, 146 (write_math_id_reg)
+        dbg_bus_cntl.f.sig_sel = 0x4;
+        dbg_bus_cntl.f.daisy_sel = dbg_daisy_id::INSTR_ISSUE_2;
+        dbg_bus_cntl.f.en = 1;
+        reg_write(RISCV_DEBUG_REG_DBG_BUS_CNTL_REG, dbg_bus_cntl.val);
+        wait (5); // Wait for value to get stable
+        srcb_bank_id = ((reg_read(RISCV_DEBUG_REG_DBG_RD_DATA)) & 0x4) ? 0 : 1;
     }
 
     // Get actual row address and array id used in hw
-    std::uint32_t hw_row_addr = ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) ? 0 :
+    std::uint32_t hw_row_addr = (array_id == dbg_array_id::SRCA) ? 0 :
                                  ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr);
 
-    std::uint32_t hw_array_id = ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) ? dbg_array_id::DEST : array_id;                             
+    std::uint32_t hw_array_id = (array_id == dbg_array_id::SRCA) ? dbg_array_id::DEST : array_id;
+
+    std::uint32_t hw_bank_id  = (array_id == dbg_array_id::SRCB) ? srcb_bank_id : 0;
 
     dbg_array_rd_en_u dbg_array_rd_en;
     dbg_array_rd_en.val = 0;
@@ -168,6 +187,7 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
     dbg_array_rd_cmd.val = 0;
     dbg_array_rd_cmd.f.row_addr = hw_row_addr;
     dbg_array_rd_cmd.f.array_id = hw_array_id;
+    dbg_array_rd_cmd.f.bank_id  = hw_bank_id;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
 
     dbg_bus_cntl_u dbg_bus_cntl;
@@ -192,8 +212,10 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
 
     // Restore dest row
-    if ((array_id == dbg_array_id::SRCA_B0) || (array_id == dbg_array_id::SRCA_B1)) {
+    if (array_id == dbg_array_id::SRCA) {
         TTI_SFPSTORE(p_sfpu::LREG3, 0, 0); // Restore dest addr 0 from LREG_3
+        // Move to the current bank
+        TTI_CLEARDVALID(1,0);
     }
 
 }
