@@ -21,7 +21,7 @@ void kernel_main() {
     // This represents how many buffers the producer can write to.
     // At the beginning, it can write to two different buffers.
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
-    uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y)) << 32;
+    uint64_t eth_consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y)) << 32;
     uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
 
     volatile tt_l1_ptr uint32_t* db_semaphore_addr =
@@ -63,19 +63,18 @@ void kernel_main() {
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
         uint32_t finish = command_ptr[DeviceCommand::finish_idx];
 
-        DPRINT << "data size: " << data_size
-               << " num_buffer_transfers: " << num_buffer_transfers
-               << " stall: " << stall
-               << " page_size: " << page_size
-               << " producer_cb_size: " << producer_cb_size
-               << " consumer_cb_size: " << consumer_cb_size
-               << " producer_cb_num_pages: " << producer_cb_num_pages
-               << " consumer_cb_num_pages: " << consumer_cb_num_pages
-               << " num_pages: " << num_pages
-               << " wrap: " << wrap
-               << " producer_consumer_transfer_num_pages: " << producer_consumer_transfer_num_pages
-               << " sharded_buffer_num_cores: " << sharded_buffer_num_cores
-               << " finish: " << finish << ENDL();
+        db_cb_config_t *db_cb_config = (db_cb_config_t *)(CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
+        // const because we only use this to get noc dst addr
+        const db_cb_config_t *eth_db_cb_config =
+            (db_cb_config_t *)(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset));
+
+        DPRINT << "debug print struct " << (uint32_t)(eth_db_cb_config) << ENDL();
+        DPRINT << "data size: " << DEC() << data_size << " num_buffer_transfers: " << num_buffer_transfers
+               << " stall: " << stall << " page_size: " << page_size << " producer_cb_size: " << producer_cb_size
+               << " consumer_cb_size: " << consumer_cb_size << " producer_cb_num_pages: " << producer_cb_num_pages
+               << " consumer_cb_num_pages: " << consumer_cb_num_pages << " num_pages: " << num_pages
+               << " wrap: " << wrap << " producer_consumer_transfer_num_pages: " << producer_consumer_transfer_num_pages
+               << " sharded_buffer_num_cores: " << sharded_buffer_num_cores << " finish: " << finish << ENDL();
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
@@ -88,30 +87,35 @@ void kernel_main() {
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        // program_consumer_cb(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
-        // relay_command(db_buf_switch, consumer_noc_encoding);
-
+        program_consumer_cb_2(
+            db_cb_config,
+            eth_db_cb_config,
+            db_buf_switch,
+            eth_consumer_noc_encoding,
+            consumer_cb_num_pages,
+            page_size,
+            consumer_cb_size);
+        relay_command(db_buf_switch, eth_consumer_noc_encoding);
         // Decrement the semaphore value
         noc_semaphore_inc(producer_noc_encoding | uint32_t(db_semaphore_addr), -1);  // Two's complement addition
         noc_async_write_barrier();
 
-        // Notify the consumer
-        // noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
-        // noc_async_write_barrier();  // Barrier for now
+        // Notify the eth SRC router
+        noc_semaphore_inc(eth_consumer_noc_encoding | eth_get_semaphore(0), 1);
+        noc_async_write_barrier();  // Barrier for now
 
         // Fetch data and send to the consumer
-        // produce(
-        //     command_ptr,
-        //     num_buffer_transfers,
-        //     sharded_buffer_num_cores,
-        //     page_size,
-        //     producer_cb_size,
-        //     producer_cb_num_pages,
-        //     consumer_cb_size,
-        //     consumer_cb_num_pages,
-        //     consumer_noc_encoding,
-        //     producer_consumer_transfer_num_pages,
-        //     db_buf_switch);
+        produce_for_eth_src_router(
+            command_ptr,
+            num_buffer_transfers,
+            sharded_buffer_num_cores,
+            producer_cb_size,
+            producer_cb_num_pages,
+            eth_consumer_noc_encoding,
+            producer_consumer_transfer_num_pages,
+            db_buf_switch,
+            db_cb_config,
+            eth_db_cb_config);
 
         issue_queue_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 

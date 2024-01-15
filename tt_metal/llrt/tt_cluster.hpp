@@ -34,12 +34,6 @@ using tt::TargetDevice;
 
 namespace tt {
 
-enum EthRouterMode : uint8_t {
-    FD_SRC = 0,
-    FD_DST = 1,
-    SD = 2,
-};
-
 class Cluster {
    public:
     Cluster &operator=(const Cluster &) = delete;
@@ -129,12 +123,15 @@ class Cluster {
     CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
 
     // Configures routing mapping of ethernet cores
-    void set_routing_config_for_ethernet_cores();
-    void launch_internal_routing_for_ethernet_cores() const;
+    void initialize_routing_info_for_ethernet_cores();
 
-    std::unordered_map<CoreCoord, tt::EthRouterMode> get_eth_router_config_for_device(chip_id_t device_id) const {
-        return this->device_eth_router_config_.at(device_id);
-    }
+    // Dispatch core is managed by device, so this is an api for device to write the routing info to each eth core used
+    // in FD tunneling Returns logical eth core that communicates with specified dispatch core
+    CoreCoord get_and_configure_corresponding_eth_core_for_device(
+        chip_id_t chip_id, CoreCoord physical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    // Writes eth routing config to device, assumes that device is initialized
+    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const;
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
@@ -202,7 +199,7 @@ class Cluster {
     std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
 
     // Mapping of each devices' ethernet routing mode
-    std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, tt::EthRouterMode>> device_eth_router_config_;
+    std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, routing_info_t>> device_eth_routing_info_;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE

@@ -16,13 +16,12 @@
 #include <stdint.h>
 
 #include "circular_buffer.h"
+#include "debug/sanitize_noc.h"
+#include "debug/status.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
-
-#include "debug/status.h"
-#include "debug/sanitize_noc.h"
 
 extern uint8_t noc_index;
 

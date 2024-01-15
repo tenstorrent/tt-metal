@@ -48,7 +48,7 @@ Cluster::Cluster() {
 
     this->assert_risc_reset();
 
-    this->set_routing_config_for_ethernet_cores();
+    this->initialize_routing_info_for_ethernet_cores();
 }
 
 void Cluster::detect_arch_and_target() {
@@ -317,22 +317,6 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
 
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
-    // Disable internal ethernet routing
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
-        const routing_info_t routing_info_disabled = {
-            .routing_enabled = 0, .routing_mode = 0, .fd_buffer_msgs_sent = 0};
-        for (const auto &chip_id : devices) {
-            for (const auto &eth_core : this->get_active_ethernet_cores(chip_id)) {
-                tt_cxy_pair this_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                write_core(
-                    (void *)&routing_info_disabled,
-                    sizeof(routing_info_t),
-                    this_phys_core,
-                    eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE,
-                    false);
-            }
-        }
-    }
 
     for (const auto &[mmio_device_id, device_driver] : this->mmio_device_id_to_driver_) {
         device_driver->close_device();
@@ -648,12 +632,12 @@ CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const Core
     return eth_cores.at(eth_chan_map.at(logical_core));
 }
 
-void Cluster::set_routing_config_for_ethernet_cores() {
+void Cluster::initialize_routing_info_for_ethernet_cores() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
-            if (this->device_eth_router_config_.find(chip_id) == this->device_eth_router_config_.end()) {
-                this->device_eth_router_config_.insert({chip_id, {}});
+            if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
+                this->device_eth_routing_info_.insert({chip_id, {}});
             }
         }
         for (const auto &chip_id : devices) {
@@ -667,71 +651,162 @@ void Cluster::set_routing_config_for_ethernet_cores() {
                     for (const auto &eth_core : active_eth_cores) {
                         const auto connected_eth_core =
                             std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
-                        if (this->device_eth_router_config_.at(chip_id).find(eth_core) ==
-                            this->device_eth_router_config_.at(chip_id).end()) {
+                        if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
+                            this->device_eth_routing_info_.at(chip_id).end()) {
                             tt_cxy_pair this_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
                             tt_cxy_pair connected_phys_core(
                                 connected_chip_id,
                                 ethernet_core_from_logical_core(connected_chip_id, connected_eth_core));
+                            routing_info_t routing_config_local = {
+                                .routing_enabled = 0,
+                                .routing_mode = EthRouterMode::SD,
+                                .connected_chip_id = (uint32_t)connected_chip_id,
+                                .dispatch_core_xy = 0xffffffff,
+                                .fd_buffer_msgs_sent = 0};
+                            routing_info_t routing_config_remote = {
+                                .routing_enabled = 0,
+                                .routing_mode = EthRouterMode::SD,
+                                .connected_chip_id = (uint32_t)chip_id,
+                                .dispatch_core_xy = 0xffffffff,
+                                .fd_buffer_msgs_sent = 0};
                             if (devices.find(connected_chip_id) != devices.end()) {
                                 // only setup fd tunneling for devices grouped with same mmio device
                                 if (set_src) {
-                                    this->device_eth_router_config_.at(chip_id).insert(
-                                        {eth_core, tt::EthRouterMode::FD_SRC});
-                                    this->device_eth_router_config_.at(connected_chip_id)
-                                        .insert({connected_eth_core, tt::EthRouterMode::FD_DST});
+                                    routing_config_local.routing_mode = EthRouterMode::FD_SRC;
+                                    this->device_eth_routing_info_.at(chip_id).insert({eth_core, routing_config_local});
+                                    routing_config_remote.routing_mode = EthRouterMode::FD_DST;
+                                    this->device_eth_routing_info_.at(connected_chip_id)
+                                        .insert({connected_eth_core, routing_config_remote});
                                 } else {
-                                    this->device_eth_router_config_.at(chip_id).insert(
-                                        {eth_core, tt::EthRouterMode::FD_DST});
-                                    this->device_eth_router_config_.at(connected_chip_id)
-                                        .insert({connected_eth_core, tt::EthRouterMode::FD_SRC});
+                                    routing_config_local.routing_mode = EthRouterMode::FD_DST;
+                                    this->device_eth_routing_info_.at(chip_id).insert({eth_core, routing_config_local});
+                                    routing_config_remote.routing_mode = EthRouterMode::FD_SRC;
+                                    this->device_eth_routing_info_.at(connected_chip_id)
+                                        .insert({connected_eth_core, routing_config_remote});
                                 }
                                 set_src = !set_src;
                             } else {
-                                this->device_eth_router_config_.at(chip_id).insert({eth_core, tt::EthRouterMode::SD});
+                                routing_config_local.routing_mode = EthRouterMode::SD;
+                                this->device_eth_routing_info_.at(chip_id).insert({eth_core, routing_config_local});
                             }
                         }
                     }
                 }
             } else {
                 // Slow dispatch mode
-                for (const auto &eth_core : this->get_active_ethernet_cores(chip_id)) {
-                    this->device_eth_router_config_.at(chip_id).insert({eth_core, tt::EthRouterMode::SD});
+                const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+                for (const auto &[connected_chip_id, active_eth_cores] :
+                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
+                    for (const auto &eth_core : active_eth_cores) {
+                        routing_info_t routing_config_sd = {
+                            .routing_enabled = 0,
+                            .routing_mode = EthRouterMode::SD,
+                            .connected_chip_id = (uint32_t)connected_chip_id,
+                            .dispatch_core_xy = 0xffffffff,
+                            .fd_buffer_msgs_sent = 0};
+                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, routing_config_sd});
+                        // For slow dispatch, write routing info to device here. For fast dispatch, device calls
+                        // initialize command queue which writes routing info to device
+                        tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                        write_core(
+                            (void *)&routing_config_sd,
+                            sizeof(routing_info_t),
+                            eth_phys_core,
+                            routing_info_addr,
+                            false);
+                    }
                 }
             }
         }
     }
 }
 
-void Cluster::launch_internal_routing_for_ethernet_cores() const {
+CoreCoord Cluster::get_and_configure_corresponding_eth_core_for_device(
+    chip_id_t chip_id, CoreCoord physical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
+    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    for (auto [eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+        // copy of values, original cluster routing info is not updated
+        if ((routing_info.routing_mode == (uint32_t)mode) and
+            (routing_info.connected_chip_id == (uint32_t)connected_chip_id)) {
+            routing_info.dispatch_core_xy =
+                ((physical_dispatch_core.x & 0xFFFF) << 16 | (physical_dispatch_core.y & 0xFFFF));
+            tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+
+            log_debug(
+                tt::LogDevice,
+                "Configuring internal routing mode {}: dispatch core {} <---> eth core {} ",
+                mode,
+                physical_dispatch_core.str(),
+                eth_phys_core.str());
+            write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+            return eth_core;
+        }
+    }
+    TT_ASSERT(false, "Cluster does not contain requested eth routing core");
+    return {};
+}
+
+void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const {
     const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW
-    std::cout << " launching interal routing " << std::endl;
+    const routing_info_t routing_info_disabled = {
+        .routing_enabled = 0,
+        .routing_mode = EthRouterMode::SD,
+        .connected_chip_id = 0,
+        .dispatch_core_xy = 0xffffffff,
+        .fd_buffer_msgs_sent = 0};
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
-            if (chip_id == assoc_mmio_device) {
-                continue;
-            } else {
-                for (const auto &[eth_core, mode] : this->device_eth_router_config_.at(chip_id)) {
-                    const routing_info_t routing_info = {
-                        .routing_enabled = 1, .routing_mode = (uint32_t)mode, .fd_buffer_msgs_sent = 0};
-                    tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                    write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+                tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                if (chip_id == assoc_mmio_device and not enable_internal_routing) {
+                    // Disable internal ethernet routing for mmio devices
+                    write_core(
+                        (void *)&routing_info_disabled,
+                        sizeof(routing_info_t),
+                        eth_phys_core,
+                        routing_info_addr,
+                        false);
+                } else if (chip_id != assoc_mmio_device and enable_internal_routing) {
+                    // Enable internal ethernet routing for non-mmio devices
+                    std::vector<uint32_t> enable_vec = {1};
+                    write_core(
+                        enable_vec.data(),
+                        enable_vec.size() * sizeof(uint32_t),
+                        eth_phys_core,
+                        routing_info_addr,
+                        false);
+
+                } else {
+                    continue;
                 }
             }
         }
         for (const auto &chip_id : devices) {
-            if (chip_id == assoc_mmio_device) {
-                for (const auto &[eth_core, mode] : this->device_eth_router_config_.at(chip_id)) {
-                    const routing_info_t routing_info = {
-                        .routing_enabled = 1, .routing_mode = (uint32_t)mode, .fd_buffer_msgs_sent = 0};
-                    tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                    write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+                tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                if (chip_id != assoc_mmio_device and not enable_internal_routing) {
+                    // Disable internal ethernet routing for non-mmio devices
+                    write_core(
+                        (void *)&routing_info_disabled,
+                        sizeof(routing_info_t),
+                        eth_phys_core,
+                        routing_info_addr,
+                        false);
+                } else if (chip_id == assoc_mmio_device and enable_internal_routing) {
+                    // Enable internal ethernet routing for mmio devices
+                    std::vector<uint32_t> enable_vec = {1};
+                    write_core(
+                        enable_vec.data(),
+                        enable_vec.size() * sizeof(uint32_t),
+                        eth_phys_core,
+                        routing_info_addr,
+                        false);
+                } else {
+                    continue;
                 }
-            } else {
-                continue;
             }
         }
     }

@@ -12,19 +12,19 @@ using namespace tt::tt_metal;
 
 // Starting L1 address of commands
 inline uint32_t get_command_start_l1_address(bool use_eth_l1) {
-    return (use_eth_l1 ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE);
+    return (use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE);
 }
 
 // Where issue queue interface core pulls in data (follows command)
 inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
-    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE;
+    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE;
     return l1_base + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 }
 
 // Space available in issue queue interface core pushing command data to consumer to dispatch or relay forward
 inline uint32_t get_producer_data_buffer_size(bool use_eth_l1) {
     uint32_t l1_size = use_eth_l1 ? MEM_ETH_SIZE : MEM_L1_SIZE;
-    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE : L1_UNRESERVED_BASE;
+    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE;
     return (l1_size - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - l1_base);
 }
 
