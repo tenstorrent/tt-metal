@@ -37,7 +37,6 @@ Pointwise Unary
 
    ttnn/exp
    ttnn/gelu
-   ttnn/pow
    ttnn/relu
    ttnn/rsqrt
    ttnn/softmax
@@ -52,6 +51,7 @@ Pointwise Binary
    ttnn/add
    ttnn/mul
    ttnn/sub
+   ttnn/pow
 
 Reduction
 =========
