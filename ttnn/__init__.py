@@ -78,6 +78,10 @@ from ttnn.normalization import (
     group_norm,
 )
 
+from ttnn.data_movement import (
+    pad,
+)
+
 import ttnn.decorators
 import ttnn.transformer
 import ttnn.model_preprocessing

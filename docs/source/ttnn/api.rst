@@ -69,6 +69,7 @@ Data Movement
 
    ttnn/permute
    ttnn/reshape
+   ttnn/pad
 
 Normalization
 =============
