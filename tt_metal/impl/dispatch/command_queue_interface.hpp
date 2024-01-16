@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
 #include "tt_metal/common/base.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/common/math.hpp"
-
 using namespace tt::tt_metal;
 
 template <bool addr_16B>
@@ -32,6 +31,7 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint32_t cq_channel,
     }
     return recv;
 }
+
 struct SystemMemoryCQInterface {
     // CQ is split into issue and completion regions
     // Host writes commands and data for H2D transfers in the issue region, device reads from the issue region
@@ -63,7 +63,7 @@ struct SystemMemoryCQInterface {
     const uint32_t command_completion_region_size;
 
     const uint32_t issue_fifo_size;
-    const uint32_t issue_fifo_limit;  // Last possible FIFO address
+    uint32_t issue_fifo_limit;  // Last possible FIFO address
     const uint32_t offset;
     uint32_t issue_fifo_wr_ptr;
     bool issue_fifo_wr_toggle;
@@ -73,7 +73,6 @@ struct SystemMemoryCQInterface {
     uint32_t completion_fifo_rd_ptr;
     bool completion_fifo_rd_toggle;
 };
-
 class SystemMemoryManager {
    private:
     chip_id_t device_id;
@@ -122,6 +121,20 @@ class SystemMemoryManager {
         this->cq_channel_size = channel_size;
     }
 
+
+    void reset(const uint8_t channel) {
+        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[channel];
+        cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;  // In 16B words
+        cq_interface.issue_fifo_wr_toggle = 0;
+        cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
+        cq_interface.completion_fifo_rd_toggle = 0;
+    }
+
+    void set_custom_issue_limit_for_trace(const uint8_t channel, const uint32_t new_limit) {
+        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[channel];
+        cq_interface.issue_fifo_limit = (new_limit >> 4);
+    }
+
     uint32_t get_issue_queue_size(const uint8_t channel) const {
         return this->cq_interfaces[channel].issue_fifo_size << 4;
     }
@@ -153,11 +166,11 @@ class SystemMemoryManager {
         uint32_t rd_ptr;
         uint32_t rd_toggle;
         const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[channel];
+
         do {
             rd_ptr_and_toggle = get_cq_issue_rd_ptr<true>(this->device_id, channel, this->cq_channel_size);
             rd_ptr = rd_ptr_and_toggle & 0x7fffffff;
             rd_toggle = rd_ptr_and_toggle >> 31;
-
         } while (
             cq_interface
                 .issue_fifo_wr_ptr < rd_ptr and cq_interface.issue_fifo_wr_ptr + cmd_size_16B > rd_ptr or
@@ -177,7 +190,6 @@ class SystemMemoryManager {
         const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[channel];
         uint32_t write_ptr_and_toggle =
             cq_interface.issue_fifo_wr_ptr | (cq_interface.issue_fifo_wr_toggle << 31);
-        // std::cout << "Sending " << (cq_interface.issue_fifo_wr_ptr << 4) << " to device" << std::endl;
         this->fast_write_callable(this->issue_byte_addrs[channel], 4, (uint8_t*)&write_ptr_and_toggle, this->m_dma_buf_size);
         tt_driver_atomics::sfence();
     }
@@ -251,4 +263,5 @@ class SystemMemoryManager {
         // Notify dispatch core
         this->send_completion_queue_read_ptr(channel);
     }
+
 };

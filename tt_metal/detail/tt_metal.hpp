@@ -442,10 +442,51 @@ namespace tt::tt_metal{
             );
         }
 
-        inline void SendDispatchKernelsToDevice(Device *device, const SystemMemoryManager& manager, const uint32_t hugepage_channel) {
-            ZoneScoped;
+        inline void CommandQueueInit(Device* device, const CoreCoord& producer_core, const CoreCoord& consumer_core, SystemMemoryManager& manager, const uint8_t command_queue_channel) {
+            // // Place the cores into reset since need to update a lot of core info
+            // tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(producer_core)));
+            // tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(consumer_core)));
+            // tt::Cluster::instance().l1_barrier(device->id());
 
-            Program dispatch_program = CreateProgram();
+            // Reset the host manager's pointer for this command queue
+            manager.reset(command_queue_channel);
+
+            // Re-start the pointers
+            vector<uint32_t> issue_queue_read_ptr = {manager.get_issue_queue_write_ptr(command_queue_channel) >> 4};
+            vector<uint32_t> completion_queue_wr_ptr = {manager.get_completion_queue_read_ptr(command_queue_channel) >> 4};
+            detail::WriteToDeviceL1(device, producer_core, CQ_ISSUE_READ_PTR, issue_queue_read_ptr);
+            detail::WriteToDeviceL1(device, producer_core, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr);
+            detail::WriteToDeviceL1(device, consumer_core, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
+            detail::WriteToDeviceL1(device, consumer_core, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+
+            // Need to update the issue queue limit to be exactly equal to the command data in the queue
+            Program& command_queue_program = *device->command_queue_programs[command_queue_channel];
+            KernelHandle producer_kernel_handle = command_queue_program.kernels_on_core(producer_core)->riscv0_id.value();
+            uint32_t issue_queue_size = manager.get_issue_queue_size(command_queue_channel);
+            vector<uint32_t> producer_runtime_args = {issue_queue_size};
+            SetRuntimeArgs(
+                command_queue_program,
+                producer_kernel_handle,
+                producer_core,
+                producer_runtime_args);
+
+            detail::WriteRuntimeArgsToDevice(device, command_queue_program);
+            detail::ConfigureDeviceWithProgram(device, command_queue_program);
+            tt::Cluster::instance().dram_barrier(device->id());
+            tt::Cluster::instance().l1_barrier(device->id());
+
+            std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
+            tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+            uint16_t huge_page_channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+            const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(device->id(), huge_page_channel);
+            const uint32_t cq_channel_size = hugepage_size / device->num_hw_cqs();
+            pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + command_queue_channel * cq_channel_size) >> 4;
+            pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + manager.get_issue_queue_size(command_queue_channel) + command_queue_channel * cq_channel_size) >> 4;
+            tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), command_queue_channel * cq_channel_size, device->id(), huge_page_channel);
+        }
+
+        inline void CompileCommandQueuePrograms(Device *device, const SystemMemoryManager& manager, const uint32_t hugepage_channel, vector<unique_ptr<Program, ProgramDeleter>>& command_queue_programs) {
+            ZoneScoped;
 
             const uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(device->id(), hugepage_channel) / device->producer_cores().size();
             TT_ASSERT(device->producer_cores().size() == device->consumer_cores().size(), "There must be the same number of producers as there are consumers");
@@ -453,12 +494,12 @@ namespace tt::tt_metal{
             TT_ASSERT(device->producer_cores().size() < 3, "There can be at most 2 hardware command queues on a given device");
 
             uint8_t cq_channel = 0;
-            vector<int> dummy;
             std::transform(
                 device->producer_cores().begin(), device->producer_cores().end(),
-                device->consumer_cores().begin(), std::back_inserter(dummy),
-                [&device, &dispatch_program, &cq_channel, &cq_size, &manager](const CoreCoord& producer_logical_core, const CoreCoord& consumer_logical_core) {
+                device->consumer_cores().begin(), std::back_inserter(command_queue_programs),
+                [&device, &cq_channel, &cq_size, &manager](const CoreCoord& producer_logical_core, const CoreCoord& consumer_logical_core) {
 
+                    unique_ptr<Program, ProgramDeleter> command_queue_program_ptr(new Program);
                     CoreCoord producer_physical_core = device->worker_core_from_logical_core(producer_logical_core);
                     CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
 
@@ -477,7 +518,7 @@ namespace tt::tt_metal{
                     uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + cq_channel * cq_size;
                     uint32_t issue_queue_start_addr = CQ_START + cq_channel * cq_size;
                     uint32_t issue_queue_size = manager.get_issue_queue_size(cq_channel);
-                    vector<uint32_t> producer_compile_args = {host_issue_queue_read_ptr_addr, issue_queue_start_addr, issue_queue_size};
+                    vector<uint32_t> producer_compile_args = {host_issue_queue_read_ptr_addr, issue_queue_start_addr};
 
                     uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + cq_channel * cq_size;
                     uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + cq_channel * cq_size;
@@ -486,7 +527,7 @@ namespace tt::tt_metal{
                     vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr};
 
                     tt::tt_metal::CreateKernel(
-                        dispatch_program,
+                        *command_queue_program_ptr,
                         "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
                         producer_logical_core,
                         tt::tt_metal::DataMovementConfig {
@@ -496,7 +537,7 @@ namespace tt::tt_metal{
                             .defines = producer_defines});
 
                     tt::tt_metal::CreateKernel(
-                        dispatch_program,
+                        *command_queue_program_ptr,
                         "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
                         consumer_logical_core,
                         tt::tt_metal::DataMovementConfig {
@@ -505,32 +546,13 @@ namespace tt::tt_metal{
                             .compile_args = consumer_compile_args,
                             .defines = consumer_defines});
 
-                    tt::tt_metal::CreateSemaphore(dispatch_program, producer_logical_core, 2);
-                    tt::tt_metal::CreateSemaphore(dispatch_program, consumer_logical_core, 0);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, producer_logical_core, 2);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, consumer_logical_core, 0);
 
-                    CompileProgram(device, dispatch_program);
-
-                    ConfigureDeviceWithProgram(device, dispatch_program);
-
-                    // The read and write pointers are equal by this point, but the logic may look a bit
-                    // awkward
-                    vector<uint32_t> issue_queue_read_ptr = {manager.get_issue_queue_write_ptr(cq_channel) >> 4};
-                    vector<uint32_t> completion_queue_wr_ptr = {manager.get_completion_queue_read_ptr(cq_channel) >> 4};
-
-                    WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_READ_PTR, issue_queue_read_ptr);
-                    WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr);
-                    WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
-                    WriteToDeviceL1(device, consumer_logical_core, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
-                    tt::Cluster::instance().l1_barrier(device->id());
-
-                    launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
-                    tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
-                    tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
-
+                    CompileProgram(device, *command_queue_program_ptr);
                     cq_channel++;
-                    return 0;
+                    return command_queue_program_ptr;
                 });
         }
-
     }
 }

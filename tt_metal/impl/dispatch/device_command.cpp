@@ -69,6 +69,11 @@ void DeviceCommand::set_producer_consumer_transfer_num_pages(const uint32_t prod
     this->desc[this->producer_consumer_transfer_num_pages_idx] = producer_consumer_transfer_num_pages;
 }
 
+void DeviceCommand::update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src) {
+    this->desc[DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER + buffer_transfer_idx * DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION] = new_src;
+}
+
+
 void DeviceCommand::add_buffer_transfer_instruction(
     const uint32_t src,
     const uint32_t dst,
@@ -141,7 +146,6 @@ void DeviceCommand::add_buffer_transfer_instruction_sharded(
 void DeviceCommand::write_program_entry(const uint32_t value) {
     this->desc.at(this->program_transfer_idx) = value;
     this->program_transfer_idx++;
-
 }
 
 void DeviceCommand::add_write_page_partial_instruction(
