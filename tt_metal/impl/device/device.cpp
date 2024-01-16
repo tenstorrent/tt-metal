@@ -10,6 +10,7 @@
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
 
+
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
@@ -17,6 +18,10 @@
 namespace tt {
 
 namespace tt_metal {
+
+void ::detail::ProgramDeleter::operator()(Program *p) {
+    delete p;
+}
 
 ActiveDevices Device::active_devices_;
 
@@ -305,25 +310,18 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                         return std::make_pair(producer_core, consumer_core);
                     });
 
-            this->sysmem_manager = std::make_unique<SystemMemoryManager>(
-                this->id_,
-                dispatch_cores,
-                [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
-            );
-
+            this->manager = std::make_unique<SystemMemoryManager>(this->id(), dispatch_cores, [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); });
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
-
-            std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
-            const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(this->id_, channel);
-            const uint32_t cq_channel_size = hugepage_size / this->num_hw_cqs();
-
-            for (uint8_t command_queue_channel = 0; command_queue_channel < this->num_hw_cqs(); command_queue_channel++) {
-                pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + command_queue_channel * cq_channel_size) >> 4;
-                pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager->get_issue_queue_size(command_queue_channel) + command_queue_channel * cq_channel_size) >> 4;
-                tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), command_queue_channel * cq_channel_size, this->id_, channel);
+            detail::CompileCommandQueuePrograms(this, *this->manager, channel, this->command_queue_programs);
+            uint8_t cq_channel = 0;
+            for (const auto& [producer_core, consumer_core]: dispatch_cores) {
+                detail::CommandQueueInit(this, producer_core, consumer_core, *this->manager, cq_channel);
+                Program& command_queue_program = *this->command_queue_programs[cq_channel];
+                launch_msg_t msg = command_queue_program.kernels_on_core(producer_core)->launch_msg;
+                tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(producer_core), &msg);
+                tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(consumer_core), &msg);
+                cq_channel++;
             }
-
-            detail::SendDispatchKernelsToDevice(this, *this->sysmem_manager, channel);
         } else {
             TT_ASSERT(this->num_hw_cqs_ == 1, "num_hw_cqs must be 1 for remote chips (for time being) and in slow dispatch");
             log_warning(tt::LogDispatch, "Not creating a sysmem manager for remote chip and not sending dispatch kernels to remote chip");
@@ -360,9 +358,6 @@ bool Device::close() {
     this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->sysmem_manager.reset(nullptr);
-    }
 
     this->active_devices_.deactivate_device(this->id_);
 

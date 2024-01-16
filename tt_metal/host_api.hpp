@@ -31,6 +31,7 @@ class Program;
 class Host;
 class Device;
 class CommandQueue;
+class Trace;
 class CircularBuffer;
 
 // ==================================================
@@ -263,7 +264,7 @@ std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kerne
  * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &            |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<uint32_t>& dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking);
 
 /**
  * Reads a buffer from the device
@@ -291,7 +292,7 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blockin
  * | src          | The vector we are writing to the device                                | vector<uint32_t> &            |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, std::vector<uint32_t>& src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -317,8 +318,10 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool 
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * | program      | The program that will be executed on the device that cq is bound to    | Program &                     |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ * | trace        | The trace object which represents the history of previously issued     | optional<reference_wrapper<Trace>>                       |                                    | Yes      |
+ * |              | commands                                                               |                               |                                    |          |
  */
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace = {});
 
 /**
  * Blocks until all previously dispatched commands on the device have completed
@@ -330,6 +333,39 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  */
 void Finish(CommandQueue& cq);
+
+/**
+ * Creates a trace object which can be used to record commands that have been run. This
+ * trace can later be replayed without the further need to create more commands.
+ * Return value: trace
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+*/
+Trace BeginTrace(CommandQueue& cq);
+
+/**
+ * This completes a trace and allows it to be replayed. WARNING: Once a trace has been
+ * completed for a given command queue, the command queue can no longer be used in eager
+ * mode (the default, non tracing mode). This would be undefined behaviour.
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | trace        | The trace object which represents the history of previously issued     | Trace &                       |                                    | Yes      |
+ * |              | commands                                                               |                               |                                    |          |
+*/
+void EndTrace(Trace& trace);
+
+/**
+ * Enqueues a trace of previously generated commands and data.
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | trace        | The trace object which represents the history of previously issued     | CommandQueue &                |                                    | Yes      |
+ * |              | commands                                                               |                               |                                    |          |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ */
+void EnqueueTrace(Trace& trace, bool blocking);
 
 /**
  * Read device side profiler data and dump results into device side CSV log
