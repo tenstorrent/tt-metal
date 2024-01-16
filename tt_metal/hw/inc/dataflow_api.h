@@ -18,6 +18,7 @@
 #include "circular_buffer.h"
 #include "debug/sanitize_noc.h"
 #include "debug/status.h"
+#include "eth_l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
@@ -1153,6 +1154,11 @@ FORCE_INLINE void noc_async_write_tile(
 FORCE_INLINE
 uint32_t get_semaphore(uint32_t semaphore_id) {
     return SEMAPHORE_BASE + semaphore_id * sizeof(uint32_t);
+}
+
+FORCE_INLINE
+uint32_t eth_get_semaphore(uint32_t semaphore_id) {
+    return eth_l1_mem::address_map::SEMAPHORE_BASE + semaphore_id * sizeof(uint32_t);
 }
 
 FORCE_INLINE

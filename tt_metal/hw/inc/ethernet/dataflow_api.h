@@ -102,11 +102,6 @@ void receive_fd_packets() {
 
 }  // namespace internal_
 
-FORCE_INLINE
-uint32_t eth_get_semaphore(uint32_t semaphore_id) {
-    return eth_l1_mem::address_map::SEMAPHORE_BASE + semaphore_id * sizeof(uint32_t);
-}
-
 void run_routing() {
     // TODO: maybe split into two FWs? or this may be better to sometimes allow each eth core to do both send and
     // receive of fd packets
