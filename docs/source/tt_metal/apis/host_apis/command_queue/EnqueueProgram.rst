@@ -1,4 +1,4 @@
 EnqueueProgram
 ==============
 
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, optional<stdreference_wrapper<Trace>> trace = {});
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, optional<reference_wrapper<Trace>> trace);
