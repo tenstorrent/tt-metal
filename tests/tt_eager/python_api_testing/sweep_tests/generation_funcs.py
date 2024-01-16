@@ -1683,7 +1683,7 @@ def gen_isclose_args(
             input_info.update({"rtol": rtol, "atol": atol, "equal_nan": False})
             yield input_info
 
-            
+
 def gen_ttnn_layernorm_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
