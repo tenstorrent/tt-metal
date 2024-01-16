@@ -124,7 +124,7 @@ class TtYolov5Conv(torch.nn.Module):
     def forward(self, x):
         x = self.conv(x)
 
-        if self.act is True:
-            x = fallback_ops.silu(x)
+        if self.act:
+            x = tt_lib.tensor.silu(x)
 
         return x
