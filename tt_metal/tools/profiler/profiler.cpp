@@ -415,17 +415,9 @@ DeviceProfiler::DeviceProfiler()
     new_log = true;
     output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::create_directories(output_dir);
-
-    tracyTTCtx = TracyCLContext();
 #endif
 }
 
-DeviceProfiler::~DeviceProfiler()
-{
-#if defined(PROFILER)
-    TracyCLDestroy(tracyTTCtx);
-#endif
-}
 
 void DeviceProfiler::setNewLogFlag(bool new_log_flag)
 {
@@ -484,30 +476,27 @@ void DeviceProfiler::dumpResults (
     }
 #endif
 
-
     for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
             device_id,
             profile_buffer,
             worker_core);
+        if (!device_data.empty())
+        {
+            TracyCLCtx tracyTTCtx = TracyCLContext();
+            pushTracyDeviceResults(tracyTTCtx);
+
+            std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+            TracyCLContextName(tracyTTCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+
+            TracyCLDestroy(tracyTTCtx);
+            device_data.clear();
+        }
     }
-    pushTracyDeviceResults();
-    device_data.clear();
 #endif
 }
 
-template <std::size_t N>
-constexpr std::array<char, N+3> PrependName(const char (&str)[N])
-{
-    std::array<char, N+3> ret{'F','W','_'};
-    for (std::size_t i = 0; i < N; i++)
-        ret[i+1] = str[i];
-    return ret;
-}
-
-
-
-void DeviceProfiler::pushTracyDeviceResults()
+void DeviceProfiler::pushTracyDeviceResults(TracyCLCtx tracyTTCtx)
 {
 #if defined(PROFILER)
     tracyTTCtx->PopulateCLContext( smallest_timestamp, 1000.f / (float)device_core_frequency);
@@ -516,9 +505,6 @@ void DeviceProfiler::pushTracyDeviceResults()
     uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4};
     uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3};
     uint32_t customColors[] = {tracy::Color::Orange2, tracy::Color::Cyan3, tracy::Color::Orchid1, tracy::Color::Plum1, tracy::Color::PaleTurquoise2};
-
-    static constexpr auto numberString = PrependName("4");
-
 
     for (auto& run: device_data)
     {
