@@ -23,7 +23,7 @@ test-list:
       output-file: eltwise_squared_difference_sweep.csv
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
   - eltwise-squared_difference:

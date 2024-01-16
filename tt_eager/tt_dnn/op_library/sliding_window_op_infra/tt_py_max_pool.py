@@ -10,6 +10,10 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
     generate_sliding_window_op_sharded_input_top_left_indices,
 )
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+    SlidingWindowOpParamsWithParallelConfig,
+    get_hash_from_sliding_window_op_params,
+)
 
 # from tt_lib.utils import _nearest_32, _nearest_y
 
@@ -17,34 +21,23 @@ import tt_lib as ttl
 import torch
 
 
-def _get_hash_from_sliding_window_op_params(sliding_window_op_params):
-    stride_h, stride_w = sliding_window_op_params[0]
-    pad_h, pad_w = sliding_window_op_params[1]
-    filter_h, filter_w = sliding_window_op_params[2]
-    batch_size, input_h, input_w = sliding_window_op_params[3]
-    ncores_w, ncores_h = sliding_window_op_params[4]
-    ncores_nhw = sliding_window_op_params[5]
-
-    return f"{stride_h}_{stride_w}_{pad_h}_{pad_w}_{filter_h}_{filter_w}_{batch_size}_{input_h}_{input_w}_{ncores_w}_{ncores_h}_{ncores_nhw}"
-
-
 class TTPyMaxPool(TTPyOp):
-    # cache map for kernel configs corresponding to unique sliding window op params
-    # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), filter_hw: tuple(int, int), input_nhw: tuple(int, int, int), ncores_nhw: int)
-    static_kernel_configs_cache_map = {}
-
     def __init__(
         self,
-        sliding_window_op_params,
+        sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig,
         device,
         grid_size,
+        reader_patterns_cache,
         output_mem_config=None,
     ):
         self.sliding_window_op_params = sliding_window_op_params
-        sliding_window_op_params_hash = _get_hash_from_sliding_window_op_params(sliding_window_op_params)
+        sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
-        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params, grid_size)
-        reader_indices = TTPyMaxPool.static_kernel_configs_cache_map[sliding_window_op_params_hash]
+        self.set_op_configs(
+            device, sliding_window_op_params_hash, sliding_window_op_params, grid_size, reader_patterns_cache
+        )
+        assert sliding_window_op_params_hash in reader_patterns_cache
+        reader_indices = reader_patterns_cache[sliding_window_op_params_hash]
 
         self.set_op_weights_biases(
             sliding_window_op_params,
@@ -53,19 +46,25 @@ class TTPyMaxPool(TTPyOp):
         )
 
     # override abstract methods from base class TTPyOp
-    @classmethod
-    def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params, grid_size):
-        if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
-            stride_h, stride_w = sliding_window_op_params[0]
-            pad_h, pad_w = sliding_window_op_params[1]
-            filter_h, filter_w = sliding_window_op_params[2]
-            batch_size, input_h, input_w = sliding_window_op_params[3]
-            ncores_nhw = sliding_window_op_params[5]
+    def set_op_configs(
+        self, device, sliding_window_op_params_hash, sliding_window_op_params, grid_size, reader_patterns_cache
+    ):
+        if sliding_window_op_params_hash not in reader_patterns_cache:
+            stride_h = sliding_window_op_params.stride_h
+            stride_w = sliding_window_op_params.stride_w
+            pad_h = sliding_window_op_params.pad_h
+            pad_w = sliding_window_op_params.pad_w
+            window_h = sliding_window_op_params.window_h
+            window_w = sliding_window_op_params.window_w
+            batch_size = sliding_window_op_params.batch_size
+            input_h = sliding_window_op_params.input_h
+            input_w = sliding_window_op_params.input_w
+            ncores_nhw = sliding_window_op_params.num_cores_nhw
 
             input_nchw_shape = [batch_size, 1, input_h, input_w]
             input_volume = batch_size * input_h * input_w
-            output_h = ((int)((input_h + (2 * pad_h) - filter_h) / stride_h)) + 1
-            output_w = ((int)((input_w + (2 * pad_w) - filter_w) / stride_w)) + 1
+            output_h = ((int)((input_h + (2 * pad_h) - window_h) / stride_h)) + 1
+            output_w = ((int)((input_w + (2 * pad_w) - window_w) / stride_w)) + 1
             output_volume = batch_size * output_h * output_w
 
             # input_size_to_shard_evenly = _nearest_y(input_volume, ncores_nhw * 32)
@@ -79,7 +78,7 @@ class TTPyMaxPool(TTPyOp):
             input_padded_width = input_w + 2 * pad_w
 
             pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-                (1, 1, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, 1, 1), input_nchw_shape
+                (1, 1, window_h, window_w, stride_h, stride_w, pad_h, pad_w, 1, 1), input_nchw_shape
             )
 
             req_conv_input_shard_start_end, tensor_metadata = decompose_conv_into_shards_and_generate_tensor_metadata(
@@ -89,8 +88,8 @@ class TTPyMaxPool(TTPyOp):
                 output_shard_height,
                 input_shard_height,
                 ncores_nhw,
-                filter_h,
-                filter_w,
+                window_h,
+                window_w,
             )
 
             sliding_window_op_sharded_input_top_left_indices = (
@@ -133,15 +132,20 @@ class TTPyMaxPool(TTPyOp):
             mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(device, mem_config, shard_spec)
 
-            cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = reader_indices_sharded_tensor
+            reader_patterns_cache[sliding_window_op_params_hash] = reader_indices_sharded_tensor
 
         return
 
     def set_op_weights_biases(self, op_params, output_mem_config, reader_indices):
-        stride_h, stride_w = op_params[0]
-        pad_h, pad_w = op_params[1]
-        filter_h, filter_w = op_params[2]
-        in_n, in_h, in_w = op_params[3]
+        stride_h = op_params.stride_h
+        stride_w = op_params.stride_w
+        pad_h = op_params.pad_h
+        pad_w = op_params.pad_w
+        window_h = op_params.window_h
+        window_w = op_params.window_w
+        in_n = op_params.batch_size
+        in_h = op_params.input_h
+        in_w = op_params.input_w
 
         def max_pool_(activation):
             output = ttl.tensor.max_pool2d_v2(
@@ -150,8 +154,8 @@ class TTPyMaxPool(TTPyOp):
                 in_n,
                 in_h,
                 in_w,
-                filter_h,
-                filter_w,
+                window_h,
+                window_w,
                 stride_h,
                 stride_w,
                 pad_h,

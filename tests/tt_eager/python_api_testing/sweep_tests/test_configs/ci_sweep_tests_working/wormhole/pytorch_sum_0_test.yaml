@@ -9,10 +9,10 @@ test-list:
         num-samples: 64
         args-sampling-strategy: "all"
       datagen:
-        function: gen_checkerboard
+        function: gen_rand
         dtype: bfloat16
         args:
-          low: 0
+          low: -100
           high: 100
       comparison:
         function: comp_pcc
@@ -35,10 +35,10 @@ test-list:
         num-samples: 64
         args-sampling-strategy: "all"
       datagen:
-        function: gen_checkerboard
+        function: gen_rand
         dtype: bfloat16
         args:
-          low: 0
+          low: -100
           high: 100
       comparison:
         function: comp_pcc

@@ -4,6 +4,19 @@
 
 from tt_lib.utils import _nearest_y
 import numpy as np
+from collections import namedtuple
+
+SlidingWindowOpParams = namedtuple(
+    "SlidingWindowOpParams", "stride_h stride_w pad_h pad_w window_h window_w batch_size input_h input_w"
+)
+SlidingWindowOpParamsWithParallelConfig = namedtuple(
+    "SlidingWindowOpParamsWithParallelConfig",
+    "stride_h stride_w pad_h pad_w window_h window_w batch_size input_h input_w num_cores_w num_cores_h num_cores_nhw",
+)
+
+
+def get_hash_from_sliding_window_op_params(sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig):
+    return f"{sliding_window_op_params.stride_h}_{sliding_window_op_params.stride_w}_{sliding_window_op_params.pad_h}_{sliding_window_op_params.pad_w}_{sliding_window_op_params.window_h}_{sliding_window_op_params.window_w}_{sliding_window_op_params.batch_size}_{sliding_window_op_params.input_h}_{sliding_window_op_params.input_w}_{sliding_window_op_params.num_cores_w}_{sliding_window_op_params.num_cores_h}_{sliding_window_op_params.num_cores_nhw}"
 
 
 def get_sliding_window_op_output_nhw_shape(

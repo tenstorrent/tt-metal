@@ -19,7 +19,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_fast_and_approx_args
+      args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -45,7 +45,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_fast_and_approx_args
+      args-gen: gen_dtype_layout_device
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

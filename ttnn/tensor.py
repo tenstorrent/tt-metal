@@ -24,6 +24,7 @@ bfloat8_b = DataType.BFLOAT8_B
 BufferType = ttl.tensor.BufferType
 TensorMemoryLayout = ttl.tensor.TensorMemoryLayout
 MemoryConfig = ttl.tensor.MemoryConfig
+MathFidelity = ttl.tensor.MathFidelity
 DRAM_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.INTERLEAVED, BufferType.DRAM)
 L1_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.INTERLEAVED, BufferType.L1)
 
@@ -34,7 +35,6 @@ TILE_LAYOUT = Layout.TILE
 
 StorageType = ttl.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
-
 
 TILE_SIZE = 32
 

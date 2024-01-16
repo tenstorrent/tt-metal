@@ -21,7 +21,10 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config
     validate_conv_sharded_input_top_left_indices,
     validate_max_pool_sharded_input_top_left_indices,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import (
+    TTPyUntilizeWithHalo,
+    SlidingWindowOpParamsWithParallelConfig,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
 import tt_lib as ttl
@@ -356,21 +359,27 @@ def test_generate_all_configs_and_references(
     # golden_untilize_with_halo_output_shards shape = 3d ls[# of shards, shard height=utwh_output_nhw_shard, shard width=output_c]
 
     # On device test
-    sliding_window_op_params = [
-        (stride_h, stride_w),
-        (pad_h, pad_w),
-        (filter_h, filter_w),
-        (batch_size, input_h, input_w),
-        grid_size,
-        num_cores_nhw,
-    ]
     num_cores_w, num_cores_h = grid_size
     num_cores_c = 1
 
     is_block_sharded = num_cores_nhw == num_cores_w
-
+    sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        window_h=filter_h,
+        window_w=filter_w,
+        batch_size=batch_size,
+        input_h=input_h,
+        input_w=input_w,
+        num_cores_h=num_cores_h,
+        num_cores_w=num_cores_w,
+        num_cores_nhw=num_cores_nhw,
+    )
     # construct op object and set op configs
-    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params)
+    halo_reader_patterns_cache = {}
+    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, halo_reader_patterns_cache)
 
     input_pyt_tensor = torch.reshape(
         torch.permute(input_pyt_tensor, [0, 2, 3, 1]), [1, 1, batch_size * input_h * input_w, input_padded_c]
@@ -516,8 +525,8 @@ def test_generate_all_configs_and_references(
                 # #     diff = torch.abs(golden_shard - output_shard)
                 # #     plot_diff(diff, i, out_shard_nsticks_per_core[i], input_padded_c)
 
-    # Clear the static cache map
-    TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
+    # Clear the cache map
+    halo_reader_patterns_cache.clear()
 
     if not is_block_sharded:
         passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(

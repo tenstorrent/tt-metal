@@ -58,6 +58,14 @@ def gen_rand(size, low=0, high=100):
     return torch.Tensor(size=size).uniform_(low, high)
 
 
+def gen_rand_infinite(size, low=-100, high=100):
+    x = torch.rand(size=size)
+    x[x <= 0.33] = float("inf")
+    x[(x > 0.33) & (x <= 0.66)] = float("-inf")
+    x[x > 0.66] = x[x > 0.66] * (high - low) + low
+    return x
+
+
 def gen_rand_complex(size, low=0, high=100):
     real = torch.Tensor(size=size).uniform_(low, high).to(torch.bfloat16).to(torch.float)
     imag = torch.Tensor(size=size).uniform_(low, high).to(torch.bfloat16).to(torch.float)
@@ -65,6 +73,15 @@ def gen_rand_complex(size, low=0, high=100):
     torch_x = torch.complex(real, imag)
 
     return torch_x
+
+
+def gen_rand_inf(size, low=-100, high=100):
+    x = torch.rand(size=size)
+    x[x <= 0.25] = float("inf")
+    x[(x > 0.25) & (x <= 0.5)] = float("-inf")
+    x[(x > 0.5) & (x <= 0.75)] = float("nan")
+    x[x > 0.75] = x[x > 0.75] * (high - low) + low
+    return x
 
 
 def gen_bin(size, probabilityones=0.5):
@@ -1044,8 +1061,8 @@ def gen_logit_args(
     supported_dtypes,
     supported_layouts,
     mem_configs,
-    low=-1e-6,
-    high=1e6,
+    low=-10,
+    high=0.99,
     dtype=torch.bfloat16,
 ):
     for input_info in gen_scalar_args(
@@ -1092,7 +1109,7 @@ def gen_bias_gelu_unary_args(
     high=100,
     dtype=torch.bfloat16,
 ):
-    for input_info in (
+    for input_info in gen_scalar_args(
         input_shapes,
         supported_dtypes,
         supported_layouts,
@@ -1370,28 +1387,6 @@ def gen_logical_immediate_args(
         layouts,
         buffer_types,
         "immediate",
-        low,
-        high,
-        dtype,
-    ):
-        yield input_info
-
-
-def gen_logit_args(
-    input_shapes,
-    supported_dtypes,
-    supported_layouts,
-    on_device,
-    low=-1e-6,
-    high=1e6,
-    dtype=torch.bfloat16,
-):
-    for input_info in gen_scalar_args(
-        input_shapes,
-        supported_dtypes,
-        supported_layouts,
-        on_device,
-        "eps",
         low,
         high,
         dtype,

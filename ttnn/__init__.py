@@ -10,6 +10,7 @@ from ttnn.tensor import (
     bfloat16,
     bfloat8_b,
     MemoryConfig,
+    MathFidelity,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     Layout,
@@ -70,3 +71,4 @@ from ttnn.unary import (
 import ttnn.decorators
 import ttnn.transformer
 import ttnn.model_preprocessing
+from ttnn.conv import Conv2D

@@ -1,9 +1,11 @@
 name: Package and release
 
 on:
-  push:
-    branches: ["release"]
   workflow_dispatch:
+  schedule:
+    # Create rc every day at EOD of PST Mon-Wed + night of Sunday to kick off
+    # releases for beginning of work week
+    - cron: "0 1 * * 1,2,3,4"
 
 permissions:
   contents: write
@@ -14,14 +16,28 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+      should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-tags: true
       - name: Get is-release-candidate
         id: get-is-release-candidate
         run: |
-          isReleaseCandidate=${{ github.ref_type == 'branch' && github.event_name == 'push' }}
+          # A workflow dispatch on a tag is considered a release run for us.
+          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+      - name: Get should-create-release
+        id: get-should-create-release
+        run: |
+          # Run once to check for errors
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' }})
+          echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
   create-tag:
-    needs: [get-params]
+    needs: get-params
+    if: ${{ fromJSON(needs.get-params.outputs.should-create-release) }}
     uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
       fetch_depth: 0
@@ -30,8 +46,8 @@ jobs:
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   create-changelog:
-    permissions: read-all
     needs: create-tag
+    permissions: read-all
     runs-on: ubuntu-latest
     steps:
       - name: Create changelog

@@ -11,6 +11,8 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
 )
 from tt_lib.utils import _nearest_y
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+    SlidingWindowOpParamsWithParallelConfig,
+    get_hash_from_sliding_window_op_params,
     get_sliding_window_op_output_shard_nhw_size,
 )
 import tt_lib as ttl
@@ -18,32 +20,24 @@ import torch
 import struct
 
 
-def _get_hash_from_sliding_window_op_params(sliding_window_op_params):
-    stride_h, stride_w = sliding_window_op_params[0]
-    pad_h, pad_w = sliding_window_op_params[1]
-    filter_h, filter_w = sliding_window_op_params[2]
-    batch_size, input_h, input_w = sliding_window_op_params[3]
-    num_cores_w, num_cores_h = sliding_window_op_params[4]
-    num_cores_nhw = sliding_window_op_params[5]
-
-    return f"{stride_h}_{stride_w}_{pad_h}_{pad_w}_{filter_h}_{filter_w}_{batch_size}_{input_h}_{input_w}_{num_cores_w}_{num_cores_h}_{num_cores_nhw}"
-
-
 class TTPyUntilizeWithHalo(TTPyOp):
-    # cache map for kernel configs corresponding to unique sliding window op params
-    # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), window_hw: tuple(int, int), input_nhw: tuple(int, int, int), num_cores_nhw: int)
-    static_kernel_configs_cache_map = {}
-
-    def __init__(self, device, sliding_window_op_params, pad_val=0x0):
+    def __init__(
+        self,
+        device,
+        sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig,
+        halo_reader_patterns_cache,
+        pad_val=0x0,
+    ):
         self.sliding_window_op_params = sliding_window_op_params
         self.device = device
-        sliding_window_op_params_hash = _get_hash_from_sliding_window_op_params(sliding_window_op_params)
-        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params)
-        assert sliding_window_op_params_hash in TTPyUntilizeWithHalo.static_kernel_configs_cache_map
-        utwh_kernel_configs = TTPyUntilizeWithHalo.static_kernel_configs_cache_map[sliding_window_op_params_hash]
+        sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
+        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache)
+        assert sliding_window_op_params_hash in halo_reader_patterns_cache
+        utwh_kernel_configs = halo_reader_patterns_cache[sliding_window_op_params_hash]
 
-        ncores_w, ncores_h = sliding_window_op_params[4]
-        ncores_nhw = sliding_window_op_params[5]
+        ncores_w = sliding_window_op_params.num_cores_w
+        ncores_h = sliding_window_op_params.num_cores_h
+        ncores_nhw = sliding_window_op_params.num_cores_nhw
 
         is_block_sharding = ncores_w == ncores_nhw
         out_mem_config = None
@@ -67,7 +61,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 utwh_kernel_configs["r_data_tensor"],
                 utwh_kernel_configs["rr_data_tensor"],
                 pad_val,
-                self.sliding_window_op_params[5],
+                self.sliding_window_op_params.num_cores_nhw,
                 utwh_kernel_configs["max_out_nsticks_per_core"],
                 utwh_kernel_configs["local_pad_nsegments_per_core"],
                 utwh_kernel_configs["ll_data_nsegments_per_core"],
@@ -86,17 +80,23 @@ class TTPyUntilizeWithHalo(TTPyOp):
         self.utwh = utwh_
 
     # override abstract methods from base class TTPyOp
-    @classmethod
-    def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params):
-        if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
-            # TODO: nitika - clean up params data structure
-            assert len(sliding_window_op_params) == 6
-            stride_h, stride_w = sliding_window_op_params[0]
-            pad_h, pad_w = sliding_window_op_params[1]
-            window_h, window_w = sliding_window_op_params[2]
-            input_n, input_h, input_w = sliding_window_op_params[3]
-            num_cores_w, num_cores_h = sliding_window_op_params[4]
-            num_cores_nhw = sliding_window_op_params[5]
+    def set_op_configs(
+        self, device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache
+    ):
+        if sliding_window_op_params_hash not in halo_reader_patterns_cache:
+            stride_h = sliding_window_op_params.stride_h
+            stride_w = sliding_window_op_params.stride_w
+            pad_h = sliding_window_op_params.pad_h
+            pad_w = sliding_window_op_params.pad_w
+            window_h = sliding_window_op_params.window_h
+            window_w = sliding_window_op_params.window_w
+            input_n = sliding_window_op_params.batch_size
+            input_h = sliding_window_op_params.input_h
+            input_w = sliding_window_op_params.input_w
+            # TODO: Had to add this (should this be shard grid?)
+            num_cores_w = sliding_window_op_params.num_cores_w
+            num_cores_h = sliding_window_op_params.num_cores_h
+            num_cores_nhw = sliding_window_op_params.num_cores_nhw
             assert num_cores_nhw > 0
             # TODO: send input_nhw_shape to generate functions (no need for C)
             # output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
@@ -243,7 +243,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             # print("gen rr data config tt tensor")
             rr_data_tensor = gen_config_tt_tensors_uint16(rr_data)
 
-            cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = {
+            halo_reader_patterns_cache[sliding_window_op_params_hash] = {
                 "local_pad_tensor": local_pad_tensor,
                 "local_data_tensor": local_data_tensor,
                 "ll_data_tensor": ll_data_tensor,
