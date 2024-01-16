@@ -65,6 +65,10 @@ from ttnn.unary import (
     gelu,
     rsqrt,
     relu,
+    silu,
+)
+
+from ttnn.binary import (
     pow,
 )
 

@@ -4,7 +4,6 @@
 
 import math
 import pathlib
-import torch
 from typing import Optional, Union, Tuple
 
 import tt_lib as ttl
