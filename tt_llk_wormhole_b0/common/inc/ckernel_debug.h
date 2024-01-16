@@ -131,10 +131,8 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
         dest_offset = (dest_offset_id == 1) ? DEST_REGISTER_HALF_SIZE : 0;
     }
 
-    std::uint32_t srcb_bank_id = 0;
-
-    // Save dest row
     if (array_id == dbg_array_id::SRCA) {
+        // Save dest row
         // WWhen SrcA array is selected we need to copy row from src register into dest to be able to dump data
         // Dump from SrcA array is not supported 
         // Save dest row to SFPU register 
@@ -156,15 +154,37 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
         // Move to the last used bank
-        TTI_CLEARDVALID(1,0);
+        TTI_CLEARDVALID(0b01,0);
 
-        // Copy single row from SrcA[4+row_addr] to dest location 0
-        // First 4 rows in SrcA are not used
+        // Copy single row from SrcA[row_addr] to dest location 0
         TT_MOVDBGA2D(0, row_addr, 0, p_mova2d::MOV_1_ROW, 0); 
 
         // Wait for TT instructions to complete
         tensix_sync();
     } else if (array_id == dbg_array_id::SRCB) {
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 0, .cr = 0},
+        }
+        .set(ADDR_MOD_0);
+
+        // Clear counters
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+
+        // Move to the last used bank
+        TTI_SETDVALID(0b10);
+        TTI_CLEARDVALID(0b10,0);
+
+        // Latch debug values
+        TTI_SETDVALID(0b10);
+        TTI_SHIFTXB(ADDR_MOD_0, 0, row_addr>>1);
+        TTI_CLEARDVALID(0b10,0);
+
+        // Wait for TT instructions to complete
+        tensix_sync();
+
+        /*
         // Get last used bank id via debug bus
         dbg_bus_cntl_u dbg_bus_cntl;
         dbg_bus_cntl.val = 0;
@@ -179,15 +199,16 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
         // Disable debug bus
         dbg_bus_cntl.val = 0;
         reg_write(RISCV_DEBUG_REG_DBG_BUS_CNTL_REG, dbg_bus_cntl.val);
+        */
     }
 
     // Get actual row address and array id used in hw
     std::uint32_t hw_row_addr = (array_id == dbg_array_id::SRCA) ? 0 :
-                                ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr<<1);
+                                ((array_id == dbg_array_id::DEST) ? dest_offset + row_addr : row_addr&0x1);
 
     std::uint32_t hw_array_id = (array_id == dbg_array_id::SRCA) ? dbg_array_id::DEST : array_id;
 
-    std::uint32_t hw_bank_id  = (array_id == dbg_array_id::SRCB) ? srcb_bank_id : 0;
+    std::uint32_t hw_bank_id  = 0;
 
     bool sel_datums_15_8 = hw_array_id != dbg_array_id::DEST;
 
