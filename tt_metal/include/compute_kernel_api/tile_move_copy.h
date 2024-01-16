@@ -46,27 +46,20 @@ namespace ckernel {
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
-    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>() ));
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
-    #else
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
-    #endif
 }
 
 ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(1) ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
     #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    #endif
+
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
-    #endif
 }
 
 /**
@@ -74,13 +67,8 @@ ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
  */
 ALWI void copy_tile_to_dst_init_short()
 {
-    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>()  ));
-    #else
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>()  ));
-    #endif
 }
 
 /**
