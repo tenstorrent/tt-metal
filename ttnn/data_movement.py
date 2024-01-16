@@ -235,4 +235,38 @@ def concat(tensors: Union[Tensor, List[Tensor]], dim: 0) -> Tensor:
     return ttnn.from_torch(output_tensor, device=device, layout=layout)
 
 
-__all__ = ["pad", "reshape", "permute", "concat"]
+def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
+    import torch
+
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    return torch.split(input_tensor, split_size, dim=dim)
+
+
+@decorate_operation(torch_function=_torch_split)
+def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
+    r"""
+    split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> Tuple[ttnn.Tensor, ...]
+
+    Split tensor into chunks of :attr:`split_size` along :attr:`dim`.
+
+    Args:
+        * :attr:`input_tensor`: input tensor.
+        * :attr:`split_size`: size of a single chunk.
+        * :attr:`dim`:  dimension along which to split the tensor.
+    """
+
+    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        raise RuntimeError("pad expects input tensor to be on device!")
+
+    output_tensors = _torch_split(input_tensor, split_size, dim)
+    output_tensors = tuple(
+        ttnn.from_torch(output_tensor, device=input_tensor.device, dtype=input_tensor.dtype, layout=input_tensor.layout)
+        for output_tensor in output_tensors
+    )
+    return output_tensors
+
+
+__all__ = ["pad", "reshape", "permute", "concat", "split"]

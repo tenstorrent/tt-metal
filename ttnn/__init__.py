@@ -85,6 +85,7 @@ from ttnn.normalization import (
 
 from ttnn.data_movement import (
     pad,
+    split,
 )
 
 import ttnn.decorators
