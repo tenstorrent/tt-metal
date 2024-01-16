@@ -91,20 +91,6 @@ def register_ttl_complex_binary_function(name, ttl_complex_function, torch_funct
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: ComplexTensor, input_tensor_b: ComplexTensor) -> ComplexTensor
-        Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-        Example::
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-        """
         original_shape = input_tensor_a.real.shape
 
         input_tensor_a_r = _reshape_to_4D(input_tensor_a.real)
@@ -139,6 +125,24 @@ def register_ttl_complex_binary_function(name, ttl_complex_function, torch_funct
         output_tensor = ComplexTensor(output_tensor_r, output_tensor_i)
         return output_tensor
 
+    complex_function.__name__ = f"ttnn.{rst_escape(name)}"
+    complex_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: ComplexTensor, input_tensor_b: ComplexTensor) -> ComplexTensor
+
+        Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+
+        """
     setattr(THIS_MODULE, name, complex_function)
     __all__.append(name)
     return complex_function
@@ -159,25 +163,6 @@ def register_ttl_complex_unary_function(name, ttl_complex_function, torch_functi
     def complex_function(
         input_tensor_a: ComplexTensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
     ) -> Union[Tensor, ComplexTensor]:
-        f"""{rst_escape(name)}(input_tensor: ComplexTensor) -> Union[Tensor,ComplexTensor]
-
-        Applies {rst_escape(name)} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-
-        Args:
-            * :attr:`input_tensor`
-
-        Example::
-
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor)
-            >>> print(output)
-            Tensor([ 0, 2], dtype=bfloat16 )
-
-        """
-
         original_shape = input_tensor_a.real.shape
 
         input_tensor_a_r = _reshape_to_4D(input_tensor_a.real)
@@ -207,6 +192,23 @@ def register_ttl_complex_unary_function(name, ttl_complex_function, torch_functi
 
         return output_tensor
 
+    complex_function.__name__ = f"ttnn.{rst_escape(name)}"
+    complex_function.__doc__ = f"""{rst_escape(name)}(input_tensor: ComplexTensor) -> Union[Tensor,ComplexTensor]
+
+        Applies {rst_escape(name)} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor)
+
+        """
     setattr(THIS_MODULE, name, complex_function)
     __all__.append(name)
     return complex_function

@@ -50,23 +50,6 @@ def register_ttl_ternary_function(name, ttl_ternary_function, torch_function):
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: Tensor, input_tensor_b: Tensor, input_tensor_c: Tensor) -> Tensor
-        Applies {rst_escape(name)} to :attr:`input_tensor_a` , :attr:`input_tensor_b` and  :attr:`input_tensor_c` element-wise.
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-            * :attr:`input_tensor_c`
-        Example::
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_c = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b, tensor_c)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-        """
-
         original_shape = input_tensor_a.shape
         input_tensor_a = _reshape_to_4D(input_tensor_a)
         input_tensor_b = _reshape_to_4D(input_tensor_b)
@@ -98,6 +81,26 @@ def register_ttl_ternary_function(name, ttl_ternary_function, torch_function):
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    ternary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    ternary_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: Tensor, input_tensor_b: Tensor, input_tensor_c: Tensor) -> Tensor
+
+        Applies {rst_escape(name)} to :attr:`input_tensor_a` , :attr:`input_tensor_b` and  :attr:`input_tensor_c` element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i, {{input\\_tensor_c}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+            * :attr:`input_tensor_c`
+
+        Example::
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_c = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, tensor_c)
+
+        """
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
     return ternary_function
@@ -123,19 +126,6 @@ def register_ttl_unary_function_with_two_float_parameters(name, ttl_unary_functi
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: Tensor) -> Tensor
-        Applies {rst_escape(name)} to :attr:`input_tensor_a` element-wise.
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-        Args:
-            * :attr:`input_tensor_a`
-        Example::
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, 2, 3)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-        """
-
         original_shape = input_tensor_a.shape
         input_tensor_a = _reshape_to_4D(input_tensor_a)
 
@@ -156,15 +146,26 @@ def register_ttl_unary_function_with_two_float_parameters(name, ttl_unary_functi
 
         return output_tensor
 
+    ternary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    ternary_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: Tensor, low: float, high: float) -> Tensor
+        Applies {rst_escape(name)} to :attr:`input_tensor_a` element-wise
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i, low, high)
+
+        Args:
+            * :attr:`input_tensor_a`
+        Example::
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, 2, 3)
+        """
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
     return ternary_function
 
 
-def register_ttl_unary_function_with_two_float_parameters_diff_shape(
-    name, ttl_ternary_function_diff_shape, torch_function
-):
-    def _torch_ternary(input_tensor_a: Tensor, parameter_1: float, parameter_2: float, **_):
+def register_ttl_unary_function_with_two_parameters_diff_shape(name, ttl_ternary_function_diff_shape, torch_function):
+    def _torch_ternary(input_tensor_a: Tensor, parameter_1: int, parameter_2: int, **_):
         import torch
         import ttnn
 
@@ -183,19 +184,6 @@ def register_ttl_unary_function_with_two_float_parameters_diff_shape(
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: Tensor) -> Tensor
-        Applies {rst_escape(name)} to :attr:`input_tensor_a` element-wise.
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-        Args:
-            * :attr:`input_tensor_a`
-        Example::
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, 2, 3)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-        """
-
         original_shape = input_tensor_a.shape
         input_tensor_a = _reshape_to_4D(input_tensor_a)
 
@@ -215,6 +203,19 @@ def register_ttl_unary_function_with_two_float_parameters_diff_shape(
 
         return output_tensor
 
+    ternary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    ternary_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: Tensor, repeat: int, dim: int ) -> Tensor
+        Applies {rst_escape(name)} to :attr:`input_tensor_a` element-wise
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i, repeat, dim)
+
+        Args:
+            * :attr:`input_tensor_a`
+        Example::
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, 2, 3)
+        """
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
     return ternary_function
@@ -249,23 +250,6 @@ def register_ttl_ternary_function_with_float_parameter(name, ttl_ternary_functio
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: Tensor, input_tensor_b: Tensor, input_tensor_c: Tensor) -> Tensor
-        Applies {rst_escape(name)} to :attr:`input_tensor_a` , :attr:`input_tensor_b` and  :attr:`input_tensor_c` element-wise.
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-            * :attr:`input_tensor_c`
-        Example::
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_c = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b, tensor_c, 2)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-        """
-
         original_shape = input_tensor_a.shape
         input_tensor_a = _reshape_to_4D(input_tensor_a)
         input_tensor_b = _reshape_to_4D(input_tensor_b)
@@ -297,6 +281,23 @@ def register_ttl_ternary_function_with_float_parameter(name, ttl_ternary_functio
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    ternary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    ternary_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: Tensor, input_tensor_b: Tensor, input_tensor_c: Tensor, param: float) -> Tensor
+        Applies {rst_escape(name)} to :attr:`input_tensor_a` , :attr:`input_tensor_b` and  :attr:`input_tensor_c` element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i, {{input\\_tensor_c}}_i, param)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+            * :attr:`input_tensor_c`
+        Example::
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_c = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b, tensor_c, 2)
+        """
     setattr(THIS_MODULE, name, ternary_function)
     __all__.append(name)
     return ternary_function
@@ -342,7 +343,7 @@ for (
     ttl_ternary_function_diff_shape,
     torch_function,
 ) in TTL_UNARY_FUNCTIONS_WITH_TWO_FLOAT_PARAMETERS_DIFF_SHAPE:
-    register_ttl_unary_function_with_two_float_parameters_diff_shape(
+    register_ttl_unary_function_with_two_parameters_diff_shape(
         ternary_function_name, ttl_ternary_function_diff_shape, torch_function
     )
 

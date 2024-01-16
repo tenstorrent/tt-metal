@@ -38,7 +38,21 @@ def register_ttl_function_with_shape(name, ttl_unary_function, torch_function):
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor: Tensor, repeat: tuple) -> Tensor
+        input_tensor = _reshape_to_4D(input_tensor)
+        if not isinstance(input_tensor, Tensor):
+            raise TypeError("Expected to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError("input_tensors must be on device!")
+
+        ttl_input_tensor = input_tensor.value
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, repeat, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        return output_tensor
+
+    unary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    unary_function.__doc__ = f"""{rst_escape(name)}(input_tensor: Tensor, repeat: tuple) -> Tensor
 
         Generates a Tensor of {rst_escape(name)} with attributes :attr:`input_tensor` and  :attr:`repeat`.
 
@@ -54,25 +68,11 @@ def register_ttl_function_with_shape(name, ttl_unary_function, torch_function):
 
             >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> output = ttnn.{name}(tensor, repeat)
-            >>> print(output)
 
         """
-
-        input_tensor = _reshape_to_4D(input_tensor)
-        if not isinstance(input_tensor, Tensor):
-            raise TypeError("Expected to be a ttnn.Tensor")
-
-        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
-            raise RuntimeError("input_tensors must be on device!")
-
-        ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, repeat, output_mem_config=memory_config)
-
-        output_tensor = Tensor(ttl_output_tensor)
-        return output_tensor
-
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
+    return unary_function
 
 
 def register_ttl_unary_function(name, ttl_unary_function, torch_function):
@@ -198,25 +198,6 @@ def register_ttl_unary_function_reduce(name, ttl_unary_function, torch_function)
 
     @decorate_operation(torch_function=_torch_unary, name=name)
     def unary_function(input_tensor: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor: Tensor) -> Tensor
-
-        Applies {rst_escape(name)} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-
-        Args:
-            * :attr:`input_tensor`
-
-        Example::
-
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor)
-            >>> print(output)
-            Tensor([ 0, 2], dtype=bfloat16 )
-
-        """
-
         original_shape = input_tensor.shape
         input_tensor = _reshape_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
@@ -233,6 +214,23 @@ def register_ttl_unary_function_reduce(name, ttl_unary_function, torch_function)
         output_tensor = Tensor(ttl_output_tensor)
         return output_tensor
 
+    unary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    unary_function.__doc__ = f"""{rst_escape(name)}(input_tensor: Tensor) -> Tensor
+
+        Applies {rst_escape(name)} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor)
+            >>> print(output)
+        """
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
     return unary_function
@@ -341,6 +339,7 @@ def register_ttl_activation_function_with_dim_parameter(name, ttl_activation_fun
 
     setattr(THIS_MODULE, name, unary_function)
     __all__.append(name)
+    return unary_function
 
 
 # register functions

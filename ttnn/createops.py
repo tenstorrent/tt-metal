@@ -35,7 +35,13 @@ def register_ttl_function_with_float_parameter(name, ttl_binary_function, torch_
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_shape: tuple, parameter: float) -> Tensor
+        ttl_output_tensor = ttl_binary_function(input_shape, parameter, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        return output_tensor
+
+    binary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    binary_function.__doc__ = f"""{rst_escape(name)}(input_shape: tuple, parameter: float) -> Tensor
 
         Generates a Tensor of {rst_escape(name)} with attributes :attr:`input_shape`  and  :attr:`parameter` .
 
@@ -50,17 +56,10 @@ def register_ttl_function_with_float_parameter(name, ttl_binary_function, torch_
         Example::
 
             >>> ttnn.{name}(input_shape, parameter)
-            >>> print(output)
-
         """
-
-        ttl_output_tensor = ttl_binary_function(input_shape, parameter, output_mem_config=memory_config)
-
-        output_tensor = Tensor(ttl_output_tensor)
-        return output_tensor
-
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 def register_ttl_function_with_shape(name, ttl_binary_function, torch_function):
@@ -74,7 +73,13 @@ def register_ttl_function_with_shape(name, ttl_binary_function, torch_function):
         *,
         memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_shape: tuple) -> Tensor
+        ttl_output_tensor = ttl_binary_function(input_shape, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        return output_tensor
+
+    binary_function.__name__ = f"ttnn.{rst_escape(name)}"
+    binary_function.__doc__ = f"""{rst_escape(name)}(input_shape: tuple) -> Tensor
 
         Generates a Tensor of {rst_escape(name)} with attributes :attr:`input_shape`.
 
@@ -90,14 +95,9 @@ def register_ttl_function_with_shape(name, ttl_binary_function, torch_function):
             >>> print(output)
 
         """
-
-        ttl_output_tensor = ttl_binary_function(input_shape, output_mem_config=memory_config)
-
-        output_tensor = Tensor(ttl_output_tensor)
-        return output_tensor
-
     setattr(THIS_MODULE, name, binary_function)
     __all__.append(name)
+    return binary_function
 
 
 # register functions

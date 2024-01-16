@@ -77,7 +77,7 @@ def register_ttl_binary_function(name, ttl_binary_function, torch_function):
         Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+             {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
 
         Args:
             * :attr:`input_tensor_a`
@@ -150,7 +150,7 @@ def register_ttl_binary_function_with_float_parameter(name, ttl_binary_function,
         Applies {rst_escape(name)} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i, parameter)
+             {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i, parameter)
 
         Args:
             * :attr:`input_tensor_a`
@@ -215,7 +215,7 @@ def register_ttl_assign_function(name, ttl_binary_function, torch_function):
         Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+             {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
 
         Args:
             * :attr:`input_tensor_a`
@@ -290,7 +290,7 @@ def register_ttl_binary_function_with_multiple_parameter(name, ttl_binary_functi
         Applies {rst_escape(name)} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+             {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
 
         Args:
             * :attr:`input_tensor_a`
@@ -362,7 +362,7 @@ def register_ttl_binary_loss_function(name, ttl_binary_function, torch_function)
         Applies {rst_escape(name)} to :attr:`input_tensor_a`  and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+             {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
 
         Args:
             * :attr:`input_tensor_a`
@@ -425,7 +425,7 @@ def register_ttl_outer_function(name, ttl_binary_function, torch_function):
         Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+            {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
 
         Args:
             * :attr:`input_tensor_a`
@@ -495,7 +495,7 @@ def register_ttl_concat_function(name, ttl_binary_function, torch_function):
         Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
 
         .. math::
-             \\texttt{{{rst_escape(name)}}}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
+             {rst_escape(name)}(\\mathrm{{input\\_tensor_a}}_i, {{input\\_tensor_b}}_i)
 
         Args:
             * :attr:`input_tensor_a`

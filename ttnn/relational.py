@@ -93,27 +93,6 @@ def register_ttl_relational_function(name, ttl_relational_function, torch_functi
     def relational_function(
         input_tensor_a: Tensor, input_tensor_b: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
     ) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
-
-        Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
-
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-
-        """
-
         assert not all(
             [isinstance(input_tensor_a, (float, int)), isinstance(input_tensor_b, (float, int))]
         ), "both operands cannot be float"
@@ -149,6 +128,27 @@ def register_ttl_relational_function(name, ttl_relational_function, torch_functi
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    relational_function.__name__ = f"ttnn.{rst_escape(name)}"
+    relational_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
+
+        Applies {rst_escape(name)} to :attr:`input_tensor_a` and  :attr:`input_tensor_b` element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((2, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+            >>> print(output)
+            Tensor([ 1, 0], dtype=bfloat16 )
+
+        """
     setattr(THIS_MODULE, name, relational_function)
     __all__.append(name)
     return relational_function
@@ -182,25 +182,6 @@ def register_ttl_relational_function_with_zero(name, ttl_relational_function, to
 
     @decorate_operation(torch_function=_torch_relational, name=name)
     def relational_function(input_tensor_a: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
-        f"""{rst_escape(name)}(input_tensor_a: Tensor) -> Tensor
-
-        Applies {rst_escape(name)} to :attr:`input_tensor_a`  element-wise.
-
-        .. math::
-            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
-
-        Args:
-            * :attr:`input_tensor_a`
-
-        Example::
-
-            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.{name}(tensor_a, tensor_b)
-            >>> print(output)
-            Tensor([ 1, 0], dtype=bfloat16 )
-
-        """
-
         original_shape = input_tensor_a.shape
         input_tensor_a = _reshape_to_4D(input_tensor_a)
 
@@ -218,6 +199,25 @@ def register_ttl_relational_function_with_zero(name, ttl_relational_function, to
         output_tensor = reshape(output_tensor, original_shape)
         return output_tensor
 
+    relational_function.__name__ = f"ttnn.{rst_escape(name)}"
+    relational_function.__doc__ = f"""{rst_escape(name)}(input_tensor_a: Tensor) -> Tensor
+
+        Applies {rst_escape(name)} to :attr:`input_tensor_a`  element-wise.
+
+        .. math::
+            {rst_escape(name)}(\\mathrm{{input\\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor_a`
+
+        Example::
+
+            >>> tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor_a, tensor_b)
+            >>> print(output)
+            Tensor([ 1, 0], dtype=bfloat16 )
+
+        """
     setattr(THIS_MODULE, name, relational_function)
     __all__.append(name)
     return relational_function

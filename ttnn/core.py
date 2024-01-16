@@ -654,7 +654,7 @@ def add(
     Adds :attr:`input_tensor_b`, scaled by :attr:`alpha`, to :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
     .. math::
-        \mathrm{{input\_tensor\_a}}_i + \mathrm{{alpha}} \\times \mathrm{{input\_tensor\_b}}_i
+        \mathrm{{input\_tensor\_a}}_i + \mathrm{{alpha}} * \mathrm{{input\_tensor\_b}}_i
 
     Supports broadcasting.
 
@@ -802,7 +802,7 @@ def sub(
     Subtracts :attr:`input_tensor_b`, scaled by :attr:`alpha`, from :attr:`input_tensor_a`.
 
     .. math::
-        \mathrm{{input\_tensor\_a}}_i - \mathrm{{alpha}} \\times \mathrm{{input\_tensor\_b}}_i
+        \mathrm{{input\_tensor\_a}}_i - \mathrm{{alpha}} * \mathrm{{input\_tensor\_b}}_i
 
     Supports broadcasting.
 
