@@ -361,6 +361,9 @@ def to_layout(tensor, layout: Layout):
         >>> print(tensor[0,0,:3])
         Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 )
     """
+    layout_change_needed = tensor.layout != layout
+    if not layout_change_needed:
+        return tensor
 
     def requires_padding_change(layout, shape):
         intended_shape = list(shape)[-2:]
@@ -377,7 +380,6 @@ def to_layout(tensor, layout: Layout):
             return False
 
     necessary_to_change_padding = requires_padding_change(layout, tensor.shape)
-    layout_change_needed = tensor.layout != layout
     if not necessary_to_change_padding and not layout_change_needed:
         return tensor
     is_on_device = has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE)
@@ -441,7 +443,9 @@ def to_layout(tensor, layout: Layout):
                         input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
                     )
                     ttl_input_tensor = input_tensor.value
-                    output_tensor = Tensor(ttl_input_tensor.unpad_from_tile(list(input_tensor.shape)))
+
+                    output_tensor_end = [dim - 1 for dim in input_tensor.shape]
+                    output_tensor = Tensor(ttl_input_tensor.unpad([0, 0, 0, 0], output_tensor_end))
                 else:
                     output_tensor = unpad_with_pytorch(input_tensor)
         else:

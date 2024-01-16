@@ -76,6 +76,14 @@ struct Padding {
     Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value);
     Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value);
 
+    template <std::size_t Rank>
+    Padding(const std::array<std::array<uint32_t, 2>, Rank> pad_dimensions, PadValue pad_value) :
+        rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
+        for (auto index = 0; index < Rank; index++) {
+            this->pad_dimensions_[index] = {.front = pad_dimensions[index][0], .back = pad_dimensions[index][1]};
+        }
+    }
+
     PadDimension& operator[](const std::int64_t index);
     const PadDimension& operator[](const std::int64_t index) const;
 
