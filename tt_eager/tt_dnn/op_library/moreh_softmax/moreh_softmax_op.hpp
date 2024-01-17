@@ -24,7 +24,11 @@ enum class MorehSoftmaxOpParallelizationStrategy {
     LARGE_C = 5,
 };
 
-enum class MorehSoftmaxOp { SOFTMAX = 0, SOFTMIN = 1 };
+enum class MorehSoftmaxOp {
+    SOFTMAX = 0,
+    SOFTMIN = 1,
+    LOGSOFTMAX = 2,
+};
 
 bool is_moreh_softmax_w_small_available(const Tensor &tensor);
 bool is_moreh_softmax_h_small_available(const Tensor &tensor);
@@ -65,7 +69,14 @@ Tensor moreh_softmax(
     uint32_t dim,
     const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor moreh_softmin(
+    const Tensor &input_tensor,
+    uint32_t dim,
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor moreh_logsoftmax(
     const Tensor &input_tensor,
     uint32_t dim,
     const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,

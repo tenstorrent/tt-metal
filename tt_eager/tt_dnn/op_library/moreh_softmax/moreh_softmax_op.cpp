@@ -161,6 +161,27 @@ Tensor moreh_softmin(
         .at(0);
 }
 
+Tensor moreh_logsoftmax(
+    const Tensor& input_tensor,
+    uint32_t dim,
+    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const MemoryConfig& output_mem_config) {
+    auto device = input_tensor.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
+
+    return operation::run(
+               MorehSoftmax{
+                   .dim = dim,
+                   .output_mem_config = output_mem_config,
+                   .core_range = all_cores,
+                   .op = MorehSoftmaxOp::LOGSOFTMAX,
+                   .strategy = strategy},
+               {input_tensor},
+               {})
+        .at(0);
+}
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt

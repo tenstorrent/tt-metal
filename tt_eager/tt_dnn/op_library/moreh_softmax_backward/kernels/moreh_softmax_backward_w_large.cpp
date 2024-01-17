@@ -38,52 +38,110 @@ void MAIN {
     uint32_t Wt = get_compile_time_arg_val(1);
 
     for (uint32_t n = 0; n < N; ++n) {
-        // step 1, compute y * dy
-        for (uint32_t w = 0; w < Wt; ++w) {
-            ACQ();
-            if (w == Wt - 1) {
-                mul_tiles_and_mask_tile_to_cb(
-                    cb_y, cb_dy, cb_mask, cb_ydy, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
-            } else {
-                mul_tiles_to_cb(cb_y, cb_dy, cb_ydy);
+
+        #ifdef LOG
+            // sum(dy)
+            for (uint32_t w = 0; w < Wt; ++w) {
+                if (w == Wt - 1) {
+                    if (w == 0){
+                        ACQ();
+                        mask_tile_to_cb(cb_dy, cb_mask, cb_add, /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
+                        REL();
+                    } else {
+                        constexpr auto cb_inter0 = tt::CB::c_intermed0;
+                        ACQ();
+                        mask_tile_to_cb(cb_dy, cb_mask, cb_inter0, /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
+                        REL();
+
+                        ACQ();
+                        add_tiles_to_cb(cb_add, cb_inter0, cb_add);
+                        REL();
+                    }
+                } else {
+                    if (w == 0) {
+                        ACQ();
+                        copy_tile_to_cb(cb_dy, cb_add);
+                        REL();
+                    }
+                    else {
+                        ACQ();
+                        add_tiles_to_cb(cb_add, cb_dy, cb_add);
+                        REL();
+                    }
+                }
             }
+
+            ACQ();
+            reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
             REL();
 
-            if (w == 0) {
+            for (uint32_t w = 0; w < Wt; w += onetile) {
+                // exp(y)
+                constexpr auto cb_exp = tt::CB::c_intermed0;
                 ACQ();
-                copy_tile_to_cb(cb_ydy, cb_add);
+                exp_tile_to_cb(cb_y, cb_exp, 0);
                 REL();
-            } else {
+
+                // sum * exp(y)
                 ACQ();
-                add_tiles_to_cb(cb_add, cb_ydy, cb_add);
+                mul_tiles_bcast_cols_to_cb(cb_exp, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);
+                REL();
+
+                // dy - sum * exp(y)
+                ACQ();
+                sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx);
                 REL();
             }
-        }
 
-        // step 2, compute sum(y * dy)
-        ACQ();
-        reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
-        REL();
+            cb_pop_front(cb_sum, onetile);
+        #else
+            // step 1, compute y * dy
+            for (uint32_t w = 0; w < Wt; ++w) {
+                ACQ();
+                if (w == Wt - 1) {
+                    mul_tiles_and_mask_tile_to_cb(
+                        cb_y, cb_dy, cb_mask, cb_ydy, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
+                } else {
+                    mul_tiles_to_cb(cb_y, cb_dy, cb_ydy);
+                }
+                REL();
 
-        // step 3, compute final result
-        for (uint32_t w = 0; w < Wt; w += onetile) {
-            // dy - sum
+                if (w == 0) {
+                    ACQ();
+                    copy_tile_to_cb(cb_ydy, cb_add);
+                    REL();
+                } else {
+                    ACQ();
+                    add_tiles_to_cb(cb_add, cb_ydy, cb_add);
+                    REL();
+                }
+            }
+
+            // step 2, compute sum(y * dy)
             ACQ();
-            sub_tiles_bcast_cols_to_cb(cb_dy, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
             REL();
 
-            ACQ();
-            #ifdef SOFTMAX
-                // (dy - sum) * y
-                mul_tiles_to_cb(cb_y, cb_inter2, cb_dx);
-            #else
-                // -(dy - sum) * y
-                mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx);
-            #endif
-            REL();
-        }
+            // step 3, compute final result
+            for (uint32_t w = 0; w < Wt; w += onetile) {
+                // dy - sum
+                ACQ();
+                sub_tiles_bcast_cols_to_cb(cb_dy, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);
+                REL();
 
-        cb_pop_front(cb_sum, onetile);
+                ACQ();
+                #ifdef SOFTMAX
+                    // (dy - sum) * y
+                    mul_tiles_to_cb(cb_y, cb_inter2, cb_dx);
+                #else
+                    // -(dy - sum) * y
+                    mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx);
+                #endif
+                REL();
+            }
+
+            cb_pop_front(cb_sum, onetile);
+        #endif
     }
 }
 }  // namespace NAMESPACE

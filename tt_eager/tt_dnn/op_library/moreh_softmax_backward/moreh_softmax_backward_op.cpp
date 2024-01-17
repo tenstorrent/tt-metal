@@ -171,6 +171,28 @@ Tensor moreh_softmin_backward(
         .at(0);
 }
 
+Tensor moreh_logsoftmax_backward(
+    const Tensor& output_tensor,
+    const Tensor& output_grad_tensor,
+    uint32_t dim,
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
+    const MemoryConfig& output_mem_config) {
+    auto device = output_grad_tensor.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
+
+    return operation::run(
+               MorehSoftmaxBackward{
+                   .dim = dim,
+                   .output_mem_config = output_mem_config,
+                   .core_range = all_cores,
+                   .op = MorehSoftmaxBackwardOp::LOGSOFTMAX,
+                   .strategy = strategy},
+               {output_tensor, output_grad_tensor},
+               {})
+        .at(0);
+}
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt
