@@ -20,6 +20,7 @@
 #include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
@@ -610,6 +611,15 @@ void py_module(py::module& m_primary) {
         R"doc(
         "Performs a moreh_matmul_backward operation.
     )doc");
+
+    // moreh_norm
+    m_primary.def(
+        "moreh_norm",
+        &moreh_norm,
+        py::arg("input").noconvert(),
+        py::arg("p").noconvert(),
+        py::arg("dim").noconvert(),
+        "Performs a moreh_norm operation.");
 
     m_primary.def(
         "moreh_layernorm",
