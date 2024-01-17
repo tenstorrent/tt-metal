@@ -10,13 +10,15 @@ namespace NAMESPACE {
     void MAIN {
         for (int i = 0; i < LOOP_COUNT; i ++)
         {
-            kernel_profiler::mark_time(5);
+            kernel_profiler::mark_time(7);
 //Max unroll size
 #pragma GCC unroll 65534
             for (int j = 0 ; j < LOOP_SIZE; j++)
             {
                 asm("nop");
             }
+            kernel_profiler::mark_time(8);
+            kernel_profiler::mark_time(9);
         }
     }
 } // NAMESPACE

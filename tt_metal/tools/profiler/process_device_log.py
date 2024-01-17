@@ -1140,8 +1140,6 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
 
     prepare_output_folder(setup)
 
-    print_chrome_tracing_json(devicesData, setup)
-
     # print_stats_outfile(devicesData, setup)
     # print_rearranged_csv(devicesData, setup)
     print_json(devicesData, setup)

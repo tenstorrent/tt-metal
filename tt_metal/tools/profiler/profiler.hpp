@@ -107,14 +107,24 @@ class DeviceProfiler {
                 int risc_num_read,
                 int risc_num_read_ts,
                 uint32_t timer_id,
-                uint64_t timestamp
+                uint64_t timestamp,
+                std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> &device_data
                 );
 
         // Helper function for reading risc profile results
         void readRiscProfilerResults(
                 int device_id,
                 vector<std::uint32_t> profile_buffer,
-                const CoreCoord &worker_core);
+                const CoreCoord &worker_core,
+                std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> &device_data
+                );
+
+        //Push device results to tracy
+        void pushTracyDeviceResults(
+                TracyCLCtx tracyTTCtx,
+                std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> &device_data,
+                bool isPopulated
+                );
 
         //Track the smallest timestamp dumped to file
         void firstTimestamp(uint64_t timestamp);
@@ -122,10 +132,6 @@ class DeviceProfiler {
     public:
         //Constructor
         DeviceProfiler();
-
-        // Map for storing dvice data
-        std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> device_data;
-
 
         //DRAM buffer for device side results
         Buffer output_dram_buffer;
@@ -142,8 +148,6 @@ class DeviceProfiler {
         //Traverse all cores on the device and dump the device profile results
         void dumpResults(Device *device, const vector<CoreCoord> &worker_cores);
 
-        //Push device results to tracy
-        void pushTracyDeviceResults(TracyCLCtx tracyTTCtx);
 };
 
 }  // namespace tt_metal
