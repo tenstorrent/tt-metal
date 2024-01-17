@@ -9,6 +9,7 @@
 
 #include "transformers/module.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
@@ -383,6 +384,21 @@ void py_module(py::module& m_primary) {
         R"doc(
             Performs a layernorm(a+b)*gamma + beta operation.
         )doc");
+
+    // moreh_clip_grad_norm
+    m_primary.def(
+        "moreh_clip_grad_norm",
+        &moreh_clip_grad_norm,
+        py::arg("inputs").noconvert(),
+        py::arg("max_norm").noconvert(),
+        py::arg("norm_type").noconvert() = 2.0f,
+        py::arg("error_if_nonfinite").noconvert() = false,
+        py::kw_only(),
+        py::arg("total_norm").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_clip_grad_norm operation.
+    )doc");
 
     // moreh_matmul
     m_primary.def(
