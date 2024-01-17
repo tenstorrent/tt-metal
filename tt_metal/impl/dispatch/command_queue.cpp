@@ -20,7 +20,6 @@
 #include <iterator> // for back_inserter
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
 namespace tt::tt_metal {
 
 

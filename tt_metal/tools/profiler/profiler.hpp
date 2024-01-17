@@ -38,6 +38,14 @@ struct TimerPeriod {
     steady_clock::time_point stop;
 };
 
+struct CoreTracyData
+{
+    std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> data;
+    TracyCLCtx tracyContext;
+    bool contextPopulated;
+    uint32_t runCounter;
+};
+
 class HostProfiler {
     private:
 
@@ -93,13 +101,18 @@ class DeviceProfiler {
         // Output Dir for device Profile Logs
         std::filesystem::path output_dir;
 
+        // Global custom marker counter
+        uint32_t customMarkerCount = 0;
+
+        // Device-Core run data
+        std::map<std::pair<uint32_t,CoreCoord>, CoreTracyData> device_core_data;
+
         // Dumping profile result to file
         void dumpResultToFile(
                 bool debug,
                 uint32_t runID,
-                int chip_id,
-                int core_x,
-                int core_y,
+                int device_id,
+                CoreCoord core,
                 int core_flat,
                 int core_flat_read,
                 int core_flat_read_ts,
@@ -107,24 +120,17 @@ class DeviceProfiler {
                 int risc_num_read,
                 int risc_num_read_ts,
                 uint32_t timer_id,
-                uint64_t timestamp,
-                std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> &device_data
+                uint64_t timestamp
                 );
 
         // Helper function for reading risc profile results
         void readRiscProfilerResults(
                 int device_id,
                 vector<std::uint32_t> profile_buffer,
-                const CoreCoord &worker_core,
-                std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> &device_data
-                );
+                const CoreCoord &worker_core);
 
         //Push device results to tracy
-        void pushTracyDeviceResults(
-                TracyCLCtx tracyTTCtx,
-                std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> &device_data,
-                bool isPopulated
-                );
+        void pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device_core);
 
         //Track the smallest timestamp dumped to file
         void firstTimestamp(uint64_t timestamp);

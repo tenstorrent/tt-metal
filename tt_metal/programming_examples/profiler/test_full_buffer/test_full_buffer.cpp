@@ -24,7 +24,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
         {"LOOP_SIZE", std::to_string(loop_size)}
     };
 
-    if (run_count % 3 | !(run_count % 4) | (fastDispatch))
+    if (run_count % 3 | !(run_count % 4) | (fastDispatch > 1))
     {
         tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
             program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
@@ -32,7 +32,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = kernel_defines});
     }
 
-    if (run_count % 4 | !(run_count % 3) | (fastDispatch))
+    if (run_count % 4 | !(run_count % 3) | (fastDispatch > 1))
     {
         tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
             program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
@@ -40,7 +40,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = kernel_defines});
     }
 
-    if ((run_count % 5) | (fastDispatch))
+    if ((run_count % 5) | (fastDispatch > 1))
     {
         vector<uint32_t> trisc_kernel_args = {};
         tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
@@ -49,7 +49,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
             tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
     }
 
-    for (int i = 1; i < fastDispatch + 1; i++)
+    for (int i = 0; i < fastDispatch; i++)
     {
         EnqueueProgram(tt_metal::detail::GetCommandQueue(device), program, false);
     }
@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
 
         for (int i = 0; i < host_loop_count; i ++)
         {
-            pass &= RunCustomCycle(device, device_loop_count, i, 0);
+            pass &= RunCustomCycle(device, device_loop_count, i, 1);
         }
 
         Finish(tt_metal::detail::GetCommandQueue(device));
