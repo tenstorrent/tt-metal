@@ -28,6 +28,7 @@ from ttnn.tensor import (
     _reshape_to_4D,
     _reshape,
 )
+from ttnn.data_movement import reshape, permute
 from ttnn.decorators import decorate_operation
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
@@ -1038,43 +1039,6 @@ Tensor.__mul__ = mul
 Tensor.__rmul__ = mul
 
 
-# Data Transformations
-def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], **_):
-    import torch
-    import ttnn
-
-    input_tensor = from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = to_torch(input_tensor)
-
-    if isinstance(shape, Shape):
-        shape = tuple(shape)
-
-    return torch.reshape(input_tensor, shape).contiguous().clone()
-
-
-@decorate_operation(torch_function=_torch_reshape)
-def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
-    r"""
-    reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
-
-    Reshape :attr:`input_tensor` into :attr:`shape`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`shape`: the desired shape.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.reshape(tensor, (32, 64))
-        >>> print(output.shape)
-        ttnn.Shape([32, 64])
-
-    """
-    return _reshape(input_tensor, shape)
-
-
 def _torch_pad_to_tile(padded_tensor: Tensor):
     import torch
 
@@ -1213,80 +1177,6 @@ def unpad_from_tile(input_tensor: Tensor) -> Tensor:
         return output_tensor
 
     return ttl.tensor.decorate_external_operation(ttnn_unpad, function_name="ttnn.unpad_from_tile")(input_tensor)
-
-
-def _torch_permute(input_tensor: Tensor, order: Tuple[int, ...], **_):
-    import torch
-    import ttnn
-
-    input_tensor = from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = to_torch(input_tensor)
-
-    return torch.permute(input_tensor, order).contiguous().clone()
-
-
-@decorate_operation(torch_function=_torch_permute)
-def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
-    r"""
-    permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
-
-    Permutes :attr:`input_tensor` using :attr:`order`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`order`: the desired ordering of dimensions.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-        >>> print(output.shape)
-        [1, 1, 32, 64]
-
-    """
-
-    if not isinstance(order, tuple):
-        raise RuntimeError("order must be a tuple")
-
-    if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-        RuntimeError("input_tensor must be on device!")
-
-    ttl_input_tensor = input_tensor.value
-
-    if len(input_tensor.shape) != len(order):
-        raise RuntimeError(
-            "The number of dimensions in the tensor input does not match the length of the desired ordering"
-        )
-
-    original_shape = tuple(input_tensor.shape)
-    original_shape_padded = tuple(input_tensor.shape.padded())
-    desired_shape = Shape(list([original_shape[i] for i in order]), list([original_shape_padded[i] for i in order]))
-    if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
-        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, order))
-        # permute is not currently keeping the original padding
-        return reshape(output_tensor, desired_shape)
-    elif len(input_tensor.shape) < 4:
-        input_tensor = _reshape_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-        adjusted_order_for_4D_tensor = order
-        while len(adjusted_order_for_4D_tensor) < 4:
-            adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
-        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, adjusted_order_for_4D_tensor))
-        return reshape(output_tensor, desired_shape)
-    else:
-
-        def torch_permute(tensor, order):
-            return tensor.permute(order).contiguous().clone()
-
-        device = ttl_input_tensor.device()
-        tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
-        tensor = from_device(tensor)
-        tensor = to_torch(tensor)
-        tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
-        tensor = from_torch(tensor, input_tensor.dtype)
-        tensor = to_device(tensor, device)
-        return tensor
 
 
 def _torch_embedding(input_tensor: Tensor, weight: Tensor, **_):
@@ -1479,8 +1369,6 @@ __all__ = [
     "subtract",
     "mul",
     "multiply",
-    "reshape",
-    "permute",
     "embedding",
     "softmax",
     "mean",

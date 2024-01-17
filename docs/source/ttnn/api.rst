@@ -67,9 +67,10 @@ Data Movement
 .. toctree::
    :maxdepth: 1
 
+   ttnn/concat
+   ttnn/pad
    ttnn/permute
    ttnn/reshape
-   ttnn/pad
 
 Normalization
 =============
