@@ -25,6 +25,7 @@ from ttnn.tensor import (
     to_device,
     from_device,
     to_layout,
+    reshape,
     deallocate,
     reallocate,
     load_tensor,
@@ -48,15 +49,20 @@ from ttnn.core import (
     mul,
     multiply,
     # data operations
-    reshape,
-    permute,
     embedding,
+    pad_to_tile,
+    unpad_from_tile,
     # fused operations
     softmax,
-    layer_norm,
-    rms_norm,
     # reduction operations
     mean,
+)
+
+from ttnn.data_movement import (
+    concat,
+    pad,
+    permute,
+    split,
 )
 
 from ttnn.unary import (
@@ -65,7 +71,17 @@ from ttnn.unary import (
     gelu,
     rsqrt,
     relu,
+    silu,
+)
+
+from ttnn.binary import (
     pow,
+)
+
+from ttnn.normalization import (
+    layer_norm,
+    rms_norm,
+    group_norm,
 )
 
 import ttnn.decorators

@@ -3,16 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs

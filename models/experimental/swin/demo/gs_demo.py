@@ -2,15 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 import torch
 import pytest
 from loguru import logger
 from torchvision.utils import save_image
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
 
 from models.utility_functions import (
     tt_to_torch_tensor,

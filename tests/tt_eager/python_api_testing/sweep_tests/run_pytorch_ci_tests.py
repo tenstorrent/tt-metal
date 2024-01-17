@@ -3,16 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
-import time
-import torch
-from pathlib import Path
-from loguru import logger
-from functools import partial
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
+from loguru import logger
+
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,

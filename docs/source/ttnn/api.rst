@@ -37,7 +37,6 @@ Pointwise Unary
 
    ttnn/exp
    ttnn/gelu
-   ttnn/pow
    ttnn/relu
    ttnn/rsqrt
    ttnn/softmax
@@ -52,6 +51,7 @@ Pointwise Binary
    ttnn/add
    ttnn/mul
    ttnn/sub
+   ttnn/pow
 
 Reduction
 =========
@@ -67,8 +67,11 @@ Data Movement
 .. toctree::
    :maxdepth: 1
 
+   ttnn/concat
+   ttnn/pad
    ttnn/permute
    ttnn/reshape
+   ttnn/split
 
 Normalization
 =============
@@ -76,6 +79,7 @@ Normalization
 .. toctree::
    :maxdepth: 1
 
+   ttnn/group_norm
    ttnn/layer_norm
    ttnn/rms_norm
 

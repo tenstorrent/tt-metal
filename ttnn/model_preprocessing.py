@@ -13,59 +13,22 @@ import torch
 
 import ttnn
 
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
-
-
-def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
-    if len(tensor.shape) > 1:
-        *original_batch_sizes, height, width = tensor.shape
-        if height % height_multiple == 0 and width % width_multiple == 0:
-            return tensor
-
-        padded_height = int(np.ceil(height / height_multiple)) * height_multiple
-        padded_width = int(np.ceil(width / width_multiple)) * width_multiple
-        tensor = ttnn.core._reshape_to_4D(tensor)
-        *batch_sizes, _, _ = tensor.shape
-        tensor = ttnn.Tensor(tensor.value.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0.0))
-        tensor = ttnn.reshape(
-            tensor,
-            ttnn.Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
-        )
-    else:
-        (width,) = tensor.shape
-        if width % width_multiple == 0:
-            return tensor
-
-        padded_width = int(np.ceil(width / width_multiple)) * width_multiple
-        tensor = ttnn.core._reshape_to_4D(tensor)
-        *batch_sizes, height, _ = tensor.shape
-        tensor = ttnn.Tensor(tensor.value.pad(batch_sizes + [height, padded_width], [0, 0, 0, 0], 0.0))
-        tensor = ttnn.reshape(tensor, ttnn.Shape([width], [padded_width]))
-    return tensor
-
 
 def preprocess_linear_weight(weight, *, dtype):
     weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype)
-    weight = pad_tensor(weight)
-    weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return weight
 
 
 def preprocess_linear_bias(bias, *, dtype):
     bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype)
-    bias = pad_tensor(bias)
-    bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return bias
 
 
 def preprocess_layernorm_parameter(parameter, *, dtype):
     parameter = parameter.reshape((1, -1))
-    parameter = ttnn.from_torch(parameter, dtype=dtype)
-    parameter = pad_tensor(parameter)
-    parameter = ttnn.to_layout(parameter, ttnn.TILE_LAYOUT)
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return parameter
 
 

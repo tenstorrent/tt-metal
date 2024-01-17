@@ -2,14 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 import torch
 import pytest
 from loguru import logger
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -30,16 +26,12 @@ from transformers import SwinModel
 )
 def test_swin_attention_inference(device, pcc, reset_seeds):
     ATTN_LAYER_INDEX = 0
-    base_address = (
-        f"encoder.layers.{ATTN_LAYER_INDEX}.blocks.{ATTN_LAYER_INDEX}.attention"
-    )
+    base_address = f"encoder.layers.{ATTN_LAYER_INDEX}.blocks.{ATTN_LAYER_INDEX}.attention"
 
     model = SwinModel.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
 
     # Torch swinattention
-    torch_model = (
-        model.encoder.layers[ATTN_LAYER_INDEX].blocks[ATTN_LAYER_INDEX].attention
-    )
+    torch_model = model.encoder.layers[ATTN_LAYER_INDEX].blocks[ATTN_LAYER_INDEX].attention
 
     # Tt swinattention
     num_heads, window_size, dim = 3, 7, 96

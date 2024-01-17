@@ -45,7 +45,7 @@ def calculate_key_values(config, key_value_states, parameters):
     return key_states, value_states
 
 
-def split_fused_qkv_and_split_heads(config, fused_qkv):
+def split_query_key_value_and_split_heads(config, fused_qkv):
     head_size = config.d_model // config.encoder_attention_heads
     batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
     hidden_size = three_times_hidden_size // 3
@@ -71,7 +71,7 @@ def split_fused_qkv_and_split_heads(config, fused_qkv):
 
 def calculate_query_key_values(config, hidden_states, *, parameters):
     fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
-    return split_fused_qkv_and_split_heads(config, fused_qkv)
+    return split_query_key_value_and_split_heads(config, fused_qkv)
 
 
 def whisper_attention(config, hidden_states, attention_mask, key_value_states, *, parameters):
@@ -373,6 +373,7 @@ def preprocess_encoder_inputs(input_features, parameters):
             padding=1,
         )
     )
+
     inputs_embeds = inputs_embeds.permute(0, 2, 1)
     return inputs_embeds
 
@@ -414,8 +415,8 @@ def whisper_original(config, input_features, decoder_input_ids, attention_mask, 
     )
 
 
-def whisper(config, inputs_embeds, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, inputs_embeds, parameters=parameters.encoder)
+def whisper(config, input_embeds, decoder_hidden_states, decoder_attention_mask, *, parameters):
+    encoder_hidden_states = encoder(config, input_embeds, parameters=parameters.encoder)
     return decoder(
         config,
         decoder_hidden_states,
@@ -428,8 +429,6 @@ def whisper(config, inputs_embeds, decoder_hidden_states, decoder_attention_mask
 def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, transformers.models.whisper.modeling_whisper.WhisperAttention):
-        height, width = torch_model.k_proj.weight.shape
-
         if "encoder_attn" in name:
             parameters = {"key_value": {}, "q_proj": {}, "out_proj": {}}
             preprocessed_weight = torch.cat([torch_model.k_proj.weight, torch_model.v_proj.weight], dim=0)
@@ -482,7 +481,7 @@ if __name__ == "__main__":
 
     # Sanity check the torch functional approach
     parameters = preprocess_model_parameters(
-        f"torch-{model_name}",
+        f"torch_{model_name}",
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         convert_to_ttnn=lambda *_: False,

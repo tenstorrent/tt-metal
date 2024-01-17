@@ -1,4 +1,4 @@
 EnqueueProgram
 ==============
 
-.. doxygenfunction:: EnqueueProgram(CommandQueue& cq, Program& program, bool blocking)
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, optional<reference_wrapper<Trace>> trace);

@@ -162,7 +162,7 @@ Once the model is implemented, it can be optimized using the following steps:
 
 .. code-block:: python
 
-    # ttnn_functional_optimized_bert.py
+    # ttnn_optimized_functional_bert.py
 
     import ttnn
 

@@ -6,11 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -95,9 +90,7 @@ def test_detection_model(device):
             classes = None  # filter by class
             agnostic_nms = False
 
-            pred = non_max_suppression(
-                pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=1000
-            )
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=1000)
 
             # Process predictions
             for i, det in enumerate(pred):  # per image
@@ -114,9 +107,7 @@ def test_detection_model(device):
 
                 if len(det):
                     # Rescale boxes from img_size to im0 size
-                    det[:, :4] = scale_boxes(
-                        im.shape[2:], det[:, :4], im0.shape
-                    ).round()
+                    det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                     # Print results
                     for c in det[:, 5].unique():
@@ -126,11 +117,7 @@ def test_detection_model(device):
                     # Write results
                     for *xyxy, conf, cls in reversed(det):
                         if True:  # Write to file
-                            xywh = (
-                                (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn)
-                                .view(-1)
-                                .tolist()
-                            )  # normalized xywh
+                            xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                             line = (cls, *xywh)  # label format
                         # Add bbox to image
                         c = int(cls)  # integer class
