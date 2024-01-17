@@ -84,10 +84,15 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_w_large/softmax_backward_w_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_c_large/softmax_backward_c_large.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_h/moreh_sum_h.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_w/moreh_sum_w.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc/moreh_sum_nc.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward.cpp \
+	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/layernorm_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.cpp \
-	tt_eager/tt_dnn/op_library/moreh_matmul_backward/sum/moreh_sum_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/single_core/moreh_dot_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/moreh_dot_op.cpp \
