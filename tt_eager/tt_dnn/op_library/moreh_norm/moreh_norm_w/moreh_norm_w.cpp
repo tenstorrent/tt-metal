@@ -23,20 +23,6 @@ namespace operations {
 
 namespace primary {
 
-// namespace {
-
-// std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
-//     auto floored_p = std::floor(p);
-//     auto decimal = p - floored_p;
-//     const bool p_is_negative = floored_p < 0.0f;
-//     if (p_is_negative) {
-//         floored_p = -floored_p;
-//     }
-//     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
-// }
-
-// }  // namespace
-
 operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -87,7 +73,6 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    // const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const uint32_t in0_t{1};  // input
     const uint32_t in1_t{1};  // one
@@ -128,9 +113,6 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // const std::vector<uint32_t> reader_compile_time_args{};
-    // const std::vector<uint32_t> writer_compile_time_args{};
-
     const auto reader_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
         "reader_moreh_norm_w.cpp";
