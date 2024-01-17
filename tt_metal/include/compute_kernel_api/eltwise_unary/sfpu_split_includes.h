@@ -64,11 +64,14 @@
 #include "compute_kernel_api/eltwise_unary/identity.h"
 #endif
 
-#if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
-#include "compute_kernel_api.h"
+#if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif
 
+#if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
+#include "compute_kernel_api.h"
+#endif
