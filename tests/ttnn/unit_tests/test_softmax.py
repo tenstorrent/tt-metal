@@ -89,4 +89,4 @@ def test_specific_tensor_combination(device):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)

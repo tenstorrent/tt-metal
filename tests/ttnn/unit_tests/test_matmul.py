@@ -24,6 +24,8 @@ from models.utility_functions import skip_for_wormhole_b0
 ])
 # fmt: on
 def test_matmul_with_matched_width_height(device, m, k, n):
+    torch.manual_seed(0)
+
     torch_input_tensor_a = torch.rand((m, k), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((k, n), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -39,7 +41,7 @@ def test_matmul_with_matched_width_height(device, m, k, n):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.99987)
 
 
 # fmt: off
@@ -68,7 +70,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k, n):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
 @pytest.mark.skip(reason="ttnn.reshape doesn't support reshaping the input tensors used in this test")
@@ -119,7 +121,7 @@ def test_matmul_with_matched_width_height_4D(device, n, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.999649)
 
 
 # fmt: off
@@ -146,7 +148,7 @@ def test_matmul_same_shape_and_valid(device, n, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.999877)
 
 
 # fmt: off
@@ -310,4 +312,4 @@ def test_specific_tensor_combination(device):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)

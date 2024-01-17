@@ -10,10 +10,6 @@ from loguru import logger
 from models.utility_functions import comp_pcc
 
 
-def torch_random(shape, low, high, dtype):
-    return torch.zeros(shape, dtype=dtype).uniform_(low, high)
-
-
 def print_comparison(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)
@@ -24,7 +20,7 @@ def print_comparison(message, expected_pytorch_result, actual_pytorch_result):
     return "\n".join(messages)
 
 
-def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
+def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -32,11 +28,12 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
     assert pcc_passed, print_comparison(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
-def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
-    return (
-        expected_pytorch_result.shape == actual_pytorch_result.shape,
-        f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
-    )
+def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    if expected_pytorch_result.shape != actual_pytorch_result.shape:
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+        )
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     return pcc_passed, pcc_message
 

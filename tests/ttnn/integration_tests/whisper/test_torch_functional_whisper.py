@@ -77,7 +77,7 @@ def test_encoder_layer(model_name, batch_size, sequence_size):
     )
 
     output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
-    assert_with_pcc(torch_output[0], output)
+    assert_with_pcc(torch_output[0], output, pcc=0.9987)
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
@@ -108,7 +108,7 @@ def test_encoder(model_name, batch_size, feature_size, sequence_length):
 
     output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
 
-    assert_with_pcc(torch_output[0], output)
+    assert_with_pcc(torch_output[0], output, pcc=0.997)
 
 
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
@@ -182,7 +182,7 @@ def test_decoder(model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
-    assert_with_pcc(torch_output[0], output)
+    assert_with_pcc(torch_output[0], output, pcc=0.9988)
 
 
 # Verify that the torch functional model matches exactly the default model.
@@ -220,4 +220,4 @@ def test_torch_whisper():
         decoder_attention_mask=decoder_attention_mask,
         parameters=parameters,
     )
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state)
+    assert_with_pcc(expected_last_hidden_state, last_hidden_state, pcc=0.99837)
