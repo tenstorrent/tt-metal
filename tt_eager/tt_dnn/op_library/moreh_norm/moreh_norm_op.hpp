@@ -18,11 +18,12 @@ using namespace tt_metal;
 
 // enum class MorehNormOpDim { W = 0, H = 1, OTHER_CASE = 2 };
 
-// operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
+std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
+
+operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
 operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
 // operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, int64_t dim);
-// operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float p, int64_t dim, const Tensor
-// &output);
+operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
 
 struct MorehNorm {
     float p;
@@ -47,9 +48,11 @@ struct MorehNorm {
 
 // Tensor moreh_norm_h(const Tensor &input, float p, int64_t dim);
 
-Tensor moreh_norm_w(const Tensor &input, float p, int64_t dim);
+// Tensor moreh_norm_w(const Tensor &input, float p, int64_t dim);
 
 // Tensor moreh_norm_other(const Tensor &input, float p, int64_t dim);
+
+Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim);
 
 Tensor moreh_norm(const Tensor &input, float p, int64_t dim);
 

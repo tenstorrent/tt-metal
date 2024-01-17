@@ -51,7 +51,9 @@ if __name__ == "__main__":
 
     # input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH + 15)
 
-    input_shape = (2, 2, 2 * TILE_HEIGHT, 2 * TILE_WIDTH)
+    # input_shape = (2, 2, 2 * TILE_HEIGHT, 2 * TILE_WIDTH)
+
+    input_shape = (2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13)
 
     a = torch.randint(0, 5, input_shape, dtype=torch.float32)
     aa = to_npu(a.bfloat16(), device)
