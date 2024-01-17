@@ -56,23 +56,17 @@ class Tensor(ttl.ttnn.tensor.Tensor):
         def torch_getitem(tensor, slices):
             return tensor[slices].clone()
 
-        if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
-            tensor = self
-            device = tensor.device
-            tensor = from_device(tensor)
-            tensor = to_torch(tensor)
-            tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
-                tensor, slices
-            )
-            tensor = from_torch(tensor, dtype=self.dtype)
-            tensor = to_device(tensor, device)
+        if has_storage_type_of(self, ttl.tensor.StorageType.DEVICE):
+            device = self.device
         else:
-            tensor = self
-            tensor = to_torch(tensor)
-            tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
-                tensor, slices
-            )
-            tensor = from_torch(tensor, dtype=self.dtype)
+            device = None
+
+        tensor = self
+        tensor = to_torch(tensor)
+        tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
+            tensor, slices
+        )
+        tensor = from_torch(tensor, dtype=self.dtype, device=device)
         return tensor
 
     def is_contiguous(self: "Shape") -> bool:
@@ -172,21 +166,17 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
             return tensor.reshape(tuple(shape.padded())).contiguous().clone()
 
         if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            ttl_input_tensor = input_tensor.value
-            device = ttl_input_tensor.device()
-            tensor = from_device(input_tensor)
-            tensor = Tensor(tensor.value.to(ROW_MAJOR_LAYOUT))
-            tensor = to_torch(tensor)
-            tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-            tensor = from_torch(tensor, input_tensor.dtype)
-            tensor = to_device(tensor, device)
-            tensor = ttnn_reshape(tensor, shape)
+            device = input_tensor.device
         else:
-            tensor = Tensor(input_tensor.value.to(ROW_MAJOR_LAYOUT))
-            tensor = to_torch(tensor)
-            tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-            tensor = from_torch(tensor, input_tensor.dtype)
-            tensor = ttnn_reshape(tensor, shape)
+            device = None
+
+        tensor = input_tensor
+        tensor = from_device(input_tensor)
+        tensor = Tensor(tensor.value.to(ROW_MAJOR_LAYOUT))
+        tensor = to_torch(tensor)
+        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
+        tensor = from_torch(tensor, dtype=input_tensor.dtype, device=device)
+        tensor = ttnn_reshape(tensor, shape)
 
         return tensor
 

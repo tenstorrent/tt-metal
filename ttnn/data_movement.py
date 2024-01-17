@@ -47,7 +47,7 @@ def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: 
 
     output_tensor = _torch_pad(input_tensor, padding, value)
     output_tensor = ttnn.from_torch(
-        output_tensor, device=input_tensor.device, dtype=input_tensor.dtype, layout=input_tensor.layout
+        output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
     )
 
     output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
@@ -119,13 +119,11 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         def torch_permute(tensor, order):
             return tensor.permute(order).contiguous().clone()
 
-        device = ttl_input_tensor.device()
-        tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        tensor = ttnn.from_device(tensor)
         tensor = ttnn.to_torch(tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
-        tensor = ttnn.from_torch(tensor, input_tensor.dtype)
-        tensor = ttnn.to_device(tensor, device)
+        tensor = ttnn.from_torch(
+            tensor, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device
+        )
         return tensor
 
 

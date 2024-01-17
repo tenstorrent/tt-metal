@@ -46,8 +46,7 @@ USE_TORCH_OUTPUT_IF_MISMATCHES = False
 def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     import ttnn
 
-    torch_output = ttnn.from_torch(torch_output)
-    torch_output = ttnn.to_layout(torch_output, output.layout)
+    torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
     if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
         torch_output = ttnn.to_device(torch_output, output.device)
     return torch_output
