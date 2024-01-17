@@ -81,6 +81,7 @@ void DumpDeviceProfileResults(Device *device) {
 void DumpDeviceProfileResults(Device *device, const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores){
 #if defined(PROFILER)
     ZoneScoped;
+    Finish(tt_metal::detail::GetCommandQueue(device));
     TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
     if (getDeviceProfilerState())
     {
@@ -92,6 +93,7 @@ void DumpDeviceProfileResults(Device *device, const std::unordered_map<CoreType,
             tt_metal_device_profiler.dumpResults(device, worker_cores_used_in_program);
         }
     }
+    InitDeviceProfiler(device);
 #endif
 }
 

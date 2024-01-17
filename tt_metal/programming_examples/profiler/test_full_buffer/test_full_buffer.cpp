@@ -75,16 +75,11 @@ int main(int argc, char **argv) {
         {
             pass &= RunCustomCycle(device, device_loop_count, i, 1);
         }
-
-        Finish(tt_metal::detail::GetCommandQueue(device));
         tt_metal::detail::DumpDeviceProfileResults(device);
-
-        tt_metal::detail::InitDeviceProfiler(device);
 
         pass &= RunCustomCycle(device, device_loop_count, 0, host_loop_count);
-
-        Finish(tt_metal::detail::GetCommandQueue(device));
         tt_metal::detail::DumpDeviceProfileResults(device);
+
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {

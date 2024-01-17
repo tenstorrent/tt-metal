@@ -79,6 +79,7 @@ def run_perf_resnet(
             profiler.start(f"{iter}_key")
             _ = tt_resnet50(tt_inputs).cpu()
             profiler.end(f"{iter}_key")
+            tt_lib.device.DumpDeviceProfiler(device)
 
         # enable_persistent_kernel_cache()
 
