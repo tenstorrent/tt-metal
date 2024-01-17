@@ -15,8 +15,8 @@ void kernel_main() {
     const auto decimal = get_arg_val<uint32_t>(i++);
 
     uint32_t cb_id{0};
-    const uint32_t cb_id_input = cb_id++;
-    const uint32_t cb_id_decimal = cb_id++;
+    const auto cb_id_input = cb_id++;
+    const auto cb_id_decimal = cb_id++;
 
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
     const auto input_data_format = get_dataformat(cb_id_input);

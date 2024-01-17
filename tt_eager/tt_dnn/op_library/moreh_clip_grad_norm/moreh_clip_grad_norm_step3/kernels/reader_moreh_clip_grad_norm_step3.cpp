@@ -15,8 +15,8 @@ void kernel_main() {
     const auto num_tiles = get_arg_val<uint32_t>(i++);
 
     uint32_t cb_id{0};
-    const uint32_t cb_id_input = cb_id++;
-    const uint32_t cb_id_clip_coef_clamped = cb_id++;
+    const auto cb_id_input = cb_id++;
+    const auto cb_id_clip_coef_clamped = cb_id++;
 
     constexpr uint32_t onetile = 1;
 
