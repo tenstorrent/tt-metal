@@ -23,17 +23,19 @@ namespace operations {
 
 namespace primary {
 
-namespace {
-std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
-    auto floored_p = std::floor(p);
-    auto decimal = p - floored_p;
-    const bool p_is_negative = floored_p < 0.0f;
-    if (p_is_negative) {
-        floored_p = -floored_p;
-    }
-    return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
-}
-}  // namespace
+// namespace {
+
+// std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
+//     auto floored_p = std::floor(p);
+//     auto decimal = p - floored_p;
+//     const bool p_is_negative = floored_p < 0.0f;
+//     if (p_is_negative) {
+//         floored_p = -floored_p;
+//     }
+//     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
+// }
+
+// }  // namespace
 
 operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
     ////////////////////////////////////////////////////////////////////////////
@@ -46,6 +48,7 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.shape();
+    const auto input_rank = input_shape.rank();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];
@@ -55,7 +58,7 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     const auto Ht = H / TILE_HEIGHT;
     const auto Wt = W / TILE_WIDTH;
 
-    const auto origin_w = input_shape.without_padding()[3];
+    const auto origin_w = input_shape.without_padding()[input_rank - 1];
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     auto [floored_recip_p, recip_p_decimal, recip_p_is_negative] =
@@ -93,10 +96,6 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
     const uint32_t in4_t{1};  // mask_w
 
     const uint32_t out0_t{1};  // output
-
-    // uint32_t im0_t{1};  // x
-    // uint32_t im1_t{1};  // |x|^p
-    // uint32_t im2_t{1};  // Sum(|x|^p)
 
     const uint32_t im0_t{1};  // |x|
     const uint32_t im1_t{1};  // log(|x|)

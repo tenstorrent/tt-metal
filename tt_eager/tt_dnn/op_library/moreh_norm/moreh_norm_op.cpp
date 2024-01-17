@@ -5,8 +5,8 @@
 #include "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
 
 #include <functional>
-#include <map>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -24,7 +24,43 @@ namespace operations {
 
 namespace primary {
 
-namespace {}  // namespace
+namespace {
+
+inline Shape compute_output_shape(const Shape &input_shape, int64_t dim) {
+    const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
+    auto output_shape = input_shape;
+    auto output_padding = input_shape.padding();
+
+    if (dim == input_rank - 1) {
+        output_shape[input_rank - 1] = TILE_WIDTH;
+        output_padding[input_rank - 1] = Padding::PadDimension{0, TILE_WIDTH - 1};
+    } else if (dim == input_rank - 2) {
+        output_shape[input_rank - 2] = TILE_HEIGHT;
+        output_padding[input_rank - 2] = Padding::PadDimension{0, TILE_HEIGHT - 1};
+    } else {
+        output_shape[dim] = 1;
+    }
+
+    return Shape(output_shape, output_padding);
+}
+
+inline Tensor create_output_tensor(const Tensor &input, int64_t dim) {
+    const auto output_shape = compute_output_shape(input.shape(), dim);
+    const auto &output = create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device());
+    return std::move(output);
+}
+
+}  // namespace
+
+std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
+    auto floored_p = std::floor(p);
+    auto decimal = p - floored_p;
+    const bool p_is_negative = floored_p < 0.0f;
+    if (p_is_negative) {
+        floored_p = -floored_p;
+    }
+    return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
+}
 
 void MorehNorm::validate(const std::vector<Tensor> &input_tensors) const {}
 
@@ -32,124 +68,29 @@ std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &)
 
 std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
-// Tensor moreh_norm_h(const Tensor &input, float p, int64_t dim) {
-//     const auto input_shape = input.shape();
-//     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
-
-//     std::vector<uint32_t> reduced_shape;
-//     reduced_shape.reserve(input_rank);
-
-//     for (decltype(dim) i = 0; i < input_rank; ++i) {
-//         if (i == input_rank - 2) {
-//             reduced_shape.push_back(TILE_WIDTH);
-//         } else {
-//             reduced_shape.push_back(input_shape[i]);
-//         }
-//     }
-
-//     // const auto h_padding = input_shape.padding()[input_rank - 2].back;
-//     const auto w_padding = input_shape.padding()[input_rank - 1].back;
-
-//     Padding padding{{{0, 0}, {0, 0}, {0, TILE_HEIGHT - 1}, {0, w_padding}}, Padding::PadValue::Zero};
-//     Shape output_shape{reduced_shape, padding};
-
-//     const auto &output = create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device());
-
-//     operation::run(MorehNorm{.p = p, .dim = dim}, {input, output}, {});
-//     return output;
-// }
-
-Tensor moreh_norm_w(const Tensor &input, float p, int64_t dim) {
-    const auto input_shape = input.shape();
-    const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
-
-    std::vector<uint32_t> reduced_shape;
-    reduced_shape.reserve(input_rank);
-
-    for (decltype(dim) i = 0; i < input_rank; ++i) {
-        if (i == input_rank - 1) {
-            reduced_shape.push_back(TILE_HEIGHT);
-        } else {
-            reduced_shape.push_back(input_shape[i]);
-        }
-    }
-
-    const auto h_padding = input_shape.padding()[input_rank - 2].back;
-    // const auto w_padding = input_shape.padding()[input_rank - 1].back;
-
-    Padding padding{{{0, 0}, {0, 0}, {0, h_padding}, {0, TILE_WIDTH - 1}}, Padding::PadValue::Zero};
-    Shape output_shape{reduced_shape, padding};
-
-    const auto &output = create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device());
-
+Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim) {
+    const auto &output = create_output_tensor(input, dim);
     operation::run(MorehNorm{.p = p, .dim = dim}, {input, output});
-    // return input;
-    return output;
-
-    // operation::run(MorehNorm{.p = p, .dim = dim}, {input});
-    // return input;
+    return std::move(output);
 }
 
-// Tensor moreh_norm_other(const Tensor &input, float p, int64_t dim) {
-//     const auto input_shape = input.shape();
-//     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
-
-//     std::vector<uint32_t> reduced_shape;
-//     reduced_shape.reserve(input_rank);
-
-//     for (decltype(dim) i = 0; i < input_rank; ++i) {
-//         if (i == dim) {
-//             reduced_shape.push_back(1);
-//         } else {
-//             reduced_shape.push_back(input_shape[i]);
-//         }
-//     }
-
-//     const auto padding = input_shape.padding();
-//     Shape output_shape{reduced_shape, padding};
-
-//     const auto &output = create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device());
-
-//     operation::run(MorehNorm{.p = p, .dim = dim}, {input, output}, {});
-//     return output;
-// }
-
-Tensor moreh_norm(const Tensor &input, float p, int64_t dim) {
-    const auto input_shape = input.shape();
-    const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
-
-    return moreh_norm_w(input, p, dim);
-
-    // if (dim == input_rank - 1) {
-    //     return moreh_norm_w(input, p, dim);
-    // } else if (dim == input_rank - 2) {
-    //     return moreh_norm_h(input, p, dim);
-    // } else {
-    //     return moreh_norm_other(input, p, dim);
-    // }
-}
+Tensor moreh_norm(const Tensor &input, float p, int64_t dim) { return moreh_norm_impl(input, p, dim); }
 
 operation::ProgramWithCallbacks MorehNorm::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto &input_tensor = input_tensors.at(0);
-    const auto &output_tensor = input_tensors.at(1);
+    const auto &input = input_tensors.at(0);
+    const auto &output = input_tensors.at(1);
 
-    const auto reduction_dim = this->dim;
+    const auto dim = this->dim;
+    const auto input_rank = static_cast<decltype(dim)>(input.shape().rank());
 
-    const auto input_shape = input_tensor.shape();
-    const auto input_rank = static_cast<decltype(reduction_dim)>(input_shape.rank());
-
-    return moreh_norm_w_impl(input_tensor, this->p, reduction_dim, output_tensor);
-
-    // return moreh_norm_w_impl(input_tensor, this->p, reduction_dim, output_tensor);
-
-    // if (reduction_dim == input_rank - 1) {
-    //     return moreh_norm_w_impl(input_tensor, this->p, reduction_dim, output_tensor);
-    // } else if (reduction_dim == input_rank - 2) {
-    //     return moreh_norm_h_impl(input_tensor, this->p, reduction_dim, output_tensor);
-    // } else {
-    //     return moreh_norm_other_impl(input_tensor, this->p, reduction_dim, output_tensor);
-    // }
+    if (dim == input_rank - 1) {
+        return moreh_norm_w_impl(input, this->p, dim, output);
+    } else if (dim == input_rank - 2) {
+        return moreh_norm_h_impl(input, this->p, dim, output);
+    } else {
+        return moreh_norm_other_impl(input, this->p, dim, output);
+    }
 }
 
 }  // namespace primary
