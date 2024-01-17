@@ -23,7 +23,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len/2;
 
     if (reuse_a) {
-        #if SKIP_UNP == 1`
+        #if SKIP_UNP == 1
             load_replay_buf<0, 1>([] {
                 TTI_NOP;
             });
@@ -179,8 +179,8 @@ inline void _llk_unpack_AB_matmul_(
 
     for (uint t = 0; t < t_dim; t++) {
 
-        std::uint32_t offset_address_a = operands[inputA].f.tile_size_words*(tile_index_a + (reuse_a ? (t*kt_dim) : (0)));
-        std::uint32_t offset_address_b = operands[inputB].f.tile_size_words*(tile_index_b + (reuse_a ? (0       ) : (t)));
+        std::uint32_t offset_address_a =tile_size_a*(tile_index_a + (reuse_a ? (t*kt_dim) : (0)));
+        std::uint32_t offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : (t)));
         std::uint32_t address_a = base_address_a + offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;
 

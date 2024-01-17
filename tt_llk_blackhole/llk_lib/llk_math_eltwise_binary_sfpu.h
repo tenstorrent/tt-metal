@@ -37,15 +37,15 @@ inline void _llk_math_eltwise_binary_sfpu_start_(const uint dst_index) {
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     }
-    math::set_addr_mod_base();
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    // math::set_addr_mod_base();
+    // TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 }
 
 inline void _llk_math_eltwise_binary_sfpu_done_() {
     math::clear_dst_reg_addr();
 
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    math::clear_addr_mod_base();
+    // TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    // math::clear_addr_mod_base();
 }
 
 inline void _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_() {

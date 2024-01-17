@@ -99,49 +99,11 @@ template <bool untilize = false, bool zero_output = false, DstTileFaceLayout Fac
 inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_c_dim = TILE_C_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false) {
     static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
 
-    // const uint PACKCNT = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
-    constexpr uint MEGAROW = 1;
-    constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr uint MOP_INNER_LOOP = 1;
-
-    if constexpr (!untilize) {
-        constexpr uint MOP_OUTER_LOOP = 1;
-
-        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
-
-        if (partial_face && IS_BFP_FORMAT(pack_dst_format)) {
-            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
-            tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0)); // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
-            tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
-        }
-        // Write header to l1
-        if constexpr (write_tile_header) {
-            tmp.set_end_op(TT_OP_STOREIND(
-                1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
-        }
-
-        tmp.program(instrn_buffer);
-    } else {
-        const uint MOP_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (face_r_dim >> 1);
-
-        if ((face_r_dim == 1) || narrow_tile) {
-            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
-            tmp.program(instrn_buffer);
-        } else {
-            // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
-            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
-            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-            tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-            tmp.program(instrn_buffer);
-        }
-    }
-
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
     if constexpr(untilize && !tilize) {
 
-        const uint tile_c_dim = get_tile_c_dim(output_id);
         const uint PACK_INTF_SEL = (tile_c_dim < TILE_C_DIM) ? p_pacr::SINGLE_INTF_ACTIVE : p_pacr::TWO_INTFS_ACTIVE;
         const uint MOP_INNER_LOOP = face_r_dim;
         const uint MOP_OUTER_LOOP = (tile_c_dim < TILE_C_DIM) ? num_faces : (num_faces >> 1);
@@ -161,29 +123,6 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         tmp.program(instrn_buffer);
         
     } else if constexpr(tilize && !untilize) {
-
-        addr_mod_pack_t {
-            .y_src = { .incr = 4 },
-            .y_dst = { .incr = 2 },
-            .z_src = { .incr = 0 },
-            .z_dst = { .incr = 0 }
-        }.set(ADDR_MOD_0);
-
-
-        addr_mod_pack_t {
-            .y_src = { .incr = 0, .clr = 1 },
-            .y_dst = { .incr = 0, .clr = 1 },
-            .z_src = { .incr = 0 },
-            .z_dst = { .incr = 0 }
-        }.set(ADDR_MOD_1);
-
-        //Increment faces by 2 (jump 2 dest address 32)
-        addr_mod_pack_t {
-            .y_src = { .incr = 0, .clr = 1 },
-            .y_dst = { .incr = 0, .clr = 1 },
-            .z_src = { .incr = 1 },
-            .z_dst = { .incr = 0 }
-        }.set(ADDR_MOD_2);
 
         const uint PACK_INTF_SEL_0 = 0b0101;
         const uint PACK_INTF_SEL_1 = 0b1010;
@@ -235,24 +174,6 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
     
     } else {
 
-        addr_mod_pack_t{
-            .y_src = {.incr = 4},
-            .y_dst = {.incr = 4},
-        }.set(ADDR_MOD_0);
-
-        addr_mod_pack_t{
-            .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 0, .clr = 1, .cr = 0},
-            .z_src = {.incr = 0, .clr = 1},
-            .z_dst = {.incr = 0, .clr = 0},
-        }.set(ADDR_MOD_1);
-
-        addr_mod_pack_t{
-            .y_src = { .incr = 0, .clr = 1, .cr = 0  },
-            .y_dst = { .incr = 4, .clr = 0, .cr = 0  },
-            .z_src = { .incr = 1, .clr = 0  },
-        }.set(ADDR_MOD_2);
-
         const uint PACK_INTF_SEL = face_r_dim == 1 ? p_pacr::SINGLE_INTF_ACTIVE : (face_r_dim == 2 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE);
 
         const uint MOP_INNER_LOOP = (face_r_dim < 4) ? 1 : face_r_dim >> 2;
@@ -284,7 +205,8 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format,
         pack_src_format,
         pack_dst_format,
         tile_size,
-        face_r_dim
+        face_r_dim,
+        tile_c_dim
     );
 
     if constexpr (is_tile_dim_reconfig_en) {
@@ -293,13 +215,14 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format,
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false, bool tilize = false>
-inline void _llk_pack_hw_configure_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false, const std::uint32_t relu_config = 0) {
+inline void _llk_pack_hw_configure_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_c_dim = TILE_C_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false, const std::uint32_t relu_config = 0) {
 
     configure_pack<is_fp32_dest_acc_en, untilize, tilize>(
         pack_src_format,
         pack_dst_format,
         tile_size,
         face_r_dim,
+        tile_c_dim,
         num_faces,
         partial_face,
         narrow_tile,
@@ -308,13 +231,14 @@ inline void _llk_pack_hw_configure_(const std::uint32_t pack_src_format, const s
 }
 
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
-inline void _llk_pack_reduce_hw_configure_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false, const std::uint32_t relu_config = 0) {
+inline void _llk_pack_reduce_hw_configure_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_c_dim = TILE_C_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false, const std::uint32_t relu_config = 0) {
 
     configure_pack<is_fp32_dest_acc_en, untilize, false>(
         pack_src_format,
         pack_dst_format,
         tile_size,
         face_r_dim,
+        tile_c_dim,
         num_faces,
         partial_face,
         narrow_tile,

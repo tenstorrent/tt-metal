@@ -42,9 +42,10 @@ inline void _llk_pack_untilize_mop_config_() {
 
     // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
     ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
-    tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-    tmp.set_end_ops(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0),
-                    TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
+    // MT FIXME: Need blackhole pack_untilize version
+    // tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
+    // tmp.set_end_ops(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0),
+                    // TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
     tmp.program(instrn_buffer);
 }
 
@@ -67,5 +68,6 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
         TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
     }
 
-    TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
+    // MT FIXME: Need blackhole pack_untilize version
+    // TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
 }

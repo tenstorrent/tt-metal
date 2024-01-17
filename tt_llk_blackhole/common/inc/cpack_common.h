@@ -146,7 +146,7 @@ namespace ckernel::packer
    }
 
    template <bool untilize = false, bool tilize = false>
-   inline void set_packer_strides(const uint pack_src_format, const uint pack_dst_format){
+   inline void set_packer_strides(const uint pack_src_format, const uint pack_dst_format, const uint tile_c_dim){
 
       // Get pointer to registers for current state ID
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
@@ -158,7 +158,6 @@ namespace ckernel::packer
       
       // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
       // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
-      const uint tile_c_dim = get_tile_c_dim(operand_id); 
       const uint z_stride = ((untilize ^ tilize) && (tile_c_dim == TILE_C_DIM)) ? 2*FACE_R_DIM*y_stride : FACE_R_DIM*y_stride;
       
 
@@ -208,7 +207,7 @@ namespace ckernel::packer
       if constexpr (is_fp32_dest_acc_en) {
          uint exp_threshold_en = 0;
          uint exp_threshold_val = 0;
-         if (IS_BFP_A_FORMAT((uint)pack_output_dst_format[output_id])) {
+         if (IS_BFP_A_FORMAT(pack_output_dst_format)) {
             exp_threshold_en = 1;
             exp_threshold_val = 113;
          }
@@ -267,7 +266,8 @@ namespace ckernel::packer
       const uint pack_src_format,
       const uint pack_dst_format,
       const uint tile_size,
-      const uint face_r_dim = FACE_R_DIM)
+      const uint face_r_dim,
+      const uint tile_c_dim)
    {
       // Get pointer to registers for current state ID
       volatile uint *cfg = get_cfg_pointer();
@@ -313,7 +313,7 @@ namespace ckernel::packer
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
 
       // Set packer strides
-      set_packer_strides(pack_output_src_format, pack_output_dst_format);
+      set_packer_strides(pack_output_src_format, pack_output_dst_format, tile_c_dim);
 
 
    }
@@ -324,6 +324,7 @@ namespace ckernel::packer
       const uint pack_dst_format,
       const uint tile_size,
       const uint face_r_dim = FACE_R_DIM,
+      const uint tile_c_dim = TILE_C_DIM,
       const uint num_faces = 4,
       const bool partial_face = false,
       const bool narrow_tile = false,
@@ -335,7 +336,7 @@ namespace ckernel::packer
       const uint pack_output_src_format = (uint)pack_src_format&0xF;
       const uint pack_output_dst_format = (uint)pack_dst_format&0xF;
 
-      set_packer_strides<untilize, tilize>(pack_src_format, pack_dst_format);
+      set_packer_strides<untilize, tilize>(pack_src_format, pack_dst_format, tile_c_dim);
 
       t6_mutex_acquire(mutex::REG_RMW);
 
