@@ -10,8 +10,7 @@ void kernel_main() {
     int i{0};
     const auto output_addr = get_arg_val<uint32_t>(i++);
     const bool output_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
-    const auto Wt = get_arg_val<uint32_t>(i++);
+    const auto num_cols_per_core = get_arg_val<uint32_t>(i++);
     const auto tile_offset = get_arg_val<uint32_t>(i++);
 
     uint32_t cb_id{16};
@@ -26,11 +25,11 @@ void kernel_main() {
     const InterleavedAddrGenFast<false> l1_output_addrg = {
         .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    const auto start_tile_idx = tile_offset / Wt;
+    const auto start_tile_idx = tile_offset;
     const auto output_l1_read_addr = get_read_ptr(cb_id_output);
 
-    for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
-        const auto tile_idx = start_tile_idx + row_idx;
+    for (uint32_t idx = 0; idx < num_cols_per_core; ++idx) {
+        const auto tile_idx = start_tile_idx + idx;
         cb_wait_front(cb_id_output, 1);
         if (output_is_dram) {
             noc_async_write_tile(tile_idx, dram_output_addrg, output_l1_read_addr);
@@ -40,4 +39,5 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_output, 1);
     }
+
 }  // void kernel_main()
