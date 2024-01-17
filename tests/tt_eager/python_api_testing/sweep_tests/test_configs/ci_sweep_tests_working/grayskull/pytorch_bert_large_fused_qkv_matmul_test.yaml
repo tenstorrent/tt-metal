@@ -1,14 +1,14 @@
 ---
 test-list:
-  - bert-large-ff2-matmul:
+  - bert-large-fused-qkv-matmul:
       shape:
-        start-shape: [9]
-        end-shape: [9]
+        start-shape: [1]
+        end-shape: [12]
         interval: [1]
         num-shapes: 3
-        num-samples: 64
+        num-samples: 1
         args-sampling-strategy: "all"
-        method: bert_ff2
+        method: bert_qkv
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
@@ -20,10 +20,10 @@ test-list:
         dtype: bfloat16
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device_bert
-      output-file: bert_large_ff2_matmul_sweep.csv
+      args-gen: gen_bert_qkv_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
+      output-file: bert_large_fused_qkv_matmul_sweep.csv
