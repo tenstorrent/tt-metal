@@ -48,8 +48,6 @@ from ttnn.core import (
     mul,
     multiply,
     # data operations
-    reshape,
-    permute,
     embedding,
     pad_to_tile,
     unpad_from_tile,
@@ -57,6 +55,13 @@ from ttnn.core import (
     softmax,
     # reduction operations
     mean,
+)
+
+from ttnn.data_movement import (
+    concat,
+    pad,
+    permute,
+    reshape,
 )
 
 from ttnn.unary import (
