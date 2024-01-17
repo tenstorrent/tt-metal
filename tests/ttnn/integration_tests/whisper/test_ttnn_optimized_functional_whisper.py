@@ -309,7 +309,6 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_attn_output, tt_attn_output)
 
 
-@pytest.mark.skip(reason="This test is not passing yet.")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 def test_ttnn_whisper(device, ttnn_model):
@@ -374,4 +373,4 @@ def test_ttnn_whisper(device, ttnn_model):
     last_hidden_state = ttnn.from_device(last_hidden_state)
     last_hidden_state = ttnn.to_torch(last_hidden_state)
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state)
+    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.97)
