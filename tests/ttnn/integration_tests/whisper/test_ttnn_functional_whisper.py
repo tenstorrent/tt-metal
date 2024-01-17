@@ -16,8 +16,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.utility_functions import skip_for_wormhole_b0
 from loguru import logger
 
-# MODEL_NAME = "openai/whisper-base"
-MODEL_NAME = "openai/whisper-tiny.en"
+MODEL_NAME = "openai/whisper-base"
 
 
 @skip_for_wormhole_b0()
@@ -308,7 +307,6 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_attn_output, tt_attn_output)
 
 
-@pytest.mark.skip(reason="This test is not passing yet.")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 def test_ttnn_whisper(device, ttnn_model):

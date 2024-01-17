@@ -72,7 +72,7 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
 
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
-        query_states = (hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias) * scaling
+        query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
         query_states = ttnn.reshape(query_states, shape=(bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
