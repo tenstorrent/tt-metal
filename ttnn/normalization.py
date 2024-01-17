@@ -6,7 +6,6 @@
 from typing import Optional
 
 import ttnn.tensor as ttnn
-from ttnn.tensor import _reshape_to_4D
 
 import tt_lib as ttl
 
@@ -64,13 +63,13 @@ def layer_norm(
         raise RuntimeError("layer_norm only supports device storage type")
 
     original_shape = input_tensor.shape
-    input_tensor = _reshape_to_4D(input_tensor)
+    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
     if residual_input_tensor is not None:
-        residual_input_tensor = _reshape_to_4D(residual_input_tensor)
+        residual_input_tensor = ttnn.unsqueeze_to_4D(residual_input_tensor)
     if weight is not None:
-        weight = _reshape_to_4D(weight)
+        weight = ttnn.unsqueeze_to_4D(weight)
     if bias is not None:
-        bias = _reshape_to_4D(bias)
+        bias = ttnn.unsqueeze_to_4D(bias)
 
     ttl_input_tensor = input_tensor.value
     residual_input_tensor = residual_input_tensor.value if residual_input_tensor is not None else None
@@ -87,7 +86,7 @@ def layer_norm(
         )
 
     output_tensor = ttnn.Tensor(output_tensor)
-    output_tensor = ttnn._reshape(output_tensor, original_shape)
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
 
@@ -103,15 +102,15 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
         raise RuntimeError("rms_norm only supports device storage type")
 
     original_shape = input_tensor.shape
-    input_tensor = _reshape_to_4D(input_tensor)
-    weight = _reshape_to_4D(weight)
+    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+    weight = ttnn.unsqueeze_to_4D(weight)
 
     ttl_input_tensor = input_tensor.value
     ttl_weight = weight.value
     ttl_output_tensor = ttl.tensor.rmsnorm(ttl_input_tensor, epsilon, ttl_weight)
 
     output_tensor = ttnn.Tensor(ttl_output_tensor)
-    output_tensor = ttnn._reshape(output_tensor, original_shape)
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
 
     return output_tensor
 

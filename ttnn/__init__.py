@@ -25,6 +25,7 @@ from ttnn.tensor import (
     to_device,
     from_device,
     to_layout,
+    reshape,
     deallocate,
     reallocate,
     load_tensor,
@@ -61,7 +62,7 @@ from ttnn.data_movement import (
     concat,
     pad,
     permute,
-    reshape,
+    split,
 )
 
 from ttnn.unary import (
@@ -81,11 +82,6 @@ from ttnn.normalization import (
     layer_norm,
     rms_norm,
     group_norm,
-)
-
-from ttnn.data_movement import (
-    pad,
-    split,
 )
 
 import ttnn.decorators

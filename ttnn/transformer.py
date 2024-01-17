@@ -6,20 +6,11 @@ from typing import Optional, Tuple
 
 import tt_lib as ttl
 
-from ttnn.tensor import (
-    Tensor,
-    MemoryConfig,
-    DRAM_MEMORY_CONFIG,
-    TILE_LAYOUT,
-    has_storage_type_of,
-    DEVICE_STORAGE_TYPE,
-)
-from ttnn.core import reshape, Shape
+import ttnn.tensor as ttnn
 from ttnn.decorators import decorate_operation
 
 
-def _torch_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_heads, **_):
-    import ttnn
+def _torch_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
     import torch
 
     batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
@@ -45,11 +36,7 @@ def _torch_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_he
     return query_layer, key_layer, value_layer
 
 
-def _fallback_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_heads, **_):
-    import ttnn
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+def _fallback_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
     input_tensor = ttnn.to_torch(input_tensor)
 
     return _torch_split_query_key_value_and_split_heads(input_tensor, num_heads=num_heads)
@@ -57,12 +44,12 @@ def _fallback_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num
 
 @decorate_operation(torch_function=_fallback_split_query_key_value_and_split_heads)
 def split_query_key_value_and_split_heads(
-    input_tensor: Tensor,
-    kv_input_tensor: Optional[Tensor] = None,
+    input_tensor: ttnn.Tensor,
+    kv_input_tensor: Optional[ttnn.Tensor] = None,
     *,
     num_heads: int,
-    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-) -> Tuple[Tensor, Tensor, Tensor]:
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """
     split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads: int, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
 
@@ -93,10 +80,10 @@ def split_query_key_value_and_split_heads(
     if len(input_tensor.shape) != 3:
         raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
 
-    if input_tensor.layout != TILE_LAYOUT:
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
-    if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
         raise RuntimeError("input_tensor must be on device!")
 
     if kv_input_tensor is not None:
@@ -117,9 +104,9 @@ def split_query_key_value_and_split_heads(
         if kv_input_tensor is not None:
             raise RuntimeError("kv_input_tensor must be None when input_tensor is of shape (batch_size, 384, 1024 * 3)")
 
-        input_tensor = reshape(
+        input_tensor = ttnn.reshape(
             input_tensor,
-            Shape(
+            ttnn.Shape(
                 [batch_size, 1, sequence_size, three_times_hidden_size],
                 [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
             ),
@@ -132,14 +119,14 @@ def split_query_key_value_and_split_heads(
             ttl_input_tensor.device().compute_with_storage_grid_size(),
             memory_config,
         )
-        query_key_value = (Tensor(ttl_tensor) for ttl_tensor in query_key_value)
+        query_key_value = (ttnn.Tensor(ttl_tensor) for ttl_tensor in query_key_value)
         query, key, value = query_key_value
         return query, key, value
     else:
         if kv_input_tensor is not None:
-            input_tensor = reshape(
+            input_tensor = ttnn.reshape(
                 input_tensor,
-                Shape(
+                ttnn.Shape(
                     [batch_size, 1, sequence_size, hidden_size],
                     [batch_size, 1, sequence_size_padded, hidden_size_padded],
                 ),
@@ -147,16 +134,16 @@ def split_query_key_value_and_split_heads(
 
             _, kv_sequence_size, _ = kv_input_tensor.shape
             _, kv_sequence_size, _ = kv_input_tensor.shape.padded()
-            desired_shape = Shape(
+            desired_shape = ttnn.Shape(
                 [batch_size, 1, kv_sequence_size, hidden_size * 2],
                 [batch_size, 1, kv_sequence_size, hidden_size_padded * 2],
             )
-            kv_input_tensor = reshape(kv_input_tensor, desired_shape)
+            kv_input_tensor = ttnn.reshape(kv_input_tensor, desired_shape)
             ttl_kv_input_tensor = kv_input_tensor.value
         else:
-            input_tensor = reshape(
+            input_tensor = ttnn.reshape(
                 input_tensor,
-                Shape(
+                ttnn.Shape(
                     [batch_size, 1, sequence_size, three_times_hidden_size],
                     [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
                 ),
@@ -171,20 +158,20 @@ def split_query_key_value_and_split_heads(
             num_heads=num_heads,
             output_mem_config=memory_config,
         )
-        query_key_value = (Tensor(ttl_tensor) for ttl_tensor in query_key_value)
+        query_key_value = (ttnn.Tensor(ttl_tensor) for ttl_tensor in query_key_value)
         query, key, value = query_key_value
 
         head_size = hidden_size // num_heads
-        query = reshape(
+        query = ttnn.reshape(
             query,
-            Shape(
+            ttnn.Shape(
                 [batch_size, num_heads, sequence_size, head_size],
                 [batch_size, num_heads, sequence_size_padded, head_size],
             ),
         )
-        key = reshape(
+        key = ttnn.reshape(
             key,
-            Shape(
+            ttnn.Shape(
                 [batch_size, num_heads, head_size, sequence_size],
                 [
                     batch_size,
@@ -194,9 +181,9 @@ def split_query_key_value_and_split_heads(
                 ],
             ),
         )
-        value = reshape(
+        value = ttnn.reshape(
             value,
-            Shape(
+            ttnn.Shape(
                 [batch_size, num_heads, sequence_size, head_size],
                 [batch_size, num_heads, sequence_size_padded, head_size],
             ),
@@ -205,7 +192,7 @@ def split_query_key_value_and_split_heads(
         return query, key, value
 
 
-def _torch_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_mask, **_):
+def _torch_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
     import torch
 
     if head_size is not None:
@@ -221,11 +208,7 @@ def _torch_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_
     return torch.softmax(input_tensor, -1)
 
 
-def _fallback_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_mask, **_):
-    import ttnn
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+def _fallback_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
     input_tensor = ttnn.to_torch(input_tensor)
 
     if attention_mask is not None:
@@ -238,12 +221,12 @@ def _fallback_attention_softmax(input_tensor: Tensor, *, head_size: int, attenti
 
 @decorate_operation(torch_function=_fallback_attention_softmax)
 def attention_softmax(
-    input_tensor: Tensor,
+    input_tensor: ttnn.Tensor,
     *,
     head_size: Optional[int],
-    attention_mask: Optional[Tensor],
-    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-) -> Tensor:
+    attention_mask: Optional[ttnn.Tensor],
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     """
     attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
 
@@ -258,7 +241,7 @@ def attention_softmax(
     if len(input_tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
-    if input_tensor.layout != TILE_LAYOUT:
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
     if head_size is not None:
@@ -270,21 +253,21 @@ def attention_softmax(
         output_tensor = ttl.tensor.scale_mask_softmax(
             input_tensor.value, scaler, attention_mask.value, output_mem_config=memory_config
         )
-        return Tensor(output_tensor)
+        return ttnn.Tensor(output_tensor)
     else:
         scaled_input_tensor = input_tensor * scaler
         ttl_scaled_input_tensor = scaled_input_tensor.value
         ttl_output_tensor = ttl.tensor.softmax(ttl_scaled_input_tensor, output_mem_config=memory_config)
-        return Tensor(ttl_output_tensor)
+        return ttnn.Tensor(ttl_output_tensor)
 
 
 @decorate_operation(torch_function=_torch_attention_softmax)
 def attention_softmax_(
-    input_tensor: Tensor,
+    input_tensor: ttnn.Tensor,
     *,
     head_size: Optional[int],
-    attention_mask: Optional[Tensor],
-) -> Tensor:
+    attention_mask: Optional[ttnn.Tensor],
+) -> ttnn.Tensor:
     """
     attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
 
@@ -299,7 +282,7 @@ def attention_softmax_(
     if len(input_tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
-    if input_tensor.layout != TILE_LAYOUT:
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
     if head_size is not None:
@@ -316,7 +299,7 @@ def attention_softmax_(
         raise RuntimeError("Cannot apply divide by sqrt(head_size) using in-place version!")
 
 
-def _torch_concatenate_heads(input_tensor: Tensor, **_):
+def _torch_concatenate_heads(input_tensor: ttnn.Tensor, **_):
     import torch
 
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
@@ -328,22 +311,17 @@ def _torch_concatenate_heads(input_tensor: Tensor, **_):
     return output_tensor
 
 
-def _fallback_concatenate_heads(input_tensor: Tensor, **_):
-    import ttnn
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+def _fallback_concatenate_heads(input_tensor: ttnn.Tensor, **_):
     input_tensor = ttnn.to_torch(input_tensor)
-
     return _torch_concatenate_heads(input_tensor)
 
 
 @decorate_operation(torch_function=_fallback_concatenate_heads)
 def concatenate_heads(
-    input_tensor: Tensor,
+    input_tensor: ttnn.Tensor,
     *,
-    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-) -> Tensor:
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     """
     concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
@@ -357,7 +335,7 @@ def concatenate_heads(
     if len(input_tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
-    if input_tensor.layout != TILE_LAYOUT:
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
 
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
@@ -367,7 +345,7 @@ def concatenate_heads(
         ttl_input_tensor,
         memory_config,
     )
-    output_tensor = Tensor(ttl_output_tensor)
-    output_tensor = reshape(output_tensor, (batch_size, sequence_size, num_heads * head_size))
+    output_tensor = ttnn.Tensor(ttl_output_tensor)
+    output_tensor = ttnn.reshape(output_tensor, (batch_size, sequence_size, num_heads * head_size))
 
     return output_tensor

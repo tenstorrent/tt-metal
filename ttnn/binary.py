@@ -6,14 +6,7 @@ import sys
 
 import tt_lib as ttl
 
-from ttnn.tensor import (
-    Tensor,
-    has_storage_type_of,
-    MemoryConfig,
-    DRAM_MEMORY_CONFIG,
-    DEVICE_STORAGE_TYPE,
-)
-from ttnn.core import reshape, _reshape_to_4D
+import ttnn.tensor as ttnn
 from ttnn.decorators import decorate_operation
 
 
@@ -23,38 +16,33 @@ __all__ = []
 
 
 def register_ttl_binary_function(name, ttl_binary_function, doc):
-    def _torch_unary(input_tensor: Tensor, parameter, **_):
+    def _torch_unary(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
-        import ttnn
 
         name_to_torch_function = {"pow": torch.pow}
         torch_function = name_to_torch_function[name]
-
-        input_tensor = ttnn.from_device(input_tensor)
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
         input_tensor = ttnn.to_torch(input_tensor)
-
         return torch_function(input_tensor, parameter)
 
     @decorate_operation(torch_function=_torch_unary, name=name)
     def binary_function(
-        input_tensor: Tensor, parameter: float, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
-    ) -> Tensor:
+        input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
-        input_tensor = _reshape_to_4D(input_tensor)
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
 
-        if not isinstance(input_tensor, Tensor):
+        if not isinstance(input_tensor, ttnn.Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
+        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
         ttl_input_tensor = input_tensor.value
 
         ttl_output_tensor = ttl_binary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)
 
-        output_tensor = Tensor(ttl_output_tensor)
-        output_tensor = reshape(output_tensor, original_shape)
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
     binary_function.__name__ = f"ttnn.{name}"
