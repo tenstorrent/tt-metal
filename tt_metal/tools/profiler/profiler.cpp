@@ -293,7 +293,7 @@ void DeviceProfiler::dumpResults (
 
     for (const auto &worker_core : worker_cores) {
         std::pair<uint32_t, CoreCoord> device_core = {device_id, worker_core};
-        auto tracyCtx = TracyCLContext();
+        auto tracyCtx = TracyTTContext();
         if (device_core_data.find(device_core) == device_core_data.end())
         {
             device_core_data.emplace(
@@ -318,7 +318,7 @@ void DeviceProfiler::dumpResults (
             pushTracyDeviceResults(device_core);
 
             std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
-            TracyCLContextName(device_core_data[device_core].tracyContext, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+            TracyTTContextName(device_core_data[device_core].tracyContext, tracyTTCtxName.c_str(), tracyTTCtxName.size());
         }
     }
 #endif
@@ -330,7 +330,7 @@ void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device
     TT_ASSERT (device_core_data.find(device_core) != device_core_data.end(), "Device {}, core {},{} not present in recorded data" , device_core.first, device_core.second.x, device_core.second.y);
     if (!device_core_data[device_core].contextPopulated)
     {
-        device_core_data[device_core].tracyContext->PopulateCLContext( smallest_timestamp, 1000.f / (float)device_core_frequency);
+        device_core_data[device_core].tracyContext->PopulateTTContext( smallest_timestamp, 1000.f / (float)device_core_frequency);
         device_core_data[device_core].contextPopulated = true;
     }
 
@@ -370,13 +370,13 @@ void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device
 
             if (markerID == 1 )
             {
-                TracyCLZoneTransient(device_core_data[device_core].tracyContext, FWScope, fmt::format("{} FW",riscName[risc]).c_str(), FWColors[risc], true, threadID);
+                TracyTTZoneTransient(device_core_data[device_core].tracyContext, FWScope, fmt::format("{} FW",riscName[risc]).c_str(), FWColors[risc], true, threadID);
                 {
-                    TracyCLZoneTransient(device_core_data[device_core].tracyContext, KernelScope, fmt::format("{} Kernel",riscName[risc]).c_str(), KernelColors[risc], true, threadID);
+                    TracyTTZoneTransient(device_core_data[device_core].tracyContext, KernelScope, fmt::format("{} Kernel",riscName[risc]).c_str(), KernelColors[risc], true, threadID);
                     for (auto &customMarker : customMarkers[threadID])
                     {
                         uint64_t actualMarkerID = (customMarker.marker << 32) >> 32;
-                        TracyCLZoneTransient(
+                        TracyTTZoneTransient(
                                 device_core_data[device_core].tracyContext,
                                 customMarkerScope,
                                 fmt::format("{}",actualMarkerID).c_str(),
@@ -390,7 +390,7 @@ void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device
                 }
                 FWScope.SetEvent(tracy::TTDeviceEvent(runID,device_id,col,row,risc,0));
             }
-            TracyCLCollect(device_core_data[device_core].tracyContext, device_core_data[device_core].data);
+            TracyTTCollect(device_core_data[device_core].tracyContext, device_core_data[device_core].data);
         }
     }
     device_core_data[device_core].data.clear();

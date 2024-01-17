@@ -14,7 +14,7 @@
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
 
 using std::chrono::steady_clock;
 using std::chrono::duration;
@@ -41,7 +41,7 @@ struct TimerPeriod {
 struct CoreTracyData
 {
     std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> data;
-    TracyCLCtx tracyContext;
+    TracyTTCtx tracyContext;
     bool contextPopulated;
     uint32_t runCounter;
 };
