@@ -519,9 +519,9 @@ def to_memory_config(tensor, memory_config: MemoryConfig):
 
 
 @decorate_operation()
-def to_layout(tensor, layout: Layout):
+def to_layout(tensor, layout: Layout, *, value: Union[int, float] = 0):
     """
-    to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
+    to_layout(tensor: ttnn.Tensor, layout: Layout, *, value: Union[int, float]=0) -> ttnn.Tensor
 
     Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
     the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
@@ -579,16 +579,6 @@ def to_layout(tensor, layout: Layout):
         else:
             return Tensor(ttl_tensor.to(layout))
 
-    # def unpad_with_pytorch(ttnn_tensor):
-    #     desired_shape = list(ttnn_tensor.shape)
-    #     ttl_tensor = ttnn_tensor.value
-    #     if ttnn_tensor.layout != ROW_MAJOR_LAYOUT:
-    #         ttl_tensor = ttl_tensor.to(ROW_MAJOR_LAYOUT)
-    #     tensor = ttl_tensor.to_torch()
-    #     slicing = [slice(None, desired_dim) for desired_dim in desired_shape]
-    #     tensor = tensor[slicing]
-    #     return from_torch(tensor)
-
     intended_shape = tuple(tensor.shape)
 
     input_tensor = tensor
@@ -644,12 +634,12 @@ def to_layout(tensor, layout: Layout):
                     ttl_input_tensor,
                     batch_sizes + [padded_height, padded_width],
                     [0, 0, 0, 0],
-                    0,
+                    value,
                 )
             )
         else:
             tensor = Tensor(
-                ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
+                ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], value).to(layout)
             )
 
         tensor = reshape(

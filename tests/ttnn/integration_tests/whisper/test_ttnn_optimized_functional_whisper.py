@@ -217,7 +217,7 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
 
     ttnn_attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    ttnn_attention_mask = ttnn.to_layout(ttnn_attention_mask, ttnn.TILE_LAYOUT)
+    ttnn_attention_mask = ttnn.to_layout(ttnn_attention_mask, ttnn.TILE_LAYOUT, value=-100)
     ttnn_attention_mask = ttnn.to_device(ttnn_attention_mask, device)
 
     ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
@@ -349,7 +349,12 @@ def test_ttnn_whisper(device, ttnn_model):
         device=device,
     )
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+    (
+        input_embeds,
+        decoder_hidden_states,
+        decoder_attention_mask,
+        encoder_attention_mask_for_softmax,
+    ) = ttnn_model.preprocess_inputs(
         config=config,
         input_features=input_features,
         input_ids=decoder_input_ids,
@@ -363,9 +368,10 @@ def test_ttnn_whisper(device, ttnn_model):
         input_embeds,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
+        encoder_attention_mask_for_softmax=encoder_attention_mask_for_softmax,
         parameters=ttnn_parameters,
     )
     last_hidden_state = ttnn.from_device(last_hidden_state)
     last_hidden_state = ttnn.to_torch(last_hidden_state)
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.97)
+    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.99)

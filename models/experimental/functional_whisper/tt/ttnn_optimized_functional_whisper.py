@@ -154,29 +154,44 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
 
     attn_weights = query_states @ ttnn.permute(key_states, (0, 2, 1))
 
-    if attention_mask is not None:
-        bsz, *_, padded_tgt_len, src_len = attention_mask.shape.padded()
-        bsz, *_, tgt_len, unpadded_src_len = attention_mask.shape
-        attn_weights = (
-            ttnn.reshape(
-                attn_weights,
-                shape=ttnn.Shape(
-                    [bsz, config.encoder_attention_heads, tgt_len, unpadded_src_len],
-                    [bsz, config.encoder_attention_heads, padded_tgt_len, src_len],
-                ),
-            )
-            + attention_mask
-        )
-        attn_weights = ttnn.reshape(
-            attn_weights,
-            shape=ttnn.Shape(
-                [bsz * config.encoder_attention_heads, tgt_len, unpadded_src_len],
-                [bsz * config.encoder_attention_heads, padded_tgt_len, src_len],
-            ),
-        )
+    # if attention_mask is not None:
+    #     *_, padded_tgt_len, src_len = attention_mask.shape.padded()
+    #     *_, tgt_len, unpadded_src_len = attention_mask.shape
+    #     attn_weights = (
+    #         ttnn.reshape(
+    #             attn_weights,
+    #             shape=ttnn.Shape(
+    #                 [bsz, config.encoder_attention_heads, tgt_len, unpadded_src_len],
+    #                 [bsz, config.encoder_attention_heads, padded_tgt_len, src_len],
+    #             ),
+    #         )
+    #         + attention_mask
+    #     )
+    #     attn_weights = ttnn.reshape(
+    #         attn_weights,
+    #         shape=ttnn.Shape(
+    #             [bsz * config.encoder_attention_heads, tgt_len, unpadded_src_len],
+    #             [bsz * config.encoder_attention_heads, padded_tgt_len, src_len],
+    #         ),
+    #     )
 
-    # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
-    attn_weights = ttnn.softmax(attn_weights, dim=-1)
+    # # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
+    # attn_weights = ttnn.softmax(attn_weights, dim=-1)
+
+    *_, padded_tgt_len, src_len = attention_mask.shape.padded()
+    *_, tgt_len, unpadded_src_len = attention_mask.shape
+
+    attn_weights = ttnn.reshape(
+        attn_weights,
+        shape=ttnn.Shape(
+            [bsz, config.encoder_attention_heads, tgt_len, unpadded_src_len],
+            [bsz, config.encoder_attention_heads, padded_tgt_len, src_len],
+        ),
+    )
+    from tests.ttnn.utils_for_testing import update_process_id
+
+    update_process_id()
+    attn_weights = ttnn.transformer.attention_softmax(attn_weights, head_size=None, attention_mask=attention_mask)
 
     attn_probs = dropout(attn_weights, p=0, training=False)
     attn_output = attn_probs @ value_states
@@ -195,7 +210,7 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     return attn_output
 
 
-def encoder_layer(config, hidden_states, *, parameters):
+def encoder_layer(config, hidden_states, encoder_attention_mask_for_softmax, *, parameters):
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
         hidden_states,
@@ -203,7 +218,9 @@ def encoder_layer(config, hidden_states, *, parameters):
         bias=parameters.self_attn_layer_norm.bias,
     )
 
-    hidden_states = whisper_attention(config, hidden_states, attention_mask=None, parameters=parameters.self_attn)
+    hidden_states = whisper_attention(
+        config, hidden_states, attention_mask=encoder_attention_mask_for_softmax, parameters=parameters.self_attn
+    )
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
@@ -227,12 +244,14 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, inputs_embeds, *, parameters):
+def encoder(config, inputs_embeds, encoder_attention_mask_for_softmax, *, parameters):
     hidden_states = inputs_embeds + parameters.embed_positions.weight
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
-        hidden_states = encoder_layer(config, hidden_states, parameters=encoder_layer_parameter)
+        hidden_states = encoder_layer(
+            config, hidden_states, encoder_attention_mask_for_softmax, parameters=encoder_layer_parameter
+        )
 
     hidden_states = ttnn.layer_norm(
         hidden_states,
@@ -366,7 +385,7 @@ def convert_to_ttnn(model, name):
     ]
 
 
-def preprocess_encoder_inputs(input_features, *, parameters, device):
+def preprocess_encoder_inputs(config, input_features, *, parameters, device):
     def conv(input, weight, bias, stride=1, padding=1, dilation=1, groups=1):
         return F.conv1d(input, weight, bias, stride, padding, dilation, groups)
 
@@ -392,7 +411,15 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
     input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
     input_embeds = ttnn.to_device(input_embeds, device)
 
-    return input_embeds
+    bsz = 1
+    encoder_attention_mask_for_softmax = torch.zeros(
+        bsz, config.encoder_attention_heads, input_embeds.shape[1], input_embeds.shape[1], dtype=torch.bfloat16
+    )
+    encoder_attention_mask_for_softmax = ttnn.from_torch(encoder_attention_mask_for_softmax, dtype=ttnn.bfloat16)
+    encoder_attention_mask_for_softmax = ttnn.to_layout(encoder_attention_mask_for_softmax, ttnn.TILE_LAYOUT, -100)
+    encoder_attention_mask_for_softmax = ttnn.to_device(encoder_attention_mask_for_softmax, device)
+
+    return input_embeds, encoder_attention_mask_for_softmax
 
 
 def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, device):
@@ -411,7 +438,7 @@ def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, 
     decoder_hidden_states = ttnn.to_device(decoder_hidden_states, device)
 
     attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
+    attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT, value=-100)
     attention_mask = ttnn.to_device(attention_mask, device)
 
     return decoder_hidden_states, attention_mask
@@ -426,15 +453,27 @@ def preprocess_inputs(
     parameters,
     device,
 ):
-    input_embeds = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
+    input_embeds, encoder_attention_mask_for_softmax = preprocess_encoder_inputs(
+        config, input_features, parameters=parameters.encoder, device=device
+    )
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
         config, input_ids, attention_mask, parameters=parameters.decoder, device=device
     )
-    return input_embeds, decoder_hidden_states, attention_mask
+    return input_embeds, decoder_hidden_states, attention_mask, encoder_attention_mask_for_softmax
 
 
-def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
+def whisper(
+    config,
+    encoder_hidden_states,
+    decoder_hidden_states,
+    decoder_attention_mask,
+    encoder_attention_mask_for_softmax,
+    *,
+    parameters,
+):
+    encoder_hidden_states = encoder(
+        config, encoder_hidden_states, encoder_attention_mask_for_softmax, parameters=parameters.encoder
+    )
     last_hidden_state = decoder(
         config,
         decoder_hidden_states,
