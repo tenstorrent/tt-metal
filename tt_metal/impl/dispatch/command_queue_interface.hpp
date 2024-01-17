@@ -93,6 +93,9 @@ struct SystemMemoryCQInterface {
       offset(get_absolute_cq_offset(channel, cq_id, cq_size))
      {
         TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
+        // Currently read / write pointers on host and device assumes contiguous ranges for each channel
+        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
+        //  but on host, we access a region of sysmem using addresses relative to a particular channel
         this->issue_fifo_wr_ptr = (CQ_START + this->offset) >> 4;  // In 16B words
         this->issue_fifo_wr_toggle = 0;
 
@@ -222,9 +225,13 @@ class SystemMemoryManager {
     }
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
-        // this->cq_sysmem_start gives start of hugepage for a given channel from perspective of host
-        //  but all rd/wr pointers include channel offset from address 0 to match device side pointers
+        // Currently read / write pointers on host and device assumes contiguous ranges for each channel
+        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
+        //  but on host, we access a region of sysmem using addresses relative to a particular channel
+        //  this->cq_sysmem_start gives start of hugepage for a given channel
+        //  since all rd/wr pointers include channel offset from address 0 to match device side pointers
         //  so channel offset needs to be subtracted to get address relative to channel
+        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent-metal/tt-metal/issues/4757
         void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         memcpy(user_scratchspace, data, size_in_bytes);
