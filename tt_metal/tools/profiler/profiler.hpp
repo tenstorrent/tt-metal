@@ -15,6 +15,7 @@
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
+#include "tt_metal/third_party/tracy/public/common/TracyTTDeviceData.hpp"
 
 using std::chrono::steady_clock;
 using std::chrono::duration;

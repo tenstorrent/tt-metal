@@ -339,12 +339,12 @@ def import_device_profile_log(
                 devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
             elif lineCount > 1:
-                chipID = int(row[0])
-                core = (int(row[1]), int(row[2]))
+                programID = int(row[0].strip())
+                chipID = int(row[1])
+                core = (int(row[2]), int(row[3]))
                 if intrestingCores and core not in intrestingCores:
                     continue
-                risc = row[3].strip()
-                programID = int(row[4].strip())
+                risc = row[4].strip()
                 timerID = int(row[5])
                 if ignoreMarkers and timerID in ignoreMarkers:
                     continue
