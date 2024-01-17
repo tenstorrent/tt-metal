@@ -301,8 +301,7 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
         )
     )
     input_embeds = input_embeds.permute(0, 2, 1)
-    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16)
-    input_embeds = ttnn.to_device(input_embeds, device)
+    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16, device=device)
 
     return input_embeds
 
@@ -318,10 +317,8 @@ def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, 
     positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
     decoder_hidden_states = inputs_embeds + positions
 
-    decoder_hidden_states = ttnn.from_torch(decoder_hidden_states, dtype=ttnn.bfloat16)
-    decoder_hidden_states = ttnn.to_device(decoder_hidden_states, device)
-    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    attention_mask = ttnn.to_device(attention_mask, device)
+    decoder_hidden_states = ttnn.from_torch(decoder_hidden_states, dtype=ttnn.bfloat16, device=device)
+    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, device=device)
 
     return decoder_hidden_states, attention_mask
 
