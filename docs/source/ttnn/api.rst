@@ -79,6 +79,7 @@ Normalization
 .. toctree::
    :maxdepth: 1
 
+   ttnn/group_norm
    ttnn/layer_norm
    ttnn/rms_norm
 
