@@ -16,22 +16,19 @@ import ttnn
 
 def preprocess_linear_weight(weight, *, dtype):
     weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype)
-    weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return weight
 
 
 def preprocess_linear_bias(bias, *, dtype):
     bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype)
-    bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return bias
 
 
 def preprocess_layernorm_parameter(parameter, *, dtype):
     parameter = parameter.reshape((1, -1))
-    parameter = ttnn.from_torch(parameter, dtype=dtype)
-    parameter = ttnn.to_layout(parameter, ttnn.TILE_LAYOUT)
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return parameter
 
 

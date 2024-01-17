@@ -159,7 +159,7 @@ def group_norm(
         raise RuntimeError("group_norm expects input tensor to be on device!")
 
     output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
-    return ttnn.from_torch(output, device=input_tensor.device, dtype=input_tensor.dtype, layout=input_tensor.layout)
+    return ttnn.from_torch(output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device)
 
 
 __all__ = [
