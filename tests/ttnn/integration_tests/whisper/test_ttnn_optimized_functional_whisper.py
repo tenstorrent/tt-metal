@@ -122,7 +122,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     tt_attn_output = ttnn.from_device(tt_attn_output)
     tt_attn_output = ttnn.to_torch(tt_attn_output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output)
+    assert_with_pcc(torch_attn_output, tt_attn_output, pcc=0.99)
 
 
 @skip_for_wormhole_b0()
@@ -306,7 +306,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     tt_attn_output = ttnn.from_device(tt_attn_output)
     tt_attn_output = ttnn.to_torch(tt_attn_output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output)
+    assert_with_pcc(torch_attn_output, tt_attn_output, pcc=0.99)
 
 
 @skip_for_wormhole_b0()

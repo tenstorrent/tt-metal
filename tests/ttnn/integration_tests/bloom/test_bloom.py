@@ -28,7 +28,7 @@ def test_merge_heads(device):
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.99)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
 @skip_for_wormhole_b0()
@@ -43,7 +43,7 @@ def test_optimized_merge_heads(device):
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.99)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
 @skip_for_wormhole_b0()
@@ -70,18 +70,14 @@ def test_create_query_key_value(device):
     (tt_query_layer, tt_key_layer, tt_value_layer) = ttnn_functional_bloom.create_query_key_value(
         tt_hidden, tt_weight, tt_bias, num_heads, use_core_grid=False
     )
-    tt_query_layer = ttnn.from_device(tt_query_layer)
-    tt_query_layer = ttnn.to_layout(tt_query_layer, ttnn.ROW_MAJOR_LAYOUT)
     tt_query_layer = ttnn.to_torch(tt_query_layer)
-    assert_with_pcc(torch_query_layer, tt_query_layer, 0.99)
-    tt_key_layer = ttnn.from_device(tt_key_layer)
-    tt_key_layer = ttnn.to_layout(tt_key_layer, ttnn.ROW_MAJOR_LAYOUT)
+    assert_with_pcc(torch_query_layer, tt_query_layer, 0.9991)
+
     tt_key_layer = ttnn.to_torch(tt_key_layer)
-    assert_with_pcc(torch_key_layer, tt_key_layer, 0.99)
-    tt_value_layer = ttnn.from_device(tt_value_layer)
-    tt_value_layer = ttnn.to_layout(tt_value_layer, ttnn.ROW_MAJOR_LAYOUT)
+    assert_with_pcc(torch_key_layer, tt_key_layer, 0.9991)
+
     tt_value_layer = ttnn.to_torch(tt_value_layer)
-    assert_with_pcc(torch_value_layer, tt_value_layer, 0.99)
+    assert_with_pcc(torch_value_layer, tt_value_layer, 0.9991)
 
 
 @skip_for_wormhole_b0()
@@ -110,20 +106,14 @@ def test_optimized_create_query_key_value(device):
         tt_hidden, tt_weight, tt_bias, num_heads=num_heads
     )
 
-    tt_query_layer = ttnn.from_device(tt_query_layer)
-    tt_query_layer = ttnn.to_layout(tt_query_layer, ttnn.ROW_MAJOR_LAYOUT)
     tt_query_layer = ttnn.to_torch(tt_query_layer)
-    assert_with_pcc(torch_query_layer, tt_query_layer, 0.99)
+    assert_with_pcc(torch_query_layer, tt_query_layer, 0.9986)
 
-    tt_key_layer = ttnn.from_device(tt_key_layer)
-    tt_key_layer = ttnn.to_layout(tt_key_layer, ttnn.ROW_MAJOR_LAYOUT)
     tt_key_layer = ttnn.to_torch(tt_key_layer)
-    assert_with_pcc(torch_key_layer, tt_key_layer, 0.99)
+    assert_with_pcc(torch_key_layer, tt_key_layer, 0.9986)
 
-    tt_value_layer = ttnn.from_device(tt_value_layer)
-    tt_value_layer = ttnn.to_layout(tt_value_layer, ttnn.ROW_MAJOR_LAYOUT)
     tt_value_layer = ttnn.to_torch(tt_value_layer)
-    assert_with_pcc(torch_value_layer, tt_value_layer, 0.99)
+    assert_with_pcc(torch_value_layer, tt_value_layer, 0.9985)
 
 
 @skip_for_wormhole_b0()
@@ -143,7 +133,7 @@ def test_compute_attention_scores(device):
     tt_attention_scores = ttnn.from_device(tt_attention_scores)
     tt_attention_scores = ttnn.to_layout(tt_attention_scores, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_scores = ttnn.to_torch(tt_attention_scores)
-    assert_with_pcc(torch_attention_scores, tt_attention_scores, 0.99)
+    assert_with_pcc(torch_attention_scores, tt_attention_scores, 0.9999)
 
 
 @skip_for_wormhole_b0()
@@ -165,7 +155,7 @@ def test_optimized_compute_attention_scores(device):
     tt_attention_scores = ttnn.from_device(tt_attention_scores)
     tt_attention_scores = ttnn.to_layout(tt_attention_scores, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_scores = ttnn.to_torch(tt_attention_scores)
-    assert_with_pcc(torch_attention_scores, tt_attention_scores, 0.99)
+    assert_with_pcc(torch_attention_scores, tt_attention_scores, 0.9999)
 
 
 @skip_for_wormhole_b0()
@@ -184,7 +174,7 @@ def test_compute_attention_probs(device):
     tt_attention_probes = ttnn.from_device(tt_attention_probes)
     tt_attention_probes = ttnn.to_layout(tt_attention_probes, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_probes = ttnn.to_torch(tt_attention_probes)
-    assert_with_pcc(torch_attention_probes, tt_attention_probes, 0.99)
+    assert_with_pcc(torch_attention_probes, tt_attention_probes, 0.9999)
 
 
 @skip_for_wormhole_b0()
@@ -201,7 +191,7 @@ def test_compute_context_layer(device):
     tt_context_layer = ttnn.from_device(tt_context_layer)
     tt_context_layer = ttnn.to_layout(tt_context_layer, ttnn.ROW_MAJOR_LAYOUT)
     tt_context_layer = ttnn.to_torch(tt_context_layer)
-    assert_with_pcc(torch_context_layer, tt_context_layer, 0.99)
+    assert_with_pcc(torch_context_layer, tt_context_layer, 0.9999)
 
 
 @skip_for_wormhole_b0()
@@ -220,7 +210,7 @@ def test_optimized_compute_context_layer(device):
     tt_context_layer = ttnn.from_device(tt_context_layer)
     tt_context_layer = ttnn.to_layout(tt_context_layer, ttnn.ROW_MAJOR_LAYOUT)
     tt_context_layer = ttnn.to_torch(tt_context_layer)
-    assert_with_pcc(torch_context_layer, tt_context_layer, 0.99)
+    assert_with_pcc(torch_context_layer, tt_context_layer, 0.9985)
 
 
 @skip_for_wormhole_b0()
@@ -242,7 +232,7 @@ def test_finalize_output(device):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_layout(tt_output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99918)
 
 
 @skip_for_wormhole_b0()
@@ -280,7 +270,7 @@ def test_mlp(device):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_layout(tt_output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9947)
 
 
 @skip_for_wormhole_b0()
@@ -325,7 +315,7 @@ def test_optimized_mlp(device):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_layout(tt_output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9965)
 
 
 @skip_for_wormhole_b0()
@@ -389,7 +379,7 @@ def test_multi_head_attention(device):
     tt_attention_output = ttnn.to_layout(tt_attention_output, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_output = ttnn.to_torch(tt_attention_output)
 
-    assert_with_pcc(torch_attention_output, tt_attention_output, 0.99)
+    assert_with_pcc(torch_attention_output, tt_attention_output, 0.9985)
 
 
 @skip_for_wormhole_b0()
@@ -454,4 +444,4 @@ def test_optimized_multi_head_attention(device):
     tt_attention_output = ttnn.to_layout(tt_attention_output, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_output = ttnn.to_torch(tt_attention_output)
 
-    assert_with_pcc(torch_attention_output, tt_attention_output, 0.99)
+    assert_with_pcc(torch_attention_output, tt_attention_output, 0.9977)
