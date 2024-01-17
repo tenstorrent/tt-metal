@@ -73,6 +73,7 @@ from ttnn.unary import (
     rsqrt,
     relu,
     silu,
+    log,
 )
 
 from ttnn.binary import (
