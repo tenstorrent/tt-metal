@@ -37,8 +37,10 @@ Pointwise Unary
 
    ttnn/exp
    ttnn/gelu
+   ttnn/log
    ttnn/relu
    ttnn/rsqrt
+   ttnn/silu
    ttnn/softmax
    ttnn/tanh
 

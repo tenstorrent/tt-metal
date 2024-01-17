@@ -164,6 +164,7 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
         if not ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
             raise RuntimeError("All tensors must be on device!")
 
+    dtype = tensors[0].dtype
     device = tensors[0].device
     layout = tensors[0].layout
 
@@ -180,7 +181,7 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
 
     output_tensor = _torch_concat(tensors, dim=0)
 
-    return ttnn.from_torch(output_tensor, device=device, layout=layout)
+    return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
 
 
 def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
@@ -261,12 +262,13 @@ def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim
     if type(repeats) == tensor and not ttnn.has_storage_type_of(repeats, ttl.tensor.StorageType.DEVICE):
         raise RuntimeError("Repeats tensor must be on device!")
 
+    dtype = tensor.dtype
     device = tensor.device
     layout = tensor.layout
 
     output_tensor = _torch_repeat_interleave(tensor, repeats, dim=0)
 
-    return ttnn.from_torch(output_tensor, device=device, layout=layout)
+    return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
 
 
 __all__ = ["pad", "reshape", "permute", "concat", "split", "repeat_interleave"]
