@@ -30,7 +30,7 @@ def test_multiply_not_4D(device, scalar):
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -67,7 +67,7 @@ def test_multiply_with_scalar_and_tile_layout(device, scalar):
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
 @pytest.mark.skip(reason="Unable to multiply scalar to tensor with int")
@@ -85,4 +85,4 @@ def test_multiply_int32_with_scalar(device, input_a, scalar):
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
