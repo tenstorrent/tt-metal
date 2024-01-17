@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 
 #include "tt_dnn/op_library/moreh_dot_backward/moreh_dot_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
@@ -23,39 +24,6 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
 }
 
 ////////////////////////////////////////////////////////////////////////////
-//                         MorehSum
-////////////////////////////////////////////////////////////////////////////
-void MorehSum::validate(const std::vector<Tensor>& inputs) const {
-    const auto& src = inputs.at(0);
-    const auto& dst = inputs.at(1);
-    const auto& src_shape = src.shape();
-    const auto& dst_shape = dst.shape();
-
-    TT_ASSERT(src_shape[2] == dst_shape[2] && src_shape[3] == dst_shape[3]);
-    TT_ASSERT(src_shape[0] >= dst_shape[0]);
-    TT_ASSERT(src_shape[1] >= dst_shape[1]);
-}
-
-std::vector<Tensor> MorehSum::create_output_tensors(const std::vector<Tensor>& inputs) const {
-    // Inplace
-    return {};
-}
-
-std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& inputs) const {
-    // Inplace
-    return {};
-}
-
-operation::ProgramWithCallbacks MorehSum::create_program(
-    const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
-    const auto& src = inputs.at(0);
-    const auto& dst = inputs.at(1);
-    return moreh_sum_multi_core(src, dst);
-}
-
-stl::reflection::Attributes MorehSum::attributes() const { return {}; }
-
-////////////////////////////////////////////////////////////////////////////
 //                         moreh_matmul_backward
 ////////////////////////////////////////////////////////////////////////////
 [[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_matmul_backward_(
@@ -68,6 +36,16 @@ stl::reflection::Attributes MorehSum::attributes() const { return {}; }
     std::vector<std::variant<Tensor, char*>> outputs;
     outputs.reserve(2);
 
+    auto find_reduce_dim = [](const Shape& shape, const Shape& shape2) -> std::vector<int64_t> {
+        std::vector<int64_t> dims;
+        for (int i = 0; i < shape.rank() - 1; ++i) {
+            if (shape[i] != shape2[i]) {
+                dims.push_back(i);
+            }
+        }
+        return dims;
+    };
+
     if (input_grad) {
         const auto& input_grad_tensor = input_grad->get();
         if (is_same_batch_shape(output_grad, input_grad_tensor)) {
@@ -78,7 +56,8 @@ stl::reflection::Attributes MorehSum::attributes() const { return {}; }
             const auto& input_shape = input.shape().without_padding();
             const auto& temp_input_grad =
                 moreh_matmul(output_grad, other, std::nullopt, false, true, output_mem_config);
-            operation::run(MorehSum{}, {temp_input_grad, input_grad_tensor});
+            auto reduce_dims = find_reduce_dim(temp_input_grad.shape(), input_grad_tensor.shape());
+            moreh_sum(temp_input_grad, input_grad_tensor, reduce_dims);
         }
         outputs.push_back(input_grad_tensor);
     } else {
@@ -92,7 +71,8 @@ stl::reflection::Attributes MorehSum::attributes() const { return {}; }
         } else {
             const auto& temp_other_grad =
                 moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
-            operation::run(MorehSum{}, {temp_other_grad, other_grad_tensor});
+            auto reduce_dims = find_reduce_dim(temp_other_grad.shape(), other_grad_tensor.shape());
+            moreh_sum(temp_other_grad, other_grad_tensor, reduce_dims);
         }
         outputs.push_back(other_grad_tensor);
     } else {

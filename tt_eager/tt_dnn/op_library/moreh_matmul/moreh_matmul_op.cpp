@@ -99,12 +99,20 @@ inline void moreh_matmul_validate(
 
 inline Shape compute_output_shape(
     const Shape& input_shape, const Shape& other_shape, bool transpose_input, bool transpose_other) {
-    Shape output_shape{
-        std::max(input_shape[0], other_shape[0]),
-        std::max(input_shape[1], other_shape[1]),
-        (transpose_input) ? (input_shape[3]) : (input_shape[2]),
-        (transpose_other) ? (other_shape[2]) : (other_shape[3])};
-    return output_shape;
+    const auto& input_shape_wo_padding = input_shape.without_padding();
+    const auto& other_shape_wo_padding = other_shape.without_padding();
+
+    auto h = (transpose_input) ? (input_shape[3]) : (input_shape[2]);
+    auto w = (transpose_other) ? (other_shape[2]) : (other_shape[3]);
+    auto h_wo_padding = (transpose_input) ? (input_shape_wo_padding[3]) : (input_shape_wo_padding[2]);
+    auto w_wo_padding = (transpose_other) ? (other_shape_wo_padding[2]) : (other_shape_wo_padding[3]);
+
+    Shape output_shape{std::max(input_shape[0], other_shape[0]), std::max(input_shape[1], other_shape[1]), h, w};
+    auto padding = output_shape.padding();
+    padding[2] = Padding::PadDimension{0, h - h_wo_padding};
+    padding[3] = Padding::PadDimension{0, w - w_wo_padding};
+
+    return {Shape(output_shape, padding)};
 }
 
 inline Tensor create_output_tensor(

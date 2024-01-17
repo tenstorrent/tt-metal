@@ -7,8 +7,7 @@ import torch
 from loguru import logger
 
 import tt_lib as ttl
-from models.utility_functions import skip_for_wormhole_b0
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
 
 
 def get_tensors(input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device):
@@ -232,6 +231,7 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
         assert passing
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
@@ -275,6 +275,7 @@ def test_moreh_matmul(params, device):
     assert passing
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "params",
     (
