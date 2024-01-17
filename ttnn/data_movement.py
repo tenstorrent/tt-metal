@@ -135,9 +135,9 @@ def _torch_concat(tensors, dim=0, **_):
 
 
 # @decorate_operation(torch_function=_torch_concat)
-def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tensor:
+def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor:
     r"""
-    concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tensor
+    concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor
 
     Concats :attr:`tensors` in the given :attr:`dim`.
 
@@ -217,4 +217,56 @@ def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     return output_tensors
 
 
-__all__ = ["pad", "reshape", "permute", "concat", "split"]
+def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
+    import torch
+
+    if isinstance(repeats, ttnn.Tensor):
+        repeats = ttnn.to_torch(repeats)
+
+    return torch.repeat_interleave(ttnn.to_torch(tensor), repeats, dim=dim)
+
+
+# @decorate_operation(torch_function=_torch_concat)
+def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
+    r"""
+    repeat_interleave(tensors: ttnn.Tensor, repeats : Union[ttnn.Tensor,int], dim: int = 0) -> ttnn.Tensor
+
+    Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
+
+    Args:
+        * :attr:`tensors`: the tensors to be concatenated.
+        * :attr:`repeats`: The number of repetitions for each element. repeats is broadcasted to fit the shape of the given axis.
+        * :attr:`dim`: the concatenating dimension.
+
+    Example::
+
+        >>> tensor = ttnn.repeats(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2, dim=3)), device)
+        >>> print(tensor)
+        tensor([[1, 2],
+        [1, 2],
+        [3, 4],
+        [3, 4]])
+
+    """
+
+    if not isinstance(tensor, ttnn.Tensor):
+        raise RuntimeError("Expected tensor argument to be a ttnn.Tensor")
+
+    if not ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("Tensor must be on device!")
+
+    if not isinstance(repeats, int) and not isinstance(repeats, ttnn.Tensor):
+        raise RuntimeError("Expected repeat to either be an int or a ttnn.Tensor")
+
+    if type(repeats) == tensor and not ttnn.has_storage_type_of(repeats, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("Repeats tensor must be on device!")
+
+    device = tensor.device
+    layout = tensor.layout
+
+    output_tensor = _torch_repeat_interleave(tensor, repeats, dim=0)
+
+    return ttnn.from_torch(output_tensor, device=device, layout=layout)
+
+
+__all__ = ["pad", "reshape", "permute", "concat", "split", "repeat_interleave"]

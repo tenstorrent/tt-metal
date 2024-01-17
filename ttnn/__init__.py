@@ -63,6 +63,7 @@ from ttnn.data_movement import (
     pad,
     permute,
     split,
+    repeat_interleave,
 )
 
 from ttnn.unary import (

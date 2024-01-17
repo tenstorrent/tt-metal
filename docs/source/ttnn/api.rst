@@ -72,6 +72,7 @@ Data Movement
    ttnn/permute
    ttnn/reshape
    ttnn/split
+   ttnn/repeat_interleave
 
 Normalization
 =============
