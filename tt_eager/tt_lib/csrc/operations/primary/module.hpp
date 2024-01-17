@@ -387,7 +387,7 @@ void py_module(py::module& m_primary) {
 
     // moreh_clip_grad_norm
     m_primary.def(
-        "moreh_clip_grad_norm",
+        "moreh_clip_grad_norm_",
         &moreh_clip_grad_norm,
         py::arg("inputs").noconvert(),
         py::arg("max_norm").noconvert(),

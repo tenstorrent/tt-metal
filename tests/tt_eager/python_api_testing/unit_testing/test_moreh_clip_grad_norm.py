@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
 from loguru import logger
 
 TILE_HEIGHT = 32
@@ -36,6 +36,7 @@ def to_npu(
     return npu_tensor
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_iters_of_each_case", [2])
 @pytest.mark.parametrize("range_of_padding", [(0, 21, 10)])  # [0, 10, 20]
 @pytest.mark.parametrize("range_of_n", [(1, 4)])
@@ -92,7 +93,7 @@ def test_moreh_clip_grad_norm(
             input_shapes.append(input_shape)
 
         cpu_total_norm = torch.nn.utils.clip_grad_norm_(cpu_inputs, max_norm, norm_type)
-        npu_total_norm = ttl.operations.primary.moreh_clip_grad_norm(npu_inputs, max_norm, norm_type)
+        npu_total_norm = ttl.operations.primary.moreh_clip_grad_norm_(npu_inputs, max_norm, norm_type)
 
         expected_total_norm = cpu_total_norm
         actual_total_norm = to_cpu(npu_total_norm, [1, 1, 1, 1])
@@ -114,6 +115,7 @@ def test_moreh_clip_grad_norm(
             assert pass_input_i
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("error_if_nonfinite", [True, False])
 def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite):
     device = ttl.device.CreateDevice(0)
@@ -144,7 +146,7 @@ def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite):
 
     # Check tt behavior
     try:
-        ttl.operations.primary.moreh_clip_grad_norm(
+        ttl.operations.primary.moreh_clip_grad_norm_(
             [to_npu(param.grad.bfloat16(), device, npu_dtype=npu_dtype)], max_norm, norm_type, error_if_nonfinite
         )
         assert not error_if_nonfinite
