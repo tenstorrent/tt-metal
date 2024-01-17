@@ -13,7 +13,6 @@ import ttnn
 from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
-    pad_tensor,
 )
 
 
@@ -298,7 +297,6 @@ def preprocess_inputs(
 
     alibi = build_alibi_tensor(attention_mask, num_heads, dtype=torch.float)
     alibi = ttnn.from_torch(alibi, dtype=ttnn.bfloat16)
-    alibi = pad_tensor(alibi)
     alibi = ttnn.to_layout(alibi, ttnn.TILE_LAYOUT)
     alibi = ttnn.to_device(alibi, device)
 

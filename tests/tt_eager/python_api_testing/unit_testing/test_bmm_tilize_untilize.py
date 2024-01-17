@@ -2,16 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 import pytest
 import itertools
 
-from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
-import numpy as np
 import torch
 
 import tt_lib as ttl

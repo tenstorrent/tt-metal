@@ -62,7 +62,9 @@ void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const 
 void kernel_main() {
     constexpr uint32_t host_issue_queue_read_ptr_addr = get_compile_time_arg_val(0);
     constexpr uint32_t issue_queue_start_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t issue_queue_size = get_compile_time_arg_val(2);
+
+    // Only the issue queue size is a runtime argument
+    uint32_t issue_queue_size = get_arg_val<uint32_t>(0);
 
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
@@ -107,7 +109,7 @@ void kernel_main() {
             // Basically popfront without the extra conditional
             cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
             cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
-            notify_host_of_issue_queue_read_pointer();
+            notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
             continue;
         }
 
@@ -142,7 +144,7 @@ void kernel_main() {
             producer_consumer_transfer_num_pages,
             db_buf_switch);
 
-        issue_queue_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
+        issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
     }

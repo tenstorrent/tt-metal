@@ -54,7 +54,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         ttnn_model = ttnn_functional_whisper
 
     parameters = preprocess_model_parameters(
-        "ttnn-functional-whisper",
+        tt_model_name,
         initialize_model=lambda: WhisperModel.from_pretrained(model_name).to(dtype_to_use).eval(),
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.custom_preprocessor,

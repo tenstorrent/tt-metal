@@ -37,7 +37,9 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
-def split_fused_qkv_and_split_heads(config, fused_qkv: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+def split_query_key_value_and_split_heads(
+    config, fused_qkv: ttnn.Tensor
+) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     head_size = config.d_model // config.encoder_attention_heads
     batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
     hidden_size = three_times_hidden_size // 3
@@ -60,7 +62,7 @@ def split_fused_qkv_and_split_heads(config, fused_qkv: ttnn.Tensor) -> Tuple[ttn
 
 def calculate_query_key_values(config, hidden_states, *, parameters):
     fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
-    return split_fused_qkv_and_split_heads(config, fused_qkv)
+    return split_query_key_value_and_split_heads(config, fused_qkv)
 
 
 def whisper_attention(config, hidden_states, attention_mask, key_value_states=None, *, parameters):
@@ -78,7 +80,7 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
         query_states, key_states, value_states = calculate_query_key_values(
             config, hidden_states, parameters=parameters
         )
-        query_states *= scaling
+    query_states *= scaling
 
     proj_shape = (bsz * config.encoder_attention_heads, -1, head_size)
     query_states = ttnn.reshape(query_states, shape=proj_shape)
@@ -269,7 +271,12 @@ def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states
 
 
 def convert_to_ttnn(model, name):
-    return name not in ["encoder.conv1", "encoder.conv2", "decoder.embed_tokens", "decoder.embed_positions"]
+    return name not in [
+        "encoder.conv1",
+        "encoder.conv2",
+        "decoder.embed_tokens",
+        "decoder.embed_positions",
+    ]
 
 
 def preprocess_encoder_inputs(input_features, *, parameters, device):
@@ -335,8 +342,8 @@ def preprocess_inputs(
     return input_embeds, decoder_hidden_states, attention_mask
 
 
-def whisper(config, inputs_embeds, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, inputs_embeds, parameters=parameters.encoder)
+def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
+    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
     return decoder(
         config,
         decoder_hidden_states,

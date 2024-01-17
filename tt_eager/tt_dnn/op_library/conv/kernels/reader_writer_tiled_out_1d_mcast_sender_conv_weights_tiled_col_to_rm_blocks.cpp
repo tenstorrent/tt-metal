@@ -70,7 +70,7 @@ void kernel_main() {
     // bias args are 3 and 4
     constexpr uint32_t act_block_h_datums                   = get_compile_time_arg_val(5);
     constexpr uint32_t act_block_num_tiles                  = get_compile_time_arg_val(6);
-    constexpr uint32_t log_base_2_of_conv_act_size_c_bytes  = get_compile_time_arg_val(7);
+    constexpr uint32_t conv_act_size_c_bytes                = get_compile_time_arg_val(7);
     constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(8);
     constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(9);
 
@@ -179,11 +179,11 @@ void kernel_main() {
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
-                            act_l1_offset = reader_offset + (reader_idx_1 << log_base_2_of_conv_act_size_c_bytes);
+                            act_l1_offset = reader_offset + (reader_idx_1 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                             l1_write_addr_act += coalesced_read_bytes;
 
-                            act_l1_offset = reader_offset + (reader_idx_2 << log_base_2_of_conv_act_size_c_bytes);
+                            act_l1_offset = reader_offset + (reader_idx_2 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                             l1_write_addr_act += coalesced_read_bytes;
 
@@ -270,11 +270,11 @@ void kernel_main() {
                             uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                             uint32_t reader_idx_2 = two_reader_indices >> 16;
 
-                            act_l1_offset = reader_offset + (reader_idx_1 << log_base_2_of_conv_act_size_c_bytes);
+                            act_l1_offset = reader_offset + (reader_idx_1 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                             l1_write_addr_act += coalesced_read_bytes;
 
-                            act_l1_offset = reader_offset + (reader_idx_2 << log_base_2_of_conv_act_size_c_bytes);
+                            act_l1_offset = reader_offset + (reader_idx_2 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                             l1_write_addr_act += coalesced_read_bytes;
 

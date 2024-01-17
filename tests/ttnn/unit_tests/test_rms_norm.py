@@ -37,6 +37,7 @@ def test_rms_norm(device, batch_size, h, w, input_layout):
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=input_layout)
     weight = ttnn.from_torch(torch_weight, device=device)
     output_tensor = ttnn.rms_norm(input_tensor, weight)
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)

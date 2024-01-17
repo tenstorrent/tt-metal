@@ -800,11 +800,19 @@ def logical_ori(x, *args, **kwargs):
 
 
 def add(x, y, *args, **kwargs):
-    return torch.add(x, y)
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return torch.add(x, y, alpha=scalar)
+    else:
+        return torch.add(x, y)
 
 
 def sub(x, y, *args, **kwargs):
-    return torch.sub(x, y)
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return torch.sub(x, y, alpha=scalar)
+    else:
+        return torch.sub(x, y)
 
 
 def mul(x, y, *args, **kwargs):
@@ -1067,6 +1075,14 @@ def embeddings(x, y, *args, **kwargs):
     return z
 
 
+def ttnn_embeddings(x, y, *args, **kwargs):
+    x = x.int()
+    x = torch.clamp(x, min=0, max=y.shape[0] - 1)
+
+    z = torch.nn.functional.embedding(x, y)
+    return z
+
+
 def rmsnorm_noweights(x, *args, **kwargs):
     eps = 1e-5
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
@@ -1120,3 +1136,21 @@ def complex_abs(x, *args, **kwargs):
 
 def complex_imag(x, *args, **kwargs):
     return torch.imag(x)
+
+
+def ttnn_layernorm_weights_bias(x, y, z, *args, **kwargs):
+    w = x.shape[1]
+    torch_output_tensor = torch.nn.functional.layer_norm(x, normalized_shape=[w], weight=y, bias=z)
+    return torch_output_tensor
+
+
+def ttnn_layernorm_weights_bias_residual(x, y, z, w, *args, **kwargs):
+    width = x.shape[1]
+    torch_output_tensor = torch.nn.functional.layer_norm(x + y, normalized_shape=[width], weight=z, bias=w)
+    return torch_output_tensor
+
+
+def ttnn_layernorm_noweights(x, *args, **kwargs):
+    w = x.shape[1]
+    torch_output_tensor = torch.nn.functional.layer_norm(x, normalized_shape=[w])
+    return torch_output_tensor

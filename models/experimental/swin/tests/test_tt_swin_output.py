@@ -2,14 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 import torch
 import pytest
 from loguru import logger
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -30,16 +25,12 @@ from transformers import SwinModel
 )
 def test_swin_output_inference(device, pcc, reset_seeds):
     OUTPUT_LAYER_INDEX = 0
-    base_address = (
-        f"encoder.layers.{OUTPUT_LAYER_INDEX}.blocks.{OUTPUT_LAYER_INDEX}.output"
-    )
+    base_address = f"encoder.layers.{OUTPUT_LAYER_INDEX}.blocks.{OUTPUT_LAYER_INDEX}.output"
 
     model = SwinModel.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
 
     # Torch swinoutput
-    torch_model = (
-        model.encoder.layers[OUTPUT_LAYER_INDEX].blocks[OUTPUT_LAYER_INDEX].output
-    )
+    torch_model = model.encoder.layers[OUTPUT_LAYER_INDEX].blocks[OUTPUT_LAYER_INDEX].output
 
     # Tt swinoutput
     dim = 96

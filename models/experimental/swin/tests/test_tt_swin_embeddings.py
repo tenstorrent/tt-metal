@@ -2,14 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-import torch
+
 import pytest
 from loguru import logger
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -38,10 +34,7 @@ def test_swin_embeddings_inference(device, imagenet_sample_input, pcc, reset_see
 
     # Tt swinembedding
     tt_model = TtSwinEmbeddings(
-        config=model.config,
-        state_dict=model.state_dict(),
-        base_address=base_address,
-        device=device
+        config=model.config, state_dict=model.state_dict(), base_address=base_address, device=device
     )
 
     # Run torch model

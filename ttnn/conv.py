@@ -2,32 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import pathlib
-from typing import Optional, Tuple, Union, Dict
+from typing import Tuple, Union, Dict
 
-
-import tt_lib as ttl
-
-from ttnn.tensor import (
-    Shape,
-    Tensor,
-    Device,
-    from_torch,
-    to_torch,
-    to_device,
-    from_device,
-    to_layout,
-    DataType,
-    MemoryConfig,
-    MathFidelity,
-    DRAM_MEMORY_CONFIG,
-    Layout,
-    ROW_MAJOR_LAYOUT,
-    TILE_LAYOUT,
-    TILE_SIZE,
-    has_storage_type_of,
-)
+import ttnn.tensor as ttnn
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
     TTPyCompositeConv,
@@ -46,18 +23,18 @@ class Conv2D:
         dilation: Union[int, Tuple[int, int]] = 1,
         groups: int = 1,
         padding_mode: str = "zeros",
-        dtype: DataType = None,
+        dtype: ttnn.DataType = None,
         *,
-        device: Device,
+        device: ttnn.Device,
         use_1d_systolic_array: bool,
         batch_size: int,
         input_height: int,
         input_width: int,
         reader_patterns_cache: Dict,
-        weight: Tensor,
-        bias: Tensor = None,
-        math_fidelity: MathFidelity = None,
-        weights_dtype: DataType = None,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor = None,
+        math_fidelity: ttnn.MathFidelity = None,
+        weights_dtype: ttnn.DataType = None,
         activation: str = None,
         conv_blocking_and_parallelization_config_override: Dict = None,
         reallocate_halo_output: bool = False,
@@ -127,11 +104,11 @@ class Conv2D:
             move_utwh_output=reallocate_halo_output,
         )
 
-    def __call__(self, activation: Tensor):
-        return Tensor(self.conv(activation.value))
+    def __call__(self, activation: ttnn.Tensor):
+        return ttnn.Tensor(self.conv(activation.value))
 
-    def copy_input_to_device(self, input: Tensor):
-        return Tensor(self.conv.copy_input_to_device(input.value))
+    def copy_input_to_device(self, input: ttnn.Tensor):
+        return ttnn.Tensor(self.conv.copy_input_to_device(input.value))
 
-    def copy_output_from_device(self, output: Tensor):
-        return Tensor(self.conv.copy_output_from_device(output.value))
+    def copy_output_from_device(self, output: ttnn.Tensor):
+        return ttnn.Tensor(self.conv.copy_output_from_device(output.value))

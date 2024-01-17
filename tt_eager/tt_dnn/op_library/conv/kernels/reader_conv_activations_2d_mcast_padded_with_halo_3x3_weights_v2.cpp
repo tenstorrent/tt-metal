@@ -8,10 +8,10 @@
 
 FORCE_INLINE
 void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
-        const uint32_t log_base_2_of_conv_act_size_c_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
+        const uint32_t conv_act_c_read_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
 
     constexpr uint32_t unroll_factor = WINDOW_INNER;
-    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx << log_base_2_of_conv_act_size_c_bytes);
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
     #pragma GCC unroll unroll_factor
     for (uint32_t inner = 0; inner < WINDOW_INNER; inner++) {
         noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
@@ -71,12 +71,10 @@ void kernel_main() {
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
-    // TODO delete unused: get_compile_time_arg_val(7); (8), (9)
     // need to have these as compile-time since we unroll loops based on them
-    constexpr uint32_t window_outer                        = get_compile_time_arg_val(10);
-    constexpr uint32_t window_inner                        = get_compile_time_arg_val(11);
-    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(12);
+    constexpr uint32_t window_outer                        = get_compile_time_arg_val(6);
+    constexpr uint32_t window_inner                        = get_compile_time_arg_val(7);
+    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(8);
 
     constexpr uint32_t cb_id_act = tt::CB::c_in0;
     constexpr uint32_t tilized_in0_cb_id = tt::CB::c_intermed1;
@@ -177,13 +175,13 @@ void kernel_main() {
     cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
-    constexpr uint32_t stride_h_bytes = (conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes;
+    constexpr uint32_t stride_h_bytes = (conv_act_size_w+2) * conv_act_c_read_bytes;
     static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
     // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
     for (uint32_t bh = 0; bh < act_block_h_datums/2; bh++) {
         uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
-        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
+        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
 
         reader_idx++;
     }

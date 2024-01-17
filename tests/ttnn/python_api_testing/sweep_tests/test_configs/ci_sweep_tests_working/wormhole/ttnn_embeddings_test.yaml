@@ -1,0 +1,33 @@
+---
+test-list:
+  - ttnn-embeddings:
+      shape:
+        start-shape: [1, 1, 2, 2]
+        end-shape: [6, 12, 256, 256]
+        interval: [1, 1, 1, 2]
+        num-shapes: 2
+        num-samples: 64
+        method: ttnn-embeddings
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+      datagen:
+        function: gen_rand
+        dtype: bfloat16
+        args:
+          low: -10
+          high: 10
+      comparison:
+        function: comp_pcc
+      args-gen: gen_embeddings_args
+      args:
+        inputs:
+          - input-1:
+            data-layout: ["ROW_MAJOR"]
+            data-type: ["UINT32"]
+            buffer-type: ["DRAM"]
+          - input-2:
+            data-layout: ["ROW_MAJOR"]
+            data-type: ["BFLOAT16"]
+            buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM"]
+      output-file: embeddings_sweep.csv

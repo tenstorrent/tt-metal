@@ -9,7 +9,7 @@ from torchvision import models
 from loguru import logger
 
 from models.experimental.vgg.reference.vgg import vgg16
-from models.utility_functions import comp_allclose_and_pcc, comp_pcc
+from models.utility_functions import comp_pcc
 
 
 _batch_size = 1
@@ -22,7 +22,6 @@ def test_vgg16_inference(fuse_ops, imagenet_sample_input):
     batch_size = _batch_size
     with torch.no_grad():
         torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
-
         torch_vgg.eval()
 
         state_dict = torch_vgg.state_dict()

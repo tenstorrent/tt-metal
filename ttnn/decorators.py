@@ -24,6 +24,7 @@ def compare(torch_outputs, outputs, pcc):
             raise TypeError(f"Expected list or tuple, got {type(torch_outputs)}")
 
     matches = True
+    last_message = None
     for torch_output, output in zip(torch_outputs, outputs):
         shape = torch_output.shape
         slices = [slice(0, dim) for dim in shape]
@@ -33,9 +34,9 @@ def compare(torch_outputs, outputs, pcc):
         output = ttnn.to_torch(output)
         output = output[slices]
 
-        passed, *_ = comp_pcc(torch_output, output, pcc)
+        passed, last_message = comp_pcc(torch_output, output, pcc)
         matches &= passed
-    return matches
+    return matches, last_message
 
 
 ENABLE_DEBUG_DECORATOR = False
@@ -45,10 +46,7 @@ USE_TORCH_OUTPUT_IF_MISMATCHES = False
 def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     import ttnn
 
-    torch_output = ttnn.from_torch(torch_output)
-    if output.layout == ttnn.TILE_LAYOUT:
-        torch_output = ttnn.model_preprocessing.pad_tensor(torch_output)
-    torch_output = ttnn.to_layout(torch_output, output.layout)
+    torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
     if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
         torch_output = ttnn.to_device(torch_output, output.device)
     return torch_output
@@ -71,7 +69,7 @@ def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
                 output = function(*function_args, **function_kwargs)
 
                 if torch_output is not None:
-                    matches = compare(torch_output, output, pcc)
+                    matches, last_message = compare(torch_output, output, pcc)
                     if not matches:
                         import ttnn
 
@@ -85,7 +83,7 @@ def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
                             output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
                             output = ttnn.to_torch(output)
                             raise RuntimeError(
-                                f"{function_name}: Comparing against PyTorch failed: {torch_output} vs {output}"
+                                f"{function_name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
                             )
 
                 return output

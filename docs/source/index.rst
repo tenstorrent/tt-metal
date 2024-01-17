@@ -26,6 +26,7 @@ Welcome to TT-Metalium documentation!
    ttnn/tensor
    ttnn/api
    ttnn/tutorials
+   ttnn/onboarding
    ttnn/converting_torch_model_to_ttnn
    ttnn/dependencies/index.rst
 

@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.model_preprocessing import pad_tensor
 
 
 @pytest.mark.parametrize("h", [32])
@@ -84,7 +83,6 @@ def test_permute_for_specific_case(device, b, s, h, w):
     torch_input_tensor = torch.rand((b, s, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
     input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = pad_tensor(input_tensor)
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))

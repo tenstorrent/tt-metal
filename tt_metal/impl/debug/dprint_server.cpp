@@ -42,6 +42,21 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return *reinterpret_cast<float*>(&val);
 }
 
+static inline uint32_t GetBaseAddr(int chip_id, const CoreCoord &core, int hart_id) {
+    // For tensix cores, compute the buffer address for the requested hart.
+    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+
+    // Ethernet cores have a different address mapping
+    if (tt::llrt::is_ethernet_core(core, chip_id))
+        base_addr = eth_l1_mem::address_map::PRINT_BUFFER_ER;
+
+    return base_addr;
+}
+
+static inline int GetNumRiscs(int chip_id, const CoreCoord &core) {
+    return (tt::llrt::is_ethernet_core(core, chip_id))? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+}
+
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
@@ -184,7 +199,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
 // Used for debug print server startup sequence.
 void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
@@ -198,7 +213,7 @@ void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enable
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
 bool CheckInitMagicCleared(int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
     auto result = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, 4);
@@ -265,30 +280,35 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
 void DebugPrintServerContext::AttachDevice(Device* device) {
     chip_id_t device_id = device->id();
 
-    // A set of all valid worker cores, used for checking the user input. Note that the core coords
+    // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are physical, which matches the user input for configuring the print server.
-    set<CoreCoord> all_worker_cores;
+    set<CoreCoord> all_printable_cores;
+    // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size = device->logical_grid_size();
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             CoreCoord logical_coord(x, y);
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_coord);
-            all_worker_cores.insert(worker_core);
+            all_printable_cores.insert(worker_core);
         }
+    }
+    for (const auto& eth_core : device->ethernet_cores()) {
+        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        all_printable_cores.insert(physical_core);
     }
 
     // Core range depends on whether dprint_all_cores flag is set.
     vector<CoreCoord> print_cores_sanitized;
     if (tt::llrt::OptionsG.get_dprint_all_cores()) {
         // Print from all worker cores, cores returned here are guaranteed to be valid.
-        print_cores_sanitized = vector<CoreCoord>(all_worker_cores.begin(), all_worker_cores.end());
+        print_cores_sanitized = vector<CoreCoord>(all_printable_cores.begin(), all_printable_cores.end());
     } else {
         // Only print from the cores specified by the user.
         vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores();
 
         // We should also validate that the cores the user specified are valid worker cores.
         for (auto core : print_cores) {
-            if (all_worker_cores.count(core) > 0) {
+            if (all_printable_cores.count(core) > 0) {
                 print_cores_sanitized.push_back(core);
             } else {
                 log_warning(
@@ -306,15 +326,17 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
-    for (auto core : all_worker_cores) {
-        for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+    for (auto core : all_printable_cores) {
+        int hart_count = GetNumRiscs(device_id, core);
+        for (int hart_index = 0; hart_index < hart_count; hart_index++) {
             WriteInitMagic(device_id, core, hart_index, false);
         }
     }
     // Write print enable magic for the cores the user specified.
     uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
     for (auto core : print_cores_sanitized) {
-        for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+        int hart_count = GetNumRiscs(device_id, core);
+        for (int hart_index = 0; hart_index < hart_count; hart_index++) {
             if (hart_mask & (1<<hart_index)) {
                 WriteInitMagic(device_id, core, hart_index, true);
             }
@@ -360,7 +382,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     bool new_data_this_iter
 ) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
@@ -590,7 +612,8 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         for (auto& device_and_cores : device_to_core_range_copy) {
             chip_id_t chip_id = device_and_cores.first->id();
             for (auto core: device_and_cores.second) {
-                for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+                int hart_count = GetNumRiscs(chip_id, core);
+                for (int hart_index = 0; hart_index < hart_count; hart_index++) {
                     if (hart_mask & (1<<hart_index)) {
                         if (!CheckInitMagicCleared(chip_id, core, hart_index))
                             continue;

@@ -104,6 +104,8 @@ class DeviceCommand {
         const uint32_t dst_page_index
     );
 
+    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
+
     void add_buffer_transfer_instruction_sharded(
         const uint32_t src,
         const uint32_t dst,
