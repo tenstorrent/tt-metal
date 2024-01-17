@@ -1,5 +1,5 @@
 What is TTNN?
-=============
+#############
 
 TTNN is a Python library that provides a user-friendly interface to ``TT-METAL``.
 The TTNN library assumes the user is familiar with `PyTorch <https://pytorch.org/>`_ and provides

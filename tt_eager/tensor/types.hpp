@@ -4,19 +4,17 @@
 
 #pragma once
 
-#include "tensor/borrowed_buffer.hpp"
-#include "tensor/owned_buffer.hpp"
-
-#include "common/bfloat16.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-
-#include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
+#include "common/bfloat16.hpp"
+#include "tensor/borrowed_buffer.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/tt_stl/concepts.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
 
@@ -68,9 +66,23 @@ struct Padding {
     std::array<PadDimension, MAX_NUM_DIMENSIONS> pad_dimensions_;
     PadValue pad_value_;
 
+    Padding(const Padding&) = default;
+    Padding& operator=(const Padding&) = default;
+    Padding(Padding&&) = default;
+    Padding& operator=(Padding&&) = default;
+    ~Padding() = default;
+
     Padding(const std::size_t rank);
     Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value);
     Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value);
+
+    template <std::size_t Rank>
+    Padding(const std::array<std::array<uint32_t, 2>, Rank> pad_dimensions, PadValue pad_value) :
+        rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
+        for (auto index = 0; index < Rank; index++) {
+            this->pad_dimensions_[index] = {.front = pad_dimensions[index][0], .back = pad_dimensions[index][1]};
+        }
+    }
 
     PadDimension& operator[](const std::int64_t index);
     const PadDimension& operator[](const std::int64_t index) const;
@@ -83,19 +95,49 @@ struct Padding {
     }
 };
 
+bool operator==(const Padding&, const Padding&);
+bool operator!=(const Padding&, const Padding&);
+
 class Shape {
     std::size_t rank_;
     std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
     Padding padding_;
 
    public:
-    Shape(const std::initializer_list<uint32_t>);
-    Shape(const std::array<uint32_t, 4>&);
-    Shape(const std::vector<uint32_t>&);
+    Shape(const Shape&) = default;
+    Shape& operator=(const Shape&) = default;
+    Shape(Shape&&) = default;
+    Shape& operator=(Shape&&) = default;
+    ~Shape() = default;
 
+    Shape(const std::initializer_list<uint32_t>);
+    Shape(const std::vector<uint32_t>&);
     Shape(const std::initializer_list<uint32_t>, const Padding&);
     Shape(const std::vector<uint32_t>&, const Padding&);
-    Shape(const Shape&, const Padding&);
+
+    explicit Shape(const Shape&, const Padding&);
+
+    template <std::size_t Rank>
+    explicit Shape(
+        const std::array<uint32_t, Rank>& shape,
+        const std::optional<std::array<uint32_t, Rank>>& padded_shape = std::nullopt) :
+        rank_(Rank), dimensions_{}, padding_{Rank} {
+        if (padded_shape.has_value()) {
+            TT_ASSERT(shape.size() == padded_shape.value().size());
+            for (auto index = 0; index < Rank; index++) {
+                auto padded_dimension = padded_shape.value()[index];
+                this->dimensions_[index] = padded_dimension;
+                this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+            }
+        } else {
+            for (auto index = 0; index < Rank; index++) {
+                this->dimensions_[index] = shape[index];
+            }
+        }
+    }
+
+    // Add an implicit constructor from 4D array due to legacy code
+    Shape(const std::array<uint32_t, 4>& shape) : Shape(shape, std::optional<std::array<uint32_t, 4>>{std::nullopt}) {}
 
     std::size_t rank() const;
 
@@ -116,8 +158,8 @@ class Shape {
     }
 };
 
-bool operator==(const Shape& shape_a, const Shape& shape_b);
-bool operator!=(const Shape& shape_a, const Shape& shape_b);
+bool operator==(const Shape&, const Shape&);
+bool operator!=(const Shape&, const Shape&);
 
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
@@ -148,11 +190,17 @@ struct OwnedStorage {
 using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
     DeviceBuffer buffer;
-    Device* device;
-    MemoryConfig memory_config;
+
+    const MemoryConfig memory_config() const {
+        const auto& buffer = this->buffer;
+        return MemoryConfig{
+            .memory_layout = buffer->buffer_layout(),
+            .buffer_type = buffer->buffer_type(),
+        };
+    }
 
     static constexpr auto attribute_names = std::make_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->memory_config)); }
+    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 };
 
 using BorrowedBuffer = std::variant<

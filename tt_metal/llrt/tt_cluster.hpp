@@ -52,14 +52,11 @@ class Cluster {
     uint32_t get_harvested_rows(chip_id_t chip) const;
 
     //! device driver and misc apis
-    void clean_system_resources(chip_id_t device_id) const;
-
     void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
-    void assert_risc_reset(const chip_id_t &chip) const;
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
-    void deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger = false) const;
+    void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
@@ -89,21 +86,16 @@ class Cluster {
     std::function<void(uint32_t, uint32_t, const uint8_t*, uint32_t)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
         tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
-        return device->get_fast_pcie_static_tlb_write_callable(chip_id);
+        return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
-    void write_sysmem(const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
-    void read_sysmem(void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
+    void write_sysmem(const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
+    void read_sysmem(void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
 
     int get_device_aiclk(const chip_id_t &chip_id) const;
-
-    // will write a value for each core+hart's debug buffer, indicating that by default
-    // any prints will be ignored unless specifically enabled for that core+hart
-    // (using tt_start_debug_print_server)
-    void reset_debug_print_server_buffers() const;
 
     void dram_barrier(chip_id_t chip_id) const;
     void l1_barrier(chip_id_t chip_id) const;
@@ -127,6 +119,17 @@ class Cluster {
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
+    // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
+    chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
+        return this->device_to_mmio_device_.at(device_id);
+    }
+
+    uint16_t get_assigned_channel_for_device(chip_id_t device_id) const {
+        return this->device_to_host_mem_channel_.at(device_id);
+    }
+
+    uint32_t get_tensix_soft_reset_addr() const;
+
    private:
     Cluster();
     ~Cluster();
@@ -134,6 +137,8 @@ class Cluster {
     void detect_arch_and_target();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
+    void assert_risc_reset();
+    void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
     void open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs = false);
     void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
 
@@ -162,6 +167,17 @@ class Cluster {
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
 
+    // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
+    // Channels are unique within a group of devices all controlled by a particular MMIO device
+    // For example:
+    //      Two N300 cards where MMIO device IDs are 0, 1 and R chips are 2, 3
+    //      0 L controls 2 R and 1 L controls 3 R then, device_to_host_mem_channel_:
+    //          0 -> 0
+    //          2 -> 1
+    //          1 -> 0
+    //          3 -> 1
+    std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
+
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE
     };
@@ -174,7 +190,8 @@ class Cluster {
         (uint32_t)MEM_TRISC2_SIZE,
         (uint32_t)MEM_TRISC0_BASE,
         (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
-        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE
+        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
+        (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
     };
 
     tt_driver_host_address_params host_address_params = {

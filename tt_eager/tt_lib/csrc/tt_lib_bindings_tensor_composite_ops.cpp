@@ -6,6 +6,8 @@
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
+#include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
+#include "tt_eager/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
@@ -23,8 +25,7 @@ namespace tt::tt_metal::detail{
                         "shape", "Shape value", "Shape", "The number of times to repeat this tensor along each dimension", "Yes"
                         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 )doc");
-
-	m_tensor.def("power_fp", &tt::tt_metal::power_fp,
+	m_tensor.def("pow", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&tt::tt_metal::pow),
 		     py::arg("input"), py::arg("exponent"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                     Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
 
@@ -37,7 +38,19 @@ namespace tt::tt_metal::detail{
                         "exponent", "exponent value", "float", "positive floating point value", "Yes"
                         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 )doc");
+    m_tensor.def("pow", py::overload_cast<const Tensor&, int, const MemoryConfig&>(&tt::tt_metal::pow),
+		     py::arg("input"), py::arg("exponent"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
 
+                    Output tensor will have BFLOAT16 data type.
+
+                    .. csv-table::
+                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                        "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "exponent", "exponent value", "integer", "positive integer value", "Yes"
+                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                )doc");
         m_tensor.def("sfpu_eps", &tt::tt_metal::sfpu_eps,
                 py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                     Returns a new tensor filled with the machine epsilon value in shape specified by input ``shape``.
@@ -93,6 +106,7 @@ namespace tt::tt_metal::detail{
 
         // *** composite unary ops ***
         detail::bind_unary_op(m_tensor, "normalize_hw", tt::tt_metal::normalize_hw, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on H,W axes.)doc");
+        detail::bind_unary_op(m_tensor, "normalize_global", tt::tt_metal::normalize_global, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on N,C,H,W axes.)doc");
         detail::bind_unary_op(m_tensor, "var_hw", tt::tt_metal::var_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
         detail::bind_unary_op(m_tensor, "std_hw", tt::tt_metal::std_hw, R"doc(Returns a new tensor with the standard deviation of the input tensor ``{0}`` on H,W axes.)doc");
         detail::bind_unary_op(m_tensor, "sinh", &tt::tt_metal::sinh, R"doc(Returns tensor with the hyperbolic sine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
@@ -117,7 +131,7 @@ namespace tt::tt_metal::detail{
 
             ``tanhshrink(x) = x - tanh(x)``)doc"
         );
-        detail::bind_unary_op(m_tensor, "digamma", &digamma, R"doc(Computes the logarithmic derivative of the gamma function on input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "digamma", &digamma, R"doc(Computes the logarithmic derivative of the gamma function on input tensor ``{0}`` for the input range 1 to inf.)doc");
         detail::bind_unary_op(m_tensor, "lgamma", &lgamma, R"doc(Computes the natural logarithm of the absolute value of the gamma function on the  ``{0}`` tensor for inputs greater than 0.)doc");
         detail::bind_unary_op(m_tensor, "multigammaln", &multigammaln, R"doc(Computes the multivariate log-gamma function with dimension 4 element-wise on the input tensor ``{0}`` for inputs greater than 1.5f.)doc");
 
@@ -722,6 +736,30 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("lamb_optimizer", &lamb_optimizer,
+            py::arg("data").noconvert(), py::arg("grad").noconvert(), py::arg("exp_avg").noconvert(), py::arg("exp_avg_sq").noconvert(), py::arg("beta1"), py::arg("beta2"), py::arg("step_size"), py::arg("eps"), py::arg("weight_decay"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns tensor with the threshold activation on elements of the input tensors ``arg0`` at threshold ``threshold``,
+            and value ``value``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "data", "Tensor data is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "grad", "Tensor grad is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "exp_avg", "Tensor exp_avg is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "exp_avg_sq", "exp_avg_sq threshold is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "beta1", "Value to beta1 at", "float", "", "Yes"
+                "beta2", "Value to beta2 with", "float", "", "Yes"
+                "step_size", "Value to beta1 at", "float", "", "Yes"
+                "eps", "Value to beta2 with", "float", "", "Yes"
+                "weight_decay", "Value to beta1 at", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         detail::bind_unary_op_with_param(
             m_tensor, "logit", &logit,
             py::arg("eps"),
@@ -770,6 +808,10 @@ namespace tt::tt_metal::detail{
         m_tensor.def("complex_sub", py::overload_cast<const Tensor&,const Tensor&,const MemoryConfig&>(&tt::tt_metal::complex_sub),
             py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary subtraction ``input_a - input_b`` on two complex tensors.)doc");
+
+        m_tensor.def("polar", py::overload_cast<const ComplexTensor&, const MemoryConfig&>(&tt::tt_metal::polar),
+	    py::arg("input_a"),
+            py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input.real(r), input.imag(theta) into x + i*y generating a type-2 complex tensor.)doc");
 
         m_tensor.def("polar", py::overload_cast<const Tensor&,const Tensor&, const MemoryConfig&>(&tt::tt_metal::polar),
 	    py::arg("input_a"), py::arg("input_b"),
@@ -882,12 +924,30 @@ namespace tt::tt_metal::detail{
         );
 
         m_tensor.def("complex_div",
-		    py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_div),
+		    py::overload_cast<const ComplexTensor&,const ComplexTensor&, const MemoryConfig&>(tt::tt_metal::complex_div),
             py::arg("input_a"),
             py::arg("input_b"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns addition of a complex division of ``{0}`` by ``{1}``.)doc"
         );
-    }
 
+        //loss functions
+        m_tensor.def("mseloss",
+		    py::overload_cast<const Tensor&,const Tensor&,const LossReductionMode,const MemoryConfig&>(tt::tt_metal::mseloss),
+            py::arg("input_reference"),
+            py::arg("input_prediction"),
+            py::arg("reduce_mode"),
+	        py::arg("output_mem_config").noconvert() = std::nullopt,
+	        R"doc(Returns mean squared error loss function for ``{0}`` and ``{1}``.)doc"
+        );
+
+        m_tensor.def("maeloss",
+		    py::overload_cast<const Tensor&,const Tensor&,const LossReductionMode,const MemoryConfig&>(tt::tt_metal::maeloss),
+            py::arg("input_reference"),
+            py::arg("input_prediction"),
+            py::arg("reduce_mode"),
+	        py::arg("output_mem_config").noconvert() = std::nullopt,
+	        R"doc(Returns mean absolute error loss function for ``{0}`` and ``{1}``.)doc"
+        );
+    }
 }

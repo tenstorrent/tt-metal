@@ -12,7 +12,6 @@ from models.experimental.functional_bloom.reference import torch_functional_bloo
 from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
 from models.utility_functions import skip_for_wormhole_b0
 
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 
@@ -80,7 +79,7 @@ def test_torch_bloom_for_causal_lm():
     num_heads = config.n_head
 
     parameters = preprocess_model_parameters(
-        f"torch-functional-bloom-for-causal-lm",
+        "torch_functional_bloom_for_causal_lm",
         initialize_model=lambda: BloomForCausalLM.from_pretrained(model_name).eval(),
         custom_preprocessor=torch_functional_bloom.custom_preprocessor,
         convert_to_ttnn=lambda *_: False,
@@ -113,7 +112,7 @@ def test_ttnn_bloom_for_causal_lm(device, batch_size=8):
     num_heads = config.n_head
 
     parameters = preprocess_model_parameters(
-        f"ttnn-functional-bloom-for-causal-lm",
+        "ttnn_functional_bloom_for_causal_lm",
         initialize_model=lambda: BloomForCausalLM.from_pretrained(model_name).eval(),
         device=device,
         custom_preprocessor=ttnn_optimized_functional_bloom.custom_preprocessor,

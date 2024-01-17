@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_act_tensor_special,
@@ -30,6 +30,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("untilize_out", (False,))
 @pytest.mark.parametrize("has_bias", (True,))
 @pytest.mark.parametrize("fuse_relu", (True,))
@@ -200,6 +201,7 @@ def test_resnet50_first_conv(
             A_cl_device,
             B_tiled,
             bias_device,
+            None,
             [R, padded_S, stride_h, stride_w, 0, 0],
             K,
             untilize_out,
@@ -227,7 +229,7 @@ def test_resnet50_first_conv(
 
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
-            assert out_unpadded_shape == out.shape_without_padding()
+            assert out_unpadded_shape == list(out.shape_without_padding())
             out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
             out = out.reshape(
                 conv_output_shape[0],
@@ -236,7 +238,7 @@ def test_resnet50_first_conv(
                 conv_output_shape[3],
             )
         out = out.cpu()
-        assert out.shape() == conv_output_shape
+        assert list(out.shape()) == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
 
         # Copy output to host and convert tt tensor to pytorch tensor

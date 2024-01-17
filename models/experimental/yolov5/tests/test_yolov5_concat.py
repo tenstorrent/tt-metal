@@ -6,11 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -37,9 +32,7 @@ def test_Yolov5_concat(device):
     data = None
     half = False
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model.model[16]
 
     torch.manual_seed(0)

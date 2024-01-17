@@ -43,7 +43,7 @@ def test_softmin_for_dim_hw(shape_dim, device):
     tt_cpu = F.softmin(x, dim)
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
 
-    assert tt_npu.shape() == list(tt_cpu.shape)
+    assert list(tt_npu.shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(tt_cpu, tt_dev)
@@ -82,7 +82,7 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     )
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim, strategy)
 
-    assert tt_npu.shape() == list(tt_cpu.shape)
+    assert list(tt_npu.shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(tt_cpu, tt_dev)
@@ -123,7 +123,7 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
 
-    assert tt_npu.shape() == list(tt_cpu.shape)
+    assert list(tt_npu.shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(tt_cpu, tt_dev)
@@ -163,7 +163,7 @@ def test_softmin_for_dim_nc(shape_dim, device):
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
 
-    assert tt_npu.shape() == list(tt_cpu.shape)
+    assert list(tt_npu.shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(tt_cpu, tt_dev)
@@ -211,7 +211,7 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
 
-    assert tt_npu.shape() == list(x.grad.shape)
+    assert list(tt_npu.shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(x.grad, tt_dev)
@@ -258,7 +258,7 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     )
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim, strategy)
 
-    assert tt_npu.shape() == list(x.grad.shape)
+    assert list(tt_npu.shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(x.grad, tt_dev)
@@ -313,7 +313,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
 
-    assert tt_npu.shape() == list(x.grad.shape)
+    assert list(tt_npu.shape()) == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(x.grad, tt_dev)
@@ -369,7 +369,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
     tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
-    assert tt_npu.shape() == list(x.grad.shape)
+    assert list(tt_npu.shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
     passing, out = comp_pcc(x.grad, tt_dev)

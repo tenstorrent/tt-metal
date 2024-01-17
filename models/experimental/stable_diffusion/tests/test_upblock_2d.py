@@ -20,9 +20,7 @@ import pytest
 
 def test_run_upblock_real_input_inference(device, model_location_generator):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -59,7 +57,7 @@ def test_run_upblock_real_input_inference(device, model_location_generator):
     tt_out = tt_upblock(tt_sample, tt_res_samples, tt_emb, None)
     tt_output = tt_to_torch_tensor(tt_out)
 
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     passing = comp_pcc(torch_output, tt_output, pcc=0.988)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
 
@@ -69,9 +67,7 @@ def test_run_upblock_real_input_inference(device, model_location_generator):
 
 def test_run_upblock_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()

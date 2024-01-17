@@ -92,6 +92,13 @@ namespace primary {
 struct LayerNormDefaultProgramConfig{
     tt::stl::reflection::Attributes attributes() const { return {}; };
 };
+struct LayerNormInterleavedMultiCoreProgramConfig {
+    MathFidelity math_fidelity;
+    DataType im_data_format;
+    DataType out_data_format;
+
+    tt::stl::reflection::Attributes attributes() const;
+};
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w;
@@ -108,6 +115,7 @@ struct LayerNormShardedMultiCoreProgramConfig {
 
 using LayerNormProgramConfig = std::variant<
     LayerNormDefaultProgramConfig,
+    LayerNormInterleavedMultiCoreProgramConfig,
     LayerNormShardedMultiCoreProgramConfig
 >;
 

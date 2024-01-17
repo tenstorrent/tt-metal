@@ -5,10 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
-from loguru import logger
+from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
 
 
 @pytest.mark.parametrize(
@@ -21,20 +18,10 @@ from loguru import logger
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
 def test_bw_unary_mul(input_shapes, scalar, device):
-    torch.manual_seed(0)
-    in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
-    grad_data = torch.randn(input_shapes).bfloat16()
-
-    grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
-
-    input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
 
     tt_output_tensor_on_device = tt_lib.tensor.unary_mul_bw(grad_tensor, input_tensor, scalar=scalar)
-    tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
     in_data.retain_grad()
 
@@ -42,9 +29,7 @@ def test_bw_unary_mul(input_shapes, scalar, device):
 
     pyt_y.backward(gradient=grad_data)
 
-    golden_output_tensor = in_data.grad
+    golden_tensor = [in_data.grad]
 
-    comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
-    _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
-    logger.info(comp_out)
-    assert comp_pass
+    status = compare_results(tt_output_tensor_on_device, golden_tensor)
+    assert status

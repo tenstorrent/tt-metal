@@ -14,7 +14,7 @@ front-page README: https://github.com/tenstorrent-metal/tt-metal#installing
 Quick Start Guide
 -----------------
 
-Metal provides developers to do more than running models, facilitating a
+Metalium provides developers to do more than running models, facilitating a
 transition from running models effortlessly out of the box, engaging in
 lightweight optimizations, and progressing into more sophisticated, heavyweight
 optimizations. This series of five steps serves as an illustrative example,
@@ -53,10 +53,10 @@ with a simple example: :ref:`here </ttnn/tutorials/ttnn_tutorials/003.ipynb#Writ
 Dive deeper into multi-head attention operations in ttnn, optimizing
 performance: :ref:`here </ttnn/tutorials/ttnn_tutorials/003.ipynb#Write-optimized-version-of-Multi-Head-Attention>`.
 
-5. Advanced Metal Usage: Matrix Multiplication Kernels
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5. Advanced Metalium Usage: Matrix Multiplication Kernels
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Explore expert-level usage by working with Metal to define your own matrix
+Explore expert-level usage by working with Metalium to define your own matrix
 multiplication kernels. Choose between :ref:`single-core
 <MatMul_Single_Core example>`
 and :ref:`multi-core<MatMul_Multi_Core example>`
@@ -66,9 +66,9 @@ Where to go from here
 ---------------------
 
 If you're an ML developer and looking for further docs for using the Python
-library APIs to build models, please now go to :ref:`TT-Metal Models Get
+library APIs to build models, please now go to :ref:`TT-Metalium Models Get
 Started`.
 
-If you're an internal TT-Metal developer, please now read please review the
+If you're an internal TT-Metalium developer, please now read please review the
 `contribution standards
 <https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_.

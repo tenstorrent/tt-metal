@@ -197,7 +197,6 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
 
 bool test_EnqueueWrap_on_EnqueueReadBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     auto [buffer, src] = EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
     vector<uint32_t> dst;
     EnqueueReadBuffer(cq, buffer, dst, true);
 
@@ -260,8 +259,7 @@ namespace dram_tests {
 
 TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
@@ -270,7 +268,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
@@ -280,7 +278,7 @@ TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, Sending131072Pages) {
@@ -291,20 +289,20 @@ TEST_F(CommandQueueFixture, Sending131072Pages) {
         .page_size = 128,
         .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, TestNon32BAlignedPageSizeForDram2) {
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
@@ -314,15 +312,105 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
-    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
+    uint32_t page_size = 2048;
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
+    uint32_t command_issue_region_size = command_queue_size * 0.75;
 
-    TestBufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
+    uint32_t max_command_size = command_issue_region_size - CQ_START;
+    uint32_t buffer = 14240;
+    uint32_t buffer_size = max_command_size - (buffer + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+    uint32_t num_pages = buffer_size / page_size;
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, buf_config));
+    TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+    CommandQueue a(this->device_, 0);
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, a, buf_config));
 }
+
+TEST_F(CommandQueueFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+    uint32_t page_size = 2048;
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
+    uint32_t num_pages = command_queue_size / page_size;
+
+    TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+}
+
+// Test that command queue wraps when buffer available space in completion region is less than a page
+TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace) {
+    uint32_t large_page_size = 8192; // page size for first and third read
+    uint32_t small_page_size = 2048; // page size for second read
+
+    // Using default 75-25 issue and completion queue split
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
+    uint32_t command_completion_region_size = command_queue_size * 0.25;
+
+    uint32_t first_buffer_size = tt::round_up(command_completion_region_size * 0.95, large_page_size);
+
+    uint32_t space_after_first_buffer = command_completion_region_size - first_buffer_size;
+    // leave only small_page_size * 2 B of space in the completion queue
+    uint32_t num_pages_second_buffer = (space_after_first_buffer / small_page_size) - 2;
+
+    Buffer buff_1(this->device_, first_buffer_size, large_page_size, BufferType::DRAM);
+    auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, src_1, false);
+    vector<uint32_t> result_1;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, result_1, true);
+    EXPECT_EQ(src_1, result_1);
+
+    Buffer buff_2(this->device_, num_pages_second_buffer * small_page_size, small_page_size, BufferType::DRAM);
+    auto src_2 = local_test_functions::generate_arange_vector(buff_2.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_2, src_2, false);
+    vector<uint32_t> result_2;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_2, result_2, true);
+    EXPECT_EQ(src_2, result_2);
+
+    Buffer buff_3(this->device_, 32 * large_page_size, large_page_size, BufferType::DRAM);
+    auto src_3 = local_test_functions::generate_arange_vector(buff_3.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_3, src_3, false);
+    vector<uint32_t> result_3;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_3, result_3, true);
+    EXPECT_EQ(src_3, result_3);
+}
+
+// Test that command queue wraps when buffer read needs to be split into multiple enqueue_read_buffer commands and available space in completion region is less than a page
+TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace2) {
+    // Using default 75-25 issue and completion queue split
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
+    uint32_t command_completion_region_size = command_queue_size * 0.25;
+
+    uint32_t num_pages_buff_1 = 9;
+    uint32_t page_size_buff_1 = 2048;
+    Buffer buff_1(this->device_, num_pages_buff_1 * page_size_buff_1, page_size_buff_1, BufferType::DRAM);
+    uint32_t space_after_buff_1 = command_completion_region_size - buff_1.size();
+
+    uint32_t page_size = 8192;
+    uint32_t desired_remaining_space_before_wrap = 6144;
+    uint32_t avail_space_for_wrapping_buffer = space_after_buff_1 - desired_remaining_space_before_wrap;
+    uint32_t num_pages_for_wrapping_buffer = (avail_space_for_wrapping_buffer / page_size) + 4;
+
+    auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, src_1, false);
+    vector<uint32_t> result_1;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, result_1, true);
+    EXPECT_EQ(src_1, result_1);
+
+    Buffer wrap_buff(this->device_, num_pages_for_wrapping_buffer * page_size, page_size, BufferType::DRAM);
+    auto src_2 = local_test_functions::generate_arange_vector(wrap_buff.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), wrap_buff, src_2, false);
+    vector<uint32_t> result_2;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), wrap_buff, result_2, true);
+    EXPECT_EQ(src_2, result_2);
+}
+
 
 }  // end namespace dram_tests
 
@@ -330,8 +418,7 @@ namespace l1_tests {
 
 TEST_F(CommandQueueFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllL1Banks) {
@@ -341,7 +428,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllL1Banks) {
         .page_size = 2048,
         .buftype = BufferType::L1};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
@@ -351,13 +438,13 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
         .page_size = 2048,
         .buftype = BufferType::L1};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, TestNon32BAlignedPageSizeForL1) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
 TEST_F(CommandQueueFixture, TestBackToBackNon32BAlignedPageSize) {
@@ -365,17 +452,17 @@ TEST_F(CommandQueueFixture, TestBackToBackNon32BAlignedPageSize) {
 
     Buffer bufa(device_, 125000, 100, buff_type);
     auto src_a = local_test_functions::generate_arange_vector(bufa.size());
-    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufa, src_a, false);
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, src_a, false);
 
     Buffer bufb(device_, 152000, 152, buff_type);
     auto src_b = local_test_functions::generate_arange_vector(bufb.size());
-    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufb, src_b, false);
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, src_b, false);
 
     vector<uint32_t> result_a;
-    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufa, result_a, true);
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, result_a, true);
 
     vector<uint32_t> result_b;
-    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufb, result_b, true);
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, result_b, true);
 
     EXPECT_EQ(src_a, result_a);
     EXPECT_EQ(src_b, result_b);
@@ -390,7 +477,7 @@ TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReads) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
 }
 
 
@@ -400,7 +487,7 @@ TEST_F(CommandQueueFixture, ShardedBufferReadWrites) {
     config.num_iterations = 100;
 
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
 }
 
 TEST_F(CommandQueueFixture, StressWrapTest) {
@@ -414,7 +501,7 @@ TEST_F(CommandQueueFixture, StressWrapTest) {
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
 }
 
 }  // end namespace stress_tests

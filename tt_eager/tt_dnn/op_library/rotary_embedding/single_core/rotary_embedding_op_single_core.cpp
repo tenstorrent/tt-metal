@@ -180,13 +180,13 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines=kernel_defines});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args, .defines=kernel_defines});
 
@@ -218,7 +218,7 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
 
 	auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/kernels/compute/rotary_embedding.cpp",
+		"tt_eager/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding.cpp",
 		core,
 		tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines=kernel_defines}
 	);

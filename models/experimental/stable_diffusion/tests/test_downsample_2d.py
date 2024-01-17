@@ -17,9 +17,7 @@ from models.experimental.stable_diffusion.tt.downsample_2d import TtDownsample2D
 
 def test_run_downsample2d_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -46,7 +44,7 @@ def test_run_downsample2d_inference(device):
         base_address="down_blocks.0.downsamplers.0",
     )
     tt_out = tt_down(tt_input)
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)

@@ -24,15 +24,16 @@ def softmax(x: tensor.Tensor, stable=False):
 
     if stable:
         sumsW = tensor.reduce(x, RMAX, RW, 1.0)
-        z = tensor.bcast(x, sumsW, BCSUB, BCW) # x-max(x)
+        z = tensor.bcast(x, sumsW, BCSUB, BCW)  # x-max(x)
     else:
         z = x
-    numerator = tensor.exp(z) # exp(z)
-    denom1 = tensor.reduce(numerator, RSUM, RW, 1.0) # torch.sum(x, 3)
+    numerator = tensor.exp(z)  # exp(z)
+    denom1 = tensor.reduce(numerator, RSUM, RW, 1.0)  # torch.sum(x, 3)
     denom = tensor.recip(denom1)
     output = tensor.bcast(numerator, denom, BCMUL, BCW)
 
     return output
+
 
 def ref_stable_softmax(x):
     """
@@ -46,14 +47,14 @@ def ref_stable_softmax(x):
 
     return softmax
 
+
 if __name__ == "__main__":
     device = device.CreateDevice(0)
-
 
     H, W = 64, 96
     torch.manual_seed(123)
 
-    x = torch.randn((1,1,H,W))
+    x = torch.randn((1, 1, H, W))
     ref_sm = ref_stable_softmax(x)
 
     x_t = tilize_to_list(x)

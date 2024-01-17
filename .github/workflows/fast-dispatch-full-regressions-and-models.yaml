@@ -29,5 +29,5 @@ jobs:
       - name: Build tt-metal and libs
         run: make build
       - name: Run frequent reg tests scripts
-        timeout-minutes: 300
+        timeout-minutes: 165
         run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent --dispatch-mode fast

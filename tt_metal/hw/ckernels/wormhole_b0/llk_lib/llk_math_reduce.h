@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-#include "llk_param_structs.h"
 
+#pragma once
 #include "ckernel_include.h"
 #include "ckernel_template.h"
 
@@ -20,16 +19,19 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
-template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false>
-inline void llk_math_reduce(uint dst_index) {
-    constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
+template <PoolType type, ReduceDim dim, int MATH_FIDELITY_DESC = 0, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
+inline void _llk_math_reduce_(const uint dst_index) {
+
+    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
+    constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
+
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         // Transpose for each face in src A done at unpacker, and pool
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
-            if constexpr (high_fidelity) {
+            if constexpr (HIGH_FIDELITY) {
                 ckernel_template::run(instrn_buffer);
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
             } else {
@@ -40,11 +42,22 @@ inline void llk_math_reduce(uint dst_index) {
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
-            if constexpr (high_fidelity) {
+            if constexpr (HIGH_FIDELITY) {
                 ckernel_template::run(instrn_buffer);
             } else {
                 TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
+        }
+
+        // Workaround for https://yyz-gitlab.local.tenstorrent.com/tenstorrent/budabackend/-/issues/1948
+        if constexpr (is_int_fpu_en) {
+            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 0);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,0);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 2);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,2);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
         }
 
         // Move back to B and transpose
@@ -64,6 +77,9 @@ inline void llk_math_reduce(uint dst_index) {
         // Note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        if constexpr (is_int_fpu_en) {
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+        }
 
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
@@ -85,7 +101,7 @@ inline void llk_math_reduce(uint dst_index) {
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
-            if constexpr (high_fidelity) {
+            if constexpr (HIGH_FIDELITY) {
                 ckernel_template::run(instrn_buffer);
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
             } else {
@@ -96,11 +112,21 @@ inline void llk_math_reduce(uint dst_index) {
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
-            if constexpr (high_fidelity) {
+            if constexpr (HIGH_FIDELITY) {
                 ckernel_template::run(instrn_buffer);
             } else {
                 TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
+        }
+        // Workaround for https://yyz-gitlab.local.tenstorrent.com/tenstorrent/budabackend/-/issues/1948
+        if constexpr (is_int_fpu_en) {
+            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 0);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,0);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 2);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,2);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
         }
 
         // Move back to B and transpose
@@ -119,6 +145,9 @@ inline void llk_math_reduce(uint dst_index) {
         // Note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        if constexpr (is_int_fpu_en) {
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+        }
 
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
@@ -134,7 +163,7 @@ inline void llk_math_reduce(uint dst_index) {
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             } else {
-                if constexpr (high_fidelity) {
+                if constexpr (HIGH_FIDELITY) {
                     ckernel_template::run(instrn_buffer);
                 } else {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
@@ -146,7 +175,7 @@ inline void llk_math_reduce(uint dst_index) {
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             } else {
-                if constexpr (high_fidelity) {
+                if constexpr (HIGH_FIDELITY) {
                     ckernel_template::run(instrn_buffer);
                 } else {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
@@ -155,6 +184,7 @@ inline void llk_math_reduce(uint dst_index) {
             // Reset Dest Counter
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
         }
+
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
         //fp32 dest unsupported with reduce scalar, must fix zeroacc
         static_assert(!is_fp32_dest_acc_en);
@@ -163,7 +193,7 @@ inline void llk_math_reduce(uint dst_index) {
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
             } else {
-                if constexpr (high_fidelity) {
+                if constexpr (HIGH_FIDELITY) {
                     ckernel_template::run(instrn_buffer);
                     TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
                 } else {
@@ -175,7 +205,7 @@ inline void llk_math_reduce(uint dst_index) {
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
         } else {
-            if constexpr (high_fidelity) {
+            if constexpr (HIGH_FIDELITY) {
                 ckernel_template::run(instrn_buffer);
             } else {
                 TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
@@ -204,8 +234,8 @@ inline void llk_math_reduce(uint dst_index) {
         if constexpr (type == PoolType::MAX) {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         } else {
-            if constexpr (high_fidelity) {
-                for (int i = 0; i < num_fidelity_phases - 1; i++) {
+            if constexpr (HIGH_FIDELITY) {
+                for (int i = 0; i < MATH_FIDELITY_PHASES - 1; i++) {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
                 }
             }
@@ -214,8 +244,13 @@ inline void llk_math_reduce(uint dst_index) {
     }
 }
 
-template <PoolType type, bool is_high_fidelity>
+template <PoolType type, int MATH_FIDELITY_DESC>
 inline void reduce_configure_addrmod() {
+
+    constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
+    constexpr int FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);
+    constexpr bool HIGH_FIDELITY = NUM_FIDELITY_PHASES > 0;
+
     addr_mod_t{
         .srca = {.incr = 0 },
         .srcb = {.incr = 0 },
@@ -236,12 +271,12 @@ inline void reduce_configure_addrmod() {
     }
         .set(ADDR_MOD_2);
 
-    if constexpr (is_high_fidelity) {
+    if constexpr (HIGH_FIDELITY) {
         addr_mod_t{
             .srca = {.incr = 0},
             .srcb = {.incr = 0},
             .dest = {.incr = 0},
-            .fidelity = { .incr = 1}
+            .fidelity = { .incr = FIDELITY_INCREMENT}
         }.set(ADDR_MOD_3);
     }
 }
@@ -267,14 +302,15 @@ inline void reduce_configure_mop() {
     }
 }
 
-template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0>
-inline void llk_math_reduce_init(const std::uint32_t within_face_16x16_transpose=0) { //within_face_16x16_transpose used for unpack, ignored by math
+template <PoolType type, ReduceDim dim, int MATH_FIDELITY_DESC = 0>
+inline void _llk_math_reduce_init_(const std::uint32_t within_face_16x16_transpose=0) { //within_face_16x16_transpose used for unpack, ignored by math
 
-    constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
+    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
+    constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
 
-    reduce_configure_addrmod<type, high_fidelity>();
-    if constexpr (high_fidelity) {
-        reduce_configure_mop<dim, num_fidelity_phases>();
+    reduce_configure_addrmod<type, MATH_FIDELITY_DESC>();
+    if constexpr (HIGH_FIDELITY) {
+        reduce_configure_mop<dim, MATH_FIDELITY_PHASES>();
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

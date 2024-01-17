@@ -2,14 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 import torch
 import pytest
 from loguru import logger
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../..")
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -31,9 +26,7 @@ from transformers import AutoFeatureExtractor
     "model_name, pcc",
     (("microsoft/swin-tiny-patch4-window7-224", 0.99),),
 )
-def test_swin_image_classification_inference(
-    device, imagenet_sample_input, model_name, pcc, reset_seeds
-):
+def test_swin_image_classification_inference(device, imagenet_sample_input, model_name, pcc, reset_seeds):
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     model = HF_SwinForImageClassification.from_pretrained(model_name)
 

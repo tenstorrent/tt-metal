@@ -313,10 +313,10 @@ void Program::update_kernel_groups() {
 
 std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
-
     for (const auto &[core_type, cores_of_type] : this->logical_cores()) {
         for (const auto &core : cores_of_type) {
             for (Kernel * kernel : kernels_) {
+                if ( kernel->get_kernel_core_type() !=  core_type ) continue;
                 auto cores = kernel->logical_cores();
                 if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
                     ops.push_back(kernel->name());
@@ -463,7 +463,7 @@ void Program::validate_circular_buffer_region(const Device *device) const {
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
-    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores.begin());
+    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
 
@@ -565,10 +565,11 @@ void Program::compile( Device * device )
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
+    detail::ProfileTTMetalScope profile_this =
+        detail::ProfileTTMetalScope(std::string("CompileProgram ") + std::to_string(device->id()));
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
-    tt_set_profiler_state_for_debug_print(profile_kernel);
+    DprintServerSetProfilerState(profile_kernel);
 
     // compile all kernels in parallel
     for (Kernel * kernel : kernels_) {

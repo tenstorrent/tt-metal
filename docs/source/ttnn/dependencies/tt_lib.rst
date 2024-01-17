@@ -40,7 +40,7 @@ Below, is an example of how to declare a new on-device operation with all of the
         }
     };
 
-Or to add one with a memmber:
+Or to add one with a member:
 
 .. code-block::
 
@@ -282,8 +282,6 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.mish
 
 .. autofunction:: tt_lib.tensor.polyval
-
-.. autofunction:: tt_lib.tensor.power
 
 .. autofunction:: tt_lib.tensor.sign
 
@@ -637,13 +635,13 @@ and then unary operations for,
 
 .. autofunction:: tt_lib.tensor.complex_recip
 
+.. autofunction:: tt_lib.tensor.polar
+
 Complex Operations (Type 2)
 ---------------------------
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
-operations; specifically this storage allows for compute without the cost of split-concat implict in
-the Type 1 contiguous representations. One additional function is following,
-
-.. autofunction:: tt_lib.tensor.polar
+operations; specifically this storage allows for compute without the cost of split-concat implicit in
+the Type 1 contiguous representations.
 
 Other Operations
 ----------------
@@ -714,6 +712,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.normalize_hw
 
+.. autofunction:: tt_lib.tensor.normalize_global
+
 .. autofunction:: tt_lib.tensor.glu
 
 .. autofunction:: tt_lib.tensor.geglu
@@ -726,11 +726,13 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.nextafter
 
+.. autofunction:: tt_lib.tensor.lamb_optimizer
+
 .. autofunction:: tt_lib.tensor.repeat
 
 .. autofunction:: tt_lib.tensor.repeat_interleave
 
-.. autofunction:: tt_lib.tensor.power_fp
+.. autofunction:: tt_lib.tensor.pow
 
 .. autofunction:: tt_lib.tensor.identity
 
@@ -749,6 +751,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_assign_bw
 
+.. autofunction:: tt_lib.tensor.binary_assign_bw
+
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
 .. autofunction:: tt_lib.tensor.div_bw
@@ -759,6 +763,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.max_bw
 
+.. autofunction:: tt_lib.tensor.min_bw
+
 .. autofunction:: tt_lib.tensor.add_bw
 
 .. autofunction:: tt_lib.tensor.tan_bw
@@ -767,6 +773,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_pow_bw
 
+.. autofunction:: tt_lib.tensor.embedding_bw
+
 .. autofunction:: tt_lib.tensor.where_bw
 
 .. autofunction:: tt_lib.tensor.tanh_bw
@@ -774,3 +782,40 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.fill_zero_bw
 
 .. autofunction:: tt_lib.tensor.fill_bw
+
+.. autofunction:: tt_lib.tensor.sub_bw
+
+.. autofunction:: tt_lib.tensor.unary_sub_bw
+
+.. autofunction:: tt_lib.tensor.log_bw
+
+.. autofunction:: tt_lib.tensor.rsub_bw
+
+.. autofunction:: tt_lib.tensor.abs_bw
+
+.. autofunction:: tt_lib.tensor.rsqrt_bw
+
+.. autofunction:: tt_lib.tensor.neg_bw
+
+.. autofunction:: tt_lib.tensor.lt_bw
+
+.. autofunction:: tt_lib.tensor.gt_bw
+
+.. autofunction:: tt_lib.tensor.relu_bw
+
+.. autofunction:: tt_lib.tensor.ne_bw
+
+.. autofunction:: tt_lib.tensor.clamp_bw
+
+.. autofunction:: tt_lib.tensor.clamp_min_bw
+
+.. autofunction:: tt_lib.tensor.clamp_max_bw
+
+.. autofunction:: tt_lib.tensor.binary_le_bw
+
+Loss Functions
+--------------
+
+.. autofunction:: tt_lib.tensor.mseloss
+
+.. autofunction:: tt_lib.tensor.maeloss

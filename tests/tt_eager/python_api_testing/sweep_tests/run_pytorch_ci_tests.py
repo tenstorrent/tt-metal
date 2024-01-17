@@ -3,16 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
-import time
-import torch
-from pathlib import Path
-from loguru import logger
-from functools import partial
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
+from loguru import logger
+
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -85,7 +78,5 @@ def run_single_pytorch_test(
         if value is not None:
             os.environ[key] = value
 
-    assert (
-        test_pass
-    ), f"{test_name} test failed with input shape {input_shapes}. {test_output}"
+    assert test_pass, f"{test_name} test failed with input shape {input_shapes}. {test_output}"
     logger.info(f"{test_name} test passed with input shape {input_shapes}.")

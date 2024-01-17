@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "llk_math_common.h"
-#include "llk_math_eltwise_binary.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_binary_api.h"
+#include "llk_math_unary_datacopy_api.h"
 
 namespace NAMESPACE
 {

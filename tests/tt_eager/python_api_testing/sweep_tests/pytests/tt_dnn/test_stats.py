@@ -13,14 +13,47 @@ from models.utility_functions import is_wormhole_b0
 import tt_lib as ttl
 import numpy as np
 
-fns = ["std_hw", "mean_hw", "var_hw", "normalize_hw"]
+fns = [
+    "std_hw",
+    "mean_hw",
+    "var_hw",
+    "normalize_hw",
+    "normalize_global",
+]  # "std_global","var_global"]
 
 WH = is_wormhole_b0() * -0.01
 WH2 = 10 * WH
 shapes = [
-    [[2, 2, 32, 64], (0.99 + WH2, 0.85 + WH, 0.85, 0.9)],  # Single core
-    [[4, 2, 64, 64], (0.97 + WH2, 0.82 + WH, 0.85, 0.9)],  # Multi core
-    [[8, 6, 32, 96], (0.91 + WH, 0.82 + WH, 0.85, 0.9)],  # Multi core
+    [
+        [2, 2, 32, 64],
+        (
+            0.99 + WH2,
+            0.85 + WH,
+            0.85,
+            0.9,
+            0.9,
+        ),
+    ],  # Single core
+    [
+        [4, 2, 64, 64],
+        (
+            0.97 + WH2,
+            0.82 + WH,
+            0.85,
+            0.9,
+            0.9,
+        ),
+    ],  # Multi core
+    [
+        [8, 6, 32, 96],
+        (
+            0.91 + WH,
+            0.82 + WH,
+            0.85,
+            0.9,
+            0.9,
+        ),
+    ],  # Multi core
 ]
 
 

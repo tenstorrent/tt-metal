@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ckernel.h"
-#include "ckernel_globals.h"
+#include "firmware_common.h"
 #include "risc_common.h"
 #include <tensix.h>
 #include "dev_msgs.h"
@@ -12,6 +12,7 @@
 
 #include "debug/fw_debug.h"
 #include "debug/status.h"
+#include "circular_buffer.h"
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -22,10 +23,10 @@ namespace ckernel
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4};
 
-volatile tt_reg_ptr uint * const reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
-volatile tt_reg_ptr uint * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile tt_reg_ptr uint * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile tt_reg_ptr uint * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile tt_reg_ptr uint * reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
+volatile tt_reg_ptr uint * pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
+volatile tt_reg_ptr uint * regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
+volatile tt_reg_ptr uint * instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
 tt_reg_ptr uint *regmem = reinterpret_cast<tt_reg_ptr uint *>(REGFILE_BASE);
 
 uint32_t cfg_state_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep state between kernel calls

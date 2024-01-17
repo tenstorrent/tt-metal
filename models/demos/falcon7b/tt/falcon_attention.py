@@ -238,7 +238,7 @@ class TtFalconAttention(nn.Module):
         ###########
         ### TMs ###
         ###########
-        query_layer, key_layer, value_layer = tt_lib.tensor.nlp_create_qkv_heads(
+        query_layer, key_layer, value_layer = tt_lib.tensor.nlp_create_qkv_heads_falcon7b(
             fused_query_key_value,
             output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
         )

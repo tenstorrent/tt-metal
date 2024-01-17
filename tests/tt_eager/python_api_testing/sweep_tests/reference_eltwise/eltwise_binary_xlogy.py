@@ -15,9 +15,7 @@ def function_xlogy(input, other):
 
 
 def custom_xlogy(input, other):
-    result = np.where(
-        other == 0, 0, np.where(np.isnan(other), np.nan, x * np.log(other))
-    )
+    result = np.where(other == 0, 0, np.where(np.isnan(other), np.nan, x * np.log(other)))
     return result
 
 

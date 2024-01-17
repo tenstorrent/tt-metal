@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "llk_unpack_common.h"
-#include "llk_unpack_AB.h"
-#include "llk_unpack_untilize.h"
+#include "llk_unpack_common_api.h"
+#include "llk_unpack_AB_api.h"
+#include "llk_unpack_untilize_api.h"
 
 namespace NAMESPACE
 {

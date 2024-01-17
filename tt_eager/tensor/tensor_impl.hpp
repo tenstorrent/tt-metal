@@ -61,7 +61,7 @@ constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<uint32_t> output;
         for (auto index = 0; index < data_to_pack.size(); index += 2) {
-            auto value = data_to_pack[index] << 16 | data_to_pack[index + 1];
+            auto value = data_to_pack[index + 1] << 16 | data_to_pack[index];
             output.push_back(value);
         }
         return output;
@@ -92,8 +92,8 @@ constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<DataType> output;
         for (auto index = 0; index < data_to_unpack.size(); index++) {
-            output.push_back(data_to_unpack[index] >> 16);
             output.push_back(data_to_unpack[index] & 0xFFFF);
+            output.push_back(data_to_unpack[index] >> 16);
         }
         return output;
     } else if constexpr (std::is_same_v<DataType, bfloat16>) {
@@ -386,12 +386,11 @@ std::string to_string_row_major(const BufferType& buffer, const Shape& shape, Da
         return to_string_row_major_4D(buffer, shape, dtype);
     }
     else {
-        TT_THROW("Cannot print tensor of rank ", shape.rank());
+        TT_THROW("Cannot print tensor of rank {}", shape.rank());
     }
 }
 
-} // namespace detail
-
+}  // namespace detail
 
 // ======================================================================================
 //                                      Validators
@@ -426,7 +425,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         std::vector<T> device_data;
         device_data.resize(size_in_bytes / sizeof(T));
-        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data.data(), true);
+        EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(tensor.device()), *device_buffer, device_data.data(), true);
         return device_data;
     } else {
         std::vector<uint32_t> device_data;
@@ -443,7 +442,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *buffer, std::begin(data_to_write), false);
+        EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(buffer->device()), *buffer, std::begin(data_to_write), false);
     } else {
         auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
         ::detail::WriteToBuffer(*buffer, uint32_data);
@@ -574,7 +573,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
         data_type, layout, memory_config,
         std::nullopt
     );
-    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 
@@ -596,7 +595,7 @@ inline Tensor to_device_sharded(const Tensor &tensor, Device *target_device, con
         layout, memory_config,
         std::make_optional<ShardSpec>(shard_spec)
     );
-    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, shard_spec);
 }
 
 template <typename T>
@@ -757,11 +756,10 @@ Tensor pad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_shape, con
 
 template <typename T>
 inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
-
-    auto input_buffer = owned_buffer::get_as<T>(tensor);
+    const auto input_tensor_shape = tensor.shape();
+    const auto input_tensor_strides = tensor.strides();
 
     // Check if tensor start and end indices are within input tensor shape
-    const Shape& input_tensor_shape = tensor.shape();
     TT_ASSERT(output_tensor_start[0] < input_tensor_shape[0]);
     TT_ASSERT(output_tensor_end[0] < input_tensor_shape[0]);
     TT_ASSERT(output_tensor_start[1] < input_tensor_shape[1]);
@@ -785,21 +783,41 @@ inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, cons
         output_tensor_end[3] - output_tensor_start[3] + 1,
     };
 
-    const Shape input_tensor_strides = tensor.strides();
-
-    auto output_buffer = owned_buffer::create<T>(compute_volume(output_tensor_shape));
-    auto output_index = 0;
-    for(auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
-        for(auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
-            for(auto dim2 = output_tensor_start[2]; dim2 <= output_tensor_end[2]; dim2++) {
-                for(auto dim3 = output_tensor_start[3]; dim3 <= output_tensor_end[3]; dim3++) {
-                    auto input_index = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 + input_tensor_strides[0] * dim0;
-                    output_buffer[output_index++] = input_buffer[input_index];
+    auto unpad =
+        [&input_tensor_shape, &input_tensor_strides, &output_tensor_shape, &output_tensor_start, &output_tensor_end](
+            const auto& input_buffer) {
+            auto output_buffer = owned_buffer::create<T>(compute_volume(output_tensor_shape));
+            auto output_index = 0;
+            for (auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
+                for (auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
+                    for (auto dim2 = output_tensor_start[2]; dim2 <= output_tensor_end[2]; dim2++) {
+                        for (auto dim3 = output_tensor_start[3]; dim3 <= output_tensor_end[3]; dim3++) {
+                            auto input_index = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 +
+                                               input_tensor_strides[0] * dim0;
+                            output_buffer[output_index++] = input_buffer[input_index];
+                        }
+                    }
                 }
             }
-        }
-    }
+            return output_buffer;
+        };
 
+    auto output_buffer = std::visit(
+        [&unpad](auto&& storage) -> owned_buffer::Buffer<T> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                const auto input_data = owned_buffer::get_as<T>(storage.buffer);
+                return unpad(input_data);
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
+                return unpad(input_data);
+            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        tensor.storage());
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 

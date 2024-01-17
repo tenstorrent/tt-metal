@@ -30,6 +30,9 @@ using std::flush;
 using std::tuple;
 using std::set;
 
+using tt::tt_metal::Device;
+using namespace tt;
+
 #define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
 
 namespace {
@@ -37,6 +40,21 @@ namespace {
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t val = bfloat_val << 16;
     return *reinterpret_cast<float*>(&val);
+}
+
+static inline uint32_t GetBaseAddr(int chip_id, const CoreCoord &core, int hart_id) {
+    // For tensix cores, compute the buffer address for the requested hart.
+    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+
+    // Ethernet cores have a different address mapping
+    if (tt::llrt::is_ethernet_core(core, chip_id))
+        base_addr = eth_l1_mem::address_map::PRINT_BUFFER_ER;
+
+    return base_addr;
+}
+
+static inline int GetNumRiscs(int chip_id, const CoreCoord &core) {
+    return (tt::llrt::is_ethernet_core(core, chip_id))? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
 }
 
 // A null stream for when the print server is muted.
@@ -47,84 +65,40 @@ public:
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
 
-// Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
-// Used for debug print server startup sequence.
-void write_init_magic(int chip_id, const CoreCoord& core, int hart_id, bool starting = true) {
-    // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
-
-    // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
-    // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
-    vector<uint32_t> initbuf = { uint32_t(starting ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
-    tt::llrt::write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
-} // write_init_magic
-
-
 struct DebugPrintServerContext {
 
     // only one instance is allowed at the moment
     static DebugPrintServerContext* inst;
     static bool ProfilerIsRunning;
 
-    DebugPrintServerContext(
-        vector<int> chip_ids,
-        const vector<CoreCoord>& cores,
-        uint32_t hart_mask,
-        string file_name
-    ) {
-        TT_ASSERT(inst == nullptr);
-        inst = this;
+    // Constructor/destructor, reads dprint options from RTOptions.
+    DebugPrintServerContext();
+    ~DebugPrintServerContext();
 
-        // the stream is shared between threads
-        if (file_name != "") {
-            outfile_ = new std::ofstream(file_name);
-        }
-        stream_ = outfile_ ? outfile_ : &cout;
-
-        stop_print_server_ = false;
-        mute_print_server_ = false;
-        new_data_last_iter_ = false;
-        server_killed_due_to_hang_ = false;
-        print_server_thread_ = new std::thread(
-            [this, chip_ids, cores, hart_mask] { thread_poll(chip_ids, cores, hart_mask); }
-        );
-    }
-
-    ~DebugPrintServerContext() {
-        // Signal the print server thread to finish
-        stop_print_server_ = true;
-
-        // Wait for the thread to end, with a timeout
-        auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
-        if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-            TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
-        }
-        delete print_server_thread_;
-        print_server_thread_ = nullptr;
-
-        if (outfile_) {
-            outfile_->close();
-            delete outfile_;
-        }
-        inst = nullptr;
-    }
-
+    // Sets whether the print server is muted. Calling this function while a kernel is running may
+    // result in a loss of print data.
     void SetMute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
 
-    void WaitForPrintsFinished() {
-        // Simply poll the flag every few ms to check whether new data is still being processed,
-        // or whether any cores are waiting for a signal to be raised.
-        // TODO(dma): once we have access to the device is there a way we can poll the device to
-        // check whether more print data is coming?
-        do {
-            // No need to await if the server was killed already due to a hang.
-            if (server_killed_due_to_hang_)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        } while (hart_waiting_on_signal_.size() > 0 || new_data_last_iter_);
-    }
+    // Waits for the prints erver to finish processing any current print data.
+    void WaitForPrintsFinished();
 
-    bool print_hang_detected() { return server_killed_due_to_hang_; }
+    // Attaches a device to be monitored by the print server.
+    // This device should not already be attached.
+    void AttachDevice(Device* device);
+
+    // Detaches a device from being monitored by the print server.
+    // This device must have been attached previously.
+    void DetachDevice(Device* device);
+
+    // Clears the log file of a currently-running print server.
+    void ClearLogFile();
+
+    // Clears any raised signals (so they can be used again in a later run).
+    void ClearSignals();
+
+    int GetNumAttachedDevices() { return device_to_core_range_.size(); }
+
+    bool PrintHangDetected() { return server_killed_due_to_hang_; }
 
 private:
 
@@ -150,8 +124,21 @@ private:
     // signal.
     std::set<uint32_t> raised_signals_;
 
-    void thread_poll(const vector<int>& chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask);
-    bool peek_flush_one_hart_nonblocking(
+    // A map from Device -> Core Range, which is used to determine which cores on which devices
+    // to scan for print data. Also a lock for editing it.
+    std::map<Device*, vector<CoreCoord>> device_to_core_range_;
+    std::mutex device_to_core_range_lock_;
+
+    // Polls specified cores/harts on all attached devices and prints any new print data. This
+    // function is the main loop for the print server thread.
+    void PollPrintData(uint32_t hart_mask);
+
+    // Peeks a specified hart for any debug prints present in the buffer, printing the contents
+    // out to host-side stream. Returns true if some data was read out, and false if no new
+    // print data was present on the device. Note that if an unanswered WAIT is present, the print
+    // buffer on the device is only flushed  up to the WAIT, even if more print data is available
+    // after it.
+    bool PeekOneHartNonBlocking(
         int chip_id,
         const CoreCoord& core,
         int hart_index,
@@ -159,7 +146,7 @@ private:
     );
 };
 
-static void print_tile_slice(ostream& stream, uint8_t* ptr, int hart_id) {
+static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     // Since MATH RISCV doesn't have access to CBs, we can't print tiles from it. If the user still
     // tries to do this print a relevant message.
     if ((1 << hart_id) == DPRINT_RISCV_TR1) {
@@ -206,32 +193,196 @@ static void print_tile_slice(ostream& stream, uint8_t* ptr, int hart_id) {
         }
     }
     stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
-}
+} // PrintTileSlice
+
+// Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
+// Used for debug print server startup sequence.
+void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled) {
+    // compute the buffer address for the requested hart
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
+
+    // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
+    // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
+    vector<uint32_t> initbuf = { uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
+    tt::llrt::write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
+} // WriteInitMagic
 
 // Checks if our magic value was cleared by the device code
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool check_init_magic_cleared(int chip_id, const CoreCoord& core, int hart_id) {
+bool CheckInitMagicCleared(int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
     auto result = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, 4);
     return (result[0] != initbuf[0]);
-} // check_init_magic_cleared
+} // CheckInitMagicCleared
 
-// Peeks a specified hart for any debug prints present in the buffer and flushes it, printing the
-// contents out to host-side stream. Returns true if some data was read out, and false if no new
-// print data was present on the device.
-bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(
+DebugPrintServerContext::DebugPrintServerContext() {
+    TT_ASSERT(inst == nullptr);
+    inst = this;
+
+    // Read hart mask + log file from rtoptions
+    uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
+    string file_name = tt::llrt::OptionsG.get_dprint_file_name();
+
+    // Set the output stream according to RTOptions, either a file name or stdout if none specified.
+    if (file_name != "") {
+        outfile_ = new std::ofstream(file_name);
+    }
+    stream_ = outfile_ ? outfile_ : &cout;
+
+    stop_print_server_ = false;
+    mute_print_server_ = false;
+    new_data_last_iter_ = false;
+    server_killed_due_to_hang_ = false;
+
+    // Spin off the thread that runs the print server.
+    print_server_thread_ = new std::thread(
+        [this, hart_mask] { PollPrintData(hart_mask); }
+    );
+} // DebugPrintServerContext
+
+DebugPrintServerContext::~DebugPrintServerContext() {
+    // Signal the print server thread to finish
+    stop_print_server_ = true;
+
+    // Wait for the thread to end, with a timeout
+    auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
+    if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
+        TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
+    }
+    delete print_server_thread_;
+    print_server_thread_ = nullptr;
+
+    if (outfile_) {
+        outfile_->close();
+        delete outfile_;
+    }
+    inst = nullptr;
+} // ~DebugPrintServerContext
+
+void DebugPrintServerContext::WaitForPrintsFinished() {
+    // Simply poll the flag every few ms to check whether new data is still being processed,
+    // or whether any cores are waiting for a signal to be raised.
+    // TODO(dma): once we have access to the device is there a way we can poll the device to
+    // check whether more print data is coming?
+    do {
+        // No need to await if the server was killed already due to a hang.
+        if (server_killed_due_to_hang_)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (hart_waiting_on_signal_.size() > 0 || new_data_last_iter_);
+} // WaitForPrintsFinished
+
+void DebugPrintServerContext::AttachDevice(Device* device) {
+    chip_id_t device_id = device->id();
+
+    // A set of all valid printable cores, used for checking the user input. Note that the coords
+    // here are physical, which matches the user input for configuring the print server.
+    set<CoreCoord> all_printable_cores;
+    // The set of all printable cores is Tensix + Eth cores
+    CoreCoord logical_grid_size = device->logical_grid_size();
+    for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+            CoreCoord logical_coord(x, y);
+            CoreCoord worker_core = device->worker_core_from_logical_core(logical_coord);
+            all_printable_cores.insert(worker_core);
+        }
+    }
+    for (const auto& eth_core : device->ethernet_cores()) {
+        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        all_printable_cores.insert(physical_core);
+    }
+
+    // Core range depends on whether dprint_all_cores flag is set.
+    vector<CoreCoord> print_cores_sanitized;
+    if (tt::llrt::OptionsG.get_dprint_all_cores()) {
+        // Print from all worker cores, cores returned here are guaranteed to be valid.
+        print_cores_sanitized = vector<CoreCoord>(all_printable_cores.begin(), all_printable_cores.end());
+    } else {
+        // Only print from the cores specified by the user.
+        vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores();
+
+        // We should also validate that the cores the user specified are valid worker cores.
+        for (auto core : print_cores) {
+            if (all_printable_cores.count(core) > 0) {
+                print_cores_sanitized.push_back(core);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_DPRINT_CORES included worker core ({}, {}), which is not a valid coordinate. This coordinate will be ignored by the dprint server.",
+                    core.x,
+                    core.y
+                );
+            }
+        }
+    }
+
+    // Initialize all print buffers on all cores on the device to have print disabled magic. We
+    // will then write print enabled magic for only the cores the user has specified to monitor.
+    // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
+    // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
+    // flushed from the host.
+    for (auto core : all_printable_cores) {
+        int hart_count = GetNumRiscs(device_id, core);
+        for (int hart_index = 0; hart_index < hart_count; hart_index++) {
+            WriteInitMagic(device_id, core, hart_index, false);
+        }
+    }
+    // Write print enable magic for the cores the user specified.
+    uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
+    for (auto core : print_cores_sanitized) {
+        int hart_count = GetNumRiscs(device_id, core);
+        for (int hart_index = 0; hart_index < hart_count; hart_index++) {
+            if (hart_mask & (1<<hart_index)) {
+                WriteInitMagic(device_id, core, hart_index, true);
+            }
+        }
+    }
+
+    // Save this device + core range to the print server
+    device_to_core_range_lock_.lock();
+    TT_ASSERT(device_to_core_range_.count(device) == 0, "Device {} added to DPRINT server more than once!", device_id);
+    device_to_core_range_[device] = print_cores_sanitized;
+    device_to_core_range_lock_.unlock();
+    log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
+} // AttachDevice
+
+void DebugPrintServerContext::DetachDevice(Device* device) {
+    device_to_core_range_lock_.lock();
+    TT_ASSERT(device_to_core_range_.count(device) > 0, "Device {} not present in DPRINT server but tried removing it!", device->id());
+    device_to_core_range_.erase(device);
+    device_to_core_range_lock_.unlock();
+    log_info(tt::LogMetal, "DPRINT Server dettached device {}", device->id());
+} // DetachDevice
+
+void DebugPrintServerContext::ClearLogFile() {
+    if (outfile_) {
+        // Just close the file and re-open it (without append) to clear it.
+        outfile_->close();
+        delete outfile_;
+
+        string file_name = tt::llrt::OptionsG.get_dprint_file_name();
+        outfile_ = new std::ofstream(file_name);
+        stream_ = outfile_ ? outfile_ : &cout;
+    }
+} // ClearLogFile
+
+void DebugPrintServerContext::ClearSignals() {
+    raised_signals_.clear();
+} // ClearSignals
+
+bool DebugPrintServerContext::PeekOneHartNonBlocking(
     int chip_id,
     const CoreCoord& core,
     int hart_id,
     bool new_data_this_iter
 ) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+    uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
@@ -322,7 +473,7 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
                 case DEBUG_PRINT_TYPEID_TILESLICE:
-                    print_tile_slice(stream, ptr, hart_id);
+                    PrintTileSlice(stream, ptr, hart_id);
                 break;
 
                 case DEBUG_PRINT_TYPEID_ENDL:
@@ -434,26 +585,11 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(
 
     // Return false to signal that no print data was ready this time.
     return false;
-} // peek_one_hart_once_nonblocking
+} // PeekOneHartNonBlocking
 
-void DebugPrintServerContext::thread_poll(
-    const vector<int>& chip_ids,
-    const vector<CoreCoord>& cores,
-    uint32_t hart_mask
-) {
+void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
     // Give the print server thread a reasonable name.
     pthread_setname_np(pthread_self(), "TT_DPRINT_SERVER");
-
-    // First, go through all cores and write init magic to set up dprint.
-    for (auto chip: chip_ids) {
-        for (auto core: cores) {
-            for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
-                if (hart_mask & (1<<hart_index)) {
-                    write_init_magic(chip, core, hart_index);
-                }
-            }
-        }
-    }
 
     // Main print loop, go through all chips/cores/harts on the device and poll for any print data
     // written.
@@ -465,17 +601,25 @@ void DebugPrintServerContext::thread_poll(
                 break;
         }
 
+        // Make a copy of the device->core map, so that it can be modified while polling.
+        std::map<Device*, vector<CoreCoord>> device_to_core_range_copy;
+        device_to_core_range_lock_.lock();
+        device_to_core_range_copy = device_to_core_range_;
+        device_to_core_range_lock_.unlock();
+
         // Flag for whether any new print data was found in this round of polling.
         bool new_data_this_iter = false;
-        for (auto chip: chip_ids) {
-            for (auto core: cores) {
-                for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+        for (auto& device_and_cores : device_to_core_range_copy) {
+            chip_id_t chip_id = device_and_cores.first->id();
+            for (auto core: device_and_cores.second) {
+                int hart_count = GetNumRiscs(chip_id, core);
+                for (int hart_index = 0; hart_index < hart_count; hart_index++) {
                     if (hart_mask & (1<<hart_index)) {
-                        if (!check_init_magic_cleared(chip, core, hart_index))
+                        if (!CheckInitMagicCleared(chip_id, core, hart_index))
                             continue;
 
-                        new_data_this_iter |= peek_flush_one_hart_nonblocking(
-                            chip,
+                        new_data_this_iter |= PeekOneHartNonBlocking(
+                            chip_id,
                             core,
                             hart_index,
                             new_data_this_iter
@@ -495,39 +639,66 @@ void DebugPrintServerContext::thread_poll(
         if (!new_data_last_iter_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-}
+} // PollPrintData
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
 bool DebugPrintServerContext::ProfilerIsRunning = false;
 
 } // anon namespace
 
-void tt_stop_debug_print_server()
-{
-    // this can be called multiple times since we register it with atexit to make explicit call to stop optional
-    if (DebugPrintServerContext::inst != nullptr) {
-        delete DebugPrintServerContext::inst;
-        DebugPrintServerContext::inst = nullptr;
+// Implementation for functions available from dprint_server.hpp.
+namespace tt {
+
+void DprintServerAttach(Device* device) {
+    // Skip if DPRINT not enabled, and make sure profiler is not running.
+    if (!tt::llrt::OptionsG.get_dprint_enabled())
+        return;
+    TT_FATAL(
+       DebugPrintServerContext::ProfilerIsRunning == false,
+       "Device side profiler is running, cannot start print server"
+    );
+
+    // Skip if RTOptions doesn't enable DPRINT for this device
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
+    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+            return;
+
+    // If no server ir running, create one
+    if (!DprintServerIsRunning())
+        DebugPrintServerContext* ctx = new DebugPrintServerContext();
+
+    // Add this device to the server
+    DebugPrintServerContext::inst->AttachDevice(device);
+}
+
+void DprintServerDetach(Device* device) {
+    if (DprintServerIsRunning()) {
+        DebugPrintServerContext::inst->DetachDevice(device);
+
+        // Check if there's no devices left attached to the server, and close it if so.
+        if (DebugPrintServerContext::inst->GetNumAttachedDevices() == 0) {
+            delete DebugPrintServerContext::inst;
+            DebugPrintServerContext::inst = nullptr;
+        }
     }
 }
 
-void tt_set_profiler_state_for_debug_print(bool profile_device)
-{
+void DprintServerSetProfilerState(bool profile_device) {
     DebugPrintServerContext::ProfilerIsRunning = profile_device;
 }
 
-bool tt_is_print_server_running()
-{
+bool DprintServerIsRunning() {
     return DebugPrintServerContext::inst != nullptr;
 }
 
-void tt_set_debug_print_server_mute(bool mute_print_server) {
-    if (DebugPrintServerContext::inst != nullptr)
+void DprintServerSetMute(bool mute_print_server) {
+    if (DprintServerIsRunning())
         DebugPrintServerContext::inst->SetMute(mute_print_server);
 }
 
-void tt_await_debug_print_server() {
-    if (DebugPrintServerContext::inst != nullptr) {
+void DprintServerAwait() {
+    if (DprintServerIsRunning()) {
         // Call the wait function for the print server, with a timeout
         auto future = std::async(
             std::launch::async,
@@ -540,70 +711,17 @@ void tt_await_debug_print_server() {
     }
 }
 
-bool tt_print_hang_detected() {
-    return (DebugPrintServerContext::inst != nullptr)
-        && (DebugPrintServerContext::inst->print_hang_detected());
+bool DPrintServerHangDetected() {
+    return DprintServerIsRunning() && DebugPrintServerContext::inst->PrintHangDetected();
 }
 
-// The print server is not valid without alive Cluster and tt_device
-void tt_start_debug_print_server(
-    std::function<CoreCoord ()>get_grid_size,
-    std::function<CoreCoord (CoreCoord)>worker_from_logical
-) {
-    if (tt::llrt::OptionsG.get_dprint_enabled()) {
-        TT_FATAL(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
-        TT_FATAL(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
-
-        tt::Cluster::instance().reset_debug_print_server_buffers();
-
-        // A set of all valid worker cores, used for checking the user input.
-        auto compare_coords = [](const CoreCoord& a, const CoreCoord& b){
-            if (a.x < b.x)
-                return true;
-            else if (a.x == b.x)
-                return (a.y < b.y);
-            else
-                return false;
-        };
-        set<CoreCoord, decltype(compare_coords)> all_worker_cores(compare_coords);
-        CoreCoord logical_grid_size = get_grid_size();
-        for (uint32_t x = 0; x < logical_grid_size.x; x++) {
-            for (uint32_t y = 0; y < logical_grid_size.y; y++) {
-                CoreCoord logical_coord(x, y);
-                CoreCoord worker_core = worker_from_logical(logical_coord);
-                all_worker_cores.insert(worker_core);
-            }
-        }
-
-        // Core range depends on whether dprint_all_cores flag is set.
-        vector<CoreCoord> print_cores_sanitized;
-        if (tt::llrt::OptionsG.get_dprint_all_cores()) {
-            // Print from all worker cores, cores returned here are guaranteed to be valid.
-            print_cores_sanitized = vector<CoreCoord>(all_worker_cores.begin(), all_worker_cores.end());
-        } else {
-            // Only print from the cores specified by the user.
-            vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores();
-
-            // We should also validate that the cores the user specified are valid worker cores.
-            for (auto core : print_cores) {
-                if (all_worker_cores.count(core) > 0) {
-                    print_cores_sanitized.push_back(core);
-                } else {
-                    log_warning(
-                        tt::LogDevice,
-                        "TT_METAL_DPRINT_CORES included worker core ({}, {}), which is not a valid coordinate. This coordinate will be ignored by the dprint server.",
-                        core.x,
-                        core.y
-                    );
-                }
-            }
-        }
-
-        DebugPrintServerContext* ctx = new DebugPrintServerContext(
-            tt::llrt::OptionsG.get_dprint_chip_ids(),
-            print_cores_sanitized,
-            tt::llrt::OptionsG.get_dprint_riscv_mask(),
-            tt::llrt::OptionsG.get_dprint_file_name()
-        );
-    }
+void DPrintServerClearLogFile() {
+    if (DprintServerIsRunning())
+        DebugPrintServerContext::inst->ClearLogFile();
 }
+
+void DPrintServerClearSignals() {
+    if (DprintServerIsRunning())
+        DebugPrintServerContext::inst->ClearSignals();
+}
+} // namespace tt

@@ -20,6 +20,4 @@ def test_cpu_demo(imagenet_sample_input, imagenet_label_dict):
         torch_vgg.eval()
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
 
-        logger.info(
-            f"CPU's predicted Output: {class_labels[torch.argmax(torch_output).item()]}"
-        )
+        logger.info(f"CPU's predicted Output: {class_labels[torch.argmax(torch_output).item()]}")

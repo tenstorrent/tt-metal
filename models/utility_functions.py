@@ -918,7 +918,7 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
         if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = tt_lib.tensor.untilize(x)
         else:
-            x_padded_shape = x.shape()
+            x_padded_shape = list(x.shape())
             x_padded_shape[-1] = roundup(x.shape()[-1], 16)
             x = tt_lib.tensor.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
@@ -948,12 +948,12 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
-def skip_for_wormhole_b0():
-    return pytest.mark.skipif(is_wormhole_b0(), reason="not working for Wormhole B0")
+def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
+    return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull():
-    return pytest.mark.skipif(is_grayskull(), reason="not working for Grayskull")
+def skip_for_grayskull(reason_str="not working for Grayskull"):
+    return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
 def ttl_complex_2_torch_complex(tt_tensor):
@@ -966,3 +966,77 @@ def ttl_complex_2_torch_complex(tt_tensor):
     # create torch complex tensor
     result = torch.complex(real, imag)
     return result
+
+
+def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
+    assert stride_h == stride_w
+    assert activation_pyt_nchw_tensor.shape[2] == activation_pyt_nchw_tensor.shape[3]
+    # Fold activation for unity stride
+    # Pad channel size to 4. This is to make sure L1 read addresses are 16 bit aligned
+    C = _nearest_y(activation_pyt_nchw_tensor.shape[1], 4)
+    # Also, pre-pad the conv left right and top bottom padding
+    activation_pyt_padded = torch.nn.functional.pad(
+        activation_pyt_nchw_tensor, (pad_w, pad_w, pad_h, pad_h, 0, C - activation_pyt_nchw_tensor.shape[1])
+    )
+    # Fold the activation face by stride depth wise i.e. C,H,W -> C*stride_h*stride_w, H/stride_h, W/stride_w
+    assert activation_pyt_padded.shape[2] % stride_h == 0
+    activation_pyt_padded_folded = torch.zeros(
+        [
+            activation_pyt_padded.shape[0],
+            C * stride_h * stride_w,
+            (int)(activation_pyt_padded.shape[2] / stride_h),
+            (int)(activation_pyt_padded.shape[3] / stride_w),
+        ]
+    )
+    for h in range(0, activation_pyt_padded.shape[2], stride_h):
+        for w in range(0, activation_pyt_padded.shape[3], stride_w):
+            folded_h = (int)(h / stride_h)
+            folded_w = (int)(w / stride_w)
+            for i in range(stride_h * stride_w):
+                start_c = i * C
+                activation_pyt_padded_folded[:, start_c : start_c + C, folded_h, folded_w] = activation_pyt_padded[
+                    :, :, h + (int)(i / stride_w), w + (int)(i % stride_w)
+                ]
+
+    return activation_pyt_padded_folded
+
+
+def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w):
+    assert stride_h == stride_w
+    assert filter_pyt_nchw_tensor.shape[2] == filter_pyt_nchw_tensor.shape[3]
+    # Fold activation for unity stride
+    # Pad channel size to 4. This is to make sure L1 read addresses are 16 bit aligned
+    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], 4)
+    # Pad filter to nearest stride
+    Padded_filter_height = _nearest_y(filter_pyt_nchw_tensor.shape[2], stride_h)
+    Padded_filter_width = _nearest_y(filter_pyt_nchw_tensor.shape[3], stride_w)
+    filter_pyt_padded = torch.nn.functional.pad(
+        filter_pyt_nchw_tensor,
+        (
+            0,
+            Padded_filter_width - filter_pyt_nchw_tensor.shape[3],
+            0,
+            Padded_filter_height - filter_pyt_nchw_tensor.shape[2],
+            0,
+            C - filter_pyt_nchw_tensor.shape[1],
+        ),
+    )
+    # Fold filter for unity stride.
+    filter_pyt_padded_folded = torch.zeros(
+        [
+            filter_pyt_padded.shape[0],
+            C * stride_h * stride_w,
+            (int)(filter_pyt_padded.shape[2] / stride_h),
+            (int)(filter_pyt_padded.shape[3] / stride_w),
+        ]
+    )
+    for h in range(0, filter_pyt_padded.shape[2], stride_h):
+        for w in range(0, filter_pyt_padded.shape[3], stride_w):
+            folded_h = (int)(h / stride_h)
+            folded_w = (int)(w / stride_w)
+            for i in range(4):
+                start_c = i * C
+                filter_pyt_padded_folded[:, start_c : start_c + C, folded_h, folded_w] = filter_pyt_padded[
+                    :, :, h + (int)(i / stride_w), w + (int)(i % stride_w)
+                ]
+    return filter_pyt_padded_folded

@@ -34,6 +34,9 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 
 #include "dprint_buffer.h"
+#if defined(COMPILE_FOR_ERISC)
+#include "ethernet/dataflow_api.h"
+#endif
 
 #define DPRINT DebugPrinter()
 
@@ -177,8 +180,12 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
     auto sum_sz = payload_sz + code_sz + sz_sz;
     if (dp.data() + wpos + sum_sz >= dp.bufend()) {
         // buffer is full - wait for the host reader to flush+update rpos
-        while (*dp.rpos() < *dp.wpos())
+        while (*dp.rpos() < *dp.wpos()) {
+#if defined(COMPILE_FOR_ERISC)
+            risc_context_switch();
+#endif
             ; // wait for host to catch up to wpos with it's rpos
+        }
         *dp.wpos() = 0;
         // TODO(AP): are these writes guaranteed to be ordered?
         *dp.rpos() = 0;

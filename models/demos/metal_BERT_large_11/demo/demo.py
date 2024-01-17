@@ -167,7 +167,7 @@ def run_bert_question_and_answering_inference_squadv2(
         logger.info(f"\tTT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
         logger.info(f"\tCPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
 
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
 
         return eval_score
 
@@ -382,7 +382,7 @@ def test_demo(
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config("BFLOAT8_B-SHARDED_BATCH12"),
+        model_config=get_model_config(12, "BFLOAT8_B-SHARDED_BATCH12"),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         NUM_RUNS=NUM_RUNS,
         input_path=input_path,
@@ -405,7 +405,7 @@ def test_demo_squadv2(model_location_generator, device, use_program_cache, loop_
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config("BFLOAT8_B-SHARDED_BATCH12"),
+        model_config=get_model_config(12, "BFLOAT8_B-SHARDED_BATCH12"),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         model_location_generator=model_location_generator,
         device=device,

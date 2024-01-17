@@ -42,7 +42,11 @@ namespace ckernel {
  */
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
 {
-    PACK((  llk_pack<false, SYNC, false >(ifrom_dst, icb)  ));
+    #ifdef ARCH_GRAYSKULL
+    PACK((  llk_pack<false, SYNC, false>(ifrom_dst, icb)  ));
+    #else
+    PACK((  llk_pack<false, SYNC, false, DST_ACCUM_MODE>(ifrom_dst, icb)  ));
+    #endif
 }
 
 /**
@@ -87,8 +91,9 @@ ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
 ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
     #ifdef ARCH_GRAYSKULL
         PACK(( llk_pack_reconfig_data_format(new_operand) ));
+    #else
+        PACK(( llk_pack_reconfig_data_format(new_operand) ));
     #endif
-    // NOTE: For wormhole_b0, packer data format reconfig functions don;t yet exist. So skip.
 }
 
 /**
@@ -97,8 +102,9 @@ ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
 ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t new_operand) {
     #ifdef ARCH_GRAYSKULL
         PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
+    #else
+        PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
     #endif
-    // NOTE: For wormhole_b0, packer data format reconfig functions don;t yet exist. So skip.
 }
 
 }

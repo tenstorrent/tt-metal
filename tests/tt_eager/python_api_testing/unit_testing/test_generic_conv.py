@@ -24,6 +24,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 )
 import torch
 
+
 # generic conv doesnt support tiled out, bias and relu fusions
 @pytest.mark.parametrize("run_conv_with_address_map", (False,))
 @pytest.mark.parametrize("untilize_out", (True,))
@@ -75,7 +76,8 @@ def test_run_generic_conv(
     stride_h,
     stride_w,
     pad_h,
-    pad_w, untilize_out,
+    pad_w,
+    untilize_out,
     has_bias,
     fuse_relu,
     device,
@@ -90,29 +92,27 @@ def test_run_generic_conv(
 
     num_iterations = 1
     if not run_conv_with_address_map:
-        num_iterations = (
-            2  # run twice to test op caching flow for conv op (without address map)
-        )
+        num_iterations = 2  # run twice to test op caching flow for conv op (without address map)
     for i in range(num_iterations):
         # torch.set_printoptions(threshold=10000)
         torch.manual_seed(0)
         a_activation_shape = [1, C, H, W]
-        #A_pyt = torch.randn(a_activation_shape)
+        # A_pyt = torch.randn(a_activation_shape)
         A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
         # A_pyt = torch.ones(a_activation_shape, dtype=torch.bfloat16).float()
         b_weights_shape = [K, C, R, S]
-        #B_pyt = torch.randn(b_weights_shape)
+        # B_pyt = torch.randn(b_weights_shape)
         B_pyt = torch.normal(mean=0, std=0.1, size=b_weights_shape)
         # B_pyt = torch.ones(b_weights_shape, dtype=torch.bfloat16).float()
         bias_shape = [1, 1, 1, K]
-        #bias_pyt = torch.randn(bias_shape)
+        # bias_pyt = torch.randn(bias_shape)
         bias_pyt = torch.normal(mean=0, std=0.1, size=bias_shape)
         # bias_pyt = torch.zeros(bias_shape, dtype=torch.bfloat16).float() * 3.
         # bias_pyt = torch.range(start=0, end=(K - 1), dtype=torch.bfloat16).float()
 
         # Parameters to define block dims
         act_block_h = 4
-        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S))/32)
+        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S)) / 32)
         weight_block_h = act_block_w
         weight_block_w = 2
         out_subblock_h = 2
@@ -130,16 +130,14 @@ def test_run_generic_conv(
             A = A_cl_host.to(device)
 
         # Prepare weights
-        B_tiled_host = create_conv_weight_tensor(
-            B_pyt, K, C, R, S, weight_block_h, weight_block_w
-        )
+        B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
         if run_conv_with_address_map:
             B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
         else:
             B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w*32), pad = 0)
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w * 32), pad=0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -174,7 +172,7 @@ def test_run_generic_conv(
             out = ttl.tensor.conv(
                 A,
                 B_tiled,
-                bias_device, # bias not fused with generic conv
+                bias_device,  # bias not fused with generic conv
                 [R, S, stride_h, stride_w, pad_h, pad_w],
                 act_block_h,
                 act_block_w,
@@ -182,14 +180,15 @@ def test_run_generic_conv(
                 out_subblock_h,
                 out_subblock_w,
                 K,
-                False)
+                False,
+            )
         if not untilize_out:
-           out_unpadded_shape = [1, 1, OH*OW, K]
-           assert out_unpadded_shape == out.shape_without_padding()
-           out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
-           out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
+            out_unpadded_shape = [1, 1, OH * OW, K]
+            assert out_unpadded_shape == out.shape_without_padding()
+            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+            out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
-        assert out.shape() == conv_output_shape
+        assert list(out.shape()) == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
 
         # Copy output to host and convert tt tensor to pytorch tensor
@@ -197,9 +196,7 @@ def test_run_generic_conv(
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 
-        torch.set_printoptions(
-            precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
-        )
+        torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
         # print(f'OUT: {out_result}')
         # print(f'GLD: {out_golden}')
@@ -208,10 +205,10 @@ def test_run_generic_conv(
         assert out_result.shape == out_golden.shape
 
         [output_N, output_C, output_H, output_W] = out_result.shape
-        #print("Golden - ")
-        #print(out_golden.flatten())
-        #print("Result - ")
-        #print(out_result.flatten())
+        # print("Golden - ")
+        # print(out_golden.flatten())
+        # print("Result - ")
+        # print(out_result.flatten())
         # for n in range(output_N):
         #     for c in range(output_C):
         #         for h in range(output_H):
@@ -224,9 +221,11 @@ def test_run_generic_conv(
         #                     print(f"Bad value at {n},{c},{h},{w} with ATOL={atol_delta} and RTOL={rtol_delta}")
         #                     print(f"    result={calculated}, golden={golden}")
 
-        passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.999)
+        passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
+            out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.999
+        )
         print("Passing=", passing_allclose_and_pcc)
         print("Output info=", output_info)
         passing_pcc, _ = comp_pcc(out_golden, out_result, pcc=0.999)
         assert passing_pcc
-        #assert passing_allclose_and_pcc
+        # assert passing_allclose_and_pcc

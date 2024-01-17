@@ -30,7 +30,7 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     logger.debug(f"in0: {in0_t.memory_config().buffer_type} and {in0_t.dtype()}")
     logger.debug(f"out: {out.memory_config().buffer_type} and {out.dtype()}")
 
-    assert out.shape() == [batch, 1, seq_len, num_heads * head_dim]
+    assert list(out.shape()) == [batch, 1, seq_len, num_heads * head_dim]
 
     pyt_got_back_rm_out = tt2torch_tensor(out)
 
@@ -86,12 +86,18 @@ def test_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_co
 @skip_for_wormhole_b0()
 def test_nlp_concat_heads_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
+        run_nlp_concat_heads_test(1, 32, dtype, mem_config, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
+        run_nlp_concat_heads_test(1, 32, dtype, mem_config, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
     assert ttl.program_cache.num_entries() == 2

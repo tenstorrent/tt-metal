@@ -163,12 +163,6 @@ namespace tt::tt_metal::detail {
             R"doc("subtrahent value which is actually calculated as minuend", "float")doc"
         );
         detail::bind_unary_op_with_param(
-            m_tensor, "power", power,
-            py::arg("exponent"),
-            R"doc(Returns tensor with the all of elements of the input tensor ``{0}`` raised to ``{1}``.)doc",
-            R"doc("exponent value", "int", ">=0")doc"
-        );
-        detail::bind_unary_op_with_param(
             m_tensor, "leaky_relu", leaky_relu,
             py::arg("slope"),
             R"doc(Returns tensor with the leaky relu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
@@ -199,23 +193,7 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "rad2deg", &rad2deg, R"doc(Returns tensor with the rad2deg conversion of elements of the input tensor ``{0}``.)doc");
 
 
-        m_tensor.def("mul_unary", [](float a, const Tensor& b, const MemoryConfig& c) -> Tensor { return mul_unary(a,b,c); },
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Perform an eltwise-binary mul on one tensor and one scalar.
-
-            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "scalar", "Scalar", "float", "", "Yes"
-                "input", "Tensor to mul", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-        )doc");
-        m_tensor.def("mul_unary", [](const Tensor& a,float b,  const MemoryConfig& c) -> Tensor { return mul_unary(a,b,c); },
+        m_tensor.def("mul_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&mul_unary),
             py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform an eltwise-binary mul on one tensor and one scalar.
 
@@ -232,7 +210,7 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("div_unary", [](float a, const Tensor& b, const MemoryConfig& c) -> Tensor { return div_unary(a,b,c); },
+        m_tensor.def("div_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&div_unary),
             py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform an eltwise-binary div on one tensor and one scalar.
 
@@ -248,40 +226,8 @@ namespace tt::tt_metal::detail {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
         )doc");
-        m_tensor.def("div_unary", [](const Tensor& a,float b,  const MemoryConfig& c) -> Tensor { return div_unary(a,b,c); },
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Perform an eltwise-binary div on one tensor and one scalar.
 
-            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor to div", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "scalar", "Scalar", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-        )doc");
-
-        m_tensor.def("sub_unary", [](float a, const Tensor& b, const MemoryConfig& c) -> Tensor { return sub_unary(a,b,c); },
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Perform an eltwise-binary sub on one tensor and one scalar.
-
-            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "scalar", "Scalar", "float", "", "Yes"
-                "input", "Tensor to sub", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-        )doc");
-        m_tensor.def("sub_unary", [](const Tensor& a,float b,  const MemoryConfig& c) -> Tensor { return sub_unary(a,b,c); },
+        m_tensor.def("sub_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&sub_unary),
             py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform an eltwise-binary sub on one tensor and one scalar.
 
@@ -298,7 +244,7 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("add_unary", [](float a, const Tensor& b, const MemoryConfig& c) -> Tensor { return add_unary(a,b,c); },
+        m_tensor.def("add_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&add_unary),
             py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform an eltwise-binary add on one tensor and one scalar.
 
@@ -312,33 +258,41 @@ namespace tt::tt_metal::detail {
                 "scalar", "Scalar", "float", "", "Yes"
                 "input", "Tensor to add", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-        )doc");
-        m_tensor.def("add_unary", [](const Tensor& a,float b,  const MemoryConfig& c) -> Tensor { return add_unary(a,b,c); },
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Perform an eltwise-binary mul on one tensor and one scalar.
-
-            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor to add", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "scalar", "Scalar", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
         )doc");
 
+        detail::bind_unary_op_with_param(
+            m_tensor, "sub_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&sub_unary),
+            py::arg("scalar"),
+            R"doc(Perform an eltwise-binary sub on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+            R"doc("Scalar", "float", "")doc"
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "mul_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&mul_unary),
+            py::arg("scalar"),
+            R"doc(Perform an eltwise-binary mul on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+            R"doc("Scalar", "float", "")doc"
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "div_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&div_unary),
+            py::arg("scalar"),
+            R"doc(Perform an eltwise-binary div on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+            R"doc("Scalar", "float", "")doc"
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "add_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&add_unary),
+            py::arg("scalar"),
+            R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+            R"doc("Scalar", "float", "")doc"
+        );
 
         // softmax
         m_tensor.def("softmax", &softmax,
             py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             "Performs a softmax operation on the last tensor dimension.");
 
+        // softmax with scale and mask, regular mask has a dim of (batch, 1, 1, seq_len), causal mask has a dim of (batch, 1, seq_len, seq_len)
         m_tensor.def("scale_mask_softmax", &transformers::scale_mask_softmax,
-        py::arg("input").noconvert(), py::arg("scale"), py::arg("mask").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("input").noconvert(), py::arg("scale"), py::arg("mask").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("is_causal_mask").noconvert() = false,
         "Performs a fused scale->attention_mask->softmax operation.");
 
     }

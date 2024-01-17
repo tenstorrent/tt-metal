@@ -7,10 +7,10 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary.h"
+#include "llk_math_binary_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_AB.h"
+#include "llk_unpack_AB_api.h"
 #endif
 
 
@@ -29,16 +29,10 @@ namespace ckernel {
 ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb=16)
 {
     UNPACK(( llk_setup_operands() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
-    UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
-    #else
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
-    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb0, icb1) ));
-    #endif
+    UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
 
     MATH(( llk_math_pack_sync_init<SYNC>() ));
-
 
     PACK(( llk_pack_init() ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
@@ -60,12 +54,7 @@ ALWI void mul_tiles_init_f() { MATH(( llk_math_eltwise_binary_init<ELWMUL, NONE,
 ALWI void mul_tiles_init() {
     MATH(( llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
-    #else
-    // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(0, 1) ));
-    #endif
 }
 
 /**
@@ -82,12 +71,7 @@ ALWI void add_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWADD, NON
 ALWI void add_tiles_init() {
     MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
-    #else
-    // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(0, 1) ));
-    #endif
 }
 
 /**
@@ -104,12 +88,7 @@ ALWI void sub_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWSUB, NON
 ALWI void sub_tiles_init() {
     MATH(( llk_math_eltwise_binary_init<ELWSUB, NONE>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
-    #else
-    // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(0, 1) ));
-    #endif
 }
 
 
@@ -141,11 +120,7 @@ ALWI void mul_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
     //first = false;
 
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1)  ));
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_binary<ELWMUL, NONE, SyncHalf, MATH_FIDELITY, false>(idst) ));
-    #else
     MATH(( llk_math_eltwise_binary<ELWMUL, NONE, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
-    #endif
 }
 
 /**
@@ -167,12 +142,7 @@ ALWI void mul_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
 ALWI void add_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1)  ));
-
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_binary<ELWADD, NONE, SyncHalf, MATH_FIDELITY, false>(idst) ));
-    #else
     MATH(( llk_math_eltwise_binary<ELWADD, NONE, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
-    #endif
 }
 
 /**
@@ -194,12 +164,7 @@ ALWI void add_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
 ALWI void sub_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1)  ));
-
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_binary<ELWSUB, NONE, SyncHalf, MATH_FIDELITY, false>(idst) ));
-    #else
     MATH(( llk_math_eltwise_binary<ELWSUB, NONE, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
-    #endif
 }
 
 template<bool full_init = false>

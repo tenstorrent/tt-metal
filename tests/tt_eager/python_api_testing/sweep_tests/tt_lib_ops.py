@@ -21,7 +21,7 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 def setup_host_and_device(func):
     def wrap(*args, device, **kwargs):
         output = func(*args, device=device, **kwargs)
-        ttl.device.ClearCommandQueueProgramCache()
+        ttl.device.ClearCommandQueueProgramCache(device)
         ttl.device.DeallocateBuffers(device)
         return output
 
@@ -109,7 +109,10 @@ def move(
     output_mem_config,
     **kwargs,
 ):
+    dummy_tensor = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    # Free up dummy tensor from memory to make available to move
+    dummy_tensor.deallocate()
     t1 = ttl.tensor.move(t0, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
@@ -697,12 +700,11 @@ def eltwise_assign_binary(
     dtype,
     layout,
     input_mem_config,
-    output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.assign(t0, t1, output_mem_config=output_mem_config)
+    t2 = ttl.tensor.assign(t0, t1)
 
     return tt2torch_tensor(t2)
 
@@ -1739,7 +1741,7 @@ def eltwise_rpow(
 
 
 @setup_host_and_device
-def eltwise_power(
+def eltwise_pow(
     x,
     *args,
     exponent,
@@ -1751,25 +1753,7 @@ def eltwise_power(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.power(t0, exponent, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_power_fp(
-    x,
-    *args,
-    exponent,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.power_fp(t0, exponent, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.pow(t0, exponent, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -1838,7 +1822,7 @@ def make_unary_op(ttl_tensor_unop):
 # mean_global = make_unary_op(ttl.tensor.global_mean)
 # var_global = make_unary_op(ttl.tensor.global_var)
 # std_global = make_unary_op(ttl.tensor.global_std)
-# normalize_global = make_unary_op(ttl.tensor.global_normalize)
+normalize_global = make_unary_op(ttl.tensor.normalize_global)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_unary_op(ttl.tensor.cos)
 eltwise_sin = make_unary_op(ttl.tensor.sin)

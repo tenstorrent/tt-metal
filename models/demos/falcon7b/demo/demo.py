@@ -124,7 +124,7 @@ def run_falcon_demo_kv(
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
 
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
 
     logger.info("Moving weights to device; might take some time...")
     profiler.start(f"moving_to_device")
@@ -144,7 +144,7 @@ def run_falcon_demo_kv(
     logger.info("Moved weights to device!")
     profiler.end(f"moving_to_device")
 
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
 
     logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
@@ -200,7 +200,7 @@ def run_falcon_demo_kv(
 
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
 
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
     logger.info("Finished 1st run prefill stage with compile!")
 
     ### First run decode stage with compile ###
@@ -255,7 +255,7 @@ def run_falcon_demo_kv(
         kv_cache_len += 1
 
     logger.info("Finished 1st run decode stage with compile!")
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
 
     del user_output_ids
     del output_ids

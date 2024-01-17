@@ -18,15 +18,13 @@ namespace tt_metal {
 enum class MatmulParallelizationStrategy {
     MULTI_CORE = 0,
     MULTI_CORE_REUSE = 1,
-    MULTI_CORE_REUSE_GENERALIZED = 2,
-    MULTI_CORE_REUSE_MCAST_GENERALIZED = 3,
-    MULTI_CORE_REUSE_PADDING = 4,
-    MULTI_CORE_REUSE_OPTIMIZED = 5,
-    MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED = 6,
-    MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED = 7,
-    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 8,
-    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 9,
-    SINGLE_CORE = 10
+    MULTI_CORE_REUSE_PADDING = 2,
+    MULTI_CORE_REUSE_OPTIMIZED = 3,
+    MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED = 4,
+    MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED = 5,
+    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 6,
+    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 7,
+    SINGLE_CORE = 8
 };
 
 
@@ -37,8 +35,6 @@ operation::ProgramWithCallbacks matmul_single_core  (const Tensor &input_tensor_
 operation::ProgramWithCallbacks matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 
@@ -75,9 +71,9 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
     return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config, .output_dtype=input_tensor_a.dtype()}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation);
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation);
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
 /**
@@ -289,6 +285,9 @@ struct Matmul {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     const MathFidelity math_fidelity;
+    const bool fp32_dest_acc_en;
+    const bool math_approx_mode;
+    const bool packer_l1_acc;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -318,9 +317,12 @@ inline Tensor matmul(
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype=std::nullopt,
-    const MathFidelity math_fidelity = MathFidelity::LoFi
+    const MathFidelity math_fidelity = MathFidelity::LoFi,
+    const bool fp32_dest_acc_en = false,
+    const bool math_approx_mode = true,
+    const bool packer_l1_acc = false
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
 inline Tensor matmul(
@@ -329,12 +331,15 @@ inline Tensor matmul(
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype=std::nullopt,
-    const MathFidelity math_fidelity = MathFidelity::LoFi
+    const MathFidelity math_fidelity = MathFidelity::LoFi,
+    const bool fp32_dest_acc_en = false,
+    const bool math_approx_mode = true,
+    const bool packer_l1_acc = false
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
 
-Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, const MathFidelity math_fidelity = MathFidelity::LoFi);
+Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, const MathFidelity math_fidelity = MathFidelity::LoFi, const bool fp32_dest_acc_en = false, const bool math_approx_mode = true, const bool packer_l1_acc = false);
 
 }  // namespace primary
 

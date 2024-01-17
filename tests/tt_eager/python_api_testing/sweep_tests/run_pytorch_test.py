@@ -16,9 +16,6 @@ from functools import partial
 import tt_lib
 from itertools import permutations, product
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 
@@ -268,7 +265,7 @@ def run_pytorch_test(args):
                             device,
                         )
 
-                        tt_lib.device.Synchronize()
+                        tt_lib.device.Synchronize(device)
                         tt_lib.profiler.stop_profiling(test_profiling_key)
                         logger.info(f"Stopped profiling test {test_profiling_key}")
                         run_id += 1

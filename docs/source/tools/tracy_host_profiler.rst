@@ -96,11 +96,11 @@ For profiling your entire python program, run your program as follows:
 Pytest Sessions
 ^^^^^^^^^^^^^^^
 
-For pytest scripts you can import pytest as a module and pass its arguments accordingly. For example, to profile a bert unit test you can run the following:
+For pytest scripts you can import pytest as a module and pass its arguments accordingly. For example, to profile a BERT unit test you can run the following:
 
 ..  code-block:: sh
 
-    python -m tracy -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+    python -m tracy -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_query_key_value_and_split_heads_with_program_cache
 
 .. image:: ../_static/tracy-python-run.png
     :alt: Tracy Python run
@@ -145,4 +145,4 @@ Add  ``-l`` option to enable line-level profiling:
 
 ..  code-block:: sh
 
-    python -m tracy -p -l -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+    python -m tracy -p -l -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_query_key_value_and_split_heads_with_program_cache

@@ -19,6 +19,16 @@
 
 namespace tt::tt_metal::operation {
 
+bool is_logging_enabled() {
+    bool enabled = false;
+    if (std::getenv("TT_METAL_LOGGER_TYPES") != nullptr and std::getenv("TT_METAL_LOGGER_LEVEL") != nullptr) {
+        enabled |= std::string{std::getenv("TT_METAL_LOGGER_TYPES")} == "Op" and
+                   std::string{std::getenv("TT_METAL_LOGGER_LEVEL")} == "DEBUG";
+    }
+    enabled |= std::getenv("OPERATION_HISTORY_CSV") != nullptr;
+    return enabled;
+}
+
 namespace detail {
 
 static Device* get_device(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
@@ -36,10 +46,6 @@ static Device* get_device(const std::vector<Tensor>& input_tensors, const std::v
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }
-
-}  // namespace detail
-
-namespace detail {
 
 void override_addresses(
     const OverrideAddressesCallback& override_addresses_callback,
@@ -102,12 +108,15 @@ constexpr op_profiler::OpType get_profiler_operation_type() {
 template <typename Function>
 constexpr auto decorate_operation(const Function& function) {
     return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
+#ifndef TTNN_ENABLE_LOGGING
+        if (not is_logging_enabled()) {
+            return function(operation, args...);
+        }
+#endif
+
         const auto start{std::chrono::steady_clock::now()};
-
         log_operation(operation, args...);
-
         auto output_tensors = function(operation, args...);
-
         const auto end{std::chrono::steady_clock::now()};
 
 #ifdef TTNN_ENABLE_LOGGING
@@ -121,7 +130,7 @@ constexpr auto decorate_operation(const Function& function) {
 }
 std::vector<Tensor> run_host_operation(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
     ZoneScoped;
-    ZoneName(operation.get_type_name().c_str(), operation.get_type_name().size());
+    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
@@ -143,6 +152,9 @@ std::vector<Tensor> run_device_operation(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+    ZoneScoped;
+    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
+
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
 
     std::function<std::variant<Program, std::reference_wrapper<Program>>(
@@ -193,8 +205,6 @@ std::vector<Tensor> run_device_operation(
         };
     }
 
-    ZoneScoped;
-    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().length());
     operation.validate(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
@@ -211,11 +221,11 @@ std::vector<Tensor> run_device_operation(
 
             if (USE_FAST_DISPATCH) {
 #ifndef TTNN_ENABLE_LOGGING
-                EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
+                EnqueueProgram(tt::tt_metal::detail::GetCommandQueue(device), program, false);
 #else
                 const auto start{std::chrono::steady_clock::now()};
-                EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
-                Finish(*tt::tt_metal::detail::GLOBAL_CQ);
+                EnqueueProgram(tt::tt_metal::detail::GetCommandQueue(device), program, false);
+                Finish(tt::tt_metal::detail::GetCommandQueue(device));
                 const auto end{std::chrono::steady_clock::now()};
                 const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                 tt::log_info(

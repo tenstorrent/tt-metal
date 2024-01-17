@@ -197,7 +197,8 @@ namespace detail {
 
     void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("WriteToDevice ") + std::to_string(buffer.device()->id()));
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
             WriteToDeviceInterleavedContiguous(buffer, host_buffer);
         }
@@ -346,7 +347,8 @@ namespace detail {
 
     void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer,  bool shard_order) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("ReadFromDevice ") + std::to_string(buffer.device()->id()));
 
         host_buffer.clear();  // overwrite the data
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED
@@ -421,7 +423,8 @@ namespace detail {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("LaunchProgram ") + std::to_string(device->id()));
         detail::CompileProgram(device, program);
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
@@ -450,12 +453,12 @@ namespace detail {
         DumpDeviceProfileResults(device, program);
     }
 
-
     bool ConfigureDeviceWithProgram(Device *device, Program &program) {
         ZoneScoped;
         bool pass = true;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("ConfigureDeviceWithProgram ") + std::to_string(device->id()));
 
         auto device_id = device->id();
 
@@ -544,7 +547,7 @@ namespace detail {
         ZoneScoped;
         program.compile(device);
     }
-}
+}   // namespace detail
 
 size_t GetNumAvailableDevices() {
 #ifdef TT_METAL_VERSIM_DISABLED
@@ -562,20 +565,12 @@ size_t GetNumPCIeDevices() {
 #endif
 }
 
-Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
-    Device * dev = new Device(device_id, l1_bank_remap);
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        detail::GLOBAL_CQ = std::make_unique<CommandQueue>(dev);
-    }
+Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) {
+    Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
     return dev;
 }
 
 bool CloseDevice(Device *device) {
-    // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
-    if (detail::GLOBAL_CQ) {
-        detail::GLOBAL_CQ.reset(nullptr);
-    }
     return device->close();
 }
 

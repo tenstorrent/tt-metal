@@ -1,0 +1,51 @@
+# Anything using [[#, #]] is logical coordinates (Can be relative)
+# relative index: 0 means first row, -1 means last row of functional grid...
+
+# product name:
+#   num of HW command queues:
+#     core descriptor config
+
+galaxy:
+  1:
+    l1_bank_size:
+      1376256
+
+    compute_with_storage_grid_range:
+      start: [0, 0]
+      end: [0, 0]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      []
+
+nebula_x1:
+  1:
+    l1_bank_size:
+      1376256
+
+    compute_with_storage_grid_range:
+      start: [0, 0]
+      end: [0, 0]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      []
+
+nebula_x2:
+  1:
+    l1_bank_size:
+      749568
+
+    compute_with_storage_grid_range:
+      start: [0, 0]
+      end: [0, 0]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      []

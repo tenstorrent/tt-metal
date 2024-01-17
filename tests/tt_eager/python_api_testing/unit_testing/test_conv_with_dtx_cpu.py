@@ -3,12 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 import numpy as np
 
@@ -35,6 +30,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 
 import torch
 
+
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -58,9 +54,7 @@ import torch
         (64, 64, 8, 8, 1, 1, 1, 1, 0, 0),
     ),
 )
-def test_run_conv_as_large_matmul_cpu(
-    K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w
-):
+def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
     a_activation_shape = [1, C, H, W]
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
     b_weights_shape = [K, C, R, S]
@@ -83,9 +77,7 @@ def test_run_conv_as_large_matmul_cpu(
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     # Prepare weights
-    B_tiled = create_conv_weight_tensor(
-        B_pyt, K, C, R, S, weight_block_h, weight_block_w
-    )
+    B_tiled = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
 
     # Call DTX pass to transform A
     act_block_width_datums = act_block_w * 32
@@ -93,9 +85,7 @@ def test_run_conv_as_large_matmul_cpu(
     weight_block_width_datums = weight_block_w * 32
     matrix_activation_h_tiles = (int)(_nearest_y(OH * OW, act_block_height_datums) / 32)
     matrix_weight_w_tiles = (int)(_nearest_y(K, weight_block_width_datums) / 32)
-    matrix_activation_w_tiles = (int)(
-        _nearest_y(_nearest_y(C, 16) * R * S, act_block_width_datums) / 32
-    )
+    matrix_activation_w_tiles = (int)(_nearest_y(_nearest_y(C, 16) * R * S, act_block_width_datums) / 32)
 
     num_blocks_act_w = (int)(matrix_activation_w_tiles / act_block_w)
     num_blocks_act_h = (int)(matrix_activation_h_tiles / act_block_h)
@@ -135,9 +125,7 @@ def test_run_conv_as_large_matmul_cpu(
     out_result = out_tr.reshape([1, K, OH, OW])
 
     # Calculate conv result with golden result. Run Pytorch conv
-    out_golden = torch.nn.functional.conv2d(
-        A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
-    )
+    out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
     assert out_result.shape == out_golden.shape
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
     print("Passing=", passing_pcc)

@@ -192,11 +192,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
     KernelHandle reader_kernel_id = CreateKernel(program,
-                                                        "tt_eager/tt_dnn/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+                                                        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
                                                         ReaderDataMovementConfig{.compile_args = reader_ct_args});
     KernelHandle writer_kernel_id = CreateKernel(program,
-                                                        "tt_eager/tt_dnn/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+                                                        "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
                                                         WriterDataMovementConfig{.compile_args = writer_ct_args});
     // int32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;

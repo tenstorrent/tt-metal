@@ -9,11 +9,11 @@
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-
 namespace tt {
 
 namespace tt_metal {
@@ -74,14 +74,7 @@ Tensor bias_gelu_unary(const Tensor& a, float bias, const MemoryConfig& output_m
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
 Tensor _softsign(const Tensor& a, const MemoryConfig& output_mem_config) {
-    Tensor recip_a = unary_chain(a,{
-        UnaryWithParam{.op_type = UnaryOpType::ABS},
-        UnaryWithParam{.op_type = UnaryOpType::ADD_UNARY,
-                        .param = 1.0f},
-        UnaryWithParam{.op_type = UnaryOpType::RECIP}
-    },output_mem_config);
-
-    return mul(a, recip_a, std::nullopt, output_mem_config);
+    return mul(a, recip(add1(abs(a, output_mem_config), output_mem_config), output_mem_config), std::nullopt, output_mem_config);
 }
 Tensor softsign(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _softsign)(a, output_mem_config);
@@ -378,8 +371,9 @@ Tensor mac(const Tensor& a, const Tensor& b, const Tensor& c, const MemoryConfig
 }
 
 Tensor _mac_overload(const Tensor& a, float b, float c, const MemoryConfig& output_mem_config) {
-  const Tensor ab = tt::tt_metal::mul_unary(b,a,output_mem_config);
-  return tt::tt_metal::add_unary(ab,c,output_mem_config);
+    Tensor t_b = mk_scalar(b);
+    Tensor t_c = mk_scalar(c);
+    return  mac(a, t_b, t_c, output_mem_config);
 }
 Tensor mac(const Tensor& input_a, float b, float c, const MemoryConfig& output_mem_config )
 {
@@ -943,6 +937,34 @@ Tensor normalize_hw(const Tensor& y,const MemoryConfig& output_mem_config) {
    return operation::decorate_as_composite(__func__, _normalize)(y,output_mem_config);
 }
 
+using HWFunctionT = std::function<Tensor (const Tensor& y, const MemoryConfig&)>;
+Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const Shape s_orig = y.shape();
+    TT_FATAL(s_orig.rank() == 4, "Cannot support non-rank 4 Tensor");
+
+    //format to HW
+    Tensor y_hw = reshape(y,1,1,s_orig[2],s_orig[3]*s_orig[1]*s_orig[0],output_mem_config);
+
+    // compute @fn
+    Tensor z_0 = fn(y_hw,output_mem_config);
+    TT_FATAL( y_hw.shape() == z_0.shape(), "shape match" );
+    y_hw.deallocate();
+
+    // reformat
+    Tensor z_1 = reshape(z_0,s_orig[0],s_orig[1],s_orig[2],s_orig[3],output_mem_config);
+    z_0.deallocate();
+
+    return z_1;
+}
+
+//Global Norm
+Tensor _normalize_global(const Tensor& y,const MemoryConfig& output_mem_config) {
+    return _make_global_from_hw_impl( normalize_hw, y, output_mem_config );
+}
+Tensor normalize_global(const Tensor& y,const MemoryConfig& output_mem_config) {
+   return operation::decorate_as_composite(__func__, _normalize_global)(y,output_mem_config);
+}
+
 //TODO: can be a fused binop
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor _hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config) {
@@ -1238,21 +1260,32 @@ Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outp
     TT_FATAL( exponent >= 0.0f, "works for positive exponents only");
     const uint32_t exponent_floor = static_cast<uint32_t>( floor(exponent) );
     if ( static_cast<float>( exponent_floor ) == exponent ) {
-        return power( input_a, exponent_floor );
+        return power( input_a, exponent_floor, output_mem_config );
     }
-
-
     const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
     Tensor  pow_trunc_log = mul_unary( log(input_a,output_mem_config),
                                        exponent_trunc, output_mem_config );
     Tensor pow_frac = exp( pow_trunc_log, output_mem_config );
     pow_trunc_log.deallocate();
-
-    return mul( power(input_a, exponent_floor, output_mem_config),
+    Tensor  t_nan  = full_like(input_a, std::nanf(""), output_mem_config);
+    Tensor result =  mul( power(input_a, exponent_floor, output_mem_config),
 		pow_frac, {}, output_mem_config );
+    // To handle negative inputs:
+    // in torch For -ve inputs with float exponent power returns nan
+    result = where(ltz(input_a, output_mem_config), t_nan, result);
+    return result;
 }
 Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     return operation::decorate_as_composite(__func__, _power_fp)(input_a, exponent, output_mem_config);
+}
+
+
+Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config){
+    return power_fp(input_a, exponent, output_mem_config);
+}
+
+Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config){
+    return power(input_a, exponent, output_mem_config);
 }
 
 //repeat a input tensor @input_a as specified by the number of dimensions

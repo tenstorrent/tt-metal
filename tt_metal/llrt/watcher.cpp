@@ -131,6 +131,8 @@ static const char * get_sanity_riscv_name(CoreCoord core, const launch_msg_t *la
         return "brisc";
     case DebugSanitizeNCrisc:
         return "ncrisc";
+    case DebugSanitizeErisc:
+        return "erisc";
     case DebugSanitizeTrisc0:
         return "trisc0";
     case DebugSanitizeTrisc1:

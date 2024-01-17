@@ -10,18 +10,19 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "risc_attribs.h"
+#include "llk_op_info_api.h"
 
 #define SYNC SyncHalf
 
 #define ALWI inline __attribute__((always_inline))
 
 #ifdef TRISC_MATH
-#include "llk_math_common.h"
-#include "llk_math_matmul.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_binary.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_math_reduce.h"
+#include "llk_math_common_api.h"
+#include "llk_math_matmul_api.h"
+#include "llk_math_unary_datacopy_api.h"
+#include "llk_math_binary_api.h"
+#include "llk_math_unary_sfpu_api.h"
+#include "llk_math_reduce_api.h"
 #define MATH(x) x
 #define MAIN math_main()
 #else
@@ -29,8 +30,8 @@
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_common.h"
-#include "llk_pack.h"
+#include "llk_pack_api.h"
+#include "llk_io_pack.h"
 #define PACK(x) x
 #define MAIN pack_main()
 #else
@@ -38,13 +39,14 @@
 #endif
 
 #ifdef TRISC_UNPACK
-#include "llk_unpack_common.h"
-#include "llk_unpack_AB_matmul.h"
-#include "llk_unpack_A.h"
-#include "llk_unpack_AB.h"
-#include "llk_unpack_reduce.h"
-#include "llk_unpack_tilize.h"
-#include "llk_unpack_untilize.h"
+#include "llk_unpack_common_api.h"
+#include "llk_unpack_AB_matmul_api.h"
+#include "llk_unpack_A_api.h"
+#include "llk_unpack_AB_api.h"
+#include "llk_unpack_reduce_api.h"
+#include "llk_unpack_tilize_api.h"
+#include "llk_unpack_untilize_api.h"
+#include "llk_io_unpack.h"
 #define UNPACK(x) x
 #define MAIN unpack_main()
 #else

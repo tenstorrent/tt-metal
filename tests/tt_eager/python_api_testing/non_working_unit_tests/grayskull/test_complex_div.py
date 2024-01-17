@@ -48,7 +48,7 @@ def run_complex_div_test(input_shape, dtype, dlayout, in_mem_config, out_mem_con
 
 test_sweep_args = [
     (
-        (1, 9, 64, 448),
+        (1, 9, 64, 416),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -60,7 +60,7 @@ test_sweep_args = [
         "",
     ),
     (
-        (1, 9, 64, 448),
+        (1, 9, 64, 416),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -72,7 +72,7 @@ test_sweep_args = [
         "",
     ),
     (
-        (1, 9, 64, 448),
+        (1, 9, 64, 416),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -84,7 +84,7 @@ test_sweep_args = [
         "",
     ),
     (
-        (1, 6, 96, 448),
+        (1, 6, 96, 416),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -96,7 +96,7 @@ test_sweep_args = [
         "",
     ),
     (
-        (1, 6, 96, 448),
+        (1, 6, 96, 416),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -108,7 +108,7 @@ test_sweep_args = [
         "",
     ),
     (
-        (1, 6, 96, 448),
+        (1, 6, 96, 416),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
         [

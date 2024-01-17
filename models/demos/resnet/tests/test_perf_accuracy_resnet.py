@@ -77,8 +77,8 @@ def run_perf_resnet(
         logits = torch_resnet50(inputs)
         profiler.end(cpu_key)
 
-        profiler.start(first_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
+        profiler.start(first_key)
         tt_output = tt_resnet50(tt_inputs)
         tt_output = tt_output.cpu().to_torch().to(torch.float)
         profiler.end(first_key)
@@ -86,8 +86,8 @@ def run_perf_resnet(
 
         enable_persistent_kernel_cache()
 
-        profiler.start(second_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
+        profiler.start(second_key)
         tt_output = tt_resnet50(tt_inputs)
         tt_output = tt_output.cpu().to_torch().to(torch.float)
         profiler.end(second_key)
@@ -163,7 +163,7 @@ def run_perf_resnet(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
-    ((16, 0.225, 33, 160),),
+    ((16, 0.015, 33, 160), (20, 0.015, 33, 160)),
 )
 def test_perf_bare_metal(
     use_program_cache,
@@ -193,7 +193,7 @@ def test_perf_bare_metal(
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
-    ((16, 0.3, 36, 50),),
+    ((16, 0.015, 36, 50), (20, 0.015, 36, 50)),
 )
 def test_perf_virtual_machine(
     use_program_cache,

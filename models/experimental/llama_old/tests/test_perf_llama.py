@@ -83,14 +83,14 @@ def run_perf_llama(expected_inference_time, expected_compile_time, device):
 
         profiler.start(first_key)
         tt_out = tt_llama_model(llama_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_out
 
         enable_persistent_kernel_cache()
         profiler.start(second_key)
         tt_out = tt_llama_model(llama_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_out
 

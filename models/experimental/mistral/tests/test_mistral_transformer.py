@@ -12,6 +12,7 @@ from models.experimental.mistral.tt.mistral_transformer import TtTransformer
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.experimental.mistral.reference.model import Transformer
 from models.experimental.mistral.reference.tokenizer import Tokenizer
+from models.experimental.mistral.mistral_helper_funcs import unpad_from_zero
 from models.utility_functions import tt_to_torch_tensor
 from models.utility_functions import (
     comp_pcc,
@@ -42,7 +43,7 @@ def test_mistral_transformer_inference(pcc, model_location_generator, device, dt
     model_args.WEIGHTS_DTYPE = dtype
     model_args.max_batch_size = 1
     model_args.n_layers = 32
-    model_args.WEIGHTS_DTYPE = dtype
+
     reference_model = Transformer(args=model_args)
     reference_model.load_state_dict(state_dict)
 
@@ -69,7 +70,7 @@ def test_mistral_transformer_inference(pcc, model_location_generator, device, dt
 
     reference_output = reference_model(input_tokens[:, :min_prompt_len], positions)
 
-    tt_output_torch = tt_to_torch_tensor(tt_output).squeeze(0).squeeze(0)
+    tt_output_torch = tt_to_torch_tensor(tt_output).squeeze(0)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
+
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -16,6 +18,10 @@
 namespace tt {
 
 namespace tt_metal {
+
+void ::detail::ProgramDeleter::operator()(Program *p) {
+    delete p;
+}
 
 ActiveDevices Device::active_devices_;
 
@@ -51,9 +57,10 @@ void ActiveDevices::deactivate_device(chip_id_t id) {
     this->active_devices_[id] = ActiveState::INACTIVE;
 }
 
-Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
+Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), num_hw_cqs_(num_hw_cqs)
 {
     ZoneScoped;
+    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
     this->initialize(l1_bank_remap);
 }
 
@@ -64,7 +71,6 @@ void Device::initialize_cluster() {
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 #endif
-    tt::Cluster::instance().assert_risc_reset(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
@@ -77,7 +83,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         .dram_bank_offsets = {},
         .worker_grid_size = this->logical_grid_size(),
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
+        .l1_bank_size = static_cast<size_t>(get_storage_core_bank_size(this->id_, this->num_hw_cqs_)),
         .core_type_from_noc_coord_table = {}, // Populated later
         .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
         .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
@@ -91,22 +97,25 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     for (const auto& core: soc_desc.physical_cores) {
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
-    for (const auto& core : soc_desc.compute_with_storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->compute_cores.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_)) {
+        this->compute_cores_.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const auto& core : soc_desc.storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->storage_only_cores_.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_)) {
+        this->storage_only_cores_.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const auto& core : soc_desc.dispatch_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->dispatch_cores_.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+    for (const CoreCoord& core : tt::get_logical_producer_cores(id_, num_hw_cqs_)) {
+        this->producer_cores_.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
+    }
+    for (const CoreCoord& core : tt::get_logical_consumer_cores(id_, num_hw_cqs_)) {
+        this->consumer_cores_.insert(core);
+        const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
@@ -162,18 +171,26 @@ void Device::build_firmware() {
 void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) {
     ZoneScoped;
 
-    llrt::program_brisc_startup_addr(this->id(), phys_core);
-    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
-        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
-        uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
-        if (riscv_id == 1) {
-            launch_msg->ncrisc_kernel_size16 = kernel_size16;
+    if (llrt::is_ethernet_core(phys_core, this->id())) {
+        int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
+        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+        uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+        log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+    } else {
+        llrt::program_brisc_startup_addr(this->id(), phys_core);
+        for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
+            ll_api::memory binary_mem =
+                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
+            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
+            if (riscv_id == 1) {
+                launch_msg->ncrisc_kernel_size16 = kernel_size16;
+            }
+            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
+            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
         }
-        log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
-        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
+        llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
     }
-
-    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
 }
 
 void Device::initialize_and_launch_firmware() {
@@ -189,6 +206,7 @@ void Device::initialize_and_launch_firmware() {
         .enable_brisc = 0,
         .enable_ncrisc = 0,
         .enable_triscs = 0,
+        .enable_erisc = 0,
         .run = RUN_MSG_INIT,
     };
 
@@ -196,32 +214,31 @@ void Device::initialize_and_launch_firmware() {
     log_debug("Initializing firmware");
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
+
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-
-            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+            if (!this->storage_only_cores_.count(logical_core)) {
+                CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
                 this->initialize_firmware(worker_core, &launch_msg);
                 not_done_cores.insert(worker_core);
             }
         }
     }
 
+    // Load erisc app base FW to eth cores
+    // TODO: we can optimize and split send/receive FD modes to two FWs
+    for (const auto &eth_core : this->get_active_ethernet_cores()) {
+        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        this->initialize_firmware(phys_eth_core, &launch_msg);
+    }
+
     // Barrier between L1 writes above and deassert below
     tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-
-            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
-            }
-        }
-    }
+    for(const auto& worker_core : not_done_cores)
+        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
@@ -264,10 +281,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
         this->build_firmware();
     }
 
-    tt_start_debug_print_server(
-        [&, this]() { return this->logical_grid_size(); },
-        [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
-    );
+    DprintServerAttach(this);
     llrt::watcher_init(this->id(),
                        [&, this]() { return this->logical_grid_size(); },
                        [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
@@ -281,7 +295,41 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
                          build_env_.get_out_root_path()
                          );
+
+    // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->initialized_ = true;
+
+    // Create system memory writer for this device to have an associated interface to hardware command queue (i.e. hugepage)
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        if (this->is_mmio_capable()) {
+            vector<pair<CoreCoord, CoreCoord>> dispatch_cores;
+            std::transform(
+                    this->producer_cores().begin(), this->producer_cores().end(),
+                    this->consumer_cores().begin(), std::back_inserter(dispatch_cores),
+                    [](const CoreCoord& producer_core, const CoreCoord& consumer_core) {
+                        return std::make_pair(producer_core, consumer_core);
+                    });
+
+            this->manager = std::make_unique<SystemMemoryManager>(this->id(), dispatch_cores, [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); });
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
+            detail::CompileCommandQueuePrograms(this, *this->manager, channel, this->command_queue_programs);
+            uint8_t cq_channel = 0;
+            for (const auto& [producer_core, consumer_core]: dispatch_cores) {
+                detail::CommandQueueInit(this, producer_core, consumer_core, *this->manager, cq_channel);
+                Program& command_queue_program = *this->command_queue_programs[cq_channel];
+                launch_msg_t msg = command_queue_program.kernels_on_core(producer_core)->launch_msg;
+                tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(producer_core), &msg);
+                tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(consumer_core), &msg);
+                cq_channel++;
+            }
+        } else {
+            TT_ASSERT(this->num_hw_cqs_ == 1, "num_hw_cqs must be 1 for remote chips (for time being) and in slow dispatch");
+            log_warning(tt::LogDispatch, "Not creating a sysmem manager for remote chip and not sending dispatch kernels to remote chip");
+        }
+    } else {
+        TT_ASSERT(this->num_hw_cqs_ == 1, "num_hw_cqs must be 1 for remote chips (for time being) and in slow dispatch");
+    }
+
     return true;
 }
 
@@ -292,8 +340,21 @@ bool Device::close() {
     }
     this->deallocate_buffers();
     llrt::watcher_detach(this);
-    tt_stop_debug_print_server();
-    tt::Cluster::instance().assert_risc_reset(id_);
+    DprintServerDetach(this);
+
+    // Assert worker cores
+    CoreCoord grid_size = this->logical_grid_size();
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord logical_core(x, y);
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+            }
+        }
+    }
+
     this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
@@ -330,7 +391,7 @@ CoreCoord Device::logical_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    return tt::Cluster::instance().get_soc_desc(id_).compute_with_storage_grid_size;
+    return tt::get_compute_grid_size(id_, num_hw_cqs_);
 }
 
 CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
@@ -359,10 +420,10 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
 }
 
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> worker_cores;
-    for (auto logical_core : logical_cores) {
-        worker_cores.push_back(worker_core_from_logical_core(logical_core));
-    }
+    std::vector<CoreCoord> worker_cores(logical_cores.size());
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
+        worker_cores[idx] = worker_core_from_logical_core(logical_cores[idx]);
+
     return worker_cores;
 }
 
@@ -377,10 +438,10 @@ CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core)
 }
 
 std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> ethernet_cores;
-    for (auto logical_core : logical_cores) {
-        ethernet_cores.emplace_back(ethernet_core_from_logical_core(logical_core));
-    }
+    std::vector<CoreCoord> ethernet_cores(logical_cores.size());
+
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
+        ethernet_cores[idx] = ethernet_core_from_logical_core(logical_cores[idx]);
     return ethernet_cores;
 }
 

@@ -3,23 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
-import numpy as np
-
-import tt_lib as ttl
-from tt_lib.utils import (
-    tilize_to_list,
-    tilize,
-    untilize,
-    _nearest_32,
-    _nearest_y,
-    convert_weights_2d_matrix,
-)
 from models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
@@ -39,10 +23,9 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
+
 @pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
-def make_conv_bn_pairs_in_one_resnet_block(
-    inplanes, planes, base_address, state_dict, stride=1
-):
+def make_conv_bn_pairs_in_one_resnet_block(inplanes, planes, base_address, state_dict, stride=1):
     norm_layer = nn.BatchNorm2d
     expansion: int = 4
     base_width = 64.0
@@ -52,18 +35,14 @@ def make_conv_bn_pairs_in_one_resnet_block(
 
     conv1_weight = state_dict[f"{base_address}.conv1.weight"]
     conv1_bias = None
-    conv1 = conv1x1(
-        inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1"
-    )
+    conv1 = conv1x1(inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1")
 
     bn1 = norm_layer(width)
     bn1.weight = nn.Parameter(state_dict[f"{base_address}.bn1.weight"])
     bn1.bias = nn.Parameter(state_dict[f"{base_address}.bn1.bias"])
     bn1.running_mean = nn.Parameter(state_dict[f"{base_address}.bn1.running_mean"])
     bn1.running_var = nn.Parameter(state_dict[f"{base_address}.bn1.running_var"])
-    bn1.num_batches_tracked = nn.Parameter(
-        state_dict[f"{base_address}.bn1.num_batches_tracked"], requires_grad=False
-    )
+    bn1.num_batches_tracked = nn.Parameter(state_dict[f"{base_address}.bn1.num_batches_tracked"], requires_grad=False)
     bn1.eval()
 
     conv2_weight = state_dict[f"{base_address}.conv2.weight"]
@@ -83,9 +62,7 @@ def make_conv_bn_pairs_in_one_resnet_block(
     bn2.bias = nn.Parameter(state_dict[f"{base_address}.bn2.bias"])
     bn2.running_mean = nn.Parameter(state_dict[f"{base_address}.bn2.running_mean"])
     bn2.running_var = nn.Parameter(state_dict[f"{base_address}.bn2.running_var"])
-    bn2.num_batches_tracked = nn.Parameter(
-        state_dict[f"{base_address}.bn2.num_batches_tracked"], requires_grad=False
-    )
+    bn2.num_batches_tracked = nn.Parameter(state_dict[f"{base_address}.bn2.num_batches_tracked"], requires_grad=False)
     bn2.eval()
 
     conv3_weight = state_dict[f"{base_address}.conv3.weight"]
@@ -102,9 +79,7 @@ def make_conv_bn_pairs_in_one_resnet_block(
     bn3.bias = nn.Parameter(state_dict[f"{base_address}.bn3.bias"])
     bn3.running_mean = nn.Parameter(state_dict[f"{base_address}.bn3.running_mean"])
     bn3.running_var = nn.Parameter(state_dict[f"{base_address}.bn3.running_var"])
-    bn3.num_batches_tracked = nn.Parameter(
-        state_dict[f"{base_address}.bn3.num_batches_tracked"], requires_grad=False
-    )
+    bn3.num_batches_tracked = nn.Parameter(state_dict[f"{base_address}.bn3.num_batches_tracked"], requires_grad=False)
     bn3.eval()
 
     return [(conv1, bn1), (conv2, bn2), (conv3, bn3)]
@@ -133,12 +108,8 @@ def test_resnet50_convs_with_folded_batch_norm(device):
         bn1 = norm_layer(inplanes)  # batch norm
         bn1.weight = nn.Parameter(state_dict[f"{base_address_with_dot}bn1.weight"])
         bn1.bias = nn.Parameter(state_dict[f"{base_address_with_dot}bn1.bias"])
-        bn1.running_mean = nn.Parameter(
-            state_dict[f"{base_address_with_dot}bn1.running_mean"]
-        )
-        bn1.running_var = nn.Parameter(
-            state_dict[f"{base_address_with_dot}bn1.running_var"]
-        )
+        bn1.running_mean = nn.Parameter(state_dict[f"{base_address_with_dot}bn1.running_mean"])
+        bn1.running_var = nn.Parameter(state_dict[f"{base_address_with_dot}bn1.running_var"])
         bn1.num_batches_tracked = nn.Parameter(
             state_dict[f"{base_address_with_dot}bn1.num_batches_tracked"],
             requires_grad=False,
@@ -221,9 +192,7 @@ def test_resnet50_convs_with_folded_batch_norm(device):
                 device,
                 conv_bias.reshape(-1).tolist(),
             )
-            x_on_device = create_conv_act_tensor(
-                x, x_shape[0], x_shape[1], x_shape[2], x_shape[3]
-            ).to(device)
+            x_on_device = create_conv_act_tensor(x, x_shape[0], x_shape[1], x_shape[2], x_shape[3]).to(device)
             x_on_device = conv_on_device(x_on_device)
             # Copy output to host and convert tt tensor to pytorch tensor
             x_result = x_on_device.cpu()

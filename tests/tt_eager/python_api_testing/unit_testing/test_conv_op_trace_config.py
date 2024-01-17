@@ -26,7 +26,7 @@ def test_run_op_trace_config(conv_params, input_nchw_shape):
     pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
         conv_params, input_nchw_shape
     )
-    logger.debug(f"Data top left indices - {data_top_left_indices}")
-    logger.debug(f"Pad meta data - {pad_metadata}")
+    logger.trace(f"Data top left indices - {data_top_left_indices}")
+    logger.trace(f"Pad meta data - {pad_metadata}")
     # run trace conv reference
     traced_conv_reference(pad_metadata, data_top_left_indices, conv_params, input_nchw_shape)

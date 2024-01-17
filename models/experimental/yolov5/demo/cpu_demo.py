@@ -6,12 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
 from loguru import logger
 from datasets import load_dataset
@@ -76,9 +70,7 @@ def test_cpu_demo():
     source = str(source)
     is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
     is_url = source.lower().startswith(("rtsp://", "rtmp://", "http://", "https://"))
-    webcam = (
-        source.isnumeric() or source.endswith(".streams") or (is_url and not is_file)
-    )
+    webcam = source.isnumeric() or source.endswith(".streams") or (is_url and not is_file)
     screenshot = source.lower().startswith("screen")
 
     download_images(Path(source))
@@ -88,9 +80,7 @@ def test_cpu_demo():
 
     # Directories
     save_dir = Path(project)
-    (save_dir / "labels" if save_txt else save_dir).mkdir(
-        parents=True, exist_ok=True
-    )  # make dir
+    (save_dir / "labels" if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Load model
     device = torch.device(device)
@@ -103,9 +93,7 @@ def test_cpu_demo():
 
     # Dataloader
     bs = 1  # batch_size
-    dataset = LoadImages(
-        source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride
-    )
+    dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
     vid_path, vid_writer = [None] * bs, [None] * bs
 
     # Run inference
@@ -126,9 +114,7 @@ def test_cpu_demo():
 
         # NMS
         with dt[2]:
-            pred = non_max_suppression(
-                pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det
-            )
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
 
         # Second-stage classifier (optional)
         # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
@@ -144,9 +130,7 @@ def test_cpu_demo():
 
             p = Path(p)  # to Path
             save_path = str(save_dir / "out_img.jpg")  # im.jpg
-            txt_path = str(save_dir / "labels" / p.stem) + (
-                "" if dataset.mode == "image" else f"_{frame}"
-            )  # im.txt
+            txt_path = str(save_dir / "labels" / p.stem) + ("" if dataset.mode == "image" else f"_{frame}")  # im.txt
             s += "%gx%g " % im.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
@@ -163,23 +147,13 @@ def test_cpu_demo():
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
-                        xywh = (
-                            (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn)
-                            .view(-1)
-                            .tolist()
-                        )  # normalized xywh
-                        line = (
-                            (cls, *xywh, conf) if save_conf else (cls, *xywh)
-                        )  # label format
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
                         with open(f"{txt_path}.txt", "a") as f:
                             f.write(("%g " * len(line)).rstrip() % line + "\n")
 
                     c = int(cls)  # integer class
-                    label = (
-                        None
-                        if hide_labels
-                        else (names[c] if hide_conf else f"{names[c]} {conf:.2f}")
-                    )
+                    label = None if hide_labels else (names[c] if hide_conf else f"{names[c]} {conf:.2f}")
                     annotator.box_label(xyxy, label, color=colors(c, True))
 
             # Stream results
@@ -192,20 +166,11 @@ def test_cpu_demo():
                 logger.warning("Only dataset.mode == 'image' supported")
 
         # Print time (inference-only)
-        logger.info(
-            f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms"
-        )
+        logger.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
 
     # Print results
     t = tuple(x.t / seen * 1e3 for x in dt)  # speeds per image
-    logger.info(
-        f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}"
-        % t
-    )
+    logger.info(f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}" % t)
 
-    s = (
-        f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}"
-        if save_txt
-        else ""
-    )
+    s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ""
     logger.info(f"Results saved to {colorstr('bold', save_dir)}{s}")

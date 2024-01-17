@@ -26,9 +26,9 @@ using namespace tt::tt_metal;
 string dim_to_kernel_name(ReduceOpDim reduce_dim, ReduceOpMath reduce_op){
     string kernel_name;
     switch(reduce_dim){
-        case ReduceOpDim::H: kernel_name = "tt_eager/tt_dnn/kernels/compute/reduce_h.cpp"; break;
-        case ReduceOpDim::W: kernel_name = "tt_eager/tt_dnn/kernels/compute/reduce_w.cpp"; break;
-        case ReduceOpDim::HW: kernel_name = "tt_eager/tt_dnn/kernels/compute/reduce_hw.cpp"; break;
+        case ReduceOpDim::H: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp"; break;
+        case ReduceOpDim::W: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp"; break;
+        case ReduceOpDim::HW: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp"; break;
         default: TT_ASSERT(false && "Undefined dim");
     }
     return kernel_name;
@@ -270,6 +270,12 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
         output = transpose(output, 0, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
+}
+
+Tensor global_sum(Tensor& val, const MemoryConfig& output_mem_config) {
+    for(int rank = val.shape().rank()-1; rank >=0; rank--)
+        val = sum(val, rank, output_mem_config);
+    return val;
 }
 
 }  // namespace tt_metal

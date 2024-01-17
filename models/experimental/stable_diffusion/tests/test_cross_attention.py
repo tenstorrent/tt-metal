@@ -19,9 +19,7 @@ from models.experimental.stable_diffusion.tt.cross_attention import TtCrossAtten
 
 def test_cross_attn_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -47,9 +45,7 @@ def test_cross_attn_inference(device):
     encoder_hidden_states_shape = torch.Size([1, 2, 77, 768])
     encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
 
-    encoder_hidden_states = (
-        encoder_hidden_states.squeeze(0) if encoder_hidden_states is not None else None
-    )
+    encoder_hidden_states = encoder_hidden_states.squeeze(0) if encoder_hidden_states is not None else None
     torch_output = cross_attn(input.squeeze(0), encoder_hidden_states)
 
     # setup tt model
@@ -65,7 +61,7 @@ def test_cross_attn_inference(device):
         # host=host,
         base_address=base_address,
     )
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
     tt_encoder_hidden_states = (
         torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)

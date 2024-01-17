@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import torch.nn as nn
 
 from torchvision import models
@@ -11,91 +10,67 @@ from typing import List, Union, Dict, cast
 import tt_lib
 
 from tt_lib.fallback_ops import fallback_ops
-from models.experimental.vgg.vgg_utils import get_shape
-from models.experimental.vgg.tt.vgg_helper_funcs import tt_linear
+from models.helper_funcs import Linear as TtLinear
 from models.utility_functions import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
-    torch_to_tt_tensor_rm,
 )
-
-
-num_classes = 1000
+from models.experimental.vgg.vgg_utils import format_tensor
 
 
 class TtVGG(nn.Module):
     def __init__(
         self,
         features: List,
-        num_classes: int = 1000,
         init_weights: bool = True,
-        dropout: float = 0.5,
         device=None,
-        state_dict=None,
         base_address="",
+        tt_cache_path=None,
+        tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
     ) -> None:
         super().__init__()
         assert init_weights == False, "we are loading weights, not initializing them"
         self.device = device
-        self.state_dict = state_dict
         self.base_address = base_address
-
         self.features = features
         self.avgpool = fallback_ops.AdaptiveAvgPool2d((7, 7))
 
-        linear1_weight = state_dict[f"classifier.0.weight"]
-        linear1_weight = tt_lib.tensor.Tensor(
-            linear1_weight.reshape(-1).tolist(),
-            get_shape(linear1_weight.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.output_mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
         )
 
-        linear1_bias = state_dict[f"classifier.0.bias"]
-        linear1_bias = tt_lib.tensor.Tensor(
-            linear1_bias.reshape(-1).tolist(),
-            get_shape(linear1_bias.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        linear1_weight = tt_lib.tensor.load_tensor(f"{tt_cache_path}classifier.0.weight{tt_dtype}.bin")
+        linear1_bias = tt_lib.tensor.load_tensor(f"{tt_cache_path}classifier.0.bias{tt_dtype}.bin")
+
+        linear2_weight = tt_lib.tensor.load_tensor(f"{tt_cache_path}classifier.3.weight{tt_dtype}.bin")
+        linear2_bias = tt_lib.tensor.load_tensor(f"{tt_cache_path}classifier.3.bias{tt_dtype}.bin")
+
+        linear3_weight = tt_lib.tensor.load_tensor(f"{tt_cache_path}classifier.6.weight{tt_dtype}.bin")
+        linear3_bias = tt_lib.tensor.load_tensor(f"{tt_cache_path}classifier.6.bias{tt_dtype}.bin")
+
+        linear1 = TtLinear(
+            in_features=linear1_weight.shape()[-1],
+            out_features=linear1_weight.shape()[-2],
+            weight=linear1_weight,
+            bias=linear1_bias,
+            output_mem_config=self.output_mem_config,
         )
 
-        linear2_weight = state_dict[f"classifier.3.weight"]
-        linear2_weight = tt_lib.tensor.Tensor(
-            linear2_weight.reshape(-1).tolist(),
-            get_shape(linear2_weight.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        linear2 = TtLinear(
+            in_features=linear2_weight.shape()[-1],
+            out_features=linear2_weight.shape()[-2],
+            weight=linear2_weight,
+            bias=linear2_bias,
+            output_mem_config=self.output_mem_config,
         )
 
-        linear2_bias = state_dict[f"classifier.3.bias"]
-        linear2_bias = tt_lib.tensor.Tensor(
-            linear2_bias.reshape(-1).tolist(),
-            get_shape(linear2_bias.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        linear3 = TtLinear(
+            in_features=linear3_weight.shape()[-1],
+            out_features=linear3_weight.shape()[-2],
+            weight=linear3_weight,
+            bias=linear3_bias,
+            output_mem_config=self.output_mem_config,
         )
-
-        linear3_weight = state_dict[f"classifier.6.weight"]
-        linear3_weight = tt_lib.tensor.Tensor(
-            linear3_weight.reshape(-1).tolist(),
-            get_shape(linear3_weight.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
-
-        linear3_bias = state_dict[f"classifier.6.bias"]
-        linear3_bias = tt_lib.tensor.Tensor(
-            linear3_bias.reshape(-1).tolist(),
-            get_shape(linear3_bias.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
-
-        linear1 = tt_linear(linear1_weight, linear1_bias, self.device)
-
-        linear2 = tt_linear(linear2_weight, linear2_bias, self.device)
-
-        linear3 = tt_linear(linear3_weight, linear3_bias, self.device)
 
         self.classifier = [
             linear1,
@@ -106,19 +81,17 @@ class TtVGG(nn.Module):
         ]
 
     def forward(self, tt_x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        batch_size = tt_x.shape()[0]
-        assert batch_size == 1
-
         for layer in self.features:
             if layer is tt_lib.tensor.relu:
-                tt_x = layer(tt_x)
+                tt_x = layer(tt_x, output_mem_config=self.output_mem_config)
             else:
                 tt_x = layer(tt_x)
 
         batch, c, w, h = tt_x.shape()
-
         tt_x = self.avgpool(tt_x)
+
         tt_x = fallback_ops.reshape(tt_x, batch, 1, 1, c * w * h)
+        tt_x = format_tensor(tt_x, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
         for layer in self.classifier:
             tt_x = layer(tt_x)
 
@@ -128,10 +101,11 @@ class TtVGG(nn.Module):
 def make_layers(
     cfg: List[Union[str, int]],
     batch_norm: bool = False,
-    state_dict=None,
     base_address="features",
     device=None,
     disable_conv_on_tt_device=True,
+    tt_cache_path=None,
+    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
 ) -> nn.Sequential:
     layers: List = []
     in_channels = 3
@@ -145,12 +119,15 @@ def make_layers(
             if not batch_norm:
                 ind = len(layers)
                 conv2d_params = [v, in_channels, 3, 3, 1, 1, 1, 1, 1, 1]
-                if not disable_conv_on_tt_device and is_conv_supported_on_device(
-                    conv2d_params
-                ):
+                if not disable_conv_on_tt_device and is_conv_supported_on_device(conv2d_params):
                     assert device is not None
-                    conv2d_weight = state_dict[f"{base_address}.{ind}.weight"]
-                    conv2d_bias = state_dict[f"{base_address}.{ind}.bias"].tolist()
+                    conv2d_weight = tt_lib.tensor.load_tensor(
+                        f"{tt_cache_path}{base_address}.{ind}.weight{tt_dtype}.bin"
+                    )
+                    conv2d_bias = tt_lib.tensor.load_tensor(
+                        f"{tt_cache_path}{base_address}.{ind}.bias{tt_dtype}.bin"
+                    ).tolist()
+
                     conv2d = run_conv_on_device_wrapper(
                         conv2d_weight.reshape(-1).tolist(),
                         conv2d_params,
@@ -158,16 +135,8 @@ def make_layers(
                         conv2d_bias,
                     )
                 else:
-                    weight = torch_to_tt_tensor_rm(
-                        state_dict[f"{base_address}.{ind}.weight"],
-                        device=device,
-                        put_on_device=False,
-                    )
-                    bias = torch_to_tt_tensor_rm(
-                        state_dict[f"{base_address}.{ind}.bias"],
-                        device=device,
-                        put_on_device=False,
-                    )
+                    weight = tt_lib.tensor.load_tensor(f"{tt_cache_path}{base_address}.{ind}.weight{tt_dtype}.bin")
+                    bias = tt_lib.tensor.load_tensor(f"{tt_cache_path}{base_address}.{ind}.bias{tt_dtype}.bin")
                     conv2d = fallback_ops.Conv2d(
                         weights=weight,
                         biases=bias,
@@ -189,95 +158,61 @@ def make_layers(
 cfgs: Dict[str, List[Union[str, int]]] = {
     "A": [64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
     "B": [64, 64, "M", 128, 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
-    "D": [
-        64,
-        64,
-        "M",
-        128,
-        128,
-        "M",
-        256,
-        256,
-        256,
-        "M",
-        512,
-        512,
-        512,
-        "M",
-        512,
-        512,
-        512,
-        "M",
-    ],
-    "E": [
-        64,
-        64,
-        "M",
-        128,
-        128,
-        "M",
-        256,
-        256,
-        256,
-        256,
-        "M",
-        512,
-        512,
-        512,
-        512,
-        "M",
-        512,
-        512,
-        512,
-        512,
-        "M",
-    ],
+    "D": [64, 64, "M", 128, 128, "M", 256, 256, 256, "M", 512, 512, 512, "M", 512, 512, 512, "M"],
+    "E": [64, 64, "M", 128, 128, "M", 256, 256, 256, 256, "M", 512, 512, 512, 512, "M", 512, 512, 512, 512, "M"],
 }
 
 
-def _vgg(features, init_weights, device, state_dict, base_address=""):
+def _vgg(features, init_weights, device, base_address="", tt_cache_path=None, tt_dtype=tt_lib.tensor.DataType.BFLOAT16):
     return TtVGG(
         features,
         init_weights=init_weights,
         device=device,
-        state_dict=state_dict,
         base_address=base_address,
+        tt_cache_path=tt_cache_path,
+        tt_dtype=tt_dtype,
     )
 
 
-def vgg16(device, disable_conv_on_tt_device=True) -> TtVGG:
+def vgg16(
+    device, disable_conv_on_tt_device=True, tt_cache_path=None, tt_dtype=tt_lib.tensor.DataType.BFLOAT16
+) -> TtVGG:
     torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
     torch_vgg.eval()
-    state_dict = torch_vgg.state_dict()
     model = _vgg(
         make_layers(
             cfgs["D"],
             batch_norm=False,
-            state_dict=state_dict,
             device=device,
             disable_conv_on_tt_device=disable_conv_on_tt_device,
+            tt_cache_path=tt_cache_path,
+            tt_dtype=tt_dtype,
         ),
         init_weights=False,
         device=device,
-        state_dict=state_dict,
+        tt_cache_path=tt_cache_path,
+        tt_dtype=tt_dtype,
     )
     return model
 
 
-def vgg11(device, disable_conv_on_tt_device=True) -> TtVGG:
+def vgg11(
+    device, disable_conv_on_tt_device=True, tt_cache_path=None, tt_dtype=tt_lib.tensor.DataType.BFLOAT16
+) -> TtVGG:
     torch_vgg = models.vgg11(weights=models.VGG11_Weights.IMAGENET1K_V1)
     torch_vgg.eval()
-    state_dict = torch_vgg.state_dict()
     model = _vgg(
         make_layers(
             cfgs["A"],
             batch_norm=False,
-            state_dict=state_dict,
             device=device,
             disable_conv_on_tt_device=disable_conv_on_tt_device,
+            tt_cache_path=tt_cache_path,
+            tt_dtype=tt_dtype,
         ),
         init_weights=False,
         device=device,
-        state_dict=state_dict,
+        tt_cache_path=tt_cache_path,
+        tt_dtype=tt_dtype,
     )
     return model

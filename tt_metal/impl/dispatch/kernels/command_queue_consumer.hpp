@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
+
+CQWriteInterface cq_write_interface;
 
 FORCE_INLINE
 void noc_async_write_multicast_one_packet_no_path_reserve(
@@ -14,8 +17,7 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
     DEBUG_STATUS('N', 'W', 'P', 'W');
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
     DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr_multicast, size);
-    while (!ncrisc_noc_fast_write_ok(noc_index, NCRISC_WR_REG_CMD_BUF))
-        ;
+    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF));
     DEBUG_STATUS('N', 'W', 'P', 'D');
 
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_DISPATCH_MULTICAST_WRITE_VC) |
@@ -73,8 +75,65 @@ uint32_t get_read_ptr(bool db_buf_switch) {
     return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
 }
 
+inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_write_ptr() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_WRITE_PTR);
+}
+
+inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_read_ptr() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_READ_PTR);
+}
+
+FORCE_INLINE
+void completion_queue_reserve_back(uint32_t data_size_B) {
+    DEBUG_STATUS('N', 'Q', 'R', 'B', 'W');
+    uint32_t data_size_16B = align(data_size_B, 32) >> 4;
+    uint32_t completion_rd_ptr_and_toggle;
+    uint32_t completion_rd_ptr;
+    uint32_t completion_rd_toggle;
+    do {
+        completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
+        completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
+        completion_rd_toggle = completion_rd_ptr_and_toggle >> 31;
+    } while (
+        ((cq_write_interface.completion_fifo_wr_ptr < completion_rd_ptr) and (cq_write_interface.completion_fifo_wr_ptr + data_size_16B > completion_rd_ptr)) or
+        (completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle) and (cq_write_interface.completion_fifo_wr_ptr == completion_rd_ptr)
+    );
+
+    DEBUG_STATUS('N', 'Q', 'R', 'B', 'D');
+}
+
+template <uint32_t host_completion_queue_write_ptr_addr>
+FORCE_INLINE
+void notify_host_of_completion_queue_write_pointer() {
+    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | host_completion_queue_write_ptr_addr;  // For now, we are writing to host hugepages at offset
+    uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
+    volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
+    completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
+    noc_async_write(CQ_COMPLETION_WRITE_PTR, pcie_address, 4);
+    // Consider changing this to be flush instead of barrier
+    // Barrier for now because host reads the completion queue write pointer to determine how many pages can be read
+    noc_async_write_barrier();
+}
+
+template <uint32_t host_completion_queue_write_ptr_addr>
+FORCE_INLINE
+void completion_queue_push_back(const uint32_t completion_queue_start_addr, uint32_t push_size_B) {
+    uint32_t push_size_16B = align(push_size_B, 32) >> 4;
+    cq_write_interface.completion_fifo_wr_ptr += push_size_16B;
+    if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit) {
+        cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;
+        // Flip the toggle
+        cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
+    }
+
+    // Notify host of updated completion wr ptr
+    notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
+}
+
+template <uint32_t host_completion_queue_write_ptr_addr>
 FORCE_INLINE void write_buffers(
     volatile tt_l1_ptr uint32_t* command_ptr,
+    const uint32_t completion_queue_start_addr,
     uint32_t num_destinations,
     uint32_t sharded_buffer_num_cores,
     uint32_t consumer_cb_size,
@@ -90,24 +149,32 @@ FORCE_INLINE void write_buffers(
         const uint32_t num_pages = command_ptr[2];
         const uint32_t page_size = command_ptr[3];
         const uint32_t dst_buf_type = command_ptr[5];
+        const uint32_t dst_page_index = command_ptr[7];
 
         uint32_t num_to_write;
         uint32_t src_addr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
         uint32_t l1_consumer_fifo_limit = src_addr + consumer_cb_size - 1;
 
+        BufferType buffer_type = (BufferType)dst_buf_type;
         Buffer buffer;
-        if ((BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
-            buffer.init((BufferType)dst_buf_type, bank_base_address, page_size);
+        if (buffer_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
+            buffer.init(buffer_type, bank_base_address, page_size);
         }
         else {
             buffer.init_sharded(page_size, sharded_buffer_num_cores, bank_base_address,
                             command_ptr + COMMAND_PTR_SHARD_IDX);
         }
-        for (uint32_t id = 0; id < num_pages;) {
-            num_to_write = min(num_pages - id, producer_consumer_transfer_num_pages);
+
+        if (buffer_type == BufferType::SYSTEM_MEMORY) {
+            completion_queue_reserve_back(num_pages * page_size);
+        }
+        uint32_t page_id = dst_page_index;
+        uint32_t end_page_id = page_id + num_pages;
+        while (page_id < end_page_id) {
+            num_to_write = min(end_page_id - page_id, producer_consumer_transfer_num_pages);
             multicore_cb_wait_front(db_buf_switch, num_to_write);
             uint32_t src_addr = get_read_ptr(db_buf_switch);
-            buffer.noc_async_write_buffer(src_addr, id, num_to_write);
+            buffer.noc_async_write_buffer(src_addr, page_id, num_to_write);
             noc_async_writes_flushed();
             multicore_cb_pop_front(
                 producer_noc_encoding,
@@ -116,7 +183,10 @@ FORCE_INLINE void write_buffers(
                 consumer_cb_size,
                 num_to_write,
                 page_size);
-            id += num_to_write;
+            page_id += num_to_write;
+        }
+        if (buffer_type == BufferType::SYSTEM_MEMORY) {
+            completion_queue_push_back<host_completion_queue_write_ptr_addr>(completion_queue_start_addr, num_pages * page_size);
         }
     }
     noc_async_write_barrier();
@@ -233,8 +303,7 @@ void write_and_launch_program(
     }
 }
 
-FORCE_INLINE void wait_for_program_completion(
-    uint32_t num_workers, uint32_t tensix_soft_reset_addr) {
+FORCE_INLINE void wait_for_program_completion(uint32_t num_workers) {
     if (not num_workers)
         return;
 
@@ -247,14 +316,16 @@ FORCE_INLINE void wait_for_program_completion(
     while (*message_addr_ptr != num_workers)
         ;
 
+
     DEBUG_STATUS('Q', 'D');
 }
 
+template <uint32_t host_finish_addr>
 FORCE_INLINE void notify_host_complete() {
     volatile tt_l1_ptr uint32_t* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
     constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
-    uint64_t finish_noc_addr = pcie_core_noc_encoding | HOST_CQ_FINISH_PTR;
+    constexpr static uint64_t finish_noc_addr = pcie_core_noc_encoding | host_finish_addr;
     noc_async_write(uint32_t(finish_ptr), finish_noc_addr, 4);
     noc_async_write_barrier();
     finish_ptr[0] = 0;

@@ -14,6 +14,8 @@ namespace tt {
 
 namespace tt_metal {
 
+//TODO: add profiling hooks
+
 #define CHECK_FOR_COMPLEX(input) do {\
   TT_ASSERT( utility::is_complex_shape(input), "works for complex shape only"); \
   /* TT_ASSERT( input.shape()[0] == 1, "tensor should have batch size 1"); */ \
@@ -32,10 +34,13 @@ namespace utility {
 }
 
 
-Tensor is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
+Tensor _is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
     return eqz(ab[1],output_mem_config); //imaginary portion = 0
+}
+Tensor is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _is_real)(input, output_mem_config);
 }
 
 Tensor is_imag(const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -178,8 +183,21 @@ ComplexTensor complex_sub(const ComplexTensor& input_a, const ComplexTensor& inp
              sub(input_a[1],input_b[1],{},output_mem_config) });
 }
 
-ComplexTensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+// level-1 type polar
+Tensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    Tensor c = cos(input_b,output_mem_config);
+    Tensor r = mul(input_a,c,{},output_mem_config);
+    c.deallocate();
 
+    Tensor s = sin(input_b,output_mem_config);
+    Tensor i = mul(input_a,s,{},output_mem_config);
+    s.deallocate();
+    return mk_complex( r, i, output_mem_config);
+}
+
+ComplexTensor polar(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    const Tensor& input_a = input.real();
+    const Tensor& input_b = input.imag();
     Tensor c = cos(input_b,output_mem_config);
     Tensor r = mul(input_a,c,{},output_mem_config);
     c.deallocate();

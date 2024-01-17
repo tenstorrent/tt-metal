@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reshape_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
@@ -202,13 +202,13 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 

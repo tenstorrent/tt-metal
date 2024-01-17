@@ -24,12 +24,8 @@ def write_csv_to_xlsx(args):
 
     if not args.no_timestamp:
         time = os.path.getmtime(input_csv_file)
-        dt_prefix = datetime.datetime.fromtimestamp(
-            time, tz=datetime.timezone.utc
-        ).strftime("%Y%m%d_%H%M")
-        output_xlsx_file = output_xlsx_file.with_name(
-            f"{dt_prefix}_{output_xlsx_file.name}"
-        )
+        dt_prefix = datetime.datetime.fromtimestamp(time, tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M")
+        output_xlsx_file = output_xlsx_file.with_name(f"{dt_prefix}_{output_xlsx_file.name}")
 
     logger.info(f"Writing {input_csv_file} to {output_xlsx_file}.")
 
@@ -92,9 +88,7 @@ def write_csv_to_xlsx(args):
                         col_idx += 1
 
                         # Write individual dims of each shape as separate columns
-                        shapes = ast.literal_eval(
-                            col
-                        )  # Assume shape is a list of lists
+                        shapes = ast.literal_eval(col)  # Assume shape is a list of lists
                         for shape_count, shape in enumerate(shapes):
                             for dim in shape:
                                 worksheet.write(row_idx, col_idx, dim)
@@ -103,9 +97,7 @@ def write_csv_to_xlsx(args):
                         col_idx += (shape_max - shape_count - 1) * (dim_max)
 
                     else:
-                        worksheet.write(
-                            row_idx, col_idx, int(col) if col.isdigit() else col
-                        )
+                        worksheet.write(row_idx, col_idx, int(col) if col.isdigit() else col)
                         col_idx += 1
 
                 # HACK for matmul perf
@@ -115,9 +107,7 @@ def write_csv_to_xlsx(args):
                     kernel_runtime = int(row[12])
 
                     total_ops = 2 * M * K * N
-                    ideal_compute_cycles = total_ops / (
-                        512 * num_cores_used
-                    )  # HiFi4: 512 OPs/CC/Tensix core
+                    ideal_compute_cycles = total_ops / (512 * num_cores_used)  # HiFi4: 512 OPs/CC/Tensix core
                     total_cycles = kernel_runtime * 1.2  # ns * 1.2GHz clock
                     math_util = ideal_compute_cycles / total_cycles
                     worksheet.write(row_idx, col_idx, math_util, PERCENT_FORMAT)

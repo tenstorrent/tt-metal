@@ -30,10 +30,13 @@ class RunTimeOptions {
     std::vector<CoreCoord> dprint_cores;
     bool dprint_all_cores;
     std::vector<int> dprint_chip_ids;
+    bool dprint_all_chips;
     uint32_t dprint_riscv_mask;
     std::string dprint_file_name;
 
     bool profiler_enabled;
+
+    bool null_kernels;
 
 public:
     RunTimeOptions();
@@ -76,6 +79,11 @@ public:
     inline void set_dprint_chip_ids(std::vector<int> chip_ids) {
         dprint_chip_ids = chip_ids;
     }
+    // An alternative to setting cores by range, a flag to enable all.
+    inline void set_dprint_all_chips(bool all_chips) {
+        dprint_all_chips = all_chips;
+    }
+    inline bool get_dprint_all_chips() { return dprint_all_chips; }
     inline uint32_t get_dprint_riscv_mask() { return dprint_riscv_mask; }
     inline void set_dprint_riscv_mask(uint32_t riscv_mask) {
         dprint_riscv_mask = riscv_mask;
@@ -86,6 +94,9 @@ public:
     }
 
     inline bool get_profiler_enabled() { return profiler_enabled; }
+
+    inline void set_kernels_nullified(bool v) { null_kernels = v; }
+    inline bool get_kernels_nullified() { return null_kernels; }
 
 private:
     // Helper functions to parse DPrint-specific environment vaiables.

@@ -16,24 +16,14 @@ struct p_setrwc
 {
 #ifdef PERF_DUMP
 
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     constexpr static uint CLR_A        = 0x0;
-    #if SKIP_UNP1 == 1
-        constexpr static uint CLR_B        = 0x0;
-        constexpr static uint CLR_AB       = 0x0;
-    #else
-        constexpr static uint CLR_B        = 0x2;
-        constexpr static uint CLR_AB       = 0x2;
-    #endif
+    constexpr static uint CLR_B        = 0x0;
+    constexpr static uint CLR_AB       = 0x0;
 #else
     constexpr static uint CLR_A        = 0x1;
-    #if SKIP_UNP1 == 1
-        constexpr static uint CLR_B        = 0x0;
-        constexpr static uint CLR_AB       = 0x1;
-    #else
-        constexpr static uint CLR_B        = 0x2;
-        constexpr static uint CLR_AB       = 0x3;
-    #endif
+    constexpr static uint CLR_B        = 0x2;
+    constexpr static uint CLR_AB       = 0x3;
 #endif
 
 #else
@@ -100,6 +90,9 @@ struct p_setadc
 {
     constexpr static uint UNP0  = 0b001;
     constexpr static uint UNP1  = 0b010;
+    constexpr static uint UNP_A = 0b001;
+    constexpr static uint UNP_B = 0b010;
+    constexpr static uint UNP_AB = 0b011;
     constexpr static uint PAC   = 0b100;
 
     constexpr static uint SET_X = 0;

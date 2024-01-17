@@ -38,7 +38,7 @@ def test_eltwise_unary_chain(device):
             [ttl.tensor.FusibleActivation.POWER, 2],
         ],
     )
-    assert xtt.shape() == [N, C, H, W]
+    assert list(xtt.shape()) == [N, C, H, W]
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -87,7 +87,7 @@ def test_eltwise_binary_fused(device):
             [ttl.tensor.FusibleActivation.POWER, 2],
         ],
     )
-    assert xtt.shape() == [N, C, H, W]
+    assert list(xtt.shape()) == [N, C, H, W]
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

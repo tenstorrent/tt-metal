@@ -19,6 +19,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
@@ -100,6 +101,8 @@ void TensorModule(py::module &m_tensor) {
 
     detail::export_enum<ShardOrientation>(m_tensor);
 
+    detail::export_enum<LossReductionMode>(m_tensor);
+
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1);
@@ -147,8 +150,55 @@ void TensorModule(py::module &m_tensor) {
         Class defining tensor shape
     )doc");
 
-    py_shape
-        .def(py::init<std::array<uint32_t, 4> >());
+    py_shape.def(py::init<std::array<uint32_t, 4>>())
+        .def(
+            py::init(
+                [](const std::vector<uint32_t>& shape,
+                   const std::optional<std::vector<uint32_t>>& padded_shape_arg) -> Shape {
+                    auto rank = shape.size();
+                    std::vector<Padding::PadDimension> padding;
+                    auto padded_shape = Shape{shape};
+                    if (padded_shape_arg.has_value()) {
+                        padded_shape = padded_shape_arg.value();
+                        TT_ASSERT(shape.size() == padded_shape.rank());
+                        for (auto index = 0; index < rank; index++) {
+                            padding.push_back({.front = 0, .back = padded_shape[index] - shape[index]});
+                        }
+                    } else {
+                        padding = std::vector<Padding::PadDimension>(rank, {.front = 0, .back = 0});
+                    }
+                    auto output = Shape{padded_shape, Padding{padding, Padding::PadValue::Any}};
+                    return output;
+                }),
+            py::arg("shape"),
+            py::arg("padded_shape") = std::nullopt)
+        .def("__len__", [](const Shape& self) { return self.rank(); })
+        .def("__eq__", [](const Shape& self, const Shape& other) { return self == other; })
+        .def("__eq__", [](const Shape& self, const std::vector<uint32_t>& other) { return self == Shape{other}; })
+        .def("__eq__", [](const Shape& self, const std::array<uint32_t, 4>& other) { return self == Shape{other}; })
+        .def("__eq__", [](const Shape& self, const py::none) { return false; })
+        .def("__getitem__", [](const Shape& self, const std::int64_t index) { return self[index]; })
+        .def(
+            "__getitem__",
+            [](const Shape& self, const py::slice slice) {
+                size_t start = 0, stop = 0, step = 0, slicelength = 0;
+                if (!slice.compute(self.rank(), &start, &stop, &step, &slicelength)) {
+                    throw std::runtime_error("Invalid slice");
+                }
+
+                std::vector<uint32_t> output;
+                for (auto index = start; index < stop; index += step) {
+                    output.push_back(self[index]);
+                }
+                return Shape{output};
+            })
+        .def(
+            "__iter__",
+            [](const Shape& self) { return py::make_iterator(self.begin(), self.end()); },
+            py::keep_alive<0, 1>())
+        .def("__repr__", [](const Shape& self) { return fmt::format("{}", self); })
+        .def("without_padding", [](const Shape& self) -> Shape { return self.without_padding(); });
+
     py::implicitly_convertible<std::vector<uint32_t>, Shape>();
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
@@ -269,7 +319,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op_with_param(
         m_tensor, "sum", &sum,
         py::arg("dim"),
-        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``.)doc",
+        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
         R"doc("dimension to sum along", "int", "0, 1, 2, or 3")doc"
     );
 
@@ -309,7 +359,10 @@ void TensorModule(py::module &m_tensor) {
             py::arg("grid_size"),
             py::arg("per_core_out_matrix_height_ntiles").noconvert(),
             py::arg("per_core_weight_matrix_width_ntiles").noconvert()
-        );
+        )
+        .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
+        .def_property_readonly("per_core_out_matrix_height_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
+        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_weight_matrix_width_ntiles; });
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
@@ -322,10 +375,17 @@ void TensorModule(py::module &m_tensor) {
             py::arg("out_block_h_ntiles").noconvert(),
             py::arg("out_subblock_h_ntiles").noconvert(),
             py::arg("out_subblock_w_ntiles").noconvert()
-        );
+        )
+        .def_property_readonly("act_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_h_ntiles; })
+        .def_property_readonly("act_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.act_block_w_ntiles; })
+        .def_property_readonly("act_c_num_blocks", [](OptimizedConvBlockConfig const& c) { return c.act_c_num_blocks; })
+        .def_property_readonly("weight_block_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.weight_block_w_ntiles; })
+        .def_property_readonly("out_block_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_block_h_ntiles; })
+        .def_property_readonly("out_subblock_h_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_h_ntiles; })
+        .def_property_readonly("out_subblock_w_ntiles", [](OptimizedConvBlockConfig const& c) { return c.out_subblock_w_ntiles; });
 
     m_tensor.def("optimized_conv", &optimized_conv,
-                 py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt,
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("conv_reader_indices").noconvert() = std::nullopt,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert() = 0,
                  py::arg("output_mem_config").noconvert() = std::nullopt, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("input_tensor_shape").noconvert() = std::nullopt, R"doc(
@@ -444,7 +504,7 @@ void TensorModule(py::module &m_tensor) {
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-            "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, num_rows, 1]", "Yes"
+            "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, 1, num_rows]", "Yes"
             "weights", "Entire embedding table", "Tensor", "Tensor shape is [1,1, num_embeddings, num_columns]. Num_columns must be divisible by 32.", "Yes"
             "tilized", "Enable fused tilize on output. Default is true.", "Bool", "", "No",
             "embeddings_type", "Version of optimized embeddings to run. PADDED requires passing pad_token. BINARY expects the indices to only be 0, 1 and weights to have 2 rows", "EmbeddingsType", "GENERIC, PADDED, BINARY", "No"
@@ -480,6 +540,7 @@ void TensorModule(py::module &m_tensor) {
         | act      | Input activations tensor   | Tensor     |                               | Yes      |
         +----------+----------------------------+------------+-------------------------------+----------+
     )doc");
+
     m_tensor.def("max_pool2d", &max_pool2d,
         py::arg("input").noconvert(),
         py::arg("in_n").noconvert(),
@@ -488,6 +549,43 @@ void TensorModule(py::module &m_tensor) {
         py::arg("stride_h") = 1, py::arg("stride_w") = 1,
         py::arg("pad_h") = 0, py::arg("pad_w") = 0,
         py::arg("dilation_h") = 1, py::arg("dilation_w") = 1,
+        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("nblocks") = 1,
+        py::arg("use_multicore") = true, R"doc(
+        Max Pool 2D
+        +-------------------+-------------------------------+---------------+-------------+----------+
+        | Argument          | Description                   | Data type     | Valid range | Required |
+        +===================+===============================+===============+=============+==========+
+        | input             | Input activations tensor      | Tensor        |             | Yes      |
+        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
+        | in_h              | Input height                  | Tensor        |             | Yes      |
+        | in_w              | Input width                   | Tensor        |             | Yes      |
+        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
+        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
+        | stride_h          | stride in height dim          | uint32_t      |             | No       |
+        | stride_w          | stride in width dim           | uint32_t      |             | No       |
+        | pad_h             | padding in height dim         | uint32_t      |             | No       |
+        | pad_w             | padding in width dim          | uint32_t      |             | No       |
+        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
+        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
+        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
+        +-------------------+-------------------------------+---------------+-------------+----------+
+    )doc");
+
+    m_tensor.def("max_pool2d_v2", &max_pool2d_v2,
+        py::arg("input").noconvert(),
+        py::arg("reader_indices").noconvert(),
+        py::arg("in_n").noconvert(),
+        py::arg("in_h").noconvert(),
+        py::arg("in_w").noconvert(),
+        py::arg("kernel_h").noconvert(),
+        py::arg("kernel_w").noconvert(),
+        py::arg("stride_h") = 1,
+        py::arg("stride_w") = 1,
+        py::arg("pad_h") = 0,
+        py::arg("pad_w") = 0,
+        py::arg("dilation_h") = 1,
+        py::arg("dilation_w") = 1,
         py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("nblocks") = 1,
         py::arg("use_multicore") = true, R"doc(
@@ -574,15 +672,16 @@ void TensorModule(py::module &m_tensor) {
     );
     m_tensor.def(
         "pad_to_tile_shape",
-        [] (const std::array<uint32_t, 4>& unpadded_shape, bool pad_c=false, bool pad_n=false, bool pad_h=true, bool pad_w=true) {
-            Shape padded_shape_object = AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
-            std::array<uint32_t, 4> padded_shape;
-            std::copy(std::begin(padded_shape_object), std::end(padded_shape_object), std::begin(padded_shape));
-            return padded_shape;
-        }, R"doc(
+        [](const std::array<uint32_t, 4>& unpadded_shape,
+           bool pad_c = false,
+           bool pad_n = false,
+           bool pad_h = true,
+           bool pad_w = true) -> Shape {
+            return AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
+        },
+        R"doc(
             Returns shape padded to tile shape
-        )doc"
-    );
+        )doc");
 
     m_tensor.def(
         "dump_tensor",

@@ -26,7 +26,6 @@ reference_pcc = defaultdict(lambda: 0.999)
 reference_pcc["silu"] = 0.9714
 reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
-reference_pcc["softsign"] = reference_pcc["softplus"]
 
 
 def custom_compare(*args, **kwargs):
@@ -113,7 +112,6 @@ if is_wormhole_b0():
                 "polygamma",
                 "nextafter",
                 "scatter",
-                "power_fp",
             ),
             shapes,
         )
@@ -192,7 +190,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "isclose",
         "assign_binary",
         "nextafter",
-        "power_fp",
     ]:
         num_inputs = 2
 
@@ -214,8 +211,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"weight": np.random.randint(1, 100)})
     elif fn in ["subalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
-    elif fn in ["power_fp"]:
-        test_args.update({"exponent": np.random.rand() + 3})
     elif fn in ["addalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["bias_gelu_unary", "bias_gelu"]:

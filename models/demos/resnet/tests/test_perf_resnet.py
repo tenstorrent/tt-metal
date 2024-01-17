@@ -73,49 +73,52 @@ def run_perf_resnet(
         logits = torch_resnet50(inputs)
         profiler.end(cpu_key)
 
-        profiler.start(first_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
-        tt_output = tt_resnet50(tt_inputs).cpu()
-        profiler.end(first_key)
+
+        for iter in range(0, 10):
+            profiler.start(f"{iter}_key")
+            _ = tt_resnet50(tt_inputs).cpu()
+            profiler.end(f"{iter}_key")
 
         # enable_persistent_kernel_cache()
 
-        profiler.start(second_key)
-        tt_inputs = tt_resnet50.preprocessing(inputs)
-        tt_output = tt_resnet50(tt_inputs).cpu()
-        profiler.end(second_key)
+    first_iter_time = profiler.get(f"{0}_key")
 
-    first_iter_time = profiler.get(first_key)
-    second_iter_time = profiler.get(second_key)
+    # ensuring inference time fluctuations is not noise
+    inference_sum = 0
+    for iter in range(5, 10):
+        inference_sum += profiler.get(f"{iter}_key")
+    inference_time_avg = inference_sum / 5.0
 
     cpu_time = profiler.get(cpu_key)
-    compile_time = first_iter_time - second_iter_time
+    compile_time = first_iter_time - inference_time_avg
     prep_perf_report(
         model_name=f"resnet50_batch_size{batch_size}",
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,
-        inference_time=second_iter_time,
+        inference_time=inference_time_avg,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
         inference_time_cpu=cpu_time,
     )
 
-    logger.info(f"resnet50 {comments} inference time: {second_iter_time}")
+    logger.info(f"resnet50 {comments} inference time (avg): {inference_time_avg}")
     logger.info(f"resnet50 compile time: {compile_time}")
 
-    # assert second_iter_time < expected_inference_time, f"resnet50 {comments} is too slow"
-    assert compile_time < expected_compile_time, "resnet50 compile time is too slow"
+    assert inference_time_avg < expected_inference_time, f"resnet50 {comments} inference is too slow"
+    assert compile_time < expected_compile_time, f"resnet50 {comments} compilation is too slow"
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.02, 28),
-        (2, 0.017, 28),
-        (8, 0.020, 28),
-        (16, 0.020, 28),
+        (1, 0.015, 25),
+        (2, 0.015, 25),
+        (8, 0.015, 25),
+        (16, 0.015, 25),
+        (20, 0.015, 25),
     ),
 )
 def test_perf_bare_metal(
@@ -142,10 +145,11 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.099, 36),
-        (2, 0.099, 36),
-        (8, 0.099, 36),
-        (16, 0.099, 36),
+        (1, 0.015, 30),
+        (2, 0.02, 30),
+        (8, 0.02, 30),
+        (16, 0.04, 30),
+        (20, 0.04, 30),
     ),
 )
 def test_perf_virtual_machine(

@@ -32,6 +32,7 @@ conftest.py @tt-rkim
 
 tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
+tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @tt-aho @TT-BrianLiu
 
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
@@ -54,6 +55,7 @@ docs/source/tt_metal/apis/host_apis/ @TT-billteng
 # tt_metal/hw/ckernels/**/module.mk @tt-rkim @davorchap
 # tt_metal/hw/ckernels/**/Makefile @tt-rkim @davorchap
 # tt_metal/hw/firmware/ @davorchap @pgkeller @DrJessop
+tt_metal/hw/ckernels/ @rtawfik01
 tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
 # tt_metal/hw/meta/ @davorchap @pgkeller @DrJessop @tt-rkim

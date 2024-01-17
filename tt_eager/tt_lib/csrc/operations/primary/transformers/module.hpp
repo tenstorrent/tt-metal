@@ -19,7 +19,7 @@ namespace transformers {
 
 
 void py_module(py::module& m_transformers) {
-    m_transformers.def("split_fused_qkv_and_split_heads", &split_fused_qkv_and_split_heads,
+    m_transformers.def("split_query_key_value_and_split_heads", &split_query_key_value_and_split_heads,
         py::arg().noconvert(),
         py::arg("compute_with_storage_grid_size"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -45,6 +45,14 @@ void py_module(py::module& m_transformers) {
     py::class_<SoftmaxDefaultProgramConfig>(m_transformers, "SoftmaxDefaultProgramConfig")
         .def(py::init<>());
 
+    py::class_<SoftmaxInterleavedMultiCoreProgramConfig>(m_transformers, "SoftmaxInterleavedMultiCoreProgramConfig")
+        .def(
+            py::init<MathFidelity, DataType>(),
+            py::kw_only(),
+            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+            py::arg("im_data_format").noconvert()
+        );
+
     py::class_<SoftmaxShardedMultiCoreProgramConfig>(m_transformers, "SoftmaxShardedMultiCoreProgramConfig")
         .def(
             py::init<CoreCoord, std::size_t, std::size_t, std::size_t, MathFidelity, DataType>(),
@@ -64,6 +72,7 @@ void py_module(py::module& m_transformers) {
         py::arg("scale").noconvert() = std::nullopt,
         py::arg("mask").noconvert() = std::nullopt,
         py::arg("program_config").noconvert() = SoftmaxDefaultProgramConfig{},
+        py::arg("is_causal_mask").noconvert() = false,
         "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place."
         );
 }

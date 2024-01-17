@@ -12,13 +12,10 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
 else
   # Need to remove move for time being since failing
-  env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -name 'test_*.py' -a ! -name 'test_move.py') -vvv
-  env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/test_move.py -k in0_L1 -vvv
+  env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py' -a ! -name 'test_move.py') -vvv
   env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_move.py -k input_L1 -vvv
 fi
-
-env pytest $TT_METAL_HOME/tests/ttnn/
 
 # This must run in slow dispatch mode
 # pytest -svv $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/test_sweep_conv_with_address_map.py
@@ -27,6 +24,10 @@ env pytest $TT_METAL_HOME/tests/ttnn/
 # you can move to where you'd like.
 
 if [ "$ARCH_NAME" != "wormhole_b0" ]; then
+
+  # TODO(arakhmati): Run ttnn tests only on graskull until the issue with ttnn.reshape on wormhole is resolved
+env pytest $TT_METAL_HOME/tests/ttnn/unit_tests
+
 # Tests for tensors in L1
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large*matmul* -k in0_L1-in1_L1-bias_L1-out_L1
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large*bmm* -k in0_L1-in1_L1-out_L1
@@ -36,7 +37,7 @@ pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_matmuls_and_bmms_with_mixed_precision.py::test_bert_large_bmm -k "pre_softmax_bmm and batch_9"
 
 # BERT TMs
-pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_split_fused_qkv_and_split_heads.py -k "in0_L1-out_L1 and batch_9"
+pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_split_query_key_value_and_split_heads.py -k "in0_L1-out_L1 and batch_9"
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large_concatenate_heads.py -k "in0_L1-out_L1 and batch_9"
 
 # Test program cache

@@ -7,7 +7,7 @@
 #include "noc_nonblocking_api.h"
 #include "dev_msgs.h"
 #include "stream_io_map.h"
-#include "ckernel_globals.h"
+#include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "risc_attribs.h"
 #include "generated_bank_to_noc_coord_mapping.h"

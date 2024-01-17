@@ -149,7 +149,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 1. Install system-level dependencies for development through `apt`.
 
 ```
-sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
+sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), version 1.9 or higher, but less than 1.10.
@@ -302,15 +302,11 @@ standards.
 
 Announcements from the Tenstorrent team regarding this project will be in the
 [discussions
-page](https://github.com/orgs/tenstorrent-metal/discussions/categories/announcements).
+page](https://github.com/tenstorrent-metal/tt-metal/discussions/categories/general-announcements).
 
 We also have a Discord channel that you can join. You may discuss with other
 members of the community and developers there. You may use this invite
 [link](https://discord.gg/tvhGzHQwaj).
-
-If you have ideas you would like to bounce off others in the community before
-formally proposing it, you can make a post in the [ideas discussions
-page](https://github.com/orgs/tenstorrent-metal/discussions/categories/ideas).
 
 If you would like to formally propose a new feature, report a bug, or have
 issues with permissions, please file through [GitHub

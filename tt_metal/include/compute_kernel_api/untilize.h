@@ -7,10 +7,10 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_untilize.h"
+#include "llk_unpack_untilize_api.h"
 #endif
 
 namespace ckernel {
@@ -20,11 +20,7 @@ namespace ckernel {
  */
 ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_init() ));
@@ -42,11 +38,7 @@ ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
  */
 ALWI void untilize_init_short(uint32_t icb)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
     UNPACK(( llk_unpack_untilize_init(icb) ));
 }
 

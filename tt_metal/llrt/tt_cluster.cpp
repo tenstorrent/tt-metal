@@ -45,12 +45,14 @@ Cluster::Cluster() {
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
+
+    this->assert_risc_reset();
 }
 
 void Cluster::detect_arch_and_target() {
 #ifdef TT_METAL_VERSIM_DISABLED
     this->target_type_ = TargetDevice::Silicon;
-    std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
+    std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
     this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
     for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
         chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
@@ -90,12 +92,13 @@ void Cluster::generate_cluster_descriptor() {
 
     if (this->arch_ == tt::ARCH::GRAYSKULL) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
-        std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
+        std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
         std::set<chip_id_t> logical_mmio_device_ids;
         for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
             logical_mmio_device_ids.insert(logical_mmio_device_id);
         }
-        this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids);
+        this->cluster_desc_ =
+            tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids, physical_mmio_device_ids);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
     }
@@ -117,6 +120,8 @@ void Cluster::generate_cluster_descriptor() {
 
 void Cluster::initialize_device_drivers() {
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
+
         this->open_driver(mmio_device_id, controlled_devices);
 
         tt_device_params default_params;
@@ -125,6 +130,26 @@ void Cluster::initialize_device_drivers() {
             default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
         }
         this->start_driver(mmio_device_id, default_params);
+    }
+}
+
+void Cluster::assert_risc_reset() {
+    for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        this->get_driver(mmio_device_id).assert_risc_reset();
+    }
+}
+
+void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
+    // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
+    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent-metal/tt-metal/issues/4087
+    TT_ASSERT(controlled_device_ids.size() <= 4, "Unable to assign each device to its own host memory channel!");
+    uint16_t channel = 0;
+    this->device_to_host_mem_channel_[mmio_device_id] = channel++;
+    for (const chip_id_t &device_id : controlled_device_ids) {
+        if (device_id == mmio_device_id) {
+            continue;
+        }
+        this->device_to_host_mem_channel_[device_id] = channel++;
     }
 }
 
@@ -142,14 +167,15 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
 
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        // This is the target/desired number of mem channels per arch/device. Silicon driver will attempt to open
-        // this many hugepages as channels, and assert if workload uses more than available.
-        uint32_t num_host_mem_ch_per_mmio_device = 1;
+        // This is the target/desired number of mem channels per arch/device.
+        // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than available.
+        // Metal currently uses assigns 1 channel per device
+        uint32_t num_host_mem_ch_per_mmio_device = controlled_device_ids.size();
         std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
         dynamic_tlb_config["REG_TLB"] = DEVICE_DATA.REG_TLB;
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
-
+        const bool clean_system_resources = true;
         device_driver = std::make_unique<tt_SiliconDevice>(
             sdesc_path,
             this->cluster_desc_path_,
@@ -157,9 +183,9 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
             num_host_mem_ch_per_mmio_device,
             dynamic_tlb_config,
             skip_driver_allocs,
+            clean_system_resources,
             perform_harvesting);
 
-        device_driver->clean_system_resources();
         device_driver->set_driver_host_address_params(host_address_params);
         device_driver->set_driver_eth_interface_params(eth_interface_params);
 
@@ -314,11 +340,6 @@ uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
     }
 }
 
-// clean up bad system resource state that may be carried over
-void Cluster::clean_system_resources(chip_id_t device_id) const {
-    this->get_driver(device_id).clean_system_resources();
-}
-
 void Cluster::verify_eth_fw() const {
     for (const auto &[chip, mmio_device_id] : this->device_to_mmio_device_) {
         std::vector<uint32_t> fw_versions;
@@ -342,48 +363,16 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     return 0;
 }
 
-void Cluster::reset_debug_print_server_buffers() const {
-    for (const auto &[device_id, mmio_device_id] : this->device_to_mmio_device_) {
-        auto workers = get_soc_desc(device_id).workers;
-        for (const CoreCoord &core : workers)
-            for (int hart_id = 0; hart_id < 5; hart_id++) {  // TODO(AP): must match DPRINT_NHARTS, magic
-                // compute the buffer address for the requested hart
-                uint32_t base_addr = PRINT_BUFFER_NC + hart_id * PRINT_BUFFER_SIZE;
-
-                // The way this works is we first initialize all dprint buffers
-                // for all cores and all harts to this magic number.
-                // This way the device DPRINT will know that this core hasn't been initialized
-                // from tt_start_debug_print_server
-                // If we didn't have this mechanism them DPRINT in the kernel would have no way of knowing
-                // Whether the host is polling it's buffer and flushing it.
-                // If kernel code (in debug_print.h) detects that this magic value is present
-                // Then it simply skips the print entirely. It prevents the kernel code
-                // from hanging in a stall waiting for the host to flush the buffer
-                // and removes the requirement that the host must listen on device's buffer.
-                vector<uint32_t> initbuf = {uint32_t(DEBUG_PRINT_SERVER_DISABLED_MAGIC)};
-                write_core(initbuf.data(), initbuf.size() * sizeof(uint32_t), {uint32_t(device_id), core}, base_addr);
-            }
-    }
-}
-
-void Cluster::assert_risc_reset(const chip_id_t &chip) const {  this->get_driver(chip).assert_risc_reset(chip); }
-
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
     this->get_driver(virtual_chip_coord.chip).deassert_risc_reset_at_core(virtual_chip_coord);
 }
 
-void Cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger) const {
-    if (this->target_type_ == TargetDevice::Versim) {
-        // Not running silicon multichip test
-        TT_FATAL(target_device_id == 0, "Device ID must be 0 for Versim");
-        this->get_driver(target_device_id).deassert_risc_reset(target_device_id);
-    } else if (this->target_type_ == TargetDevice::Silicon) {
-        log_debug(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
-        TT_ASSERT(not start_stagger, "UMD currently does not support staggered deassert of RISC reset");
-        this->get_driver(target_device_id).deassert_risc_reset(target_device_id);
-    }
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
+    tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
+    this->get_driver(virtual_chip_coord.chip).assert_risc_reset_at_core(virtual_chip_coord);
 }
 
 inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {
@@ -499,14 +488,13 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     this->get_driver(chip_id).read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
 }
 
-void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const {
-    constexpr uint16_t channel = 0;
+void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->get_driver(src_device_id).write_to_sysmem(vec, size_in_bytes, addr, channel, src_device_id);
 }
 
-void Cluster::read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const {
-    // TODO: Uplift
-    constexpr uint16_t channel = 0;
+void Cluster::read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->get_driver(src_device_id).read_from_sysmem(vec, addr, channel, size_in_bytes, src_device_id);
 }
 
@@ -617,6 +605,10 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
         std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+}
+
+uint32_t Cluster::get_tensix_soft_reset_addr() const {
+    return DEVICE_DATA.TENSIX_SOFT_RESET_ADDR;
 }
 
 }  // namespace tt

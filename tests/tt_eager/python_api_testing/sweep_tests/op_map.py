@@ -9,6 +9,8 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
     tt_lib_ops,
 )
 
+from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
+
 
 op_map = {
     ################################################
@@ -64,7 +66,7 @@ op_map = {
         "pytorch_op": pytorch_ops.mean_global,
     },
     "stats-normalize_global": {
-        "tt_lib_op": None,  # tt_lib_ops.normalize_global,
+        "tt_lib_op": tt_lib_ops.normalize_global,
         "pytorch_op": pytorch_ops.normalize_global,
     },
     # Eltwise unary
@@ -388,12 +390,8 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,
     },
-    "eltwise-power": {
-        "tt_lib_op": tt_lib_ops.eltwise_power,
-        "pytorch_op": pytorch_ops.power,
-    },
-    "eltwise-power_fp": {
-        "tt_lib_op": tt_lib_ops.eltwise_power_fp,
+    "eltwise-pow": {
+        "tt_lib_op": tt_lib_ops.eltwise_pow,
         "pytorch_op": pytorch_ops.power,
     },
     "bert-large-fused-qkv-matmul": {
@@ -944,5 +942,66 @@ op_map = {
     "complex-imag": {
         "tt_lib_op": tt_lib_ops.complex_imag,
         "pytorch_op": pytorch_ops.complex_imag,
+    },
+    "ttnn-eltwise-add": {
+        "tt_lib_op": ttnn_ops.eltwise_add,
+        "pytorch_op": pytorch_ops.add,
+    },
+    "ttnn-eltwise-exp": {
+        "tt_lib_op": ttnn_ops.eltwise_exp,
+        "pytorch_op": pytorch_ops.exp,
+    },
+    "ttnn-permute": {
+        "tt_lib_op": ttnn_ops.permute,
+        "pytorch_op": pytorch_ops.permute,
+    },
+    "ttnn-reshape": {
+        "tt_lib_op": ttnn_ops.reshape,
+        "pytorch_op": pytorch_ops.reshape,
+    },
+    "ttnn-gelu": {
+        "tt_lib_op": ttnn_ops.gelu,
+        "pytorch_op": pytorch_ops.gelu,
+    },
+    "ttnn-eltwise-sub": {
+        "tt_lib_op": ttnn_ops.eltwise_sub,
+        "pytorch_op": pytorch_ops.sub,
+    },
+    "ttnn-embeddings": {
+        "tt_lib_op": ttnn_ops.embeddings,
+        "pytorch_op": pytorch_ops.ttnn_embeddings,
+    },
+    "ttnn-eltwise-tanh": {
+        "tt_lib_op": ttnn_ops.eltwise_tanh,
+        "pytorch_op": pytorch_ops.tanh,
+    },
+    "ttnn-softmax": {
+        "tt_lib_op": ttnn_ops.softmax,
+        "pytorch_op": pytorch_ops.softmax_in_place,
+    },
+    "ttnn-mul": {
+        "tt_lib_op": ttnn_ops.mul,
+        "pytorch_op": pytorch_ops.mul,
+    },
+    "ttnn-linear": {"tt_lib_op": ttnn_ops.linear, "pytorch_op": pytorch_ops.linear},
+    "ttnn-eltwise-softmax_in_place": {
+        "tt_lib_op": ttnn_ops.eltwise_softmax_in_place,
+        "pytorch_op": pytorch_ops.softmax_in_place,
+    },
+    "ttnn-matmul": {
+        "tt_lib_op": ttnn_ops.matmul,
+        "pytorch_op": pytorch_ops.matmul,
+    },
+    "ttnn-layernorm": {
+        "tt_lib_op": ttnn_ops.layernorm,
+        "pytorch_op": pytorch_ops.ttnn_layernorm_weights_bias,
+    },
+    "ttnn-layernorm_residual": {
+        "tt_lib_op": ttnn_ops.layernorm_residual,
+        "pytorch_op": pytorch_ops.ttnn_layernorm_weights_bias_residual,
+    },
+    "ttnn-layernorm_noweights": {
+        "tt_lib_op": ttnn_ops.layernorm_noweights,
+        "pytorch_op": pytorch_ops.ttnn_layernorm_noweights,
     },
 }

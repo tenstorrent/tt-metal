@@ -7,8 +7,6 @@
 static constexpr uint32_t COMMAND_START_ADDR =
     L1_UNRESERVED_BASE;  // Space between UNRESERVED_BASE -> data_start is for commands
 
-CQReadInterface cq_read_interface;
-
 FORCE_INLINE
 void program_local_cb(uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
     uint32_t cb_id = 0;
@@ -54,19 +52,21 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
 
 // Only the read interface is set up on the device... the write interface
 // belongs to host
-void setup_cq_read_interface() {
-    uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
-    uint fifo_size = ((DeviceCommand::HUGE_PAGE_SIZE) >> 4) - fifo_addr;
-
-    cq_read_interface.fifo_limit = fifo_addr + fifo_size;
-    cq_read_interface.fifo_rd_ptr = fifo_addr;
-    cq_read_interface.fifo_size = fifo_size;
-    cq_read_interface.fifo_rd_toggle = 0;
+void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const uint32_t issue_region_size) {
+    cq_read_interface.issue_fifo_rd_ptr = issue_region_rd_ptr >> 4;
+    cq_read_interface.issue_fifo_size = issue_region_size >> 4;
+    cq_read_interface.issue_fifo_limit = (issue_region_rd_ptr + issue_region_size) >> 4;
+    cq_read_interface.issue_fifo_rd_toggle = 0;
 }
 
 void kernel_main() {
+    constexpr uint32_t host_issue_queue_read_ptr_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t issue_queue_start_addr = get_compile_time_arg_val(1);
 
-    setup_cq_read_interface();
+    // Only the issue queue size is a runtime argument
+    uint32_t issue_queue_size = get_arg_val<uint32_t>(0);
+
+    setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -79,14 +79,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 2 by host
 
     bool db_buf_switch = false;
-
     while (true) {
-        cq_wait_front();
+
+        issue_queue_wait_front();
 
         // Read in command
-        uint32_t rd_ptr = (cq_read_interface.fifo_rd_ptr << 4);
+        uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
-        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, DeviceCommand::HUGE_PAGE_SIZE - rd_ptr));
+        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));
         noc_async_read_barrier();
 
         // Producer information
@@ -103,12 +103,13 @@ void kernel_main() {
         uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
         uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
+        uint32_t finish = command_ptr[DeviceCommand::finish_idx];
 
-        if (wrap) {
+        if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
-            cq_read_interface.fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
-            cq_read_interface.fifo_rd_toggle = not cq_read_interface.fifo_rd_toggle;
-            notify_host_of_cq_read_pointer();
+            cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
+            cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
+            notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
             continue;
         }
 
@@ -129,9 +130,7 @@ void kernel_main() {
         noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
         noc_async_write_barrier();  // Barrier for now
 
-
         // Fetch data and send to the consumer
-
         produce(
             command_ptr,
             num_buffer_transfers,
@@ -145,7 +144,7 @@ void kernel_main() {
             producer_consumer_transfer_num_pages,
             db_buf_switch);
 
-        cq_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
+        issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
     }

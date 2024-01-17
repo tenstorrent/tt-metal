@@ -99,6 +99,10 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_min = MEM_TRISC2_BASE;
             range_max = MEM_TRISC2_BASE + MEM_TRISC2_SIZE;
             break;
+        case 5:
+            range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
+            range_max = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
+            break;
         default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
     }
 
@@ -141,11 +145,15 @@ void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg)
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
     if (static_cast<bool>(msg->enable_erisc)) {
-        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+        llrt::write_hex_vec_to_core(chip, core, {123}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+        launch_erisc_app_fw_on_core(chip, core);
     } else {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
     }
+}
+void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
+    llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -154,16 +162,6 @@ void print_worker_cores(chip_id_t chip_id) {
         std::cout << core.str() << " ";
     }
     std::cout << std::endl << std::endl;
-}
-
-bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) != soc_desc.physical_workers.end();
-}
-bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_ethernet_cores.begin(), soc_desc.physical_ethernet_cores.end(), core) !=
-           soc_desc.physical_ethernet_cores.end();
 }
 
 CircularBufferConfigVec create_circular_buffer_config_vector() {

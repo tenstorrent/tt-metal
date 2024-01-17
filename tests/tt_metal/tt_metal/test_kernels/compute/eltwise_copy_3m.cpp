@@ -14,16 +14,12 @@ namespace NAMESPACE {
 
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_unary_datacopy_api.h"
 
 void math_main()
 {
     int __outer_loop_iter;
-    #ifdef ARCH_GRAYSKULL
-    llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>();
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, 0) ));
-    #endif
     llk_math_pack_sync_init<SyncHalf>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -61,13 +57,8 @@ void unpack_main()
 {
     int __outer_loop_iter;
     llk_setup_operands();
-    #ifdef ARCH_GRAYSKULL
-    llk_unpack_A_init<BroadcastType::NONE, false, false>();
-    llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE, false, false, false>(0);
-    #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    UNPACK(( llk_unpack_A_hw_configure_disaggregated<>(0) ));
-    #endif
+    UNPACK(( llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE>(0) ));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_wait_tiles(0,1);

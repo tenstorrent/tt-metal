@@ -11,10 +11,9 @@
 #include <utility>
 #include <fstream>
 
-
-#include "jit_build/build.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
+#include "jit_build/build.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/program/program.hpp"
@@ -25,6 +24,7 @@ namespace tt::tt_metal {
 using std::pair;
 using std::set;
 using std::shared_ptr;
+using std::weak_ptr;
 using std::tuple;
 using std::unique_ptr;
 
@@ -61,6 +61,9 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
 uint32_t get_noc_unicast_encoding(CoreCoord coord);
 
+class Trace;
+class CommandQueue;
+
 class Command {
     EnqueueCommandType type_ = EnqueueCommandType::INVALID;
 
@@ -74,14 +77,24 @@ class Command {
 class EnqueueReadBufferCommand : public Command {
    private:
     Device* device;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     void* dst;
+    uint32_t src_page_index;
+    uint32_t pages_to_read;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
+    uint32_t command_queue_channel;
 
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
-    EnqueueReadBufferCommand(Device* device, Buffer& buffer, void* dst, SystemMemoryWriter& writer);
+    EnqueueReadBufferCommand(
+        uint32_t command_queue_channel,
+        Device* device,
+        Buffer& buffer,
+        void* dst,
+        SystemMemoryManager& manager,
+        uint32_t src_page_index = 0,
+        std::optional<uint32_t> pages_to_read = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t dst);
 
@@ -95,11 +108,21 @@ class EnqueueWriteBufferCommand : public Command {
     Device* device;
     Buffer& buffer;
 
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     const void* src;
+    uint32_t dst_page_index;
+    uint32_t pages_to_write;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
+    uint32_t command_queue_channel;
    public:
-    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer);
+    EnqueueWriteBufferCommand(
+        uint32_t command_queue_channel,
+        Device* device,
+        Buffer& buffer,
+        const void* src,
+        SystemMemoryManager& manager,
+        uint32_t dst_page_index = 0,
+        std::optional<uint32_t> pages_to_write = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 
@@ -110,35 +133,36 @@ class EnqueueWriteBufferCommand : public Command {
 
 class EnqueueProgramCommand : public Command {
    private:
+    uint32_t command_queue_channel;
     Device* device;
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
     const Program& program;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     bool stall;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
+    std::optional<std::reference_wrapper<Trace>> trace = {};
 
    public:
-    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, const Program& program, bool stall);
+    EnqueueProgramCommand(uint32_t command_queue_channel, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall, std::optional<std::reference_wrapper<Trace>> trace);
 
-    const DeviceCommand assemble_device_command(uint32_t);
+    const DeviceCommand assemble_device_command(uint32_t src_address);
 
     void process();
 
     EnqueueCommandType type();
 };
-
-// Easiest way for us to process finish is to explicitly have the device
 // write to address chosen by us for finish... that way we don't need
 // to mess with checking recv and acked
 class FinishCommand : public Command {
    private:
     Device* device;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::FINISH;
+    uint32_t command_queue_channel;
 
    public:
-    FinishCommand(Device* device, SystemMemoryWriter& writer);
+    FinishCommand(uint32_t command_queue_channel, Device* device, SystemMemoryManager& manager);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -150,11 +174,13 @@ class FinishCommand : public Command {
 class EnqueueWrapCommand : public Command {
    private:
     Device* device;
-    SystemMemoryWriter& writer;
+    SystemMemoryManager& manager;
+    DeviceCommand::WrapRegion wrap_region;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::WRAP;
+    uint32_t command_queue_channel;
 
    public:
-    EnqueueWrapCommand(Device* device, SystemMemoryWriter& writer);
+    EnqueueWrapCommand(uint32_t command_queue_channel, Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -163,22 +189,74 @@ class EnqueueWrapCommand : public Command {
     EnqueueCommandType type();
 };
 
-void send_dispatch_kernel_to_device(Device* device);
+// Fwd declares
+namespace detail{
+    CommandQueue &GetCommandQueue(Device *device);
+}
+
+
+class Trace {
+
+    private:
+      struct TraceNode {
+          DeviceCommand command;
+          const vector<uint32_t> data;
+          EnqueueCommandType command_type;
+          uint32_t num_bytes;
+      };
+      bool trace_complete;
+      CommandQueue& command_queue;
+      vector<TraceNode> history;
+      uint32_t num_bytes;
+      void create_replay();
+
+    friend class EnqueueProgramCommand;
+    friend Trace BeginTrace(CommandQueue& cq);
+    friend void EndTrace(Trace& trace);
+    friend void EnqueueTrace(Trace& trace, bool blocking);
+
+    public:
+      Trace(CommandQueue& command_queue);
+      void record(const TraceNode& trace_node);
+};
 
 class CommandQueue {
    public:
-    CommandQueue(Device* device);
+
+    CommandQueue(Device* device, uint32_t command_queue_channel);
 
     ~CommandQueue();
 
    private:
-    Device* device;
-    SystemMemoryWriter sysmem_writer;
-    // thread processing_thread;
-    map<uint64_t, unique_ptr<Buffer>>
-        program_to_buffer;
+    // Program command_queue_program;
+    CoreCoord producer_core;
+    CoreCoord consumer_core;
 
-    map<uint64_t, ProgramMap> program_to_dev_map;
+    uint32_t command_queue_channel;
+    uint32_t command_queue_channel_size;
+    SystemMemoryManager& manager;
+
+    Device* device;
+
+    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer(const chip_id_t chip_id) {
+        static map<chip_id_t, map<uint64_t, unique_ptr<Buffer>>> chip_to_program_to_buffer;
+        if (chip_to_program_to_buffer.count(chip_id)) {
+            return chip_to_program_to_buffer[chip_id];
+        }
+        map<uint64_t, unique_ptr<Buffer>> dummy;
+        chip_to_program_to_buffer.emplace(chip_id, std::move(dummy));
+        return chip_to_program_to_buffer[chip_id];
+    }
+
+    map<uint64_t, ProgramMap>& program_to_dev_map(const chip_id_t chip_id) {
+        static map<chip_id_t, map<uint64_t, ProgramMap>> chip_to_program_to_dev_map;
+        if (chip_to_program_to_dev_map.count(chip_id)) {
+            return chip_to_program_to_dev_map[chip_id];
+        }
+        map<uint64_t, ProgramMap> dummy;
+        chip_to_program_to_dev_map.emplace(chip_id, std::move(dummy));
+        return chip_to_program_to_dev_map[chip_id];
+    };
 
     void enqueue_command(Command& command, bool blocking);
 
@@ -186,19 +264,35 @@ class CommandQueue {
 
     void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking);
 
-    void enqueue_program(Program& program, bool blocking);
+    void enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
+
+    void wait_finish();
 
     void finish();
 
-    void wrap();
+    void wrap(DeviceCommand::WrapRegion wrap_region, bool blocking);
+
+    void reset();
+
+    void launch(launch_msg_t& msg);
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool blocking);
-    friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
+    friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
     friend void Finish(CommandQueue& cq);
     friend void ClearProgramCache(CommandQueue& cq);
+    friend CommandQueue &detail::GetCommandQueue(Device *device);
+
+    // Trace APIs
+    friend Trace BeginTrace(CommandQueue& command_queue);
+    friend void EndTrace(Trace& trace);
+    friend void EnqueueTrace(Trace& trace, bool blocking);
+    friend class Device;
+    friend class Trace;
 };
+
+inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 } // namespace tt::tt_metal

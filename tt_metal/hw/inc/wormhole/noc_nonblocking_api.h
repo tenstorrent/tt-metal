@@ -66,6 +66,14 @@ inline uint32_t NOC_CFG_READ_REG(uint32_t noc, uint32_t reg_id) {
   return *ptr;
 }
 
+inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
+  return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
+}
+
+inline __attribute__((always_inline)) bool noc_cmd_buf_ready_l1(uint32_t noc, uint32_t cmd_buf) {
+  return (NOC_CMD_BUF_READ_REG_L1(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
+}
+
 inline void ncrisc_noc_fast_read(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
   if (len_bytes > 0) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
@@ -76,7 +84,6 @@ inline void ncrisc_noc_fast_read(uint32_t noc, uint32_t cmd_buf, uint64_t src_ad
     noc_reads_num_issued[noc] += 1;
   }
 }
-
 
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_l1(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
   if (len_bytes > 0) {
@@ -96,15 +103,6 @@ inline bool ncrisc_noc_reads_flushed(uint32_t noc) {
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed_l1(uint32_t noc) {
   return (NOC_STATUS_READ_REG_L1(noc, NIU_MST_RD_RESP_RECEIVED) == noc_reads_num_issued[noc]);
 }
-
-inline bool ncrisc_noc_fast_read_ok(uint32_t noc, uint32_t cmd_buf) {
-  return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
-}
-
-inline __attribute__((always_inline)) bool ncrisc_noc_fast_read_ok_l1(uint32_t noc, uint32_t cmd_buf) {
-  return (NOC_CMD_BUF_READ_REG_L1(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
-}
-
 
 inline void ncrisc_noc_fast_write(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {
   if (len_bytes > 0) {
@@ -170,14 +168,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_l1(uint32_t noc
   }
 }
 
-inline bool ncrisc_noc_fast_write_ok(uint32_t noc, uint32_t cmd_buf) {
-  return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
-}
-
-inline __attribute__((always_inline)) bool ncrisc_noc_fast_write_ok_l1(uint32_t noc, uint32_t cmd_buf) {
-  return (NOC_CMD_BUF_READ_REG_L1(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
-}
-
 inline void ncrisc_noc_blitz_write_setup(uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, uint32_t num_times_to_write) {
   uint32_t noc_cmd_field =
     NOC_CMD_CPY | NOC_CMD_WR |
@@ -185,7 +175,7 @@ inline void ncrisc_noc_blitz_write_setup(uint32_t noc, uint32_t cmd_buf, uint64_
     NOC_CMD_STATIC_VC(vc) |
     NOC_CMD_RESP_MARKED;
 
-  while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+  while (!noc_cmd_buf_ready(noc, cmd_buf));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, dest_addr >> 32);
@@ -254,63 +244,63 @@ inline void ncrisc_noc_full_sync() {
 
 inline void ncrisc_noc_fast_read_any_len(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
   while (len_bytes > NOC_MAX_BURST_SIZE) {
-    while (!ncrisc_noc_fast_read_ok(noc, cmd_buf));
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
     src_addr += NOC_MAX_BURST_SIZE;
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
-  while (!ncrisc_noc_fast_read_ok(noc, cmd_buf));
+  while (!noc_cmd_buf_ready(noc, cmd_buf));
   ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
 
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len_l1(uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
   while (len_bytes > NOC_MAX_BURST_SIZE) {
-    while (!ncrisc_noc_fast_read_ok_l1(noc, cmd_buf));
+    while (!noc_cmd_buf_ready_l1(noc, cmd_buf));
     ncrisc_noc_fast_read_l1(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
     src_addr += NOC_MAX_BURST_SIZE;
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
-  while (!ncrisc_noc_fast_read_ok_l1(noc, cmd_buf));
+  while (!noc_cmd_buf_ready_l1(noc, cmd_buf));
   ncrisc_noc_fast_read_l1(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
 
 inline void ncrisc_noc_fast_write_any_len(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {
   while (len_bytes > NOC_MAX_BURST_SIZE) {
-    while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, vc, mcast, linked, num_dests);
     src_addr += NOC_MAX_BURST_SIZE;
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
-  while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+  while (!noc_cmd_buf_ready(noc, cmd_buf));
   ncrisc_noc_fast_write(noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests);
 }
 
 inline void ncrisc_noc_fast_write_any_len_loopback_src(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {
   while (len_bytes > NOC_MAX_BURST_SIZE) {
-    while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write_loopback_src(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, vc, mcast, linked, num_dests);
     src_addr += NOC_MAX_BURST_SIZE;
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
-  while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+  while (!noc_cmd_buf_ready(noc, cmd_buf));
   ncrisc_noc_fast_write_loopback_src(noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests);
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_l1(uint32_t noc, uint32_t cmd_buf, uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, bool mcast, bool linked, uint32_t num_dests) {
   while (len_bytes > NOC_MAX_BURST_SIZE) {
-    while (!ncrisc_noc_fast_write_ok_l1(noc, cmd_buf));
+    while (!noc_cmd_buf_ready_l1(noc, cmd_buf));
     ncrisc_noc_fast_write_l1(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, vc, mcast, linked, num_dests);
     src_addr += NOC_MAX_BURST_SIZE;
     dest_addr += NOC_MAX_BURST_SIZE;
     len_bytes -= NOC_MAX_BURST_SIZE;
   }
-  while (!ncrisc_noc_fast_write_ok_l1(noc, cmd_buf));
+  while (!noc_cmd_buf_ready_l1(noc, cmd_buf));
   ncrisc_noc_fast_write_l1(noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests);
 }
 
@@ -339,7 +329,7 @@ inline void noc_fast_posted_write_dw_inline(uint32_t noc, uint32_t cmd_buf, uint
 }
 
 inline void noc_fast_atomic_increment(uint32_t noc, uint32_t cmd_buf, uint64_t addr, uint32_t incr, uint32_t wrap, bool linked) {
-  while (!ncrisc_noc_fast_write_ok(noc, cmd_buf));
+  while (!noc_cmd_buf_ready(noc, cmd_buf));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32));
   NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, (linked ? NOC_CMD_VC_LINKED : 0x0) | NOC_CMD_AT);

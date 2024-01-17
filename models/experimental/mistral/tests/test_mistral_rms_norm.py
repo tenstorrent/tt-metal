@@ -33,12 +33,16 @@ def test_mistral_rms_norm_inference(pcc, model_location_generator, device, reset
     model_args.max_batch_size = 1
     reference_model = RMSNorm(dim=dim)
     reference_model.load_state_dict(state_dict)
-
+    output_mem_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    )
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
     tt_model = TtRMSNorm(
         dim=dim,
         base_address=base_address,
         tt_cache_path=tt_cache_path,
+        output_mem_config=output_mem_config,
+        device=device,
     )
     input = torch.rand(1, 11, 4096)
     reference_output = reference_model(input)

@@ -15,7 +15,6 @@ class DeviceCommand {
     enum class TransferType : uint8_t { RUNTIME_ARGS, CB_CONFIGS, PROGRAM_PAGES, GO_SIGNALS, NUM_TRANSFER_TYPES };
 
     // Constants
-    static constexpr uint32_t HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
     //TODO: investigate other num_cores
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
     static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
@@ -55,7 +54,14 @@ class DeviceCommand {
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
     static constexpr uint32_t sharded_buffer_num_cores_idx = 18;
 
-    void wrap();
+    // Denotes which portion of the command queue needs to be wrapped
+    enum class WrapRegion : uint8_t {
+        NONE = 0,
+        ISSUE = 1,
+        COMPLETION = 2
+    };
+
+    void wrap(WrapRegion wrap_region);
 
     void finish();
 
@@ -93,8 +99,12 @@ class DeviceCommand {
         const uint32_t num_pages,
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
-        const uint32_t dst_buf_type
-        );
+        const uint32_t dst_buf_type,
+        const uint32_t src_page_index,
+        const uint32_t dst_page_index
+    );
+
+    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
 
     void add_buffer_transfer_instruction_sharded(
         const uint32_t src,
@@ -103,6 +113,8 @@ class DeviceCommand {
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
         const uint32_t dst_buf_type,
+        const uint32_t src_page_index,
+        const uint32_t dst_page_index,
         const std::vector<uint32_t> num_pages_in_shard,
         const std::vector<uint32_t> core_id_x,
         const std::vector<uint32_t> core_id_y

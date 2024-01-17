@@ -41,12 +41,12 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time,
     with torch.no_grad():
         profiler.start(cpu_key)
         pt_model(test_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_model_outputs = tt_model(tt_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_model_outputs
 
@@ -54,7 +54,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time,
 
         profiler.start(second_key)
         tt_model_outputs = tt_model(tt_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_model_outputs
 

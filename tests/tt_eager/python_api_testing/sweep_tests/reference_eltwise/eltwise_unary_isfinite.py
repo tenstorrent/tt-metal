@@ -8,12 +8,13 @@ import torch
 
 
 def custom_isfinite(x):
-  isposinf = torch.where(x == float('inf'), False, True)
-  isneginf = torch.where(x == float('-inf'), False, True)
-  isnan = torch.where(torch.isnan(x), False, True)
-  return torch.mul(isnan, torch.mul(isposinf, isneginf))
+    isposinf = torch.where(x == float("inf"), False, True)
+    isneginf = torch.where(x == float("-inf"), False, True)
+    isnan = torch.where(torch.isnan(x), False, True)
+    return torch.mul(isnan, torch.mul(isposinf, isneginf))
 
-x = torch.tensor([1.0, 2.0, float('inf'), float('-inf'), 5.0, 6.0, float('nan'), 8.0, 9.0, float('nan')])
+
+x = torch.tensor([1.0, 2.0, float("inf"), float("-inf"), 5.0, 6.0, float("nan"), 8.0, 9.0, float("nan")])
 t_out = torch.isfinite(x)
 cust_out_formula = custom_isfinite(x)
 

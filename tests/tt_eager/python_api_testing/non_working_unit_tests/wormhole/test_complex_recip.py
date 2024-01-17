@@ -50,22 +50,22 @@ def run_complex_recip_tests(
 
 test_sweep_args = [
     (
-        (1, 5, 64, 448),
+        (1, 5, 64, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         3181992,
-        "",
+        "1",
     ),
     (
-        (1, 5, 64, 448),
+        (1, 5, 64, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         8405597,
-        "",
+        "1",
     ),
     (
         (1, 11, 32, 64),
@@ -74,7 +74,7 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         2841039,
-        "",
+        "1",
     ),
     (
         (1, 11, 32, 64),
@@ -83,7 +83,7 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         6645129,
-        "",
+        "1",
     ),
 ]
 

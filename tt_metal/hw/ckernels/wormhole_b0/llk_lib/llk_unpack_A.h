@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-#include "llk_io_unpack.h"
-#include "llk_param_structs.h"
 
+#pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -15,14 +13,19 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::uint32_t operand_id) {
+#ifndef SKIP_UNP
+#define SKIP_UNP 0
+#endif
+
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
+inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0) {
 
     static_assert(!((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
+    static_assert((((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) || (!unpack_to_dest)), "Not supported configuration when unpacking to dest!");
 
-    const uint32_t num_faces = get_num_faces(operand_id);
     #if SKIP_UNP == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
+        static constexpr uint unpack_srca_to_dest = TT_OP_NOP;
         static constexpr uint unpack_srca_set_dvalid = TT_OP_NOP;
         static constexpr uint unpack_srcb = TT_OP_NOP;
         static constexpr uint unpack_srcb_inc_z_0 = TT_OP_NOP;
@@ -36,6 +39,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
         TTI_NOP;
     #else
         static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr uint unpack_srca_to_dest = TT_OP_UNPACR(SrcA, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
         static constexpr uint unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID);
         static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         static constexpr uint unpack_srcb_inc_z_0 = TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -46,7 +50,12 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
         static constexpr uint srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
     #endif
 
-    if constexpr (BType == BroadcastType::COL) {
+    if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format)) {
+        const uint32_t outerloop = num_faces;
+        constexpr uint32_t innerloop = 1;
+        ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
+        tmp.program(instrn_buffer);
+    } else if constexpr (BType == BroadcastType::COL) {
         if constexpr (acc_to_dest) {
             constexpr uint32_t innerloop = 1;
             constexpr uint32_t outerloop = 2; //TODO: add support for num_faces, add support for dest to srcB
@@ -128,50 +137,33 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
-inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int within_face_16x16_transpose = 0) {
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+inline void _llk_unpack_A_hw_configure_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
     constexpr bool is_row_pool = false;
-    const uint32_t unpA_operand_id = get_operand_id(unpack_A_params->unpA_operand);
-
-    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
-
-    const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
-
-    configure_unpack_AB(unpA_operand_id, unpA_operand_id,
-        unpA_face_r_dim, unpA_face_r_dim, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpA_num_faces);
+    constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
+    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
+        unpack_src_format,
+        unpack_src_format,
+        unpack_dst_format,
+        unpack_dst_format,
+        face_r_dim,
+        face_r_dim,
+        within_face_16x16_transpose,
+        num_faces,
+        num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
-
-    const llk_unpack_A_params_t unpack_A_params = {
-        .unpA_operand = unpA_operand
-    };
-    llk_unpack_A_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
-}
-
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 0) {
-
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
-
-    const std::uint32_t operand_id = get_operand_id(operand);
-
-    const std::uint32_t face_r_dim = get_face_r_dim(operand_id);
-
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
+inline void _llk_unpack_A_init_(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0) {
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    config_face_dim<false, UNP_SEL>(face_r_dim);
-    llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, operand_id);
+    config_unpacker_x_end<UNP_SEL>(face_r_dim);
+    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces>0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0 /*not used*/) {
-    std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr;
-    std::uint32_t offset_address = cb_interface[input].fifo_page_size * tile_index;
-    // note: unpacker is programmed to automatically skip the tile header (+1)
-    // since there is no tile header, we need to -1 the address (in terms of 16B words), to offet unpacker's automatic +1
-    std::uint32_t address = base_address + offset_address - 1;
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
+inline void _llk_unpack_A_(const std::uint32_t address, const bool transpose_of_faces = 0, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0) {
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
@@ -206,13 +198,30 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         }
     }
 
+    if constexpr (unpack_to_dest) {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format)) {
+            set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+            wait_for_dest_available();
+        }
+    }
+
     // Run MOP
     ckernel::ckernel_template::run(instrn_buffer);
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
+    if (unpack_to_dest) {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format)) {
+            unpack_to_dest_tile_done(unp_cfg_context);
+        }
+    }
+
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
 
+
+#ifdef PERF_DUMP
+    first_unpack_recorded = true;
+#endif
 }

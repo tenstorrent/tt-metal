@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_lib_bindings.hpp"
+
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "tt_metal/detail/reports/compilation_reporter.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-
+#include "operations/module.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/math.hpp"
-
-#include "tt_lib_bindings.hpp"
+#include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_lib_bindings_tensor.hpp"
-#include "operations/module.hpp"
+#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include "tt_metal/detail/reports/compilation_reporter.hpp"
+#include "tt_metal/detail/reports/memory_reporter.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/module.hpp"
 #include "type_caster.hpp"
 
 namespace py = pybind11;
@@ -35,7 +35,7 @@ void DeviceModule(py::module &m_device) {
         .def(
             py::init<>(
                 [](int device_id) {
-                    return Device(device_id);
+                    return Device(device_id, 1);
                 }
             ), "Create device."
         )
@@ -56,7 +56,7 @@ void DeviceModule(py::module &m_device) {
         | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
         )doc");
-    m_device.def("CreateDevice", [](int device_id) { return CreateDevice(device_id); }, R"doc(
+    m_device.def("CreateDevice", [](int device_id) { return CreateDevice(device_id, 1); }, R"doc(
         Creates an instance of TT device.
 
         +------------------+------------------------+---------------------+------------------------------+----------+
@@ -124,6 +124,11 @@ void DeviceModule(py::module &m_device) {
 
     m_device.def("Synchronize", &detail::Synchronize, R"doc(
         Wait for all kernels on TT device to complete.
+    )doc");
+    m_device.def("SetLazyCommandQueueMode", &detail::SetLazyCommandQueueMode, R"doc(
+        If set to true, the host does not notify the device that there are commands available other than
+        the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
+        that the write pointer has been updated.
     )doc");
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
@@ -302,6 +307,9 @@ PYBIND11_MODULE(_C, m) {
 
     py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
     tt::operations::py_module(m_operations);
+
+    py::module_ m_ttnn = m.def_submodule("ttnn", "Submodule for ttnn");
+    ttnn::py_module(m_ttnn);
 
 #if defined(TRACY_ENABLE)
     py::function tracy_decorator = py::module::import("tt_eager.tt_lib_profiler_wrapper").attr("callable_decorator");

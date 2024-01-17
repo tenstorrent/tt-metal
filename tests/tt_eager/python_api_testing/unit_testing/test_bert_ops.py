@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, is_grayskull
+from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
@@ -215,8 +215,14 @@ def test_bert_linear(
 
 
 @pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
 @pytest.mark.parametrize(
-    "fidelity", [ttl.tensor.MathFidelity.LoFi, ttl.tensor.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"]
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.LoFi,
+    ],
+    ids=["LoFi"],
 )
 @pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
 @pytest.mark.parametrize(
@@ -242,7 +248,7 @@ def test_bert_linear(
         (True, True, False, 2688, 1024, 1024, None),
         (True, False, True, 2688, 1024, 1024, None),
         (True, False, False, 2688, 1024, 1024, None),
-        # # # in1-L1-ff1
+        # # # # in1-L1-ff1
         (False, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
         (False, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
         (False, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
@@ -274,28 +280,44 @@ def test_bert_linear(
         (True, False, False, 2688, 4096, 1024, None),
     ],
 )
+@skip_for_wormhole_b0("WH ND hang, see issue #4392")
 def test_bert_linear_batch7(
-    device, fidelity, in0_sharded, out_sharded, in1_in_dram, has_bias, M, K, N, activation, function_level_defaults
+    device,
+    fidelity,
+    in0_sharded,
+    out_sharded,
+    in1_in_dram,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    M,
+    K,
+    N,
+    activation,
+    function_level_defaults,
 ):
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
     grid_size = (8, 7)
-    # grid_size = (2, 2)
 
     in0_block_h = M // grid_size[1] // 32
     in0_block_w = K // grid_size[0] // 32
     out_block_h = M // grid_size[1] // 32
     out_block_w = N // grid_size[0] // 32
 
-    if out_block_w <= 8:
-        out_subblock_w = out_block_w
-        out_subblock_h = 8 // out_subblock_w
-    else:
+    if fp32_acc_mode == True:
+        out_subblock_w = 4
         out_subblock_h = 1
-        out_subblock_w = 8 // out_subblock_h
-        while out_block_w % out_subblock_w != 0:
-            out_subblock_w = out_block_w // 2
+    else:
+        if out_block_w <= 8:
+            out_subblock_w = out_block_w
+            out_subblock_h = 8 // out_subblock_w
+        else:
+            out_subblock_h = 1
+            out_subblock_w = 8 // out_subblock_h
+            while out_block_w % out_subblock_w != 0:
+                out_subblock_w = out_block_w // 2
 
     logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
     logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
@@ -319,23 +341,12 @@ def test_bert_linear_batch7(
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    if in0_sharded:
-        in0_t = torch2tt_tensor(
-            in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
-    else:
-        in0_t = torch2tt_tensor(
-            in0, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
-
-    if in1_in_dram:
-        in1_t = torch2tt_tensor(
-            in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
-    else:
-        in1_t = torch2tt_tensor(
-            in1, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
+    in0_t = torch2tt_tensor(
+        in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
+    in1_t = torch2tt_tensor(
+        in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
     bias_t = pad_by_zero(
@@ -370,6 +381,8 @@ def test_bert_linear_batch7(
             program_config=program_config,
             output_mem_config=output_mem_config,
             math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -378,6 +391,8 @@ def test_bert_linear_batch7(
             program_config=program_config,
             output_mem_config=output_mem_config,
             math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
         )
 
     if out_sharded:

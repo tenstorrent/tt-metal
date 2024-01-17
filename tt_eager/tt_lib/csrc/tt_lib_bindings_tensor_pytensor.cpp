@@ -269,7 +269,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 auto tensor = py::cast<Tensor>(value);
                 input_tensors.push_back(tensor);
             } else if (py::isinstance(value, ttnn.attr("Tensor"))) {
-                auto tensor = py::cast<Tensor>(value.attr("_tensor"));
+                auto tensor = py::cast<Tensor>(value.attr("value"));
                 input_tensors.push_back(tensor);
             } else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
                 // do nothing
@@ -321,6 +321,11 @@ Tensor convert_torch_tensor_to_tt_tensor(
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
+#ifndef TTNN_ENABLE_LOGGING
+                    if (not operation::is_logging_enabled()) {
+                        return function(*args, **kwargs);
+                    }
+#endif
                     const auto start{std::chrono::steady_clock::now()};
 
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
@@ -1028,12 +1033,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )doc")
             .def(
                 "shape",
-                [](const Tensor &self) {
-                    const auto &shape = self.shape();
-                    return std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
-                },
+                [](const Tensor &self) { return self.shape(); },
                 R"doc(
-                Get the shape of the tensor as list of integers.
+                Get the shape of the tensor as Shape class.
 
                 .. code-block:: python
 
@@ -1145,14 +1147,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )doc")
             .def(
                 "shape_without_padding",
-                [](const Tensor &self) {
-                    Shape shape_without_padding = self.shape().without_padding();
-                    std::vector<uint32_t> unpadded_shape;
-                    for (auto value : shape_without_padding) {
-                        unpadded_shape.push_back(value);
-                    }
-                    return unpadded_shape;
-                },
+                [](const Tensor &self) { return Shape{self.shape().without_padding()}; },
                 R"doc(
                 Get shape without padding of TT Tensor.
 
@@ -1161,7 +1156,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     dtype = tt_tensor.shape_without_padding()
             )doc")
             .def(
-                "reshape", [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); }, R"doc(
+                "reshape",
+                [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
+                R"doc(
                     Reshapes TT tensor
 
                     .. code-block:: python
@@ -1169,7 +1166,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         reshaped_tensor = tt_tensor.reshape(N, C, H, W)
                 )doc")
             .def(
-                "reshape", [](Tensor &self, const std::vector<uint32_t> &shape) { return self.reshape(shape); }, R"doc(
+                "reshape",
+                [](Tensor &self, const Shape &shape) -> Tensor { return self.reshape(shape); },
+                R"doc(
                     Reshapes TT tensor
 
                     .. code-block:: python

@@ -246,80 +246,6 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
         this->physical_routing_to_virtual_routing_x.size() == this->worker_grid_size.x);
 }
 
-const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {
-    const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
-        {tt::ARCH::GRAYSKULL, {{0, "E150"}, {2, "E75"}}},
-        {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}}};
-
-    return product_name.at(arch).at(num_harvested_noc_rows);
-}
-
-void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_mask) {
-    std::bitset<32> mask_bitset(harvesting_mask);
-    uint32_t num_harvested_noc_rows = mask_bitset.count();
-
-    if (num_harvested_noc_rows > 2) {
-        TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_noc_rows);
-    }
-    if (num_harvested_noc_rows == 1 and this->arch == tt::ARCH::GRAYSKULL) {
-        TT_THROW("One row harvested Grayskull is not supported");
-    }
-
-    YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
-    auto product_to_config = device_descriptor_yaml["dispatch_and_banking"];
-    auto product_name = get_product_name(this->arch, num_harvested_noc_rows);
-    auto config = product_to_config[product_name];
-
-    this->l1_bank_size = config["l1_bank_size"].as<int>();
-
-    // TODO: Add validation for compute_with_storage, storage only, and dispatch core specification
-    auto compute_with_storage_start = config["compute_with_storage_grid_range"]["start"];
-    auto compute_with_storage_end = config["compute_with_storage_grid_range"]["end"];
-    TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
-    TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
-    TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
-
-    this->compute_with_storage_grid_size = CoreCoord({
-        .x = (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
-        .y = (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1,
-    });
-
-    // compute_with_storage_cores are a subset of worker cores
-    // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-    for (auto x = 0; x < this->compute_with_storage_grid_size.x; x++) {
-        for (auto y = 0; y < this->compute_with_storage_grid_size.y; y++) {
-            const auto relative_coord = RelativeCoreCoord({.x = x, .y = y});
-            this->compute_with_storage_cores.push_back(relative_coord);
-        }
-    }
-
-    // storage_cores are a subset of worker cores
-    // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-    for (const auto& core_node : config["storage_cores"]) {
-        RelativeCoreCoord coord = {};
-        if (core_node.IsSequence()) {
-            // Logical coord
-            coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
-        } else {
-            TT_THROW("Only logical relative coords supported for storage_cores cores");
-        }
-        this->storage_cores.push_back(coord);
-    }
-
-    // dispatch_cores are a subset of worker cores
-    // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-    for (const auto& core_node : config["dispatch_cores"]) {
-        RelativeCoreCoord coord = {};
-        if (core_node.IsSequence()) {
-            // Logical coord
-            coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
-        } else {
-            TT_THROW("Only logical relative coords supported for dispatch_cores cores");
-        }
-        this->dispatch_cores.push_back(coord);
-    }
-}
-
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     this->physical_ethernet_cores = this->ethernet_cores;
     for (int i = 0; i < this->physical_ethernet_cores.size(); i++) {
@@ -343,6 +269,5 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t
     this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
     this->generate_physical_descriptors_from_virtual(harvesting_mask);
     this->load_dram_metadata_from_device_descriptor();
-    this->load_dispatch_and_banking_config(harvesting_mask);
     this->generate_logical_eth_coords_mapping();
 }

@@ -272,8 +272,8 @@ int main(int argc, char **argv) {
 
     log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
     auto begin = std::chrono::steady_clock::now();
-    EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-    Finish(*::detail::GLOBAL_CQ);
+    EnqueueProgram(::detail::GetCommandQueue(device), program, false);
+    Finish(::detail::GetCommandQueue(device));
     auto end = std::chrono::steady_clock::now();
     auto elapsed_us = duration_cast<microseconds>(end - begin).count();
     auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) /

@@ -94,6 +94,10 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
 
+    if (tt::llrt::OptionsG.get_kernels_nullified()) {
+        this->defines_ += "-DDEBUG_NULL_KERNELS ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     this->includes_ = string("") +
@@ -103,11 +107,14 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         "-I" + this->root_ + "tt_metal " +
         "-I" + this->root_ + "tt_metal/include " +
         "-I" + this->root_ + "tt_metal/hw/inc " +
+        "-I" + this->root_ + "tt_metal/hw/inc/debug " +
         "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + " " +
         "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " +
         "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " +
         "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " + // TODO(fixme)
-        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/common/inc "; // TODO(fixme) datamovement fw shouldn't read this
+        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/common/inc " + // TODO(fixme) datamovement fw shouldn't read this
+        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " +
+        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -160,7 +167,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
         "-Os " +
         "-fno-tree-loop-distribute-patterns "; // don't use memcpy for cpy loops
     this->includes_ = env_.includes_ +
-        "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+        "-I " + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
 
@@ -230,6 +239,10 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
     this->includes_ = env_.includes_ +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/llk_lib " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
         "-I" + env_.root_ + "tt_metal/third_party/sfpi/include " +
         "-I" + env_.root_ + "tt_metal/hw/firmware/src ";
 
@@ -238,7 +251,6 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
         this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
     } else {
-        this->srcs_.push_back("tt_metal/hw/ckernels/" + env_.arch_name_ + "/common/src/ckernel_template.cc");
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisck.cc");
         this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
     }
@@ -305,7 +317,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
     }
 
     this->includes_ = env_.includes_ +
-        "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
+        "-I " + env_.root_ + "tt_metal/hw/inc/ethernet " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
     if (this->is_fw_) {
@@ -315,10 +329,19 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
         this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
     }
 
+    string linker_str;
+    if (this->is_fw_) {
+        linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+    } else {
+        linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
+    }
     this->lflags_ = env_.lflags_ +
-        "-Os "
-        "-L" + env_.root_ + "/tt_metal/hw/toolchain "
-        "-T" + env_.root_ + "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+                    "-Os "
+                    "-L" +
+                    env_.root_ +
+                    "/tt_metal/hw/toolchain "
+                    "-T" +
+                    env_.root_ + linker_str;
 
     this->process_defines_at_compile = true;
 
@@ -509,7 +532,6 @@ void jit_build(const JitBuildState& build,
                const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "jit_build";
 
     if (settings != nullptr) {
         build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
@@ -523,8 +545,6 @@ void jit_build_set(const JitBuildStateSet& build_set,
                    const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "jit_build_set";
-    ZoneName( tracyPrefix, tracyPrefix.length());
 
     std::vector<std::thread> threads;
     threads.resize(build_set.size());
@@ -549,8 +569,6 @@ void jit_build_subset(const JitBuildStateSubset& build_subset,
                       const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "jit_build_subset";
-    ZoneName( tracyPrefix, tracyPrefix.length());
 
     std::vector<std::thread> threads;
     threads.resize(build_subset.size);

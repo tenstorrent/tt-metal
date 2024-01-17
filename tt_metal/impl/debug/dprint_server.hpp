@@ -11,6 +11,8 @@
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/device/device.hpp"
 
+namespace tt {
+
 enum DebugPrintHartFlags : unsigned int {
     DPRINT_RISCV_NC  = 1,
     DPRINT_RISCV_TR0 = 2,
@@ -20,48 +22,41 @@ enum DebugPrintHartFlags : unsigned int {
 };
 
 constexpr int DPRINT_NRISCVS = 5;
+constexpr int DPRINT_NRISCVS_ETH = 1;
 
 /*
-@brief Starts the print server thread - will poll all specified chip/cores/harts of a device for any print data accumulated in thread-local buffers.
+@brief Attaches a device to be monitored by the print server. If no devices were present on the
+    print server, also initializes the print server and launches the thread it runs on.
 
-thread_mask in this API is using flags from DebugPrintHartFlags to enable per-thread debug server listening.
-This call will launch a host thread for each core in cores array and each hart specified by the mask.
-
-Note that this call only works correctly after open_device and start_device calls. (TODO(AP): add runtime checks)
-
-@param filename If filename is null, by default all prints will go to std::cout.
-                If filename is specified, the output will go to that newly created file (used for testing).
-@param cores    A vector of NOC coordinates of cores for the print server to poll.
-                If a given core is not in this list, then it's DPRINT output will not show up on the host.
-                Note that these are not logical worker coordinates.
-                NOC coordinates start at {1,1} and have gaps, logical start at {0,0}.
+@param device Pointer to the device to attach to the print server. The cores/harts to be monitored
+    on this device are determined by the environment variables read out in RTOptions.
 
 This call is not thread safe, and there is only one instance of print server supported at a time.
-
 */
-void tt_start_debug_print_server(
-    std::function<CoreCoord ()>get_grid_size,
-    std::function<CoreCoord (CoreCoord)>worker_from_logical
-);
+void DprintServerAttach(tt::tt_metal::Device* device);
 
 /*
-@brief Stops the print server thread. This call is optional.
+@brief Detach a device so it is no longer monitored by the print server. If no devices are present
+    after detatching, also stops the print server.
+
+@param device Pointer to device to detatch, will throw if trying to detatch a device that is not
+    currently attached to the server.
 
 Note that this api call is not thread safe at the moment.
 */
-void tt_stop_debug_print_server();
+void DprintServerDetach(tt::tt_metal::Device* device);
 
 /**
 @brief Set device side profiler state.
 
 @param profile_device true if profiling, false if not profiling
 */
-void tt_set_profiler_state_for_debug_print(bool profile_device);
+void DprintServerSetProfilerState(bool profile_device);
 
 /**
 @brief Return if the instance debug print server is running or not.
 */
-bool tt_is_print_server_running();
+bool DprintServerIsRunning();
 
 /**
 @brief Set whether the debug print server should be muted.
@@ -72,15 +67,15 @@ while a kernel is running may result in loss of print data.
 
 @param mute_print_server true to mute the print server, false to unmute
 */
-void tt_set_debug_print_server_mute(bool mute_print_server);
+void DprintServerSetMute(bool mute_print_server);
 
 /**
 @brief Wait until the debug print server is not currently processing data.
 
 Note that this function does not actually check whether the device will continue producing print
-data, it only checks whether the print server is currently processing print data.
+data, it only checks whether the print server to finish with any data it is currently processing.
 */
-void tt_await_debug_print_server();
+void DprintServerAwait();
 
 /**
 @brief Check whether a print hang has been detected by the print server.
@@ -90,4 +85,16 @@ print command and (2) no new print data coming through. An invalid WAIT command 
 buffer filling up afterwards can cause the core to spin forever. In this case this function will
 return true and the print server will be terminated.
 */
-bool tt_print_hang_detected();
+bool DPrintServerHangDetected();
+
+/**
+@brief Clears the print server log file.
+*/
+void DPrintServerClearLogFile();
+
+/**
+@brief Clears any RAISE signals in the print server, so they can be used again in a later run.
+*/
+void DPrintServerClearSignals();
+
+} // namespace tt

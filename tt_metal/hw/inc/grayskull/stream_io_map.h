@@ -40,14 +40,6 @@ inline __attribute__((always_inline)) volatile tt_reg_ptr uint32_t* get_cb_tiles
         get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));
 }
 
-inline __attribute__((always_inline)) volatile uint32_t* get_cq_read_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(CQ_READ_PTR);
-}
-
-inline __attribute__((always_inline)) volatile uint32_t* get_cq_write_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(CQ_WRITE_PTR);
-}
-
 inline __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* get_cq_finish_ptr() {
     return (volatile tt_l1_ptr uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
         get_operand_stream_id(0), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));

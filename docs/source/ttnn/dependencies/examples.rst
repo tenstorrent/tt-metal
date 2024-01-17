@@ -54,13 +54,13 @@ Run `TT-LIB` and PyTorch OPs
 In this code example we build on previous example and after ``relu`` also execute ``pow``, ``silu``, and ``exp``.
 
 Since ``pow`` with exponent as tensor is not supported in `TT-LIB` library, we need to move TT Tensor produced by ``relu`` to host machine,
-convert it to PyTorch tensor, execute ``pow`` from PyTorch, and then convert the outpout of ``pow`` back to TT Tensor for ``silu`` to be executed on device. The `TT-LIB` supports ``power`` for integral scalar exponent, and ``power_fp`` for floating point positive valued exponent.
+convert it to PyTorch tensor, execute ``pow`` from PyTorch, and then convert the output of ``pow`` back to TT Tensor for ``silu`` to be executed on device. The `TT-LIB` supports ``power`` for integral scalar exponent, and ``power_fp`` for floating point positive valued exponent.
 
-After ``pow`` is executed as a fallback op; this means that the operation will actully execute as a PyTorch operation
+After ``pow`` is executed as a fallback op; this means that the operation will actually execute as a PyTorch operation
 on host machine. But since ``silu`` is supported as on-device operation in `TT-LIB` library we can
 supply it with TT Tensor as input.
 
-Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``silu`` without any conversion).
+Lastly, we run ``exp`` on TT Accelerator device (supplying it with output from ``silu`` without any conversion).
 
 
 .. code-block::
@@ -163,7 +163,7 @@ can be modified as follow:
         )
 
         # Run relu on TT accelerator device
-        # The ops will padd tensor as needed and send to TT Accelerator device for execution,
+        # The ops will pad tensor as needed and send to TT Accelerator device for execution,
         # then it will return result to host and unpad
         tt_relu_out = tt_lib.tensor.relu(tt_tensor)
 

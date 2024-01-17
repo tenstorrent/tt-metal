@@ -60,9 +60,7 @@ def test_run_basic_transformer_inference(device):
     encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
 
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -71,9 +69,7 @@ def test_run_basic_transformer_inference(device):
 
     # setup tt model
     tt_input = torch_to_tt_tensor(input, device)
-    tt_encoder_hidden_states = torch_to_tt_tensor_rm(
-        encoder_hidden_states, device, put_on_device=False
-    )
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
 
     tt_basic_transformer = TtBasicTransformerBlock(
         dim=dim,
@@ -99,11 +95,9 @@ def test_run_basic_transformer_inference(device):
     logger.info(f"PASSED {passing[1]}")
 
 
-def test_run_transformer_inference():
+def test_run_transformer_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -171,9 +165,7 @@ def test_run_transformer_inference():
 
     # setup tt model
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
-    tt_encoder_hidden_states = torch_to_tt_tensor_rm(
-        encoder_hidden_states, device, put_on_device=False
-    )
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
 
     tt_transformer = TtTransformer2DModel(
         in_channels=in_channels,
@@ -184,7 +176,7 @@ def test_run_transformer_inference():
         state_dict=state_dict,
         base_address=base_address,
     )
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_out = tt_transformer(tt_input, tt_encoder_hidden_states)
     tt_output = tt_to_torch_tensor(tt_out)
 

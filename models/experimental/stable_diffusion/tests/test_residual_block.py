@@ -22,9 +22,7 @@ from models.experimental.stable_diffusion.tt.residual_block import TtResnetBlock
 
 def test_run_resnet_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
     unet = pipe.unet
     unet.eval()
@@ -73,7 +71,7 @@ def test_run_resnet_inference(device):
     tt_temb = torch_to_tt_tensor_rm(temb, device, put_on_device=False)
 
     tt_out = tt_resnet(tt_input, tt_temb)
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)

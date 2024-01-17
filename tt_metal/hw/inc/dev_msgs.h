@@ -12,8 +12,13 @@
 
 #include "noc/noc_parameters.h"
 
+#ifdef COMPILE_FOR_ERISC
+#define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#else
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
+#endif
 
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
@@ -43,14 +48,18 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint16_t ncrisc_watcher_kernel_id;
     volatile uint16_t triscs_watcher_kernel_id;
     volatile uint16_t ncrisc_kernel_size16; // size in 16 byte units
-    volatile uint8_t mode;
-    volatile uint8_t brisc_noc_id;
-    volatile uint8_t enable_brisc;
-    volatile uint8_t enable_ncrisc;
-    volatile uint8_t enable_triscs;
-    volatile uint8_t max_cb_index;
-    volatile uint8_t enable_erisc;
-    volatile uint8_t run;  // must be in last cacheline of this msg
+
+    // TODO(agrebenisan): This must be added in to launch_msg_t
+    // volatile uint16_t dispatch_core_x;
+    // volatile uint16_t dispatch_core_y;
+    volatile uint8_t  mode;
+    volatile uint8_t  brisc_noc_id;
+    volatile uint8_t  enable_brisc;
+    volatile uint8_t  enable_ncrisc;
+    volatile uint8_t  enable_triscs;
+    volatile uint8_t  max_cb_index;
+    volatile uint8_t  enable_erisc;
+    volatile uint8_t  run;  // must be in last cacheline of this msg
 };
 
 struct slave_sync_msg_t {

@@ -145,8 +145,7 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), storage.memory_config
-                };
+                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), tensor.memory_config()};
             }
             else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return operation_history::TensorRecord{
@@ -240,6 +239,8 @@ inline void log_operation(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {}
 #endif
+
+bool is_logging_enabled();
 
 std::vector<Tensor> run(
     const HostOperation& operation,

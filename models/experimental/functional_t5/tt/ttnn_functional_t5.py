@@ -9,55 +9,57 @@ import torch
 
 import ttnn
 
-from ..common.attention_mask_functions import get_extended_attention_mask, invert_attention_mask
+from models.experimental.functional_common.attention_mask_functions import (
+    get_extended_attention_mask,
+    invert_attention_mask,
+)
 
 
-def t5_layer_norm(hidden_states, *, weight, eps=1e-6):
+def t5_layer_norm(config, hidden_states, *, weight):
     # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
     # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus varience is calculated
     # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
     # half-precision inputs is done in fp32
 
-    # import tt_lib as ttl
-
-    # original_shape = tuple(hidden_states.shape)
-    # hidden_states = ttnn.core._reshape_to_4D(hidden_states)
-
-    # ttl_hidden_states = hidden_states._tensor
-    # ttl_weight = weight._tensor
-    # ttl_hidden_states = ttl.tensor.rmsnorm(ttl_hidden_states, eps, ttl_weight)
-
-    # hidden_states = ttnn.Tensor(ttl_hidden_states)
-    # hidden_states = ttnn.reshape(hidden_states, original_shape)
-
-    # return hidden_states
-
-    import tt_lib as ttl
-
-    original_shape = tuple(hidden_states.shape)
-    hidden_states = ttnn.core._reshape_to_4D(hidden_states)
-
-    ttl_hidden_states = hidden_states._tensor
-
-    ttl_squared_hidden_states = ttl.tensor.power(ttl_hidden_states, 2)
-    ttl_averaged_squared_hidden_states = ttl.tensor.reduce(
-        ttl_squared_hidden_states, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, 1 / original_shape[-1]
+    squared_hidden_states = ttnn.pow(hidden_states, 2)
+    averaged_squared_hidden_states = ttnn.mean(
+        squared_hidden_states,
+        dim=-1,
+        keepdim=True,
     )
 
-    variance = ttnn.Tensor(ttl_averaged_squared_hidden_states) + eps
-    std = ttnn.Tensor(ttl.tensor.rsqrt(variance._tensor))
+    variance = averaged_squared_hidden_states + config.layer_norm_epsilon
+    std = ttnn.rsqrt(variance)
+
     hidden_states = hidden_states * std
-
     hidden_states = hidden_states * weight
-
-    hidden_states = ttnn.reshape(hidden_states, original_shape)
 
     return hidden_states
 
 
-def t5_dense_gated_act_dense(hidden_states, parameters):
+def get_activation_function(dense_act_fn):
+    if dense_act_fn == "relu":
+        return ttnn.relu
+    elif dense_act_fn == "gelu_new":
+        return ttnn.gelu
+    else:
+        raise RuntimeError(f"Unsupported activation function: {dense_act_fn}")
+
+
+def t5_dense_act_dense(config, hidden_states, parameters):
+    activation_function = get_activation_function(config.dense_act_fn)
+
+    hidden_states = hidden_states @ parameters.wi.weight
+    hidden_states = activation_function(hidden_states)
+    hidden_states = hidden_states @ parameters.wo.weight
+    return hidden_states
+
+
+def t5_dense_gated_act_dense(config, hidden_states, parameters):
+    activation_function = get_activation_function(config.dense_act_fn)
+
     hidden_gelu = hidden_states @ parameters.wi_0.weight
-    hidden_gelu = ttnn.gelu(hidden_gelu)
+    hidden_gelu = activation_function(hidden_gelu)
     hidden_linear = hidden_states @ parameters.wi_1.weight
     hidden_states = hidden_gelu * hidden_linear
 
@@ -65,21 +67,24 @@ def t5_dense_gated_act_dense(hidden_states, parameters):
     return hidden_states
 
 
-def t5_layer_ff(hidden_states, parameters):
-    forwarded_states = t5_layer_norm(hidden_states, weight=parameters.layer_norm.weight, eps=1e-6)
-    forwarded_states = t5_dense_gated_act_dense(forwarded_states, parameters.DenseReluDense)
-    hidden_states = hidden_states + forwarded_states
+def t5_layer_ff(config, hidden_states, parameters):
+    forwarded_states = t5_layer_norm(config, hidden_states, weight=parameters.layer_norm.weight)
+    if config.is_gated_act:
+        forwarded_states = t5_dense_gated_act_dense(config, forwarded_states, parameters.DenseReluDense)
+    else:
+        forwarded_states = t5_dense_act_dense(config, forwarded_states, parameters.DenseReluDense)
+    hidden_states = ttnn.add(hidden_states, forwarded_states, memory_config=ttnn.L1_MEMORY_CONFIG)
     return hidden_states
 
 
 def t5_attention(
+    config,
     hidden_states,
     key_value_states=None,
     mask=None,
     layer_head_mask=None,
     *,
     parameters,
-    num_heads,
 ):
     """
     Self-attention (if key_value_states is None) or attention over source sentence (provided by key_value_states).
@@ -89,9 +94,9 @@ def t5_attention(
     # past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
     batch_size, seq_length, _ = hidden_states.shape
 
-    def shape(states, num_heads, head_size, is_key=False):
+    def shape(states, head_size, is_key=False):
         """projection"""
-        states = ttnn.reshape(states, (batch_size, seq_length, num_heads, head_size))
+        states = ttnn.reshape(states, (batch_size, seq_length, config.num_heads, head_size))
         if is_key:
             states = ttnn.permute(states, (0, 2, 3, 1))
         else:
@@ -106,11 +111,11 @@ def t5_attention(
 
     def project(hidden_states, weight, is_key=False):
         hidden_size = weight.shape[-1]
-        head_size = hidden_size // num_heads
+        head_size = hidden_size // config.num_heads
         """projects hidden states correctly to key/query states"""
         # self-attn
         # (batch_size, n_heads, seq_length, dim_per_head)
-        hidden_states = shape(hidden_states @ weight, num_heads, head_size, is_key=is_key)
+        hidden_states = shape(hidden_states @ weight, head_size, is_key=is_key)
         return hidden_states
 
     # get query states
@@ -146,157 +151,132 @@ def t5_attention(
 
 
 def t5_layer_self_attention(
+    config,
     hidden_states,
     attention_mask=None,
     *,
     parameters,
-    num_heads,
 ):
-    normed_hidden_states = t5_layer_norm(hidden_states, weight=parameters.layer_norm.weight, eps=1e-06)
+    normed_hidden_states = t5_layer_norm(config, hidden_states, weight=parameters.layer_norm.weight)
     attention_output = t5_attention(
+        config,
         normed_hidden_states,
         mask=attention_mask,
         parameters=parameters.SelfAttention,
-        num_heads=num_heads,
     )
     hidden_states = hidden_states + attention_output
     return hidden_states
 
 
-def t5_layer_cross_attention(hidden_states, key_value_states, attention_mask=None, *, parameters, num_heads):
-    normed_hidden_states = t5_layer_norm(hidden_states, weight=parameters.layer_norm.weight, eps=1e-06)
+def t5_layer_cross_attention(config, hidden_states, key_value_states, attention_mask=None, *, parameters):
+    normed_hidden_states = t5_layer_norm(config, hidden_states, weight=parameters.layer_norm.weight)
     attention_output = t5_attention(
+        config,
         normed_hidden_states,
         key_value_states,
         mask=attention_mask,
         parameters=parameters.EncDecAttention,
-        num_heads=num_heads,
     )
     layer_output = hidden_states + attention_output
     return layer_output
 
 
 def t5_block(
+    config,
     hidden_states,
     attention_mask=None,
     encoder_hidden_states=None,
     encoder_attention_mask=None,
     *,
     parameters,
-    num_heads,
 ):
     hidden_states = t5_layer_self_attention(
+        config,
         hidden_states,
         attention_mask=attention_mask,
         parameters=parameters.layer[0],
-        num_heads=num_heads,
     )
-
-    # clamp inf values to enable fp16 training
-    if hidden_states.dtype == torch.float16:
-        clamp_value = torch.where(
-            torch.isinf(hidden_states).any(),
-            torch.finfo(hidden_states.dtype).max - 1000,
-            torch.finfo(hidden_states.dtype).max,
-        )
-        hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
     do_cross_attention = encoder_hidden_states is not None
     if do_cross_attention:
         hidden_states = t5_layer_cross_attention(
+            config,
             hidden_states,
             key_value_states=encoder_hidden_states,
             attention_mask=encoder_attention_mask,
             parameters=parameters.layer[1],
-            num_heads=num_heads,
         )
-
-        # clamp inf values to enable fp16 training
-        if hidden_states.dtype == torch.float16:
-            clamp_value = torch.where(
-                torch.isinf(hidden_states).any(),
-                torch.finfo(hidden_states.dtype).max - 1000,
-                torch.finfo(hidden_states.dtype).max,
-            )
-            hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
     # Apply Feed Forward layer
-    hidden_states = t5_layer_ff(hidden_states, parameters.layer[-1])
-
-    # clamp inf values to enable fp16 training
-    if hidden_states.dtype == torch.float16:
-        clamp_value = torch.where(
-            torch.isinf(hidden_states).any(),
-            torch.finfo(hidden_states.dtype).max - 1000,
-            torch.finfo(hidden_states.dtype).max,
-        )
-        hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
+    hidden_states = t5_layer_ff(config, hidden_states, parameters.layer[-1])
 
     return hidden_states  # hidden-states, present_key_value_states, (self-attention position bias), (self-attention weights), (cross-attention position bias), (cross-attention weights)
 
 
 def t5_stack(
+    config,
     input_ids,
     shared_embedding_weight,
     encoder_hidden_states=None,
     *,
     parameters,
-    num_heads,
 ):
     input_shape = tuple(input_ids.shape)
 
     hidden_states = ttnn.embedding(input_ids, shared_embedding_weight)
 
     attention_mask = create_attention_mask(
-        input_shape, num_heads, input_ids.device, is_decoder=encoder_hidden_states is not None
+        input_shape, config.num_heads, input_ids.device, is_decoder=encoder_hidden_states is not None
     )
     if encoder_hidden_states is not None:
-        encoder_attention_mask = create_encoder_attention_mask(input_shape, num_heads, input_ids.device)
+        encoder_attention_mask = create_encoder_attention_mask(input_shape, config.num_heads, input_ids.device)
     else:
         encoder_attention_mask = None
 
     for block_parameters in parameters.block:
         hidden_states = t5_block(
+            config,
             hidden_states,
             attention_mask=attention_mask,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
             parameters=block_parameters,
-            num_heads=num_heads,
         )
 
-    hidden_states = t5_layer_norm(hidden_states, weight=parameters.final_layer_norm.weight, eps=1e-06)
+    hidden_states = t5_layer_norm(config, hidden_states, weight=parameters.final_layer_norm.weight)
 
     return hidden_states
 
 
 def t5_for_conditional_generation(
-    input_ids: Optional[torch.LongTensor],
-    decoder_input_ids: Optional[torch.LongTensor],
+    config,
+    input_ids: ttnn.Tensor,
+    decoder_input_ids: ttnn.Tensor,
     parameters,
     *,
-    num_heads,
-) -> torch.FloatTensor:
+    encoder_last_hidden_state=None,
+) -> ttnn.Tensor:
     # Encode
-    hidden_states = t5_stack(
-        input_ids=input_ids,
-        shared_embedding_weight=parameters.shared.weight,
-        parameters=parameters.encoder,
-        num_heads=num_heads,
-    )
+    if encoder_last_hidden_state is None:
+        encoder_last_hidden_state = t5_stack(
+            config,
+            input_ids=input_ids,
+            shared_embedding_weight=parameters.shared.weight,
+            parameters=parameters.encoder,
+        )
 
     # Decode
     sequence_output = t5_stack(
+        config,
         input_ids=decoder_input_ids,
-        encoder_hidden_states=hidden_states,
+        encoder_hidden_states=encoder_last_hidden_state,
         shared_embedding_weight=parameters.shared.weight,
         parameters=parameters.decoder,
-        num_heads=num_heads,
     )
 
     lm_logits = sequence_output @ parameters.lm_head.weight
 
-    return lm_logits
+    return lm_logits, encoder_last_hidden_state
 
 
 @functools.lru_cache
@@ -305,7 +285,9 @@ def create_attention_mask(input_shape, num_heads, device, is_decoder):
 
     attention_mask = torch.ones(batch_size, seq_length)
 
-    extended_attention_mask = get_extended_attention_mask(attention_mask, input_shape, is_decoder=is_decoder)
+    extended_attention_mask = get_extended_attention_mask(
+        attention_mask, input_shape, is_decoder=is_decoder, dtype=torch.bfloat16
+    )
 
     extended_attention_mask = extended_attention_mask.expand((-1, num_heads, seq_length, -1))
     extended_attention_mask = ttnn.from_torch(extended_attention_mask)
@@ -333,6 +315,8 @@ def custom_preprocessor(model, name):
     import transformers
     from ttnn.model_preprocessing import preprocess_layernorm_parameter
 
+    parameters = {}
     if isinstance(model, transformers.models.t5.modeling_t5.T5LayerNorm):
-        return {"weight": preprocess_layernorm_parameter(model.weight, dtype=ttnn.bfloat16)}
-    return {}
+        parameters["weight"] = preprocess_layernorm_parameter(model.weight, dtype=ttnn.bfloat16)
+
+    return parameters

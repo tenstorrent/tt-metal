@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         reduce_dim == ReduceOpDim::H ?
-            "tt_eager/tt_dnn/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp" :
+            "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp" :
             "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines});

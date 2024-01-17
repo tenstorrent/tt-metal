@@ -48,7 +48,7 @@ SECTIONS
 
 
   PROVIDE (__etext = .);
-  _etext = .; PROVIDE (_etext = .);
+  PROVIDE (_etext = .);
   PROVIDE (etext = .);
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_CODE

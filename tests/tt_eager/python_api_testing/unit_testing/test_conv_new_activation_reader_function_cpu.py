@@ -3,13 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
-import numpy as np
 
 import tt_lib as ttl
 from tt_lib.utils import (
@@ -80,13 +73,9 @@ def conv_activation_reader(
                 dst_l1_addr = 0
                 for bh in range(0, act_block_height_datums):
                     in_h_offset = out_h * stride_h
-                    in_w_offset = (
-                        out_w * stride_w
-                    )  # stride 1 or 2.. compile time args - also conv input width
+                    in_w_offset = out_w * stride_w  # stride 1 or 2.. compile time args - also conv input width
                     in_w_offset_within_kernel_window = 0
-                    for bw in range(
-                        0, (int)(act_block_width_datums_unpadded / C)
-                    ):  # constant argument
+                    for bw in range(0, (int)(act_block_width_datums_unpadded / C)):  # constant argument
                         dram_src_address = 0
                         read_size = C
                         pad = False
@@ -114,9 +103,7 @@ def conv_activation_reader(
                         else:
                             # pad 0s for now but do nothing in reader kernel - let garbage rows be in l1
                             pad = True
-                        address_map_this_group.append(
-                            dram_src_address
-                        )  # src address unused if pad is true
+                        address_map_this_group.append(dram_src_address)  # src address unused if pad is true
                         address_map_this_group.append(dst_l1_addr)
                         address_map_this_group.append(read_size)
                         address_map_this_group.append(pad)
@@ -125,9 +112,7 @@ def conv_activation_reader(
                     # pad 0s for block padding on the right side of block.. only first conv since C%32 != 0.. ifdef with compile time arg
                     pad_size = act_block_width_datums - act_block_width_datums_unpadded
                     if pad_size > 0:  # can be skipped .. ifdef out
-                        address_map_this_group.append(
-                            0
-                        )  # src address unused if pad is true
+                        address_map_this_group.append(0)  # src address unused if pad is true
                         address_map_this_group.append(dst_l1_addr)
                         address_map_this_group.append(pad_size)
                         address_map_this_group.append(pad)
@@ -161,9 +146,7 @@ def conv_activation_reader(
         # (64, 3, 224, 224, 7, 7, 2, 2, 3, 3),
     ),
 )
-def test_run_conv_as_large_matmul_cpu(
-    K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w
-):
+def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
     a_activation_shape = [1, C, H, W]
     A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
     b_weights_shape = [K, C, R, S]
@@ -190,17 +173,13 @@ def test_run_conv_as_large_matmul_cpu(
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     # Prepare weights
-    B_tiled = create_conv_weight_tensor_special_padding(
-        B_pyt, K, C, R, S, weight_block_h, weight_block_w
-    )
+    B_tiled = create_conv_weight_tensor_special_padding(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
 
     # Call DTX pass to transform A
 
     matrix_activation_h_tiles = (int)(_nearest_y(OH * OW, act_block_height_datums) / 32)
     matrix_weight_w_tiles = (int)(_nearest_y(K, weight_block_width_datums) / 32)
-    matrix_activation_w_tiles = (int)(
-        _nearest_y(_nearest_y(C, 16) * R * S, act_block_width_datums) / 32
-    )
+    matrix_activation_w_tiles = (int)(_nearest_y(_nearest_y(C, 16) * R * S, act_block_width_datums) / 32)
 
     num_blocks_act_w = (int)(matrix_activation_w_tiles / act_block_w)
     num_blocks_act_h = (int)(matrix_activation_h_tiles / act_block_h)
@@ -265,9 +244,7 @@ def test_run_conv_as_large_matmul_cpu(
     out_result = out_tr.reshape([1, K, OH, OW])
 
     # Calculate conv result with golden result. Run Pytorch conv
-    out_golden = torch.nn.functional.conv2d(
-        A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
-    )
+    out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
     assert out_result.shape == out_golden.shape
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
     print("Passing=", passing_pcc)

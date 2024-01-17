@@ -32,10 +32,10 @@ import torch
         # (10, 64, 64, 16, 16, 2, 2, 20, (10,2), False),
         # (10, 64, 64, 16, 16, 1, 1, 20, (10,2), False),
         # (8, 64, 64, 56, 56, 1, 1, 98, (12,9), True),
-        (8, 64, 64, 56, 56, 2, 2, 98, (12, 9), True),
+        (8, 256, 256, 56, 56, 2, 2, 98, (12, 9), True),
         (8, 512, 512, 28, 28, 2, 2, 80, (10, 8), False),
         (8, 1024, 1024, 14, 14, 2, 2, 56, (7, 8), False),
-        (16, 64, 64, 56, 56, 2, 2, 98, (12, 9), True),
+        (16, 256, 256, 56, 56, 2, 2, 98, (12, 9), True),
         (16, 512, 512, 28, 28, 2, 2, 80, (11, 8), False),
         (16, 1024, 1024, 14, 14, 2, 2, 56, (9, 8), False),
     ),
@@ -57,6 +57,8 @@ def test_run_downsample(
     dtype,
     device,
 ):
+    if batch_size > 8 and dtype != ttl.tensor.DataType.BFLOAT8_B:
+        pytest.skip("Batch > 8 must be run fully bfp8")
     assert input_channels % 32 == 0
     assert output_channels % 32 == 0
     assert stride_h == stride_w
@@ -147,9 +149,9 @@ def test_run_downsample(
     )
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size * output_height * output_width, 32), input_channels]
-    assert out_shape == out.shape()
+    assert out_shape == list(out.shape())
     out_shape_unpadded = [1, 1, batch_size * output_height * output_width, input_channels]
-    assert out_shape_unpadded == out.shape_without_padding()
+    assert out_shape_unpadded == list(out.shape_without_padding())
     out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
     out = out.cpu()
 
@@ -171,8 +173,8 @@ def test_run_downsample(
     end_i = start_i + output_shard_height
     for i in range(start_i, end_i):
         for j in range(input_shard_width):
-            calculated = torch.tensor(out_golden_2d_nhwc[0][0][i][j])
-            golden = torch.tensor(out_debug[0][0][i][j])
+            calculated = out_golden_2d_nhwc[0][0][i][j]
+            golden = out_debug[0][0][i][j]
             atol_delta = torch.abs(golden - calculated).item()
             rtol_delta = torch.abs(golden - calculated) / torch.abs(calculated)
             if dtype == ttl.tensor.DataType.BFLOAT8_B:

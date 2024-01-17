@@ -27,49 +27,101 @@
 #define GPR_DEBUG_REGFILE 0
 #endif
 
+#ifdef PERF_DUMP
+#define DECOUPLINGS_EN (SKIP_UNP || MATH_PACK_DECOUPLE)
+#else
+#define SKIP_UNP 0
+#define MATH_PACK_DECOUPLE 0
+#define DECOUPLINGS_EN 0
+#define OVERLAY_DECOUPLE 0
+#endif
+
+#if defined(EN_KERNEL_SLOWDOWN)
+#include "kernel_slowdown_config.h"
+#endif
+
+#ifndef INSERT_UNPACK_DELAY
+#define INSERT_UNPACK_DELAY 0
+#endif
+
+#ifndef INSERT_MATH_DELAY
+#define INSERT_MATH_DELAY 0
+#endif
+
+#ifndef INSERT_PACK_DELAY
+#define INSERT_PACK_DELAY 0
+#endif
+
+#define DELAY_EN (INSERT_UNPACK_DELAY || INSERT_PACK_DELAY || INSERT_MATH_DELAY)
+
+#define TT_ALWAYS_INLINE inline __attribute__ ((always_inline))
+
 #include <cstdint>
 
 #include "ckernel_include.h"
-#include "debug/fw_debug.h"
 #include "tensix.h"
-#include "eth_l1_address_map.h"
-#include "noc_overlay_parameters.h"
-#include "stream_io_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "limits.h"
+#include "fw_debug.h"
+#include "tt_log.h"
 // #include <cstring>
-//#include "perf_lib/scratch_api.h" // not used unless perf dump enabled?
-
+#if defined(PERF_DUMP) || DELAY_EN > 0
+#include <l1_address_map.h>
+#include "perf_lib/scratch_api.h"
+#endif
 
 namespace ckernel
 {
-
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
 
 constexpr uint PACK_FLUSH_COUNTERS = // counters flush
     (1 << PACK_COUNTERS_SEC2_pack_per_xy_plane_SHAMT) |
     (1 << PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_SHAMT) |
     (1 << PACK_COUNTERS_SEC2_pack_xys_per_tile_SHAMT);
 
-extern volatile uint tt_reg_ptr * const reg_base;
-extern volatile uint tt_reg_ptr * const pc_buf_base;
-extern volatile uint tt_reg_ptr * const regfile;
-extern uint tt_reg_ptr * regmem;
-extern volatile uint tt_reg_ptr * const instrn_buffer;
+constexpr uint RESET_VAL = 0;
+constexpr uint KERNEL_IN_PROGRESS = 15;
+constexpr uint KERNEL_COMPLETE = 1;
+
+extern volatile uint tt_reg_ptr *reg_base;
+extern volatile uint tt_reg_ptr *pc_buf_base;
+extern volatile uint tt_reg_ptr *regfile;
+extern volatile uint tt_reg_ptr *instrn_buffer;
+extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
+extern volatile uint tt_reg_ptr *trisc_l1_mailbox;
+extern volatile uint8_t tt_l1_ptr *debug_buffer;
 
 extern uint32_t cfg_state_id;
 extern uint32_t dest_offset_id;
 extern uint32_t dbg_event_index;
 extern uint32_t dbg_event_end;
 
-extern uint32_t op_info_offset;
+extern volatile uint16_t tt_reg_ptr *debug_mailbox_base;
+extern uint8_t mailbox_index;
+const extern uint8_t mailbox_end;
 // Internal scope to namespace methods only (C++ does not allow namespace private ownership)
 namespace internal {
 }
 
-void tensix_sync();
-void mop_sync();
+inline void tensix_sync()
+{
+    volatile uint foo = 0;
+    volatile uint *fooptr = &foo;
+    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
+    pc_buf_base[1] = foo;
+
+    // Now read -- this read will block until we're idle
+    *fooptr = pc_buf_base[1];
+}
+
+inline void mop_sync()
+{
+    volatile uint foo = 0;
+    volatile uint *fooptr = &foo;
+    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
+    pc_buf_base[2] = foo;
+
+    // Now read -- this read will block until mops are done
+    *fooptr = pc_buf_base[2];
+}
 
 inline void sync_regfile_write(const uint index);
 
@@ -84,6 +136,7 @@ static constexpr bool is_valid(const T val, const uint8_t wid)
 inline void mmio_register_write(register_space_e space, uint addr, uint data)
 {
     const uint regaddr = (space << 6) | (addr & 0x3F);
+    //FWLOG2("Regaddr: 0x%x, data: 0x%x", regaddr, data);
     reg_base[regaddr] = data;
 }
 
@@ -122,6 +175,17 @@ inline void t6_semaphore_get(const uint8_t index)
     TTI_SEMGET(semaphore::t6_sem(index));
 }
 
+template <uint WaitRes>
+inline void t6_semaphore_wait_on_max(const uint8_t index)
+{
+    TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_MAX);
+}
+template <uint WaitRes>
+inline void t6_semaphore_wait_on_zero(const uint8_t index)
+{
+    TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_ZERO);
+}
+
 // Tensix thread semaphore get optionally stalled
 inline void t6_semaphore_init(const uint8_t index, const uint8_t min_value, const uint8_t max_value)
 {
@@ -154,7 +218,7 @@ inline void cfg_write(uint cfg_addr32, uint data)
 inline uint cfg_read(uint cfg_addr32)
 {
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
-    volatile uint32_t tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
     return cfg_regs[cfg_addr(cfg_addr32)];
 }
 
@@ -199,7 +263,11 @@ inline void mop_run(const uint8_t type, const uint8_t count)
     TTI_MOP(type, count - 1, 0); // Run the MOP
 }
 
-inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
+// Register read (workaround for bug
+// https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976
+// now handled by the compiler)
+// workaround is needed only for GS
+inline uint reg_read(uint32_t addr)
 {
     volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *> (addr);
     return p_reg[0];
@@ -310,10 +378,71 @@ inline void cfg_reg_rmw_tensix(uint32_t val)
     }
 }
 
+inline void mailbox_write(const uint8_t thread, const uint32_t data)
+{
+    mailbox_base[thread + 1][0] = data;
+}
+
+// Blocking read
+inline uint32_t mailbox_read(const uint8_t thread)
+{
+    return mailbox_base[thread + 1][0];
+}
+
+inline bool mailbox_not_empty(const uint8_t thread)
+{
+    return mailbox_base[thread + 1][1] > 0;
+}
+
+inline void mailbox_write_full(const uint8_t thread, const uint32_t data)
+{
+    mailbox_base[thread][0] = data;
+}
+
+// Blocking read
+inline uint32_t mailbox_read_full(const uint8_t thread)
+{
+    return mailbox_base[thread][0];
+}
+
+inline bool mailbox_not_empty_full(const uint8_t thread)
+{
+    return mailbox_base[thread][1] > 0;
+}
+
+inline void trisc_l1_mailbox_write(const uint data)
+{
+    trisc_l1_mailbox[0] = data;
+}
+
+inline uint trisc_l1_mailbox_read()
+{
+    return trisc_l1_mailbox[0];
+}
+
 template <class T>
 inline std::uint32_t memory_cast(T *object_ptr)
 {
     return reinterpret_cast<uint32_t>(object_ptr);
+}
+
+inline void record_mailbox_value(uint16_t event_value) {
+  if (mailbox_index < mailbox_end) {
+    debug_mailbox_base[mailbox_index] = event_value;
+    mailbox_index++;
+  }
+}
+
+inline void record_mailbox_value_with_index(uint8_t index, uint16_t event_value) {
+  if (index < mailbox_end) {
+    debug_mailbox_base[index] = event_value;
+  }
+}
+
+// Initialize debug scratch mailbox values and range
+inline void clear_mailbox_values(uint16_t value = 0) {
+  for (int i = 0; i < mailbox_end; i++)
+    debug_mailbox_base[i] = value;
 }
 
 inline uint64_t read_wall_clock()
@@ -323,133 +452,95 @@ inline uint64_t read_wall_clock()
    return ((uint64_t)timestamp_high << 32) | timestamp_low;
 }
 
+inline void record_kernel_runtime(uint64_t kernel_runtime) {
+    debug_mailbox_base[mailbox_end - 4] = kernel_runtime & 0xffff;
+    debug_mailbox_base[mailbox_end - 3] = (kernel_runtime >> 16) & 0xffff;
+    debug_mailbox_base[mailbox_end - 2] = (kernel_runtime >> 32) & 0xffff;
+    debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
+}
+
 void debug_dump(const uint8_t *data, uint32_t byte_size);
 void debug_dump_seek(uint8_t offset);
 
-
-inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
-{
-  unsigned int r = 0;
-  while (a)
-    {
-      if (a & 1)
-        r += b;
-      a >>= 1;
-      b <<= 1;
-    }
-  return r;
-}
-
-inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n)
-{
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
-    return (((uint64_t) n * 0xAAAAAAAB) >> 32) >> 3;
-}
-
-inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n)
-{
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
-    return (((uint64_t) n * 0xAE4C415D) >> 32) >> 6;
-}
-
-template <uint32_t d>
-inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
-{
-    if constexpr (d == 12) {
-        // fast divide for 12 divisor
-        return fast_udiv_12(n);
-    } else if constexpr (d == 94) {
-        // fast divide for 94 divisor. Handles Banked L1 address generation for E75
-        return fast_udiv_94(n);
-    } else {
-        // generic divide from llvm
-        const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;
-        unsigned int q;
-        unsigned int r;
-        unsigned sr;
-        /* special cases */
-        if (d == 0)
-            return 0; /* ?! */
-        if (n == 0)
-            return 0;
-        sr = __builtin_clz(d) - __builtin_clz(n);
-        /* 0 <= sr <= n_uword_bits - 1 or sr large */
-        if (sr > n_uword_bits - 1)  /* d > r */
-            return 0;
-        if (sr == n_uword_bits - 1)  /* d == 1 */
-            return n;
-        ++sr;
-        /* 1 <= sr <= n_uword_bits - 1 */
-        /* Not a special case */
-        q = n << (n_uword_bits - sr);
-        r = n >> sr;
-        unsigned int  carry = 0;
-        for (; sr > 0; --sr)
-        {
-            /* r:q = ((r:q)  << 1) | carry */
-            r = (r << 1) | (q >> (n_uword_bits - 1));
-            q = (q << 1) | carry;
-            /* carry = 0;
-             * if (r.all >= d.all)
-             * {
-             *      r.all -= d.all;
-             *      carry = 1;
-             * }
-             */
-            const int s = (unsigned int)(d - r - 1) >> (n_uword_bits - 1);
-            carry = s & 1;
-            r -= d & s;
+inline void stall_kernel(uint32_t num_cycles) {
+#if DELAY_EN > 0
+    TT_LLK_DUMP("stall_kernel({})", num_cycles);
+    uint32_t start_clk_l = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t elapsed_time = 0;
+    while (elapsed_time <= num_cycles) {
+        uint32_t current_clk_l = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        if (current_clk_l >= start_clk_l) {
+            elapsed_time = current_clk_l - start_clk_l;
+        } else {
+            elapsed_time = 0xffffffff - (start_clk_l - current_clk_l);
         }
-        q = (q << 1) | carry;
-        return q;
     }
-}
-template <uint32_t d>
-inline __attribute__((always_inline)) uint32_t umodsi3_const_divisor(uint32_t a)
-{
-    return a - udivsi3_const_divisor<d>(a) * d;
+#endif
 }
 
-inline void tensix_sync()
-{
-    volatile uint foo = 0x0;
-    volatile uint *fooptr = &foo;
-    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
-    pc_buf_base[1] = foo;
+#if defined(PERF_DUMP) || DELAY_EN > 0
+extern bool record_perf_events;
+#endif
 
-    // Now read -- this read will block until we're idle
-    *fooptr = pc_buf_base[1];
+// This api is inserted in the beginning of each input loop
+// Wait for all instructions of previous loop to finish before starting the next loop
+// If PERF_DUMP is enabled, always wait but only for the inputs that perf dump is enabled for
+// If PERF_DUMP is enabled, and delay is not, no need to insert these apis for unpack and math
+template<int thread_id>
+inline void serialize_input_loop_start() {
+    #if defined(PERF_DUMP) || DELAY_EN > 0
+        TT_LLK_DUMP("serialize_input_loop_start<{}>()", thread_id);
+        if constexpr (thread_id == 0) {
+    #if DELAY_EN > 0
+            t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
+            while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+    #endif
+
+        } else if (thread_id == 1) {
+    #if DELAY_EN > 0
+            t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
+            while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+    #endif
+
+        } else if (thread_id == 2) {
+    #if DELAY_EN == 0
+            if (record_perf_events) {
+    #endif
+            t6_semaphore_post(semaphore::PACK_DONE);
+            while (semaphore_read(semaphore::PACK_DONE) == 0) {}
+    #if DELAY_EN == 0
+            }
+    #endif
+        }
+    #endif
 }
 
-inline void mop_sync()
-{
-    volatile uint foo = 0x0;
-    volatile uint *fooptr = &foo;
-    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
-    pc_buf_base[2] = foo;
+template<int thread_id>
+inline void serialize_input_loop_end() {
+    #if defined(PERF_DUMP) || DELAY_EN > 0
+        TT_LLK_DUMP("serialize_input_loop_end<{}>()", thread_id);
+        if constexpr (thread_id == 0) {
+        #if DELAY_EN > 0
+                t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_MATH_DONE);
+                while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
+        #endif
 
-    // Now read -- this read will block until mops are done
-    *fooptr = pc_buf_base[2];
-}
+            } else if (thread_id == 1) {
+        #if DELAY_EN > 0
+                t6_semaphore_get<p_stall::MATH>(semaphore::UNPACK_MATH_DONE);
+                while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
+        #endif
 
-inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
-
-    uint32_t* op_info_ptr = reinterpret_cast<uint32_t*>(OP_INFO_BASE_ADDR + op_info_offset);
-    static constexpr uint32_t op_info_num_items = 7;
-
-    volatile uint32_t* op_info_struct_ptr = reinterpret_cast<volatile uint32_t*>(&op_info_struct);
-    for (uint32_t i = 0; i < op_info_num_items; i++) {
-        op_info_struct_ptr[i] = op_info_ptr[i];
+            } else if (thread_id == 2) {
+        #if DELAY_EN == 0
+                if (record_perf_events) {
+        #endif
+                t6_semaphore_get<p_stall::PACK>(semaphore::PACK_DONE);
+                while (semaphore_read(semaphore::PACK_DONE) > 0) {}
+        #if DELAY_EN == 0
+                }
+        #endif
+            }
+    #endif
     }
-    op_info_offset += 28;
-
-    if (op_info_offset == OP_INFO_SIZE) {
-        op_info_offset = 0; // In case we go out of bounds
-    }
-}
-
 }

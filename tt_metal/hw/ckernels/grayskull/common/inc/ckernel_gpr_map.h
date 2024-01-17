@@ -37,9 +37,6 @@ struct p_gpr_unpack
     constexpr static uint PERF_UNPACK_NUM_TILES_2 = 36;   // num tiles for input operands 4-5
     constexpr static uint PERF_UNPACK_NUM_TILES_3 = 37;   // num tiles for input operands 6-7
     constexpr static uint FACE_DIM_16x16    = 40;   // Holds face dimension (16x16)
-    constexpr static uint FACE_DIM_8x16     = 41;   // Holds face dimension (8x16)
-    constexpr static uint FACE_DIM_4x16     = 42;   // Holds face dimension (4x16)
-    constexpr static uint FACE_DIM_2x16     = 43;   // Holds face dimension (2x16)
     constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
     constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore
     constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;
@@ -59,9 +56,6 @@ struct p_gpr_math
     constexpr static uint PERF_CNT_STOP     = 8;   // Stop perf counter
     constexpr static uint PERF_EPOCH_BASE_ADDR= 9; // Perf event ID
     constexpr static uint PERF_EPOCH_OFFSET = 10; // The offset address for event id
-    constexpr static uint PERF_BUF_BASE     = 11; // Base address for perf buffer
-    constexpr static uint PERF_EVENT_ID     = 12; // Event id for math thread events
-    constexpr static uint PERF_EVENT_OFFSET = 13; // The offset address for event id
     constexpr static uint DEST_OP0_BASE     = 48;  // dest base for sfpu op0
     constexpr static uint DEST_OP1_BASE     = 49;  // dest base for sfpu op1
     constexpr static uint DEST_REGW_OFFSET  = 50;  // dest rwc base (1st set)
@@ -84,9 +78,15 @@ struct p_gpr_pack
     constexpr static uint NUM_MSGS_RECEIVED = 24;  // holds tile count and word size
     constexpr static uint ONE_MSG_RECEIVED  = 25;  // by default holds 1 tile count and word size for streaming per tile
     constexpr static uint HEADER_ADDR       = 26;  // Holds the address of the header (used by pack shift kernel only)
-    constexpr static uint TMP0              = 28;   // Temp data
-    constexpr static uint TMP1              = 29;   // Temp data
-    constexpr static uint PACK_STREAM_SYNC  = 32;  // sync between pack and output stream [32:63]
+    constexpr static uint TMP0              = 28;  // Temp data
+    constexpr static uint TMP1              = 29;  // Temp data
+    constexpr static uint TMP_LO            = 30;  // Temp data, upper 16-bit always 0
+    constexpr static uint TMP_HI            = 31;  // Temp data, lower 16-bit always 0
+    constexpr static uint PACK_STREAM_SYNC  = 32;  // sync between pack and output stream [32:47]
+    constexpr static uint BFP8_EXP_SEC_SIZE = 48;  // holds packer 0-3 exp section size for bfp8 format
+    constexpr static uint BFP4_EXP_SEC_SIZE = 52;  // holds packer 0-3 exp section size for bfp4 format
+    constexpr static uint BFP2_EXP_SEC_SIZE = 56;  // holds packer 0-3 exp section size for bfp2 format
+    constexpr static uint PERF_PACK_NUM_TILES = 60; // output operand num tiles
 };
 
 } // namespace ckernel

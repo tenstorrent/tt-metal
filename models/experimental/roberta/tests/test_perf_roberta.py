@@ -58,7 +58,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
         profiler.start(first_key)
 
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_output
 
@@ -66,7 +66,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
 
         profiler.start(second_key)
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_output
 

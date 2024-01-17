@@ -141,7 +141,9 @@ L1BankingAllocator::L1BankingAllocator(const AllocatorConfig &alloc_config)
             }
         }
     ) {}
-
+    L1BankingAllocator::~L1BankingAllocator() {
+        Allocator::reset();
+    }
 }  // namespace tt_metal
 
 }  // namespace tt

@@ -11,6 +11,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/move/single_core/move_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_overlap.cpp \
+	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_sharded.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \
@@ -46,8 +47,6 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/bmm/single_core/bmm_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core/bmm_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse/bmm_op_multi_core_reuse.cpp \
-	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_generalized/bmm_op_multi_core_reuse_generalized.cpp \
-	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_generalized/bmm_op_multi_core_reuse_mcast_generalized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_1d_optimized/bmm_op_multi_core_reuse_mcast_1d_optimized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_2d_optimized/bmm_op_multi_core_reuse_mcast_2d_optimized.cpp \
@@ -57,6 +56,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp \
+	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_multi_core/tilize_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_single_core/tilize_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_op.cpp \
@@ -64,6 +64,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/untilize/single_core/untilize_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/untilize/untilize_op.cpp \
 	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op.cpp \
+	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op_v2.cpp \
 	tt_eager/tt_dnn/op_library/softmax/softmax_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.cpp \
@@ -98,9 +99,11 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/permute/permute_op.cpp \
 	tt_eager/tt_dnn/op_library/composite/composite_ops.cpp\
 	tt_eager/tt_dnn/op_library/backward/backward_ops.cpp\
+	tt_eager/tt_dnn/op_library/optimizer/optimizer_ops.cpp\
 	tt_eager/tt_dnn/op_library/complex/complex_ops.cpp\
+	tt_eager/tt_dnn/op_library/loss/loss_op.cpp\
 	tt_eager/tt_dnn/op_library/transformer_tms/transformer_tms.cpp \
-	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_split_fused_qkv_and_split_heads/multi_core_split_fused_qkv_and_split_heads.cpp \
+	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_split_query_key_value_and_split_heads/multi_core_split_query_key_value_and_split_heads.cpp \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_concatenate_heads/multi_core_concatenate_heads.cpp \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp \
 	tt_eager/tt_dnn/op_library/run_operation.cpp \
@@ -111,6 +114,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/concat/single_core/concat_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/concat_op.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
+	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_concat_heads.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/single_core/rotate_half_op_single_core.cpp \

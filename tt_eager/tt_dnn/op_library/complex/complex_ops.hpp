@@ -54,15 +54,15 @@ class ComplexTensor {
             TT_ASSERT( m_real_imag[0].shape() == m_real_imag[1].shape() , "Tensor shapes of real and imag should be identical");
         }
 
-        Tensor operator[](uint32_t index) const {
+        const Tensor& operator[](uint32_t index) const {
             return m_real_imag[index];
         }
 
-        Tensor real() {
+        const Tensor& real() const {
             return m_real_imag[0];
         }
 
-        Tensor imag() {
+        const Tensor& imag() const {
             return m_real_imag[1];
         }
 
@@ -89,7 +89,8 @@ ComplexTensor complex_div(const ComplexTensor& input_a, const ComplexTensor& inp
 ComplexTensor complex_recip(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //polar operator: return a complex value tensor
-ComplexTensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+ComplexTensor polar(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 

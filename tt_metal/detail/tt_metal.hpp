@@ -14,6 +14,7 @@
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/host_api.hpp"
 
 using std::unique_lock;
 using std::mutex;
@@ -21,9 +22,6 @@ using std::mutex;
 namespace tt::tt_metal{
 
     namespace detail {
-        // To be removed at a later time, but need a global
-        // command queue for the time being.
-        inline unique_ptr<CommandQueue> GLOBAL_CQ;
 
         inline static bool DispatchStateCheck( bool isFastDispatch){
             static bool fd = isFastDispatch;
@@ -119,12 +117,12 @@ namespace tt::tt_metal{
          *
          * Return value: void
          *
-         * | Argument      | Description                                       | Type                      | Valid Range               | Required |
-         * |---------------|---------------------------------------------------|---------------------------|---------------------------|----------|
-         * | device        | The device holding the program being profiled.    | Device *                  |                           | True     |
-         * | core_coords   | The logical core coordinates being profiled.      | const vector<CoreCoord> & |                           | True     |
+         * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
+         * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
          * */
-        void DumpDeviceProfileResults(Device *device, const vector<CoreCoord>& logical_cores);
+        void DumpDeviceProfileResults(Device *device,const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores);
 
         /**
          * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
@@ -275,11 +273,33 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline void Synchronize()
+        inline CommandQueue &GetCommandQueue(Device *device)
         {
-            if (detail::GLOBAL_CQ) {
-                Finish(*detail::GLOBAL_CQ);
+            detail::DispatchStateCheck(true);
+            // For now there is only one SW CommandQueue per device
+            static std::vector<std::unique_ptr<CommandQueue>> command_queues( GetNumAvailableDevices() );
+            chip_id_t id = device->id();
+            TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
+            TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
+            static std::mutex cq_creation_mutex;
+            {
+                std::lock_guard<std::mutex> lock(cq_creation_mutex);
+                command_queues[device->id()] = std::make_unique<CommandQueue>(device, 0);
             }
+            return *(command_queues[id]);
+        }
+
+        inline void Synchronize(Device *device)
+        {
+            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+                Finish(GetCommandQueue(device));
+            }
+        }
+
+        inline void SetLazyCommandQueueMode(bool lazy)
+        {
+            DispatchStateCheck(true);
+            LAZY_COMMAND_QUEUE_MODE = lazy;
         }
 
         inline void DeallocateBuffers(Device * device)
@@ -287,16 +307,17 @@ namespace tt::tt_metal{
             device->deallocate_buffers();
         }
 
-        inline void ClearCommandQueueProgramCache()
+        inline void ClearCommandQueueProgramCache(Device *device)
         {
-            if (detail::GLOBAL_CQ) {
-                ClearProgramCache(*detail::GLOBAL_CQ);
+            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+                ClearProgramCache(GetCommandQueue(device));
             }
         }
 
         inline void GenerateDeviceHeaders(Device *device,
                                           const std::string &path)
         {
+
             // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
             const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
             const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
@@ -338,10 +359,6 @@ namespace tt::tt_metal{
                 }
             }
 
-            auto dispatch_cores = device->dispatch_cores().begin();
-            CoreCoord producer_logical_core = *dispatch_cores++;
-            CoreCoord consumer_logical_core = *dispatch_cores;
-
             // Create valid PCIe address ranges
             // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
             // TODO: consider checking multiple ranges to detect straddling transactions
@@ -350,6 +367,8 @@ namespace tt::tt_metal{
             for (int pcie_chan = 0; pcie_chan < tt::Cluster::instance().get_num_host_channels(device->id()); pcie_chan++) {
                 pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
             }
+
+            CoreCoord enqueue_program_dispatch_core = *device->consumer_cores().begin();
 
             jit_build_genfiles_noc_addr_ranges_header(
                 path,
@@ -362,7 +381,7 @@ namespace tt::tt_metal{
                 soc_d.get_physical_ethernet_cores(),
                 soc_d.grid_size,
                 harvested_rows,
-                {device->worker_core_from_logical_core(consumer_logical_core)});
+                device->worker_core_from_logical_core(enqueue_program_dispatch_core));
         }
 
         inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
@@ -421,6 +440,119 @@ namespace tt::tt_metal{
                 },
                 specified_core_spec
             );
+        }
+
+        inline void CommandQueueInit(Device* device, const CoreCoord& producer_core, const CoreCoord& consumer_core, SystemMemoryManager& manager, const uint8_t command_queue_channel) {
+            // // Place the cores into reset since need to update a lot of core info
+            // tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(producer_core)));
+            // tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(consumer_core)));
+            // tt::Cluster::instance().l1_barrier(device->id());
+
+            // Reset the host manager's pointer for this command queue
+            manager.reset(command_queue_channel);
+
+            // Re-start the pointers
+            vector<uint32_t> issue_queue_read_ptr = {manager.get_issue_queue_write_ptr(command_queue_channel) >> 4};
+            vector<uint32_t> completion_queue_wr_ptr = {manager.get_completion_queue_read_ptr(command_queue_channel) >> 4};
+            detail::WriteToDeviceL1(device, producer_core, CQ_ISSUE_READ_PTR, issue_queue_read_ptr);
+            detail::WriteToDeviceL1(device, producer_core, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr);
+            detail::WriteToDeviceL1(device, consumer_core, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
+            detail::WriteToDeviceL1(device, consumer_core, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+
+            // Need to update the issue queue limit to be exactly equal to the command data in the queue
+            Program& command_queue_program = *device->command_queue_programs[command_queue_channel];
+            KernelHandle producer_kernel_handle = command_queue_program.kernels_on_core(producer_core)->riscv0_id.value();
+            uint32_t issue_queue_size = manager.get_issue_queue_size(command_queue_channel);
+            vector<uint32_t> producer_runtime_args = {issue_queue_size};
+            SetRuntimeArgs(
+                command_queue_program,
+                producer_kernel_handle,
+                producer_core,
+                producer_runtime_args);
+
+            detail::WriteRuntimeArgsToDevice(device, command_queue_program);
+            detail::ConfigureDeviceWithProgram(device, command_queue_program);
+            tt::Cluster::instance().dram_barrier(device->id());
+            tt::Cluster::instance().l1_barrier(device->id());
+
+            std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
+            tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+            uint16_t huge_page_channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+            const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(device->id(), huge_page_channel);
+            const uint32_t cq_channel_size = hugepage_size / device->num_hw_cqs();
+            pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + command_queue_channel * cq_channel_size) >> 4;
+            pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + manager.get_issue_queue_size(command_queue_channel) + command_queue_channel * cq_channel_size) >> 4;
+            tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), command_queue_channel * cq_channel_size, device->id(), huge_page_channel);
+        }
+
+        inline void CompileCommandQueuePrograms(Device *device, const SystemMemoryManager& manager, const uint32_t hugepage_channel, vector<unique_ptr<Program, ProgramDeleter>>& command_queue_programs) {
+            ZoneScoped;
+
+            const uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(device->id(), hugepage_channel) / device->producer_cores().size();
+            TT_ASSERT(device->producer_cores().size() == device->consumer_cores().size(), "There must be the same number of producers as there are consumers");
+            TT_ASSERT(device->producer_cores().size() > 0, "There must be at least 1 producer/consumer core");
+            TT_ASSERT(device->producer_cores().size() < 3, "There can be at most 2 hardware command queues on a given device");
+
+            uint8_t cq_channel = 0;
+            std::transform(
+                device->producer_cores().begin(), device->producer_cores().end(),
+                device->consumer_cores().begin(), std::back_inserter(command_queue_programs),
+                [&device, &cq_channel, &cq_size, &manager](const CoreCoord& producer_logical_core, const CoreCoord& consumer_logical_core) {
+
+                    unique_ptr<Program, ProgramDeleter> command_queue_program_ptr(new Program);
+                    CoreCoord producer_physical_core = device->worker_core_from_logical_core(producer_logical_core);
+                    CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
+
+                    std::map<string, string> producer_defines = {
+                        {"DISPATCH_KERNEL", "1"},
+                        {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
+                        {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
+                    };
+                    std::map<string, string> consumer_defines = {
+                        {"DISPATCH_KERNEL", "1"},
+                        {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
+                        {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
+                    };
+
+                    // Address in sysmem for CQ to write back its read ptr to
+                    uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + cq_channel * cq_size;
+                    uint32_t issue_queue_start_addr = CQ_START + cq_channel * cq_size;
+                    uint32_t issue_queue_size = manager.get_issue_queue_size(cq_channel);
+                    vector<uint32_t> producer_compile_args = {host_issue_queue_read_ptr_addr, issue_queue_start_addr};
+
+                    uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + cq_channel * cq_size;
+                    uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + cq_channel * cq_size;
+                    uint32_t completion_queue_size = manager.get_completion_queue_size(cq_channel);
+                    uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + cq_channel * cq_size;
+                    vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr};
+
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
+                        producer_logical_core,
+                        tt::tt_metal::DataMovementConfig {
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = producer_compile_args,
+                            .defines = producer_defines});
+
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
+                        consumer_logical_core,
+                        tt::tt_metal::DataMovementConfig {
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = consumer_compile_args,
+                            .defines = consumer_defines});
+
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, producer_logical_core, 2);
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, consumer_logical_core, 0);
+
+                    CompileProgram(device, *command_queue_program_ptr);
+                    cq_channel++;
+                    return command_queue_program_ptr;
+                });
         }
     }
 }

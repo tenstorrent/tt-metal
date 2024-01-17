@@ -17,50 +17,8 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod();
 
-
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false /* unused */>
-ALWI void llk_math_eltwise_unary_datacopy_cm(uint start_dst_index, uint ntiles) {
-    // TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, dst_index);
-
-
-    for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
-        if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
-            math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
-        } else {
-            math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
-        }
-
-        if constexpr (type == A2D) {
-            ckernel_template::run(instrn_buffer);
-        } else if constexpr (type == B2D) {
-            if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
-                // Manually clear B once mop is done
-                ckernel_template::run(instrn_buffer);
-                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
-            } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
-                // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
-                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
-                TTI_ZEROSRC(0, 1, 0, 1);  // Zero out SrcA current read bank
-                ckernel_template::run(instrn_buffer);
-                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
-                ckernel_template::run(instrn_buffer);
-                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0);
-            } else {
-                ckernel_template::run(instrn_buffer);
-            }
-        } else {
-            FWASSERT("Unsupported op!", false);
-        }
-
-        math::clear_dst_reg_addr();
-
-    }
-
-
-}
-
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
+inline void _llk_math_eltwise_unary_datacopy_(uint dst_index) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {
@@ -93,7 +51,7 @@ inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
 }
 
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
-ALWI void eltwise_unary_configure_addrmod() {
+inline void eltwise_unary_configure_addrmod() {
     // Use srcA for data movement
     if constexpr (type == A2D) {
         addr_mod_t{
@@ -145,8 +103,8 @@ ALWI void eltwise_unary_configure_addrmod() {
     }
 }
 
-template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE, bool transpose_xy = false>
-ALWI void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
+template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
+inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, bool within_face_16x16_transpose = false) {
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == A2D) {
@@ -154,7 +112,7 @@ ALWI void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
         uint innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         uint outerloop = 4;
         ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(rows_per_inst, addr_mod, 4, 0));
-        if constexpr (transpose_xy) {
+        if (within_face_16x16_transpose) {
             tmp.set_start_op(TT_OP_TRNSPSRCA);
         } else {
             tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD));
@@ -208,17 +166,17 @@ ALWI void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
     }
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool transpose_xy = false>
-// within_face_16x16_transpose is not used
-// On GS, transpose_xy template param is within_face_16x16_transpose
-// On WH, within_face_16x16_transpose is used in unpacker (not math)
-ALWI void llk_math_eltwise_unary_datacopy_init(const std::uint32_t within_face_16x16_transpose=0 /* unused */) {
+template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
+// On GS, transpose_of_faces is not used, within_face_16x16_transpose is used
+// On WH, transpose_of_faces is used in unpacker (not math)
+inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0) {
+
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, transpose_xy>(p_mova2d::MOV_8_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, within_face_16x16_transpose);
     } else if constexpr (type == B2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, false>(p_movb2d::MOV_4_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, within_face_16x16_transpose);
     } else {
         FWASSERT("Unsupported op!", false);
     }

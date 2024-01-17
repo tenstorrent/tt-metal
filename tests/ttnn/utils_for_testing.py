@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.utility_functions import comp_pcc
 import os
 import json
 import torch
+
+from loguru import logger
+from models.utility_functions import comp_pcc
 
 
 def torch_random(shape, low, high, dtype):
@@ -16,12 +18,9 @@ def print_comparison(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)
     messages.append("Expected")
-    # TODO: handle other dimensions
-    if len(expected_pytorch_result.shape) == 4:
-        messages.append(str(expected_pytorch_result[0:5, 0:5, 0:5, 0:5]))
+    messages.append(str(expected_pytorch_result))
     messages.append("Actual")
-    if len(actual_pytorch_result.shape) == 4:
-        messages.append(str(actual_pytorch_result[0:5, 0:5, 0:5, 0:5]))
+    messages.append(str(actual_pytorch_result))
     return "\n".join(messages)
 
 
@@ -31,6 +30,27 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     assert pcc_passed, print_comparison(pcc_message, expected_pytorch_result, actual_pytorch_result)
+
+
+def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
+    return (
+        expected_pytorch_result.shape == actual_pytorch_result.shape,
+        f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+    )
+    pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    return pcc_passed, pcc_message
+
+
+def set_slow_dispatch_mode(set_var):
+    prev_value = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+
+    if set_var != "" and set_var is not None:
+        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = set_var
+        logger.info("Setting slow dispatch mode")
+    else:
+        logger.info("Setting fast dispatch mode")
+
+    return prev_value
 
 
 def update_process_id():
@@ -47,6 +67,3 @@ def update_process_id():
 
     with open(launch_json_path, "w") as f:
         json.dump(launch_data, f, indent=4)
-
-
-#    input("Press Enter to continue once the debugger is attached...")

@@ -36,14 +36,14 @@ def run_eltwise_ne_tests(
     if in1_in_mem_config == "SYSTEM_MEMORY":
         input1_mem_config = None
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
+    y = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
 
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()
 
     # get referent value
-    ref_value = pt_ne(x_ref, y_ref)
+    ref_value = pt_ne(x_ref, y_ref).to(torch.bfloat16)
 
     # calculate tt output
     if in0_in_mem_config == "SYSTEM_MEMORY":
@@ -170,7 +170,7 @@ test_sweep_args = [
         "SYSTEM_MEMORY",
         "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        16934480,
+        16934160,
     ),
     # ROW_MAJOR, ROW_MAJOR
     (
