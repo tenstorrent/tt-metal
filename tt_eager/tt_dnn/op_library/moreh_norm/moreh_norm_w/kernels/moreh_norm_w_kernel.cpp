@@ -2,21 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "debug/dprint.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "tt_eager/tt_dnn/op_library/moreh_norm/kernel_utils/common_ckernels.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -101,76 +87,7 @@ void MAIN {
             cb_push_back(cb_xabs, onetile);
             REL();
 
-            // |x|^p
-            ACQ();
-            cb_wait_front(cb_xabs, onetile);
-            cb_reserve_back(cb_xpow, onetile);
-
-            copy_tile_init();
-            copy_tile(cb_xabs, 0, dst0);
-
-            power_tile_init();
-            power_tile(dst0, p);
-
-            if (p_is_negative) {
-                recip_tile_init();
-                recip_tile(dst0);
-            }
-
-            pack_tile(dst0, cb_xpow);
-
-            cb_push_back(cb_xpow, onetile);
-            REL();
-            // We don't pop cb_xabs here.
-
-            // log(|x|)
-            ACQ();
-            cb_reserve_back(cb_logx, onetile);
-
-            copy_tile_init();
-            copy_tile(cb_xabs, 0, dst0);
-
-            log_tile_init();
-            log_tile(dst0);
-
-            pack_tile(dst0, cb_logx);
-
-            cb_pop_front(cb_xabs, onetile);
-            cb_push_back(cb_logx, onetile);
-            REL();
-
-            // exp(log(|x|) * decimal)
-            ACQ();
-            cb_wait_front(cb_logx, onetile);
-            cb_reserve_back(cb_exp_lxmd, onetile);
-
-            mul_tiles_init();
-            mul_tiles(cb_logx, cb_decimal, 0, 0, dst0);
-
-            exp_tile_init();
-            exp_tile(dst0);
-
-            pack_tile(dst0, cb_exp_lxmd);
-
-            cb_pop_front(cb_logx, onetile);
-            cb_push_back(cb_exp_lxmd, onetile);
-            REL();
-
-            // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
-            ACQ();
-            cb_wait_front(cb_xpow, onetile);
-            cb_wait_front(cb_exp_lxmd, onetile);
-            cb_reserve_back(cb_correct_xpow, onetile);
-
-            mul_tiles_init();
-            mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
-
-            pack_tile(dst0, cb_correct_xpow);
-
-            cb_pop_front(cb_xpow, onetile);
-            cb_pop_front(cb_exp_lxmd, onetile);
-            cb_push_back(cb_correct_xpow, onetile);
-            REL();
+            power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
             // Add(|x|^p)
             if (col_idx == 0) {
@@ -218,77 +135,7 @@ void MAIN {
         cb_push_back(cb_xpowsum, onetile);
         REL();
 
-        // Y = Sum(|x|^p)
-        // Y^(1/p)
-        ACQ();
-        cb_wait_front(cb_xpowsum, onetile);
-        cb_reserve_back(cb_tmp0, onetile);
-
-        copy_tile_init();
-        copy_tile(cb_xpowsum, 0, dst0);
-
-        power_tile_init();
-        power_tile(dst0, recip_p);
-
-        if (recip_p_is_negative) {
-            recip_tile_init();
-            recip_tile(dst0);
-        }
-
-        pack_tile(dst0, cb_tmp0);
-
-        cb_push_back(cb_tmp0, onetile);
-        REL();
-        // We don't pop cb_xpowsum here.
-
-        // log(Y)
-        ACQ();
-        cb_reserve_back(cb_tmp1, onetile);
-
-        copy_tile_init();
-        copy_tile(cb_xpowsum, 0, dst0);
-
-        log_tile_init();
-        log_tile(dst0);
-
-        pack_tile(dst0, cb_tmp1);
-
-        cb_pop_front(cb_xpowsum, onetile);
-        cb_push_back(cb_tmp1, onetile);
-        REL();
-
-        // exp(log(Y) * recip_p_decimal)
-        ACQ();
-        cb_wait_front(cb_tmp1, onetile);
-        cb_reserve_back(cb_tmp2, onetile);
-
-        mul_tiles_init();
-        mul_tiles(cb_tmp1, cb_recip_p_decimal, 0, 0, dst0);
-
-        exp_tile_init();
-        exp_tile(dst0);
-
-        pack_tile(dst0, cb_tmp2);
-
-        cb_pop_front(cb_tmp1, onetile);
-        cb_push_back(cb_tmp2, onetile);
-        REL();
-
-        // Y^(1/p) * exp(log(Y) * recip_p_decimal)(==|1/x + recip_p_decimal|^(1/p))
-        ACQ();
-        cb_wait_front(cb_tmp0, onetile);
-        cb_wait_front(cb_tmp2, onetile);
-        cb_reserve_back(cb_y, onetile);
-
-        mul_tiles_init();
-        mul_tiles(cb_tmp0, cb_tmp2, 0, 0, dst0);
-
-        pack_tile(dst0, cb_y);
-
-        cb_pop_front(cb_tmp0, onetile);
-        cb_pop_front(cb_tmp2, onetile);
-        cb_push_back(cb_y, onetile);
-        REL();
+        power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);
     }
 
     cb_pop_front(cb_one, onetile);
