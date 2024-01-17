@@ -86,7 +86,37 @@ def has_storage_type_of(tensor: Tensor, storage_type) -> bool:
     return tensor.value.storage_type() == storage_type
 
 
-def _reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
+def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], **_):
+    import torch
+
+    input_tensor = to_torch(input_tensor)
+
+    if isinstance(shape, Shape):
+        shape = tuple(shape)
+
+    return torch.reshape(input_tensor, shape).contiguous().clone()
+
+
+@decorate_operation(torch_function=_torch_reshape)
+def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
+    r"""
+    reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
+
+    Reshape :attr:`input_tensor` into :attr:`shape`.
+
+    Args:
+        * :attr:`input_tensor`: the input tensor
+        * :attr:`shape`: the desired shape.
+
+    Example::
+
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((64, 32), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.reshape(tensor, (32, 64))
+        >>> print(output.shape)
+        ttnn.Shape([32, 64])
+
+    """
+
     if isinstance(shape, tuple):
         if not (0 <= shape.count(-1) <= 1):
             raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
@@ -162,7 +192,7 @@ def _reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tens
 
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
-def _reshape_to_4D(tensor):
+def unsqueeze_to_4D(tensor):
     if len(tensor.shape) == 4:
         return tensor
     if len(tensor.shape) > 4:
@@ -172,7 +202,7 @@ def _reshape_to_4D(tensor):
     full_shape = tuple(tensor.shape.padded())
     shape = (1,) * num_missing_dims + shape
     full_shape = (1,) * num_missing_dims + full_shape
-    return _reshape(tensor, shape=Shape(shape, full_shape))
+    return reshape(tensor, shape=Shape(shape, full_shape))
 
 
 @decorate_operation()
@@ -421,7 +451,7 @@ def to_layout(tensor, layout: Layout):
         if is_on_device:
             *_, width = input_tensor.shape
             if layout_change_needed and width % 2 == 0:  # Can only unpad to row major tensor of even width
-                input_tensor = _reshape_to_4D(input_tensor)
+                input_tensor = unsqueeze_to_4D(input_tensor)
                 intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
                 ttl_input_tensor = input_tensor.value
                 output_tensor = Tensor(
@@ -438,7 +468,7 @@ def to_layout(tensor, layout: Layout):
                 batch_shape_dim = list(input_tensor.shape)[:-2]
                 batch_padded_dim = list(input_tensor.shape.padded())[:-2]
                 if batch_shape_dim == batch_padded_dim:
-                    input_tensor = _reshape_to_4D(input_tensor)
+                    input_tensor = unsqueeze_to_4D(input_tensor)
                     input_tensor = Tensor(
                         input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
                     )
@@ -450,7 +480,7 @@ def to_layout(tensor, layout: Layout):
                     output_tensor = unpad_with_pytorch(input_tensor)
         else:
             if necessary_to_change_padding:
-                input_tensor = _reshape_to_4D(input_tensor)
+                input_tensor = unsqueeze_to_4D(input_tensor)
                 input_tensor = Tensor(input_tensor.value if not layout_change_needed else input_tensor.value.to(layout))
                 ttl_input_tensor = input_tensor.value
                 output_tensor = Tensor(ttl_input_tensor.unpad_from_tile(list(input_tensor.shape)))
@@ -459,7 +489,7 @@ def to_layout(tensor, layout: Layout):
                     input_tensor.value if not layout_change_needed else input_tensor.value.to(layout)
                 )
 
-        output_tensor = _reshape(output_tensor, intended_shape)
+        output_tensor = reshape(output_tensor, intended_shape)
         return output_tensor
     elif layout == TILE_LAYOUT:
         if len(tensor.shape) > 1:
@@ -472,7 +502,7 @@ def to_layout(tensor, layout: Layout):
         pad_w = (TILE_SIZE - width % TILE_SIZE) % TILE_SIZE
         padded_height = height + pad_h
         padded_width = width + pad_w
-        tensor = _reshape_to_4D(tensor)
+        tensor = unsqueeze_to_4D(tensor)
         *batch_sizes, _, _ = tensor.shape
         ttl_input_tensor = tensor.value
         if tensor.layout == ROW_MAJOR_LAYOUT and is_on_device:
@@ -488,7 +518,7 @@ def to_layout(tensor, layout: Layout):
             tensor = Tensor(
                 ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
             )
-        tensor = _reshape(
+        tensor = reshape(
             tensor,
             Shape(original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]),
         )
@@ -498,11 +528,7 @@ def to_layout(tensor, layout: Layout):
 
 
 def _torch_identity(input_tensor):
-    import ttnn
-
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_torch(input_tensor)
+    input_tensor = to_torch(input_tensor)
     return input_tensor.clone()
 
 

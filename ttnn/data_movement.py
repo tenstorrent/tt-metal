@@ -4,23 +4,9 @@
 
 from typing import Tuple, Union, List
 
-import ttnn.tensor as ttnn
-from ttnn.decorators import decorate_operation
 import tt_lib as ttl
 
-from ttnn.tensor import (
-    Shape,
-    Tensor,
-    from_torch,
-    to_torch,
-    to_device,
-    from_device,
-    to_layout,
-    ROW_MAJOR_LAYOUT,
-    has_storage_type_of,
-    _reshape_to_4D,
-    _reshape,
-)
+import ttnn.tensor as ttnn
 from ttnn.decorators import decorate_operation
 
 
@@ -64,60 +50,22 @@ def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: 
         output_tensor, device=input_tensor.device, dtype=input_tensor.dtype, layout=input_tensor.layout
     )
 
-    output_tensor = ttnn._reshape(output_tensor, input_tensor.shape + padding)
+    output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
     return output_tensor
 
 
-# Data Transformations
-def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], **_):
+def _torch_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     import torch
-    import ttnn
 
-    input_tensor = from_device(input_tensor)
+    input_tensor = ttnn.from_device(input_tensor)
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = to_torch(input_tensor)
-
-    if isinstance(shape, Shape):
-        shape = tuple(shape)
-
-    return torch.reshape(input_tensor, shape).contiguous().clone()
-
-
-@decorate_operation(torch_function=_torch_reshape)
-def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
-    r"""
-    reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
-
-    Reshape :attr:`input_tensor` into :attr:`shape`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`shape`: the desired shape.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.reshape(tensor, (32, 64))
-        >>> print(output.shape)
-        ttnn.Shape([32, 64])
-
-    """
-    return _reshape(input_tensor, shape)
-
-
-def _torch_permute(input_tensor: Tensor, order: Tuple[int, ...], **_):
-    import torch
-    import ttnn
-
-    input_tensor = from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = to_torch(input_tensor)
+    input_tensor = ttnn.to_torch(input_tensor)
 
     return torch.permute(input_tensor, order).contiguous().clone()
 
 
 @decorate_operation(torch_function=_torch_permute)
-def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
+def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     r"""
     permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
 
@@ -139,7 +87,7 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
     if not isinstance(order, tuple):
         raise RuntimeError("order must be a tuple")
 
-    if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+    if not ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
         RuntimeError("input_tensor must be on device!")
 
     ttl_input_tensor = input_tensor.value
@@ -151,43 +99,45 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
 
     original_shape = tuple(input_tensor.shape)
     original_shape_padded = tuple(input_tensor.shape.padded())
-    desired_shape = Shape(list([original_shape[i] for i in order]), list([original_shape_padded[i] for i in order]))
-    if has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
-        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, order))
+    desired_shape = ttnn.Shape(
+        list([original_shape[i] for i in order]), list([original_shape_padded[i] for i in order])
+    )
+    if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
+        output_tensor = ttnn.Tensor(ttl.tensor.permute(ttl_input_tensor, order))
         # permute is not currently keeping the original padding
-        return reshape(output_tensor, desired_shape)
+        return ttnn.reshape(output_tensor, desired_shape)
     elif len(input_tensor.shape) < 4:
-        input_tensor = _reshape_to_4D(input_tensor)
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
         adjusted_order_for_4D_tensor = order
         while len(adjusted_order_for_4D_tensor) < 4:
             adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
-        output_tensor = Tensor(ttl.tensor.permute(ttl_input_tensor, adjusted_order_for_4D_tensor))
-        return reshape(output_tensor, desired_shape)
+        output_tensor = ttnn.Tensor(ttl.tensor.permute(ttl_input_tensor, adjusted_order_for_4D_tensor))
+        return ttnn.reshape(output_tensor, desired_shape)
     else:
 
         def torch_permute(tensor, order):
             return tensor.permute(order).contiguous().clone()
 
         device = ttl_input_tensor.device()
-        tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
-        tensor = from_device(tensor)
-        tensor = to_torch(tensor)
+        tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        tensor = ttnn.from_device(tensor)
+        tensor = ttnn.to_torch(tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
-        tensor = from_torch(tensor, input_tensor.dtype)
-        tensor = to_device(tensor, device)
+        tensor = ttnn.from_torch(tensor, input_tensor.dtype)
+        tensor = ttnn.to_device(tensor, device)
         return tensor
 
 
 def _torch_concat(tensors, dim=0, **_):
     import torch
 
-    torch_tensors = [to_torch(tensor) for tensor in tensors]
+    torch_tensors = [ttnn.to_torch(tensor) for tensor in tensors]
     return torch.concat(torch_tensors, dim)
 
 
 # @decorate_operation(torch_function=_torch_concat)
-def concat(tensors: Union[Tensor, List[Tensor]], dim: 0) -> Tensor:
+def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tensor:
     r"""
     concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tensor
 
@@ -213,7 +163,7 @@ def concat(tensors: Union[Tensor, List[Tensor]], dim: 0) -> Tensor:
         raise RuntimeError("You must have at least two tensors to concat!")
 
     for input_tensor in tensors:
-        if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+        if not ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
             raise RuntimeError("All tensors must be on device!")
 
     device = tensors[0].device
