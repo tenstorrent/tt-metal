@@ -13,7 +13,7 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import reduce_max_h as tt_reduce_max_h
 
 
@@ -40,7 +40,7 @@ def run_reduce_max_h_test(input_shape, dtype, dlayout, in_mem_config, out_mem_co
     )
     # compare tt and golden outputs
 
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 

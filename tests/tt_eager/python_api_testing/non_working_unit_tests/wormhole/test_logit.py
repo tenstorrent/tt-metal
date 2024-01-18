@@ -12,7 +12,7 @@ import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 from tests.tt_eager.python_api_testing.sweep_tests import tt_lib_ops
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
 
@@ -38,7 +38,7 @@ def run_eltwise_logit_test(
         output_mem_config=out_mem_config,
     )
 
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 

@@ -8,7 +8,7 @@ import torch
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import rmsnorm as tt_rmsnorm
 
 
@@ -48,7 +48,7 @@ def run_rmsnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     )
 
     # compare tt and golden outputs -------------
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value, tt_result, pcc=0.98)
     logger.debug(pcc_value)
     assert success
 

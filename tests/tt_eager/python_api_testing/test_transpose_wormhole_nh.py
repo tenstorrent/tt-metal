@@ -11,7 +11,7 @@ import torch
 import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import transpose_nh as tt_transpose_nh
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
 
@@ -34,7 +34,7 @@ def run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_equal(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 

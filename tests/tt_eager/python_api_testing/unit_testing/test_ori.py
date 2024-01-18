@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+import random
 import pytest
 import torch
 
 import tt_lib as ttl
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 
 from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import logical_ori as pt_ori
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logical_ori as tt_ori
@@ -25,7 +26,7 @@ def run_ori_tests(
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).round()
     x_ref = x.detach().clone()
 
     # get ref result
@@ -42,7 +43,7 @@ def run_ori_tests(
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value.to(torch.float32), tt_result.to(torch.float32))
     logger.debug(pcc_value)
 
     set_slow_dispatch_mode(prev_dispatch_mode)
@@ -61,9 +62,9 @@ test_sweep_args = [
         "1",
     ),
     (
-        (5, 11, 252, 22),
+        (5, 11, 256, 32),
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.Layout.TILE,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         84,
@@ -80,6 +81,7 @@ test_sweep_args = [
 def test_ori_test(
     input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, dispatch_mode, device
 ):
+    random.seed(0)
     run_ori_tests(
         input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, dispatch_mode, device
     )

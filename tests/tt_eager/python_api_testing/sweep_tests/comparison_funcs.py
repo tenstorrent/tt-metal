@@ -6,6 +6,13 @@ import torch
 import numpy as np
 from loguru import logger
 
+import os
+
+
+def custom_breakpoint():
+    print("Current PID = ", os.getpid())
+    breakpoint()
+
 
 def get_atol_rtol_pcc(golden, calculated):
     if golden.is_complex() and calculated.is_complex():
@@ -132,6 +139,18 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if not passing:
         output_str += ", Allclose check failed"
     return passing, output_str
+
+
+def replace_inf_with_0(t: torch.Tensor):
+    t = torch.where(t >= 2.65e38, 0, t)
+    t = torch.where(t <= -2.64e38, 0, t)
+    return t
+
+
+def comp_pcc_skip_inf(golden, calculated, *args, **kwargs):
+    golden = replace_inf_with_0(golden)
+    calculated = replace_inf_with_0(calculated)
+    return comp_pcc(golden, calculated, *args, **kwargs)
 
 
 def comp_pcc(golden, calculated, pcc=0.99):

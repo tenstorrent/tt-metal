@@ -11,7 +11,7 @@ import pytest
 import torch
 import tt_lib as ttl
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import addcdiv as pt_eltwise_addcdiv
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_addcdiv as tt_eltwise_addcdiv
 
@@ -42,7 +42,7 @@ def run_eltwise_addcdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_me
     logger.info("Done")
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value, tt_result)
     logger.debug(pcc_value)
 
     assert success

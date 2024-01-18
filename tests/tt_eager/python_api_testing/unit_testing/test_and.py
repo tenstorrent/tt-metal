@@ -13,11 +13,11 @@ import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logical_or as tt_or
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logical_and as tt_and
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_complex
 
 
-def run_or_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def run_and_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     torch.manual_seed(data_seed)
     prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
@@ -26,16 +26,16 @@ def run_or_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data
     if in_mem_config[1] == "SYSTEM_MEMORY":
         in_mem_config[1] = None
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).round()
+    y = torch.Tensor(size=input_shape).uniform_(-100, 100).round()
 
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()
 
     # compute ref value
-    ref_value = pytorch_ops.logical_or(x=x_ref, y=y_ref)
+    ref_value = pytorch_ops.logical_and(x=x_ref, y=y_ref)
 
-    tt_result = tt_or(
+    tt_result = tt_and(
         x=x,
         y=y,
         device=device,
@@ -98,6 +98,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
     (test_sweep_args),
 )
-def test_or(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def test_and(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     random.seed(0)
-    run_or_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)
+    run_and_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)

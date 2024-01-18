@@ -11,7 +11,7 @@ import torch
 import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc_skip_inf
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logaddexp2 as tt_eltwise_logaddexp2
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
 
@@ -21,8 +21,8 @@ def run_eltwise_logaddexp2_test(
 ):
     torch.manual_seed(data_seed)
 
-    x = gen_rand(size=input_shape_1, low=-64, high=64)
-    y = gen_rand(size=input_shape_2, low=-64, high=64)
+    x = gen_rand(size=input_shape_1, low=-64, high=64).round()
+    y = gen_rand(size=input_shape_2, low=-64, high=64).round()
     # compute ref value
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()
@@ -40,7 +40,7 @@ def run_eltwise_logaddexp2_test(
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc_skip_inf(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 

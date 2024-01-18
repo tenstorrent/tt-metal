@@ -758,11 +758,9 @@ Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input
 
 //addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
 Tensor _addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config) {
-    Tensor t_value = mk_tiled_scalar(value);
-	Tensor t_div = mul(input_b, recip(input_c, output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_factor = bcast(t_div, t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+    Tensor t_div = mul(input_b, recip(input_c, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_factor = mul_unary(t_div, value, output_mem_config);
     t_div.deallocate();
-    t_value.deallocate();
     Tensor result = add(input_a, t_factor, std::nullopt, output_mem_config);
     return result;
 }
