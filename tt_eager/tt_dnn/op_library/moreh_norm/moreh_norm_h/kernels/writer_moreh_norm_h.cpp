@@ -25,19 +25,19 @@ void kernel_main() {
     const InterleavedAddrGenFast<false> l1_output_addrg = {
         .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    const auto start_tile_idx = tile_offset;
     const auto output_l1_read_addr = get_read_ptr(cb_id_output);
 
+    auto output_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_cols_per_core; ++idx) {
-        const auto tile_idx = start_tile_idx + idx;
         cb_wait_front(cb_id_output, 1);
         if (output_is_dram) {
-            noc_async_write_tile(tile_idx, dram_output_addrg, output_l1_read_addr);
+            noc_async_write_tile(output_tile_idx, dram_output_addrg, output_l1_read_addr);
         } else {
-            noc_async_write_tile(tile_idx, l1_output_addrg, output_l1_read_addr);
+            noc_async_write_tile(output_tile_idx, l1_output_addrg, output_l1_read_addr);
         }
         noc_async_write_barrier();
         cb_pop_front(cb_id_output, 1);
+        output_tile_idx++;
     }
 
 }  // void kernel_main()

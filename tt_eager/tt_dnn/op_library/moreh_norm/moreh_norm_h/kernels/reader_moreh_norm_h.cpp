@@ -51,32 +51,25 @@ void kernel_main() {
 
     const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
 
-    auto col_start_tile_idx = (tile_offset / Wt) * (Ht * Wt) + (tile_offset % Wt);
-
-    const auto current_col_in_batch = tile_offset % Wt;
-    auto col_idx = current_col_in_batch;
-
-    // Read a NHW tensor in NWH order
+    auto start_output_tile_idx = tile_offset;
     for (uint32_t j = 0; j < num_cols_per_core; ++j) {
-        auto tile_idx = col_start_tile_idx;
-        for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
+        const auto w_idx = start_output_tile_idx % Wt;
+        const auto nc_idx = start_output_tile_idx / Wt;
+
+        auto input_tile_idx = nc_idx * Ht * Wt + w_idx;
+        for (uint32_t h = 0; h < Ht; ++h) {
             cb_reserve_back(cb_id_input, 1);
             if (input_is_dram) {
-                noc_async_read_tile(tile_idx, dram_input_addrg, input_l1_write_ptr);
+                noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr);
             } else {
-                noc_async_read_tile(tile_idx, l1_input_addrg, input_l1_write_ptr);
+                noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr);
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_input, 1);
-            tile_idx += Wt;  // stride in H
+            input_tile_idx += Wt;
         }
-        col_idx++;
-        if (col_idx == Wt) {
-            col_start_tile_idx = tile_idx - Wt + 1;
-            col_idx = 0;
-        } else {
-            col_start_tile_idx++;
-        }
+
+        start_output_tile_idx++;
     }
 
 }  // void kernel_main()
