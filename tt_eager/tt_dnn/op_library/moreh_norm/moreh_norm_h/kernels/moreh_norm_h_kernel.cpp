@@ -60,7 +60,7 @@ void MAIN {
         cb_wait_front(cb_mask_h, onetile);  // comes from the reader
     }
 
-    for (uint32_t j = 0; j < num_cols_per_core; ++j) {
+    for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
             // |x|
             ACQ();
