@@ -304,6 +304,9 @@ Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem
 
 Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor argmax(const Tensor& input_a, int32_t dim = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor argmin(const Tensor& input_a, int32_t dim = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 

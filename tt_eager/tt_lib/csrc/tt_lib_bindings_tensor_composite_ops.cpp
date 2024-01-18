@@ -215,6 +215,22 @@ namespace tt::tt_metal::detail{
             R"doc("Scalar", "float", "")doc"
         );
 
+        detail::bind_unary_op_with_param(
+            m_tensor, "argmax", &argmax,
+            py::arg("dim"),
+            R"doc(Returns the indices of the maximum value of all elements in the ``input`` tensor.)
+            Currently supported dimension are H, W, and HW. By default it returns argmax across HW. Suported dimension [1, 1, H, W])doc",
+            R"doc("dim", "int", "")doc"
+        );
+
+        detail::bind_unary_op_with_param(
+            m_tensor, "argmin", &argmin,
+            py::arg("dim"),
+            R"doc(Returns the indices of the minimum value of all elements in the ``input`` tensor.)
+            Currently supported dimension are H, W, and HW. By default it returns argmin across HW. Suported dimension [1, 1, H, W])doc",
+            R"doc("dim", "int", "")doc"
+        );
+
         m_tensor.def("hardtanh", &hardtanh,
             py::arg("input").noconvert(), py::arg("low") = -1.0f, py::arg("high") = +1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Applies the hard tanh function to the elements of the input tensor ``input``.
