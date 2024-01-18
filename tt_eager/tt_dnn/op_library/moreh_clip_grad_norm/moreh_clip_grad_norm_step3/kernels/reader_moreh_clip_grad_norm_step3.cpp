@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-
-#include "dataflow_api.h"
+#include "tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/kernel_utils/common.hpp"
 
 void kernel_main() {
     int i{0};

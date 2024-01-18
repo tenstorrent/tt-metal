@@ -2,14 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/kernel_utils/common_ckernels.hpp"
 
 namespace NAMESPACE {
 void MAIN {

@@ -2,16 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/kernel_utils/common_ckernels.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -79,80 +70,8 @@ void MAIN {
         }
     }
 
-    // Compute cb_xpow
     // x^p
-    ACQ();
-    cb_wait_front(cb_x, onetile);
-    cb_reserve_back(cb_xpow, onetile);
+    power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
 
-    copy_tile_init();
-    copy_tile(cb_x, 0, dst0);
-
-    power_tile_init();
-    power_tile(dst0, p);
-
-    if (p_is_negative) {
-        recip_tile_init();
-        recip_tile(dst0);
-    }
-
-    pack_tile(dst0, cb_xpow);
-
-    cb_push_back(cb_xpow, onetile);
-    REL();
-    // We don't pop cb_x here.
-
-    // Compute cb_logx
-    // log(x)
-    ACQ();
-    cb_reserve_back(cb_logx, onetile);
-
-    copy_tile_init();
-    copy_tile(cb_x, 0, dst0);
-
-    log_tile_init();
-    log_tile(dst0);
-
-    pack_tile(dst0, cb_logx);
-
-    cb_pop_front(cb_x, onetile);
-    cb_push_back(cb_logx, onetile);
-    REL();
-
-    // Compute cb_exp_lxmd
-    // exp(log(x) * decimal)
-    ACQ();
-    cb_wait_front(cb_logx, onetile);
-    cb_reserve_back(cb_exp_lxmd, onetile);
-
-    mul_tiles_init();
-    mul_tiles(cb_logx, cb_decimal, 0, 0, dst0);
-
-    exp_tile_init();
-    exp_tile(dst0);
-
-    pack_tile(dst0, cb_exp_lxmd);
-
-    cb_pop_front(cb_logx, onetile);
-    cb_pop_front(cb_decimal, onetile);
-    cb_push_back(cb_exp_lxmd, onetile);
-    REL();
-
-    // Compute cb_y
-    // x^p * exp(log(x) * decimal)
-    ACQ();
-    cb_wait_front(cb_xpow, onetile);
-    cb_wait_front(cb_exp_lxmd, onetile);
-    cb_reserve_back(cb_y, onetile);
-
-    mul_tiles_init();
-    mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
-
-    pack_tile(dst0, cb_y);
-
-    cb_pop_front(cb_xpow, onetile);
-    cb_pop_front(cb_exp_lxmd, onetile);
-    cb_push_back(cb_y, onetile);
-    REL();
 }  // void MAIN
 }  // namespace NAMESPACE
