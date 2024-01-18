@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_op import TTPyOp
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
@@ -12,10 +13,11 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
     SlidingWindowOpParamsWithParallelConfig,
+    SlidingWindowOpParams,
     get_hash_from_sliding_window_op_params,
 )
 
-# from tt_lib.utils import _nearest_32, _nearest_y
+from typing import Union
 
 import tt_lib as ttl
 import torch
@@ -24,25 +26,45 @@ import torch
 class TTPyMaxPool(TTPyOp):
     def __init__(
         self,
-        sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig,
+        sliding_window_op_params: Union[SlidingWindowOpParams, SlidingWindowOpParamsWithParallelConfig],
         device,
         grid_size,
         reader_patterns_cache,
+        pad_val=0xF7FF,
         output_mem_config=None,
     ):
+        if len(reader_patterns_cache) == 0:
+            reader_patterns_cache["max_pool"] = {}
+            reader_patterns_cache["halo"] = {}
+        else:
+            assert len(reader_patterns_cache) == 2
+            assert "max_pool" in reader_patterns_cache and "halo" in reader_patterns_cache
+        for key in reader_patterns_cache:
+            assert (
+                key == "max_pool" or key == "halo"
+            ), f"reader_patterns_cache should have 1 of the following keys - 'max_pool' or 'halo'. Found key - {key}"
+
         self.sliding_window_op_params = sliding_window_op_params
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
         self.set_op_configs(
-            device, sliding_window_op_params_hash, sliding_window_op_params, grid_size, reader_patterns_cache
+            device,
+            sliding_window_op_params_hash,
+            sliding_window_op_params,
+            grid_size,
+            reader_patterns_cache["max_pool"],
         )
-        assert sliding_window_op_params_hash in reader_patterns_cache
-        reader_indices = reader_patterns_cache[sliding_window_op_params_hash]
+        assert sliding_window_op_params_hash in reader_patterns_cache["max_pool"]
+        reader_indices = reader_patterns_cache["max_pool"][sliding_window_op_params_hash]
 
         self.set_op_weights_biases(
             sliding_window_op_params,
             output_mem_config,
             reader_indices,
+        )
+
+        self.untilize_with_halo = TTPyUntilizeWithHalo(
+            device, self.sliding_window_op_params, reader_patterns_cache["halo"], pad_val=pad_val
         )
 
     # override abstract methods from base class TTPyOp
@@ -150,8 +172,11 @@ class TTPyMaxPool(TTPyOp):
         in_w = op_params.input_w
 
         def max_pool_(activation):
+            act_mem_config = activation.memory_config()
+            haloed_act = self.untilize_with_halo(activation)
+            activation.deallocate()
             output = ttl.tensor.max_pool2d_v2(
-                activation,
+                haloed_act,
                 reader_indices,
                 in_n,
                 in_h,
@@ -162,7 +187,7 @@ class TTPyMaxPool(TTPyOp):
                 stride_w,
                 pad_h,
                 pad_w,
-                output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
+                output_mem_config=act_mem_config if output_mem_config is None else output_mem_config,
             )
             return output
 
