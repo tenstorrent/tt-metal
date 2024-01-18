@@ -10,6 +10,17 @@
 namespace ckernel
 {
 
+struct dbg_cfgreg
+{
+    constexpr static uint32_t THREAD_0_CFG = 0; // Thread 0 config
+    constexpr static uint32_t THREAD_1_CFG = 1; // Thread 1 config
+    constexpr static uint32_t THREAD_2_CFG = 2; // Thread 2 config
+    constexpr static uint32_t HW_CFG_0 = 3; // Hardware config state 0
+    constexpr static uint32_t HW_CFG_1 = 4; // Hardware config state 1
+    constexpr static uint32_t HW_CFG_SIZE = 187;
+    constexpr static uint32_t THREAD_CFG_SIZE = THD_STATE_SIZE;
+};
+
 struct dbg_array_id
 {
     constexpr static uint32_t SRCA = 0; // SrcA last used bank 
@@ -243,6 +254,34 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
         // Move to the current bank
         TTI_CLEARDVALID(1,0);
     }
+
+}
+
+inline std::uint32_t dbg_read_cfgreg(const uint32_t cfgreg_id, const uint32_t addr) {
+
+    uint32_t hw_base_addr = 0;
+
+    switch (cfgreg_id) {
+        case dbg_cfgreg::HW_CFG_1:
+            hw_base_addr = dbg_cfgreg::HW_CFG_SIZE;
+            break;
+        case dbg_cfgreg::THREAD_0_CFG:
+        case dbg_cfgreg::THREAD_1_CFG:
+        case dbg_cfgreg::THREAD_2_CFG:
+            hw_base_addr = 2*dbg_cfgreg::HW_CFG_SIZE + cfgreg_id*dbg_cfgreg::THREAD_CFG_SIZE;
+            break;
+        default:
+            break;
+
+    }
+
+    uint32_t hw_addr = hw_base_addr + (addr&0x7ff); // hw address is 4-byte aligned
+    reg_write(RISCV_DEBUG_REG_CFGREG_RD_CNTL, hw_addr);
+
+    wait(1);
+
+    return reg_read(RISCV_DEBUG_REG_CFGREG_RDDATA);
+
 
 }
   
