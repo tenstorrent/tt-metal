@@ -12,13 +12,24 @@ import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import transpose_hc as tt_transpose_hc
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import (
+    untilize_with_unpadding as tt_untilize_with_unpadding,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
-def run_transpose_hc_tests(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
+def run_untilize_with_unpadding_tests(
+    input_shape,
+    dtype,
+    dlayout,
+    in_mem_config,
+    out_mem_config,
+    data_seed,
+    output_tensor_start,
+    output_tensor_end,
+    dispatch_mode,
+    device,
 ):
     torch.manual_seed(data_seed)
     prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
@@ -29,10 +40,14 @@ def run_transpose_hc_tests(
     x = gen_rand(size=input_shape, low=-100, high=100).to(torch.bfloat16)
     # compute ref value
     x_ref = x.detach().clone()
-    ref_value = pytorch_ops.transpose(x_ref, dim0=1, dim1=-2)
+    ref_value = pytorch_ops.untilize_with_unpadding(
+        x_ref, output_tensor_start=output_tensor_start, output_tensor_end=output_tensor_end
+    )
 
-    tt_result = tt_transpose_hc(
+    tt_result = tt_untilize_with_unpadding(
         x=x,
+        output_tensor_start=output_tensor_start,
+        output_tensor_end=output_tensor_end,
         device=device,
         dtype=[dtype],
         layout=[dlayout],
@@ -51,39 +66,45 @@ def run_transpose_hc_tests(
 
 test_sweep_args = [
     (
-        (10, 14, 474, 44),
+        (11, 17, 64, 448),
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        3515317,
-        "1",
-    ),
-    (
-        (10, 14, 474, 44),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.Layout.TILE,
         "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        13946604,
-        "1",
-    ),
-    (
-        (2, 4, 214, 398),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        5239758,
+        5263366,
+        [0, 0, 0, 0],
+        [10, 9, 4, 1],
         "1",
     ),
 ]
 
 
-def test_transpose_hc_test(device):
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, output_tensor_start, output_tensor_end, dispatch_mode",
+    (test_sweep_args),
+)
+def test_untilize_with_unpadding_test(
+    input_shape,
+    dtype,
+    dlayout,
+    in_mem_config,
+    out_mem_config,
+    data_seed,
+    output_tensor_start,
+    output_tensor_end,
+    dispatch_mode,
+    device,
+):
     random.seed(0)
-    for i in range(10):
-        for input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode in test_sweep_args:
-            run_transpose_hc_tests(
-                input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-            )
+    run_untilize_with_unpadding_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        in_mem_config,
+        out_mem_config,
+        data_seed,
+        output_tensor_start,
+        output_tensor_end,
+        dispatch_mode,
+        device,
+    )

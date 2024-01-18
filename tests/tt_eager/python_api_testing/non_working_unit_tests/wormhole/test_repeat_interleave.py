@@ -48,9 +48,62 @@ def run_repeat_interleave_tests(
     assert success
 
 
-# 	3	2	6978585	(('TT_METAL_SLOW_DISPATCH_MODE', '1'),)	completed	Max ATOL Delta: 198.0, Max RTOL Delta: inf, PCC: 0.9859791322181275, PCC check failed	fail	NA	NA	NA	Details
-
 test_sweep_args = [
+    (
+        (4, 7, 176, 108),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        16663962,
+        3,
+        2,
+        "1",
+    ),
+    (
+        (3, 12, 66, 22),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        11828038,
+        3,
+        0,
+        "1",
+    ),
+    (
+        (1, 6, 178, 8),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        11672839,
+        3,
+        2,
+        "1",
+    ),
+    (
+        (2, 1, 214, 250),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        7734079,
+        2,
+        0,
+        "1",
+    ),
+    (
+        (2, 1, 214, 250),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        12274294,
+        1,
+        2,
+        "1",
+    ),
     (
         (1, 10, 230, 38),
         ttl.tensor.DataType.BFLOAT16,
@@ -65,14 +118,29 @@ test_sweep_args = [
 ]
 
 
-@pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, repeat, dim, dispatch_mode",
-    (test_sweep_args),
-)
-def test_repeat_interleave_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, repeat, dim, dispatch_mode, device
-):
+def test_repeat_interleave_test(device):
     random.seed(0)
-    run_repeat_interleave_tests(
-        input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, repeat, dim, dispatch_mode, device
-    )
+    for i in range(10):
+        for (
+            input_shape,
+            dtype,
+            dlayout,
+            in_mem_config,
+            out_mem_config,
+            data_seed,
+            repeat,
+            dim,
+            dispatch_mode,
+        ) in test_sweep_args:
+            run_repeat_interleave_tests(
+                input_shape,
+                dtype,
+                dlayout,
+                in_mem_config,
+                out_mem_config,
+                data_seed,
+                repeat,
+                dim,
+                dispatch_mode,
+                device,
+            )
