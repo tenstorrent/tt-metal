@@ -1007,6 +1007,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.complex_imag,
         "pytorch_op": pytorch_ops.complex_imag,
     },
+    "unary-div-bw": {
+        "tt_lib_op": tt_lib_ops.unary_div_bw,
+        "pytorch_op": pytorch_ops.unary_div_bw,
+    },
+    "div-bw": {
+        "tt_lib_op": tt_lib_ops.div_bw,
+        "pytorch_op": pytorch_ops.div_bw,
+    },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
