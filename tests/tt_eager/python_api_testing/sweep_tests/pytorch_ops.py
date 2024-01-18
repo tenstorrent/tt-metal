@@ -1382,6 +1382,34 @@ def complex_imag(x, *args, **kwargs):
     return torch.imag(x)
 
 
+def unary_div_bw(x, y, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.div(in_data, torch.tensor(scalar))
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def div_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+    pyt_y = torch.div(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
 def ttnn_layernorm_weights_bias(x, y, z, *args, **kwargs):
     w = x.shape[1]
     torch_output_tensor = torch.nn.functional.layer_norm(x, normalized_shape=[w], weight=y, bias=z)
