@@ -49,9 +49,9 @@ def test_performance_of_bloom_for_question_answering(
     inputs = tokenizer.encode_plus(question, context, return_tensors="pt")
 
     if functional_bloom == ttnn_functional_bloom:
-        tt_model_name = "ttnn_functional_bloom_for_question_answering"
+        tt_model_name = f"ttnn_{model_name}"
     elif functional_bloom == ttnn_optimized_functional_bloom:
-        tt_model_name = "ttnn_optimized_functional_bloom_for_question_answering"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_bloom: {functional_bloom}")
 
