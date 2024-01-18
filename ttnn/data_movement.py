@@ -50,7 +50,7 @@ def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: 
         output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
     )
 
-    output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
+    # output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
     return output_tensor
 
 
