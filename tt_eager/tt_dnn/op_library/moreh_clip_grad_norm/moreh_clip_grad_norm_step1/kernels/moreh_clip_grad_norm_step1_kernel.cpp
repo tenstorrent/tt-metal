@@ -2,20 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
+#include "tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/kernel_utils/common_ckernels.hpp"
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
-
-inline bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
+ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
 
 namespace NAMESPACE {
 void MAIN {
@@ -101,80 +90,8 @@ void MAIN {
         cb_push_back(cb_xabs, onetile);
         REL();
 
-        // Compute cb_logx
-        // log(|x|)
-        ACQ();
-        cb_wait_front(cb_xabs, onetile);
-        cb_reserve_back(cb_logx, onetile);
-
-        copy_tile_init();
-        copy_tile(cb_xabs, 0, dst0);
-
-        log_tile_init();
-        log_tile(dst0);
-
-        pack_tile(dst0, cb_logx);
-
-        cb_push_back(cb_logx, onetile);
-        REL();
-        // We don't pop cb_xabs here.
-
-        // Compute cb_exp_lxmd
-        // exp(log(|x|) * decimal)
-        ACQ();
-        cb_wait_front(cb_logx, onetile);
-        cb_reserve_back(cb_exp_lxmd, onetile);
-
-        mul_tiles_init();
-        mul_tiles(cb_logx, cb_decimal, 0, 0, dst0);
-
-        exp_tile_init();
-        exp_tile(dst0);
-
-        pack_tile(dst0, cb_exp_lxmd);
-
-        cb_pop_front(cb_logx, onetile);
-        cb_push_back(cb_exp_lxmd, onetile);
-        REL();
-
-        // Compute cb_xpow
-        // |x|^p
-        ACQ();
-        cb_reserve_back(cb_xpow, onetile);
-
-        copy_tile_init();
-        copy_tile(cb_xabs, 0, dst0);
-
-        power_tile_init();
-        power_tile(dst0, p);
-
-        if (p_is_negative) {
-            recip_tile_init();
-            recip_tile(dst0);
-        }
-
-        pack_tile(dst0, cb_xpow);
-
-        cb_pop_front(cb_xabs, onetile);
-        cb_push_back(cb_xpow, onetile);
-        REL();
-
-        // Compute cb_correct_xpow
-        // |x|^p * exp(log(|x|) * decimal)
-        ACQ();
-        cb_wait_front(cb_xpow, onetile);
-        cb_wait_front(cb_exp_lxmd, onetile);
-        cb_reserve_back(cb_correct_xpow, onetile);
-
-        mul_tiles_init();
-        mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
-
-        pack_tile(dst0, cb_correct_xpow);
-
-        cb_pop_front(cb_xpow, onetile);
-        cb_pop_front(cb_exp_lxmd, onetile);
-        cb_push_back(cb_correct_xpow, onetile);
-        REL();
+        // |x + decimal|^p
+        power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
         if (tile_idx == 0) {
             ACQ();
@@ -206,11 +123,6 @@ void MAIN {
             REL();
         }
     }
-    cb_pop_front(cb_decimal, onetile);
-    cb_pop_front(cb_one, onetile);
-    if (do_mask_h || do_mask_w) {
-        cb_pop_front(cb_mask_h_w, 2);
-    }
 
     // Compute cb_y
     ACQ();
@@ -226,5 +138,12 @@ void MAIN {
     cb_pop_front(cb_xpowadd, onetile);
     cb_push_back(cb_y, onetile);
     REL();
+
+    cb_pop_front(cb_decimal, onetile);
+    cb_pop_front(cb_one, onetile);
+    if (do_mask_h || do_mask_w) {
+        cb_pop_front(cb_mask_h_w, 2);
+    }
+
 }  // void MAIN
 }  // namespace NAMESPACE
