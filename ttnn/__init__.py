@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ttnn.tensor import (
+    TILE_SIZE,
     Device,
     DataType,
     uint32,
