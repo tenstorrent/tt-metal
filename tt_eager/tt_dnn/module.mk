@@ -67,6 +67,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op_v2.cpp \
 	tt_eager/tt_dnn/op_library/softmax/softmax_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
+	tt_eager/tt_dnn/op_library/moreh_arange/moreh_arange_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_small/softmax_w_small.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_small/softmax_h_small.cpp \
