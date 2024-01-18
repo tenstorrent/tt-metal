@@ -271,7 +271,7 @@ make tests
 1. Initialize the Python virtual environment [see documentation](#Environment-setup)
 2. Run the specific test point with pytest tool, e.g.
    ```
-   $ pytest tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
+   $ pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
    ```
 3. If you have any issues with import paths for python libraries include the following environment variable,
    ```
