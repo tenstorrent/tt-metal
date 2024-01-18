@@ -189,6 +189,85 @@ static Tensor index_trilu(const Shape& shape, const int32_t diag, DataType data_
     return output;
 }
 
+
+template<typename T>
+static Tensor index_width(const Shape& shape, DataType data_type,
+			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+
+    auto index = 0;
+    auto value = 0;
+    for(uint32_t w = 0; w < shape[0]; w++) {
+        for(int32_t z = 0; z < shape[1]; z++) {
+            for(int32_t y = 0; y < shape[2]; y++) {
+                for(int32_t x = 0; x < shape[3]; x++) {
+                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+                        value = value + 1;
+                } // dim X
+                value = 0;
+	        } // dim Y
+	    } // dim Z
+    } // dim W
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+
+template<typename T>
+static Tensor index_height(const Shape& shape, DataType data_type,
+			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+
+    auto index = 0;
+    auto value = 0;
+    for(uint32_t w = 0; w < shape[0]; w++) {
+        for(int32_t z = 0; z < shape[1]; z++) {
+            for(int32_t y = 0; y < shape[2]; y++) {
+                for(int32_t x = 0; x < shape[3]; x++) {
+                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+                } // dim X
+                value = value + 1;
+	        } // dim Y
+            value = 0;
+	    } // dim Z
+    } // dim W
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+template<typename T>
+static Tensor index_hw(const Shape& shape, DataType data_type,
+			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+
+    auto index = 0;
+    auto value = 0;
+    for(uint32_t w = 0; w < shape[0]; w++) {
+        for(int32_t z = 0; z < shape[1]; z++) {
+            for(int32_t y = 0; y < shape[2]; y++) {
+                for(int32_t x = 0; x < shape[3]; x++) {
+                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+                        value = value + 1;
+                } // dim X
+	        } // dim Y
+	    } // dim Z
+    } // dim W
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
 template<typename T>
 static Tensor manual_insertion(const Tensor& input_tensor, const Shape& shape, DataType data_type,
 			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
