@@ -22,7 +22,7 @@
 namespace tt::tt_metal {
 
 namespace detail{
-    inline HWCommandQueue &GetHWCommandQueue(Device *device)
+    inline HWCommandQueue &GetHWCommandQueue(Device *device, uint32_t cmd_queue_channel)
     {
         detail::DispatchStateCheck(true);
         // For now there is only one SW HWCommandQueue per device
@@ -33,7 +33,8 @@ namespace detail{
         static std::mutex cq_creation_mutex;
         {
             std::lock_guard<std::mutex> lock(cq_creation_mutex);
-            command_queues[device->id()] = std::make_unique<HWCommandQueue>(device, 0);
+            if ( command_queues[device->id()] == nullptr )
+                command_queues[device->id()] = std::make_unique<HWCommandQueue>(device, cmd_queue_channel);
         }
         return *(command_queues[id]);
     }
@@ -1368,37 +1369,41 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, 
     // version of this API, I assume the user mallocs themselves
     dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(uint32_t));
 
-    cq.submit( [device = cq.device(), &buffer, &dst, blocking ]{
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device);
+    std::future<void> f;
+    cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, &dst, blocking ]{
+        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_read_buffer(buffer, dst.data(), blocking);
-    } );
+    }, f );
+    f.get();
+
 }
 
 void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking) {
     // TODO(agrebenisan): Move to deprecated
     detail::DispatchStateCheck(true);
-
-    cq.submit ( [device = cq.device(), &buffer, data_ptr = src.data(), blocking ] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device);
+    cq.submit ( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, data_ptr = src.data(), blocking ] {
+        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_write_buffer(buffer, data_ptr, blocking);
-    } );
+    });
 }
 
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blocking) {
     detail::DispatchStateCheck(true);
-
-    cq.submit( [device = cq.device(), &buffer, dst, blocking] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device);
+    std::future<void> f;
+    cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, dst, blocking] {
+        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_read_buffer(buffer, dst, blocking);
-    } );
+    }, f );
+    f.get();
+
 }
 
 
 void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool blocking) {
     detail::DispatchStateCheck(true);
 
-    cq.submit( [device = cq.device(), &buffer, src, blocking] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device);
+    cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, src, blocking] {
+        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_write_buffer(buffer, src, blocking);
     } );
 }
@@ -1413,27 +1418,27 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::opti
     program.allocate_circular_buffers();
     detail::ValidateCircularBufferRegion(program, cq.device());
 
-    cq.submit( [device = cq.device(), &program, blocking] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device);
+    cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &program, trace, blocking] {
+        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_program(program, trace, blocking);
     } );
 }
 
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
-    std::shared_future<void> f;
-    cq.submit( [device = cq.device()] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device);
+    std::future<void> f;
+    cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel()] {
+        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
         hcq.finish();
     }, f);
-    f.wait();
+    f.get();
 }
 
 namespace detail
 {
     void ClearProgramCache(CommandQueue& cq) {
         detail::DispatchStateCheck(true);
-        HWCommandQueue & hcq = detail::GetHWCommandQueue( cq.device() );
+        HWCommandQueue & hcq = detail::GetHWCommandQueue( cq.device(), cq.command_queue_channel() );
         hcq.program_to_buffer(cq.device()->id()).clear();
         hcq.program_to_dev_map(cq.device()->id()).clear();
     }
