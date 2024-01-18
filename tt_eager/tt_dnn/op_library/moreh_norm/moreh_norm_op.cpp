@@ -68,13 +68,18 @@ std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &)
 
 std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
+Tensor moreh_norm(const Tensor &input, float p, std::variant<int64_t, std::vector<int64_t>> dims) {
+    if (std::holds_alternative<int64_t>(dims)) {
+        return moreh_norm_impl(input, p, std::get<int64_t>(dims));
+    }
+    return moreh_norm_impl(input, p, std::get<std::vector<int64_t>>(dims).at(0));
+}
+
 Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim) {
     const auto &output = create_output_tensor(input, dim);
     operation::run(MorehNorm{.p = p, .dim = dim}, {input, output});
     return std::move(output);
 }
-
-Tensor moreh_norm(const Tensor &input, float p, int64_t dim) { return moreh_norm_impl(input, p, dim); }
 
 operation::ProgramWithCallbacks MorehNorm::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -85,9 +90,9 @@ operation::ProgramWithCallbacks MorehNorm::create_program(
     const auto input_rank = static_cast<decltype(dim)>(input.shape().rank());
 
     if (dim == input_rank - 1) {
-        return moreh_norm_w_impl(input, this->p, dim, output);
+        return moreh_norm_w_impl(input, this->p, output);
     } else if (dim == input_rank - 2) {
-        return moreh_norm_h_impl(input, this->p, dim, output);
+        return moreh_norm_h_impl(input, this->p, output);
     } else {
         return moreh_norm_other_impl(input, this->p, dim, output);
     }

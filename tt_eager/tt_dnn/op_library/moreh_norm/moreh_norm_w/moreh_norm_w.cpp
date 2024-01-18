@@ -23,7 +23,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
+operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, const Tensor &output) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
