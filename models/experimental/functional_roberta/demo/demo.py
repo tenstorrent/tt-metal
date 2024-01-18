@@ -65,7 +65,7 @@ def run_roberta_question_and_answering_inference(
     if functional_bert == ttnn_functional_bert:
         tt_model_name = f"ttnn_{model_name}"
     elif functional_bert == ttnn_optimized_functional_bert:
-        tt_model_name = f"ttnn_optimized_{model_name}"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
@@ -180,7 +180,7 @@ def run_roberta_question_and_answering_inference_squad_v2(
     if functional_bert == ttnn_functional_bert:
         tt_model_name = f"ttnn_{model_name}"
     elif functional_bert == ttnn_optimized_functional_bert:
-        tt_model_name = f"ttnn_optimized_{model_name}"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 

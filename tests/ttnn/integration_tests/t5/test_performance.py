@@ -54,7 +54,7 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
     if functional_t5 == ttnn_functional_t5:
         tt_model_name = f"ttnn_{model_name}"
     elif functional_t5 == ttnn_optimized_functional_t5:
-        tt_model_name = f"ttnn_optimized_{model_name}"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_t5: {functional_t5}")
 

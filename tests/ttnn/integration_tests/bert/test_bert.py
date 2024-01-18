@@ -53,7 +53,7 @@ def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, 
     if functional_bert == ttnn_functional_bert:
         tt_model_name = f"ttnn_{model_name}"
     elif functional_bert == ttnn_optimized_functional_bert:
-        tt_model_name = f"ttnn_optimized_{model_name}"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 

@@ -403,7 +403,7 @@ def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_
     torch_output = model(torch_input_ids, decoder_input_ids=torch_decoder_input_ids).logits
 
     parameters = preprocess_model_parameters(
-        f"ttnn_optimized_{model_name}",
+        f"ttnn_{model_name}_optimized",
         initialize_model=lambda: model,
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,
