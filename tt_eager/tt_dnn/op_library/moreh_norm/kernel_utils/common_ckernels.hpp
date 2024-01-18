@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
