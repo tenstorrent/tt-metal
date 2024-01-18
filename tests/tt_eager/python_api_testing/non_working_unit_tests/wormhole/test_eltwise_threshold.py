@@ -23,6 +23,9 @@ def run_eltwise_threshold_tests(
     torch.manual_seed(data_seed)
     prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
+    if in_mem_config == "SYSTEM_MEMORY":
+        in_mem_config = None
+
     x = gen_rand(size=input_shape, low=-100, high=100).to(torch.bfloat16)
     # compute ref value
     x_ref = x.detach().clone()
@@ -49,8 +52,32 @@ def run_eltwise_threshold_tests(
 
 
 # 71.0	-16.375	4133507	(('TT_METAL_SLOW_DISPATCH_MODE', '1'),)	completed	Max ATOL Delta: 99.0, Max RTOL Delta: inf, PCC: 0.9968988009373057, Equal check failed	fail	NA	NA	NA	Details
+# -56.25	-14.0625	6978585	(('TT_METAL_SLOW_DISPATCH_MODE', '1'),)	completed	Max ATOL Delta: 0.0, Max RTOL Delta: 0.0, PCC: 1.0	pass	NA	NA	NA	Details
+# 71.0	1.5625	108451	(('TT_METAL_SLOW_DISPATCH_MODE', '1'),)	completed	Max ATOL Delta: 0.0, Max RTOL Delta: 0.0, PCC: 1.0	pass	NA	NA	NA	Details
 
 test_sweep_args = [
+    (
+        (2, 20, 458, 74),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        6978585,
+        -56.25,
+        -14.0625,
+        "1",
+    ),
+    (
+        (2, 20, 458, 74),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        "SYSTEM_MEMORY",
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        108451,
+        71.0,
+        1.5625,
+        "1",
+    ),
     (
         (4, 22, 346, 376),
         ttl.tensor.DataType.BFLOAT16,
