@@ -45,9 +45,13 @@ if __name__ == "__main__":
 
     # input_shape = (1, 1, TILE_HEIGHT, 2 * TILE_WIDTH)
 
+    # input_shape = (1, 1, 2 * TILE_HEIGHT, TILE_WIDTH)
+
     # input_shape = (1, 1, TILE_HEIGHT + 15, 2 * TILE_WIDTH)
 
     input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH - 15)
+
+    input_shape = (1, 1, TILE_HEIGHT - 15, TILE_WIDTH)
 
     # input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH + 15)
 
@@ -58,19 +62,23 @@ if __name__ == "__main__":
     a = torch.randint(0, 5, input_shape, dtype=torch.float32)
     aa = to_npu(a.bfloat16(), device)
 
-    # p = 2.0
-    p = 2.5
+    print(a.shape)
+
+    dim = 2
+
+    p = 2.0
+    # p = 2.5
     # p = -2.0
     # p = -3.3
     # p = -1.5
     # print(a)
 
-    b = torch.norm(a, p=p, dim=3, keepdim=True)
-    # b = a.pow(p).sum(dim=3, keepdim=True).pow(1.0 / p)
-    # print(a.pow(p))
-    bb = ttl.operations.primary.moreh_norm(aa, p=p, dim=3)
+    b = torch.norm(a, p=p, dim=dim, keepdim=True)
+
+    bb = ttl.operations.primary.moreh_norm(aa, p=p, dim=dim)
 
     # print(to_cpu(bb, list(b.shape)))
+    # print()
     # print(b)
     print(b.shape)
 
