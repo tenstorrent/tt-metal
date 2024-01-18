@@ -3,4 +3,5 @@
 ttnn.Conv2D
 ###############
 
-.. autofunction:: ttnn.Conv2D
+.. autoclass:: ttnn.Conv2D
+   :members:

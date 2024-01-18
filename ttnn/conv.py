@@ -36,25 +36,8 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 
 
 class Conv2D:
-    (
-        r"""Applies a 2D convolution over an input signal composed of several input
-    planes.
-
-    In the simplest case, the output value of the layer with input size
-    :math:`(N, C_{\text{in}}, H, W)` and output :math:`(N, C_{\text{out}}, H_{\text{out}}, W_{\text{out}})`
-    can be precisely described as:
-
-    .. math::
-        \text{out}(N_i, C_{\text{out}_j}) = \text{bias}(C_{\text{out}_j}) +
-        \sum_{k = 0}^{C_{\text{in}} - 1} \text{weight}(C_{\text{out}_j}, k) \star \text{input}(N_i, k)
-
-
-    where :math:`\star` is the valid 2D `cross-correlation`_ operator,
-    :math:`N` is a batch size, :math:`C` denotes a number of channels,
-    :math:`H` is a height of input planes in pixels, and :math:`W` is
-    width in pixels.
     """
-        + r"""
+    Applies a 2D convolution over an input signal composed of several input planes.
 
     * :attr:`stride` controls the stride for the cross-correlation, a single
       number or a tuple.
@@ -166,7 +149,6 @@ class Conv2D:
         >>> input = torch.randn(20, 16, 50, 100)
         >>> output = m(input)
     """
-    )
 
     def __init__(
         self,
