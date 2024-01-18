@@ -288,28 +288,3 @@ def test_tutorial_matmul_with_tilized_input_in_l1_memory_and_user_specified_core
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
-
-
-@pytest.mark.skip(reason="#4617: matmul pcc at 0.93 when comparing to torch")
-@skip_for_wormhole_b0()
-def test_specific_tensor_combination(device):
-    current_dir = os.path.dirname(os.path.realpath(__file__))
-    tensor_file = os.path.join(current_dir, "tensor_a.pt")
-    torch_input_tensor_a = torch.load(tensor_file)
-    tensor_file = os.path.join(current_dir, "tensor_b.pt")
-    torch_input_tensor_b = torch.load(tensor_file)
-
-    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b)
-    input_tensor_a = ttnn.to_device(input_tensor_a, device)
-    input_tensor_b = ttnn.to_device(input_tensor_b, device)
-
-    output = ttnn.matmul(input_tensor_a, input_tensor_b)
-    output = ttnn.from_device(output)
-    output = ttnn.to_torch(output)
-
-    assert len(output.shape) == len(torch_output_tensor.shape)
-    assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
