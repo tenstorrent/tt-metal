@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple
+
 import torch
 
 import ttnn
@@ -25,8 +27,12 @@ parameters = {
 }
 
 
-def skip(**_):
-    return False
+def skip(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
+
+
+def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
 
 
 def run(
@@ -44,7 +50,7 @@ def run(
     core_grid,
     *,
     device,
-):
+) -> Tuple[bool, Optional[str]]:
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
     if batch_matrix_multiply:

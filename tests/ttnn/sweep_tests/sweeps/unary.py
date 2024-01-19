@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple
+
 import torch
 
 import ttnn
@@ -27,8 +29,12 @@ parameters = {
 }
 
 
-def skip(**_):
-    return False
+def skip(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
+
+
+def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
 
 
 def run(
@@ -42,7 +48,7 @@ def run(
     output_memory_config,
     *,
     device,
-):
+) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
     low = -0.1
