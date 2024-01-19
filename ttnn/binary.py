@@ -49,7 +49,6 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
     binary_function.__doc__ = doc
 
     setattr(THIS_MODULE, name, binary_function)
-    __all__.append(name)
 
 
 TTL_BINARY_FUNCTIONS = [
@@ -79,3 +78,5 @@ TTL_BINARY_FUNCTIONS = [
 
 for binary_function_name, ttl_binary_function, doc in TTL_BINARY_FUNCTIONS:
     register_ttl_binary_function(binary_function_name, ttl_binary_function, doc)
+
+__all__ = []
