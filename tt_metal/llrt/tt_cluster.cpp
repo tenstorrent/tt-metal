@@ -717,29 +717,41 @@ void Cluster::initialize_routing_info_for_ethernet_cores() {
     }
 }
 
-CoreCoord Cluster::get_and_configure_corresponding_eth_core_for_device(
-    chip_id_t chip_id, CoreCoord physical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
-    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
-    for (auto [eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
-        // copy of values, original cluster routing info is not updated
+tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
+    tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
+    const auto &local_chip_id = logical_dispatch_core.chip;
+    for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(local_chip_id)) {
         if ((routing_info.routing_mode == (uint32_t)mode) and
             (routing_info.connected_chip_id == (uint32_t)connected_chip_id)) {
-            routing_info.dispatch_core_xy =
-                ((physical_dispatch_core.x & 0xFFFF) << 16 | (physical_dispatch_core.y & 0xFFFF));
-            tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-
-            log_debug(
-                tt::LogDevice,
-                "Configuring internal routing mode {}: dispatch core {} <---> eth core {} ",
-                mode,
-                physical_dispatch_core.str(),
-                eth_phys_core.str());
-            write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
-            return eth_core;
+            return tt_cxy_pair(local_chip_id, eth_core);
         }
     }
     TT_ASSERT(false, "Cluster does not contain requested eth routing core");
     return {};
+}
+
+void Cluster::configure_eth_core_for_dispatch_core(
+    tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
+    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(logical_dispatch_core.chip);
+    const auto &physical_dispatch_core = soc_desc.get_physical_core_from_logical_core(
+        CoreCoord(logical_dispatch_core.x, logical_dispatch_core.y), CoreType::WORKER);
+    tt_cxy_pair eth_core = this->get_eth_core_for_dispatch_core(logical_dispatch_core, mode, connected_chip_id);
+    tt_cxy_pair eth_phys_core(
+        eth_core.chip, ethernet_core_from_logical_core(eth_core.chip, CoreCoord(eth_core.x, eth_core.y)));
+
+    routing_info_t routing_info =
+        this->device_eth_routing_info_.at(eth_core.chip).at(CoreCoord(eth_core.x, eth_core.y));
+    routing_info.dispatch_core_xy = ((physical_dispatch_core.x & 0xFFFF) << 16 | (physical_dispatch_core.y & 0xFFFF));
+
+    log_debug(
+        tt::LogDevice,
+        "Configuring chip {} internal routing {} for: dispatch core {} <---> eth core {} ",
+        eth_core.chip,
+        mode,
+        physical_dispatch_core.str(),
+        eth_phys_core.str());
+    write_core((void *)&routing_info, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
 }
 
 void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const {

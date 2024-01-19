@@ -117,12 +117,6 @@ class Device {
         return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
     }
 
-    CoreCoord get_and_configure_corresponding_eth_core(
-        CoreCoord physical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
-        return tt::Cluster::instance().get_and_configure_corresponding_eth_core_for_device(
-            this->id_, physical_dispatch_core, mode, connected_chip_id);
-    };
-
     bool is_mmio_capable() const {
         return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
     }

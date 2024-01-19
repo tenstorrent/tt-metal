@@ -125,12 +125,23 @@ class Cluster {
     // Configures routing mapping of ethernet cores
     void initialize_routing_info_for_ethernet_cores();
 
-    // Dispatch core is managed by device, so this is an api for device to write the routing info to each eth core used
-    // in FD tunneling Returns logical eth core that communicates with specified dispatch core
-    CoreCoord get_and_configure_corresponding_eth_core_for_device(
-        chip_id_t chip_id, CoreCoord physical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+    // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
+    // Returns logical eth core that communicates with specified dispatch core
+    tt_cxy_pair get_eth_core_for_dispatch_core(
+        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
 
-    // Writes eth routing config to device, assumes that device is initialized
+    // Writes router config to corresponding eth core
+    void configure_eth_core_for_dispatch_core(
+        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
+    // cluster. When using multiple devices in a cluster, this should be the flow:
+    //       CreateDevice(0)
+    //       CreateDevice(1)
+    //       set_internal_routing_info_for_ethernet_cores(true);
+    //       set_internal_routing_info_for_ethernet_cores(false);
+    //       CloseDevice(0)
+    //       CloseDevice(1)
     void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const;
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.

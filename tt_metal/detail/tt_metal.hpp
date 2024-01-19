@@ -553,14 +553,12 @@ namespace tt::tt_metal{
                         if (device_id != device->id()) {
                             // This means the issue queue and completion queue interfaces that service a remote device are being set up
                             // the issue queue interface needs to send fast dispatch packets to the "src" ethernet core
-                            CoreCoord logical_eth_router_src =
-                                tt::Cluster::instance().get_and_configure_corresponding_eth_core_for_device(
-                                    device->id(), issue_q_physical_core, EthRouterMode::FD_SRC, device_id);
+                            CoreCoord logical_eth_router_src = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+                                issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
                             consumer_physical_core = device->ethernet_core_from_logical_core(logical_eth_router_src);
-                            // TODO: remote processor core should use logical_eth_router_dst as producer
-                            CoreCoord logical_eth_router_dst =
-                                tt::Cluster::instance().get_and_configure_corresponding_eth_core_for_device(
-                                    device_id, issue_q_physical_core, EthRouterMode::FD_DST, device->id());
+
+                            tt::Cluster::instance().configure_eth_core_for_dispatch_core(
+                                issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
                         }
 
                         std::map<string, string> producer_defines = {
