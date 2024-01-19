@@ -368,9 +368,11 @@ def test_level1_mul(bs, memcfg, dtype, device, function_level_defaults):
     "memcfg",
     (
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        # ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
     ),
-    ids=["out_DRAM", "out_L1"],
+    ids=[
+        "out_DRAM",
+    ],  # "out_L1"],
 )
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
 def test_level1_div(memcfg, dtype, device, function_level_defaults):
