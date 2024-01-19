@@ -112,7 +112,7 @@ set_up_kernels/clean:
 	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
 
 hugepage-check:
-	bash -c "python3.8 $(TT_METAL_HOME)/infra/machine_setup/scripts/setup_hugepages.py check" || (echo "$?"; exit 1)
+	bash -c "( [ -f /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ] && [ ! `cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` -eq 0 ] )" || (echo "Hugepages not setup correctly!" && exit 1)
 
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
