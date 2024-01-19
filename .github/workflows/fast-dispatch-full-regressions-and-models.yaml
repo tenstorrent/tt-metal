@@ -23,6 +23,11 @@ jobs:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         with:
           token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Ensure weka mount is active
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
