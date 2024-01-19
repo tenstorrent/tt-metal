@@ -477,7 +477,7 @@ TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReads) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 
@@ -487,7 +487,7 @@ TEST_F(CommandQueueFixture, ShardedBufferReadWrites) {
     config.num_iterations = 100;
 
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, StressWrapTest) {
@@ -501,7 +501,7 @@ TEST_F(CommandQueueFixture, StressWrapTest) {
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device_, *this->cmd_queue_, config));
 }
 
 }  // end namespace stress_tests
