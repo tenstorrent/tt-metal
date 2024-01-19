@@ -1527,6 +1527,7 @@ class ResNet(nn.Module):
         self.relu = tt_lib.tensor.relu_without_autoformat
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
+        self.max_pool_reader_patterns_cache = {}
         if sharded:
             max_pool_op_params = SlidingWindowOpParamsWithParallelConfig(
                 stride_h=2,
@@ -1542,12 +1543,11 @@ class ResNet(nn.Module):
                 num_cores_w=grid_size[0],
                 num_cores_nhw=self.first_conv_num_cores_nhw,
             )
-            assert "halo" in self.reader_patterns_cache
-            self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(
-                self.device, max_pool_op_params, self.reader_patterns_cache["halo"], pad_val=0xF7FF
-            )
-            self.max_pool_reader_patterns_cache = {}
-            self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, grid_size, self.max_pool_reader_patterns_cache)
+            # assert "halo" in self.reader_patterns_cache
+            # self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(
+            #     self.device, max_pool_op_params, self.reader_patterns_cache["halo"], pad_val=0xF7FF
+            # )
+            self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, self.max_pool_reader_patterns_cache)
         else:
             self.maxpool = TtMaxPool(
                 self.device,
@@ -1988,9 +1988,7 @@ class ResNet(nn.Module):
         if self.batch_size == 20:
             x = tt_lib.tensor.move_sharded(x)
 
-        if self.sharded:
-            x = self.maxpool_untilize_with_halo(x)
-        else:
+        if not self.sharded:
             x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
             x = x.reshape(
                 self.conv1_output_shape[0],
