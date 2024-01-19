@@ -173,22 +173,23 @@ void MAIN {
     #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
     #endif
-
-    #ifdef PRE_TILIZE
-    unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
-
-    col_major_to_row_major_init();
-    tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-    row_major_to_col_major_init();
-
-    // TODO: unpack_reconfig_data_format_srca(in0_pretilize_cb_id, in1_cb_id) doesn't work if in0 is BFLOATB_B and in1 is BFLOAT16
-    mm_block_init_short();
-    unpack_reconfig_data_format_srca(in1_cb_id);
-    #endif
-
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
+
         for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
+
+            #ifdef PRE_TILIZE
+            unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+
+            col_major_to_row_major_init();
+            tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+            row_major_to_col_major_init();
+
+            // TODO: unpack_reconfig_data_format_srca(in0_pretilize_cb_id, in1_cb_id) doesn't work if in0 is BFLOATB_B and in1 is BFLOAT16
+            mm_block_init_short();
+            unpack_reconfig_data_format_srca(in1_cb_id);
+            #endif
+
             bool enable_reload = false;
 
             #ifdef PACK_RELU
@@ -296,6 +297,7 @@ void MAIN {
                         PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
                     }
                 }
+
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
@@ -380,6 +382,7 @@ void MAIN {
                 }
             }
             #endif
+
         } // for in0_num_blocks_h
         #ifdef FUSE_BIAS
             bias_block_offset += in1_block_w;

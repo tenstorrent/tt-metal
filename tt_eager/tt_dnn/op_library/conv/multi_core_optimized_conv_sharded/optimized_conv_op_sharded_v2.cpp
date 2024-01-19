@@ -551,10 +551,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     if (fully_buffer_weights) {
         num_weight_cb_tiles *= window_outer;
-    } else if (per_core_weight_matrix_width_ntiles < 8) {
+    } else if (per_core_weight_matrix_width_ntiles < 5 && per_core_out_matrix_height_ntiles < 22) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
-    if (conv_act_size_c / conv_act_c_blocks < 256) {
+
+    if (conv_act_size_c / conv_act_c_blocks < 160 && per_core_out_matrix_height_ntiles < 22) {
         num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
     }
 
@@ -876,7 +877,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
                 conv_act_size_h,
                 weight_size_h,
                 weight_size_w,
-
+                num_blocks_act_h_per_core,
                 act_block_h_datums,
                 in0_block_num_tiles,
                 conv_act_c_blocks,
