@@ -96,3 +96,4 @@ import ttnn.decorators
 import ttnn.transformer
 import ttnn.model_preprocessing
 from ttnn.conv import Conv2D
+from ttnn.max_pool import MaxPool2D

@@ -215,7 +215,7 @@ def test_run_max_pool(
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
 
     max_pool_reader_patterns_cache = {}
-    max_pool = TTPyMaxPool(sliding_window_op_params, device, grid_size, max_pool_reader_patterns_cache, pad_val=pad_val)
+    max_pool = TTPyMaxPool(sliding_window_op_params, device, max_pool_reader_patterns_cache, pad_val=pad_val)
 
     out_padded = max_pool(ttact_sharded)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
