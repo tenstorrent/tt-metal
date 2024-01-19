@@ -62,11 +62,11 @@ void MAIN {
             unpack_reconfig_data_format_srca(cb_in1, cb_intermed0);
             cb_wait_front(cb_intermed0, onetile);
             untilize_init_short(cb_intermed0);
-            cb_reserve_back(cb_intermed1, 1);
-            untilize_block(cb_intermed0, 1, cb_intermed1);
-            cb_push_back(cb_intermed1, 1);
+            cb_reserve_back(cb_intermed1, onetile);
+            untilize_block(cb_intermed0, onetile, cb_intermed1);
+            cb_push_back(cb_intermed1, onetile);
 
-            cb_pop_front(cb_intermed0, 1);
+            cb_pop_front(cb_intermed0, onetile);
             untilize_uninit(cb_intermed0);
 
             unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
@@ -77,15 +77,15 @@ void MAIN {
         // cb_intermed2 comes from reader; untilized row-major tile
         unpack_reconfig_data_format_srca(cb_in1, cb_intermed2);
         pack_reconfig_data_format(cb_intermed1, out_cb_id);
-        cb_wait_front(cb_intermed2, 1);
+        cb_wait_front(cb_intermed2, onetile);
         cb_reserve_back(out_cb_id, onetile);
 
         // tilize CB::intermed2 and write to CB::c_out0
-        tilize_init_short(cb_intermed2, 1);
-        tilize_block(cb_intermed2, 1, out_cb_id);
-        cb_push_back(out_cb_id, 1);
+        tilize_init_short(cb_intermed2, onetile);
+        tilize_block(cb_intermed2, onetile, out_cb_id);
+        cb_push_back(out_cb_id, onetile);
 
-        cb_pop_front(cb_intermed2, 1);
+        cb_pop_front(cb_intermed2, onetile);
         tilize_uninit();
 
         // Hangs when in0 is BFLOAT8_B if we don't force the reconfig
