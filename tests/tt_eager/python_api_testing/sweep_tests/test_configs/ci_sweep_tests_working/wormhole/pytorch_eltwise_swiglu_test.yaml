@@ -20,7 +20,7 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
       output-file: activation_swiglu_sweep.csv
       env:
@@ -46,7 +46,7 @@ test-list:
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
       output-file: activation_swiglu_sweep.csv
       env:
