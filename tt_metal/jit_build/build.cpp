@@ -113,6 +113,7 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " +
         "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " + // TODO(fixme)
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/common/inc " + // TODO(fixme) datamovement fw shouldn't read this
+        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/llk_lib " +
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " +
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io ";
 

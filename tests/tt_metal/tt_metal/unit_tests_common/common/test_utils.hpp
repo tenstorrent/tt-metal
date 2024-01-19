@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <deque>
 #include "tt_metal/host_api.hpp"
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
@@ -22,7 +23,7 @@ inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base
 
 // Check whether the given file contains a list of strings. Doesn't check for
 // strings between lines in the file.
-inline bool FileContainsAllStrings(string file_name, vector<string> &must_contain) {
+inline bool FileContainsAllStrings(string file_name, const vector<string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -60,6 +61,59 @@ inline bool FileContainsAllStrings(string file_name, vector<string> &must_contai
         file_name,
         missing_strings);
     return false;
+}
+
+// Check whether the given file contains a list of strings (in order). Doesn't check for strings
+// between lines in a file.
+inline bool FileContainsAllStringsInOrder(string file_name, const vector<string> &must_contain) {
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in))
+        return false;
+
+    // Construct a queue of required strings, we'll remove each one when it's found.
+    std::deque<string> must_contain_queue(must_contain.begin(), must_contain.end());
+
+    if (log_file.is_open()) {
+        string line;
+        while (getline(log_file, line)) {
+            // Check for all target strings in the current line
+            while (
+                !must_contain_queue.empty() &&
+                line.find(must_contain_queue.front()) != string::npos
+            ) {
+                must_contain_queue.pop_front();
+            }
+
+            // If all strings have been found, return true
+            if (must_contain_queue.empty())
+                return true;
+        }
+    }
+
+    // If the log file doesn't exist, is empty, or doesn't contain all strings, return false.
+    string missing_strings = "";
+    for (const string &s : must_contain_queue)
+        missing_strings += s + ",";
+    tt::log_info(
+        tt::LogTest,
+        "Test Error: Expected file {} to contain the following strings: {}",
+        file_name,
+        missing_strings);
+    return false;
+}
+
+// Helper function to dump a file
+inline void DumpFile(string file_name) {
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
+        tt::log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
+        return;
+    }
+
+    tt::log_info(tt::LogTest, "File \'{}\' contains:", file_name);
+    string line;
+    while (getline(log_file, line))
+        tt::log_info(tt::LogTest, "{}", line);
 }
 
 // Compare two strings with a (single-character) wildcard

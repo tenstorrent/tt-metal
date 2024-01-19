@@ -26,6 +26,7 @@ class RunTimeOptions {
     bool watcher_enabled;
     int watcher_interval_ms;
     bool watcher_dump_all;
+    bool watcher_append;
 
     std::vector<CoreCoord> dprint_cores;
     bool dprint_all_cores;
@@ -45,9 +46,16 @@ public:
 
     inline bool get_build_map_enabled() { return build_map_enabled; }
 
-    inline bool get_watcher_enabled() { return watcher_enabled; }
-    inline int get_watcher_interval() { return watcher_interval_ms; }
-    inline int get_watcher_dump_all() { return watcher_dump_all; }
+    // Info from watcher environment variables, setters included so that user
+    // can override with a SW call.
+    inline bool get_watcher_enabled()                 { return watcher_enabled; }
+    inline void set_watcher_enabled(bool enabled)     { watcher_enabled = enabled; }
+    inline int get_watcher_interval()                 { return watcher_interval_ms; }
+    inline void set_watcher_interval(int interval_ms) { watcher_interval_ms = interval_ms; }
+    inline int get_watcher_dump_all()                 { return watcher_dump_all; }
+    inline void set_watcher_dump_all(bool dump_all)   { watcher_dump_all = dump_all; }
+    inline int get_watcher_append()                   { return watcher_append; }
+    inline void set_watcher_append(bool append)       { watcher_append = append; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -105,6 +113,9 @@ private:
     void ParseDPrintChipIds(const char* env_var);
     void ParseDPrintRiscvMask(const char* env_var);
     void ParseDPrintFileName(const char* env_var);
+
+    // Helper function to parse watcher-specific environment variables.
+    void ParseWatcherEnv();
 };
 
 
