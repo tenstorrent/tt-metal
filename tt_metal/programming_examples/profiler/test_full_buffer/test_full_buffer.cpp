@@ -49,10 +49,18 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
             tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
     }
 
-    for (int i = 0; i < fastDispatch; i++)
+    if (!fastDispatch)
     {
-        EnqueueProgram(tt_metal::detail::GetCommandQueue(device), program, false);
+        tt_metal::detail::LaunchProgram(device, program);
     }
+    else
+    {
+        for (int i = 0; i < fastDispatch; i++)
+        {
+            EnqueueProgram(tt_metal::detail::GetCommandQueue(device), program, false);
+        }
+    }
+
 
     return pass;
 }
@@ -71,14 +79,23 @@ int main(int argc, char **argv) {
         constexpr int device_loop_count = 10;
         constexpr int host_loop_count = 60;
 
-        for (int i = 0; i < host_loop_count; i ++)
-        {
-            pass &= RunCustomCycle(device, device_loop_count, i, 1);
-        }
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-        pass &= RunCustomCycle(device, device_loop_count, 0, host_loop_count);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        if (USE_FAST_DISPATCH)
+        {
+            for (int i = 0; i < host_loop_count; i ++)
+            {
+                pass &= RunCustomCycle(device, device_loop_count, i, 1);
+            }
+            tt_metal::detail::DumpDeviceProfileResults(device);
+
+            pass &= RunCustomCycle(device, device_loop_count, 0, host_loop_count);
+            tt_metal::detail::DumpDeviceProfileResults(device);
+        }
+        else
+        {
+            pass &= RunCustomCycle(device, device_loop_count, 1, 0);
+        }
 
         pass &= tt_metal::CloseDevice(device);
 
