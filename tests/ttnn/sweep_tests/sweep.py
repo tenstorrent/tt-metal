@@ -53,11 +53,15 @@ def get_parameter_names(parameters):
             return [name] + get_parameter_names(other_parameters)
 
 
+def preprocess_parameter_value(parameter_value):
+    if callable(parameter_value):
+        parameter_value = parameter_value.__name__
+    return parameter_value
+
+
 def get_parameter_values(parameter_names, permutation):
     for parameter_name in parameter_names:
-        parameter_value = permutation[parameter_name]
-        if callable(parameter_value):
-            parameter_value = parameter_value.__name__
+        parameter_value = preprocess_parameter_value(permutation[parameter_name])
         yield parameter_value
 
 
@@ -94,7 +98,9 @@ def run_single_test(test_name, index, *, device):
     sweep_module = SourceFileLoader(f"sweep_module_{file_name.stem}", str(file_name)).load_module()
     permutation = list(permutations(sweep_module.parameters))[index]
 
-    pretty_printed_parameters = ",\n".join(f"\t{key}={value}" for key, value in permutation.items())
+    pretty_printed_parameters = ",\n".join(
+        f"\t{key}={preprocess_parameter_value(value)}" for key, value in permutation.items()
+    )
     logger.info(f"Running sweep test at index {index}:\n{{{pretty_printed_parameters}}}")
     return _run_single_test(
         sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
