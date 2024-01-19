@@ -346,3 +346,6 @@ def concatenate_heads(
     output_tensor = ttnn.reshape(output_tensor, (batch_size, sequence_size, num_heads * head_size))
 
     return output_tensor
+
+
+__all__ = []
