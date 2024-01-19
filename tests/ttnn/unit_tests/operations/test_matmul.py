@@ -238,73 +238,104 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
-def test_interleaved_to_block_sharded_matmul(device):
+@pytest.mark.parametrize(
+    "B, H, M, K, N, bcast_batch, in0_sharded_mem_config, in1_sharded_mem_config",
+    [
+        (
+            2,
+            3,
+            1600,
+            224,
+            896,
+            True,
+            ttnn.create_sharded_memory_config(
+                ttnn.CoreGrid(y=5, x=7), ttnn.ShardShape(y=2 * 3 * 1600 // 5, x=224 // 7), ttnn.ShardStrategy.BLOCK
+            ),
+            None,
+        ),  # mcast 2d
+        (
+            2,
+            3,
+            1600,
+            224,
+            896,
+            True,
+            ttnn.create_sharded_memory_config(
+                ttnn.CoreGrid(y=7, x=5),
+                ttnn.ShardShape(y=2 * 3 * 1600 // 5, x=224 // 7),
+                ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
+            ),
+            None,
+        ),  # mcast 2d transposed
+        (
+            2,
+            3,
+            64,
+            32 * 7,
+            1024,
+            True,
+            ttnn.create_sharded_memory_config(
+                ttnn.CoreGrid(y=1, x=7), ttnn.ShardShape(y=2 * 3 * 64, x=32), ttnn.ShardStrategy.WIDTH
+            ),
+            None,
+        ),  # mcast in0
+        (
+            2,
+            3,
+            160 * 7,
+            64,
+            64,
+            True,
+            ttnn.create_sharded_memory_config(
+                ttnn.CoreGrid(y=7, x=1), ttnn.ShardShape(y=2 * 3 * 160, x=64), ttnn.ShardStrategy.HEIGHT
+            ),
+            None,
+        ),  # mcast in1
+        (
+            7,
+            7,
+            384,
+            64,
+            384,
+            False,
+            ttnn.create_sharded_memory_config(
+                ttnn.CoreGrid(y=7, x=7), ttnn.ShardShape(y=384, x=64), ttnn.ShardStrategy.HEIGHT
+            ),
+            ttnn.create_sharded_memory_config(
+                ttnn.CoreGrid(y=7, x=7), ttnn.ShardShape(y=64, x=384), ttnn.ShardStrategy.HEIGHT
+            ),
+        ),  # bmm
+    ],
+    ids=["mcast_2d", "mcast_2d_transposed", "mcast_in0", "mcast_in1", "bmm"],
+)
+def test_sharded_matmul(B, H, M, K, N, bcast_batch, in0_sharded_mem_config, in1_sharded_mem_config, device):
     torch.manual_seed(0)
-    grid_size = ttnn.CoreGrid(y=5, x=8)
-
-    M = 1600
-    K = 256
-    N = 1024
-    in0_shape = [1, 1, M, K]
-    in1_shape = [1, 1, K, N]
-
-    torch_input_tensor_a = torch.randn(in0_shape, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn(in1_shape, dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        grid_size, ttnn.ShardShape(y=M // grid_size.y, x=K // grid_size.x), ttnn.ShardStrategy.BLOCK
-    )
-    input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_mem_config)
-
-    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=grid_size)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-    output = ttnn.from_device(output)
-    output = ttnn.to_torch(output)
-
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
-
-
-@skip_for_wormhole_b0()
-def test_height_sharded_matmul(device):
-    torch.manual_seed(0)
-    grid_size = ttnn.CoreGrid(8, 12)
-    B = 12
-    H = 16
-    M = 384
-    K = 64
-    N = 384
 
     in0_shape = [B, H, M, K]
-    in1_shape = [B, H, K, N]
+    if bcast_batch:
+        in1_shape = [1, 1, K, N]
+    else:
+        in1_shape = [B, H, K, N]
 
-    torch_input_tensor_a = torch.randn(in0_shape, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn(in1_shape, dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.randn(in0_shape)
+    torch_input_tensor_b = torch.randn(in1_shape)
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a.to(torch.bfloat16))
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b.to(torch.bfloat16))
 
-    num_cores = grid_size.num_cores
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        grid_size, ttnn.ShardShape(y=B * H * M // num_cores, x=K), ttnn.ShardStrategy.HEIGHT
-    )
+    input_tensor_a = ttnn.to_device(input_tensor_a, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor_b = ttnn.to_device(input_tensor_b, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_mem_config)
+    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.TILE_LAYOUT)
 
-    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=grid_size)
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, in0_sharded_mem_config)
+    if in1_sharded_mem_config:
+        input_tensor_b = ttnn.to_memory_config(input_tensor_b, in1_sharded_mem_config)
+
+    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
