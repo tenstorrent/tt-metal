@@ -28,25 +28,7 @@ RunTimeOptions::RunTimeOptions() {
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
-    watcher_enabled = false;
-    watcher_interval_ms = 0;
-    const char *watcher_enable_str = getenv("TT_METAL_WATCHER");
-    if (watcher_enable_str != nullptr) {
-        int sleep_val = 0;
-        sscanf(watcher_enable_str, "%d", &sleep_val);
-        if (strstr(watcher_enable_str, "ms") == nullptr) {
-            sleep_val *= 1000;
-        }
-        watcher_enabled = true;
-        watcher_interval_ms = sleep_val;
-    }
-
-    watcher_dump_all = false;
-    const char *watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
-    if (watcher_dump_all_str != nullptr) {
-        watcher_dump_all = true;
-    }
-
+    ParseWatcherEnv();
     ParseDPrintEnv();
 
     profiler_enabled = false;
@@ -67,6 +49,26 @@ const std::string& RunTimeOptions::get_root_dir() {
     }
 
     return root_dir;
+}
+
+void RunTimeOptions::ParseWatcherEnv() {
+    watcher_interval_ms = 0;
+    const char *watcher_enable_str = getenv("TT_METAL_WATCHER");
+    watcher_enabled = (watcher_enable_str != nullptr);
+    if (watcher_enabled) {
+        int sleep_val = 0;
+        sscanf(watcher_enable_str, "%d", &sleep_val);
+        if (strstr(watcher_enable_str, "ms") == nullptr) {
+            sleep_val *= 1000;
+        }
+        watcher_interval_ms = sleep_val;
+    }
+
+    const char *watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
+    watcher_dump_all = (watcher_dump_all_str != nullptr);
+
+    const char *watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
+    watcher_append = (watcher_append_str != nullptr);
 }
 
 void RunTimeOptions::ParseDPrintEnv() {

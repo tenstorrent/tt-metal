@@ -20,5 +20,8 @@ void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord
 
 int watcher_register_kernel(const string& name);
 
+// Helper function to clear the watcher log file
+void watcher_clear_log();
+
 } // namespace llrt
 } // namespace tt
