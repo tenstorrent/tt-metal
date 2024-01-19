@@ -131,6 +131,8 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 
     initialize_dummy_kernels(program, program_config.cr_set);
     EnqueueProgram(cq, program, false);
+    Finish(cq);
+
     auto pass_1 = cb_config_successful(device, program_config);
 
     DummyProgramMultiCBConfig program_config_2 = program_config;
