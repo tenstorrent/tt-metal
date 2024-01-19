@@ -20,6 +20,7 @@
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
 
 namespace py = pybind11;
 
@@ -529,6 +530,22 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input_grad").noconvert(),
         "Performs sum backward operation. Returns an input_grad tensor.");
+    m_primary.def(
+        "moreh_cumsum",
+        &moreh_cumsum,
+        py::arg("input").noconvert(),
+        py::arg("output").noconvert(),
+        py::kw_only(),
+        py::arg("dim").noconvert(),
+        "Performs cumsum operation. Returns an output tensor.");
+    m_primary.def(
+        "moreh_cumsum_backward",
+        &moreh_cumsum_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input_grad").noconvert(),
+        py::kw_only(),
+        py::arg("dim").noconvert(),
+        "Performs cumsum backward operation. Returns an input_grad tensor.");
 }
 
 }  // namespace
