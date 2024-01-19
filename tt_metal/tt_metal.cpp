@@ -55,7 +55,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
             }
             uint32_t addr = num_semaphores == 0
                                 ? SEMAPHORE_BASE
-                                : program.semaphore_address(num_semaphores - 1) + ALIGNED_SIZE_PER_SEMAPHORE;
+                                : program.semaphore_address(num_semaphores - 1) + L1_ALIGNMENT;
             if (!address.has_value()) {
                 address = addr;
             } else if (addr != address) {
