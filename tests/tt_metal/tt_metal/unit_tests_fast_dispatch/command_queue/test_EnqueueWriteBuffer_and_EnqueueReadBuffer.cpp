@@ -259,7 +259,7 @@ namespace dram_tests {
 
 TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
@@ -268,7 +268,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
@@ -278,7 +278,7 @@ TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, Sending131072Pages) {
@@ -289,20 +289,20 @@ TEST_F(CommandQueueFixture, Sending131072Pages) {
         .page_size = 128,
         .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, TestNon32BAlignedPageSizeForDram2) {
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
@@ -312,7 +312,7 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
-    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
@@ -339,7 +339,7 @@ TEST_F(CommandQueueFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 // Test that command queue wraps when buffer available space in completion region is less than a page
@@ -360,23 +360,23 @@ TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace) {
 
     Buffer buff_1(this->device_, first_buffer_size, large_page_size, BufferType::DRAM);
     auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, src_1, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, buff_1, src_1, false);
     vector<uint32_t> result_1;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, result_1, true);
+    EnqueueReadBuffer(*this->cmd_queue_, buff_1, result_1, true);
     EXPECT_EQ(src_1, result_1);
 
     Buffer buff_2(this->device_, num_pages_second_buffer * small_page_size, small_page_size, BufferType::DRAM);
     auto src_2 = local_test_functions::generate_arange_vector(buff_2.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_2, src_2, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, buff_2, src_2, false);
     vector<uint32_t> result_2;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_2, result_2, true);
+    EnqueueReadBuffer(*this->cmd_queue_, buff_2, result_2, true);
     EXPECT_EQ(src_2, result_2);
 
     Buffer buff_3(this->device_, 32 * large_page_size, large_page_size, BufferType::DRAM);
     auto src_3 = local_test_functions::generate_arange_vector(buff_3.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_3, src_3, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, buff_3, src_3, false);
     vector<uint32_t> result_3;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_3, result_3, true);
+    EnqueueReadBuffer(*this->cmd_queue_, buff_3, result_3, true);
     EXPECT_EQ(src_3, result_3);
 }
 
@@ -398,16 +398,16 @@ TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace2) {
     uint32_t num_pages_for_wrapping_buffer = (avail_space_for_wrapping_buffer / page_size) + 4;
 
     auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, src_1, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, buff_1, src_1, false);
     vector<uint32_t> result_1;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), buff_1, result_1, true);
+    EnqueueReadBuffer(*this->cmd_queue_, buff_1, result_1, true);
     EXPECT_EQ(src_1, result_1);
 
     Buffer wrap_buff(this->device_, num_pages_for_wrapping_buffer * page_size, page_size, BufferType::DRAM);
     auto src_2 = local_test_functions::generate_arange_vector(wrap_buff.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), wrap_buff, src_2, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, wrap_buff, src_2, false);
     vector<uint32_t> result_2;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), wrap_buff, result_2, true);
+    EnqueueReadBuffer(*this->cmd_queue_, wrap_buff, result_2, true);
     EXPECT_EQ(src_2, result_2);
 }
 
@@ -418,7 +418,7 @@ namespace l1_tests {
 
 TEST_F(CommandQueueFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllL1Banks) {
@@ -428,7 +428,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllL1Banks) {
         .page_size = 2048,
         .buftype = BufferType::L1};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
@@ -438,13 +438,13 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
         .page_size = 2048,
         .buftype = BufferType::L1};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, TestNon32BAlignedPageSizeForL1) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue_, config));
 }
 
 TEST_F(CommandQueueFixture, TestBackToBackNon32BAlignedPageSize) {
@@ -452,17 +452,17 @@ TEST_F(CommandQueueFixture, TestBackToBackNon32BAlignedPageSize) {
 
     Buffer bufa(device_, 125000, 100, buff_type);
     auto src_a = local_test_functions::generate_arange_vector(bufa.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, src_a, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, bufa, src_a, false);
 
     Buffer bufb(device_, 152000, 152, buff_type);
     auto src_b = local_test_functions::generate_arange_vector(bufb.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, src_b, false);
+    EnqueueWriteBuffer(*this->cmd_queue_, bufb, src_b, false);
 
     vector<uint32_t> result_a;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, result_a, true);
+    EnqueueReadBuffer(*this->cmd_queue_, bufa, result_a, true);
 
     vector<uint32_t> result_b;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, result_b, true);
+    EnqueueReadBuffer(*this->cmd_queue_, bufb, result_b, true);
 
     EXPECT_EQ(src_a, result_a);
     EXPECT_EQ(src_b, result_b);
