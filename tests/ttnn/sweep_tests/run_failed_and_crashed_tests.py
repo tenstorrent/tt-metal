@@ -10,27 +10,32 @@ import ttnn
 from tests.ttnn.sweep_tests.sweep import run_failed_and_crashed_tests
 
 
-def parse_exclude_string(exclude):
-    if exclude is None:
-        exclude = []
+def convert_string_to_list(string):
+    if string is None:
+        output = []
     else:
-        exclude = exclude.split(",")
-        exclude = [test_name.strip() for test_name in exclude]
-    return set(exclude)
+        output = string.split(",")
+        output = [element.strip() for element in output]
+    return set(output)
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--include", type=str)
     parser.add_argument("--exclude", type=str)
     parser.add_argument("--stepwise", action="store_true")
 
+    include = parser.parse_args().include
     exclude = parser.parse_args().exclude
     stepwise = parser.parse_args().stepwise
 
-    exclude = parse_exclude_string(exclude)
+    include = convert_string_to_list(include)
+    exclude = convert_string_to_list(exclude)
+    if include and exclude:
+        raise ValueError("Cannot specify both include and exclude")
 
     device = ttnn.open(0)
-    run_failed_and_crashed_tests(device=device, stepwise=stepwise, exclude=exclude)
+    run_failed_and_crashed_tests(device=device, stepwise=stepwise, include=include, exclude=exclude)
     ttnn.close(device)
 
 

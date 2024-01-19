@@ -25,8 +25,9 @@ In `tests/ttnn/sweep_tests/sweeps` add a new file `<new_file>.py`.
 
 The file must contain:
 - `parameters` dictionary from a variable to the list of values to sweep
-- `skip` function for filtering out unwanted combinations. It should return `bool`
-- `run` function for running the test. It should return `Tuple[bool, Optional[str]]`. Second element of the tuple is the error message
+- `skip` function for filtering out unwanted combinations. It should return `Tuple[bool, Optional[str]]`. Second element of the tuple is the reason to skip the test.
+- `is_expected_to_fail` function for marking the test as expected to fail. It should return `Tuple[bool, Optional[str]]`. Second element of the tuple is the expected exception.
+- `run` function for running the test. It should return `Tuple[bool, Optional[str]]`. Second element of the tuple is the error message.
 
 For example, let's add `tests/ttnn/sweep_tests/sweeps/to_and_from_device.py`:
 ```python
@@ -41,12 +42,13 @@ parameters = {
     "width": [1, 32],
 }
 
-def skip(height, width):
-    if height == 1 and width == 1:
-        return True
+def skip(height, width) -> Tuple[bool, Optional[str]]:
+    return False, None
+
+def is_expected_to_fail(height, width) -> Tuple[bool, Optional[str]]:
     return False
 
-def run(height, width, *, device):
+def run(height, width, *, device) -> Tuple[bool, Optional[str]]:
     torch_tensor = torch.zeros((height, width))
 
     tensor = ttnn.from_torch(torch_tensor, device=device)

@@ -8,8 +8,6 @@ import pathlib
 from loguru import logger
 import pandas as pd
 
-import ttnn
-
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 SWEEP_RESULTS_DIR = SWEEPS_DIR / "results"
@@ -63,32 +61,59 @@ def get_parameter_values(parameter_names, permutation):
         yield parameter_value
 
 
-def sweep(sweep_file_name, run, skip, parameters, *, device):
+def _run_single_test(run, skip, is_expected_to_fail, permutation, *, device):
+    try:
+        should_be_skipped, message = skip(**permutation)
+        if should_be_skipped:
+            return "skipped", message
+
+        passed, message = run(**permutation, device=device)
+        status = "passed" if passed else "failed"
+        if passed:
+            message = None
+    except Exception as e:
+        should_fail, expected_exception = is_expected_to_fail(**permutation)
+        if should_fail and expected_exception == str(e):
+            status = "is_expected_to_fail"
+            message = expected_exception
+        else:
+            status = "crashed"
+            message = f"Exception: {e}"
+    finally:
+        import tt_lib as ttl
+
+        ttl.device.ClearCommandQueueProgramCache(device)
+        ttl.device.DeallocateBuffers(device)
+    return status, message
+
+
+def run_single_test(test_name, index, *, device):
+    file_name = (SWEEP_SOURCES_DIR / test_name).with_suffix(".py")
+    logger.info(f"Running {file_name}")
+
+    sweep_module = SourceFileLoader(f"sweep_module_{file_name.stem}", str(file_name)).load_module()
+    permutation = list(permutations(sweep_module.parameters))[index]
+
+    pretty_printed_parameters = ",\n".join(f"\t{key}={value}" for key, value in permutation.items())
+    logger.info(f"Running sweep test at index {index}:\n{{{pretty_printed_parameters}}}")
+    return _run_single_test(
+        sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
+    )
+
+
+def run_sweep(sweep_file_name, *, device):
     sweep_name = pathlib.Path(sweep_file_name).stem
-    parameter_names = get_parameter_names(parameters)
+    sweep_module = SourceFileLoader(f"sweep_module_{sweep_name}", str(sweep_file_name)).load_module()
+
+    parameter_names = get_parameter_names(sweep_module.parameters)
     column_names = ["status", "exception"] + parameter_names
 
     rows = []
-    for permutation in permutations(parameters):
-        parameter_values = list(get_parameter_values(parameter_names, permutation))
-
-        if skip(**permutation):
-            rows.append(["skipped", None] + parameter_values)
-            continue
-
-        try:
-            passed, message = run(**permutation, device=device)
-            if passed:
-                rows.append(["passed", None] + parameter_values)
-            else:
-                rows.append(["failed", message] + parameter_values)
-        except Exception as e:
-            rows.append(["crashed", str(e)] + parameter_values)
-        finally:
-            import tt_lib as ttl
-
-            ttl.device.ClearCommandQueueProgramCache(device)
-            ttl.device.DeallocateBuffers(device)
+    for permutation in permutations(sweep_module.parameters):
+        status, message = _run_single_test(
+            sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
+        )
+        rows.append([status, message] + list(get_parameter_values(parameter_names, permutation)))
 
     SWEEP_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     file_name = (SWEEP_RESULTS_DIR / sweep_name).with_suffix(".csv")
@@ -99,37 +124,6 @@ def sweep(sweep_file_name, run, skip, parameters, *, device):
     logger.info(f"Saved sweep results to {file_name}")
 
 
-def _run_single_test(run, skip, parameters, index, *, device):
-    permutation = list(permutations(parameters))[index]
-    pretty_printed_parameters = ",\n".join(f"\t{key}={value}" for key, value in permutation.items())
-    logger.info(f"Running sweep test at index {index}:\n{{{pretty_printed_parameters}}}")
-    if skip(**permutation):
-        return "skipped", None
-    passed, message = run(**permutation, device=device)
-    return passed, message
-
-
-def run_single_test(test_name, index, *, device):
-    file_name = (SWEEP_SOURCES_DIR / test_name).with_suffix(".py")
-    logger.info(f"Running {file_name}")
-
-    sweep_module = SourceFileLoader("sweep_module", str(file_name)).load_module()
-
-    status = None
-    try:
-        passed, message = _run_single_test(
-            sweep_module.run, sweep_module.skip, sweep_module.parameters, index, device=device
-        )
-        status = "passed" if passed else "failed"
-        if not passed:
-            logger.error(message)
-    except Exception as e:
-        status = "crashed"
-        message = f"Exception: {e}"
-        logger.exception(message)
-    return status, message
-
-
 def run_all_tests(*, device):
     logger.info(f"Deleting old sweep results in {SWEEP_RESULTS_DIR}")
     if SWEEP_RESULTS_DIR.exists():
@@ -138,15 +132,18 @@ def run_all_tests(*, device):
 
     for file_name in sorted(SWEEP_SOURCES_DIR.glob("*.py")):
         logger.info(f"Running {file_name}")
-        sweep_module = SourceFileLoader("sweep_module", str(file_name)).load_module()
-        sweep(file_name, sweep_module.run, sweep_module.skip, sweep_module.parameters, device=device)
+        run_sweep(file_name, device=device)
 
 
-def run_failed_and_crashed_tests(*, device, stepwise, exclude):
+def run_failed_and_crashed_tests(*, device, stepwise, include, exclude):
     keep_running = True
     for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
         test_name = file_name.stem
-        if test_name in exclude:
+
+        if include and test_name not in include:
+            continue
+
+        if exclude and test_name in exclude:
             continue
 
         if not keep_running:
@@ -164,9 +161,11 @@ def run_failed_and_crashed_tests(*, device, stepwise, exclude):
 
             status, message = run_single_test(file_name.stem, index, device=device)
             logger.info(status)
-            if status in {"failed", "crashed"} and stepwise:
-                keep_running = False
-                break
+            if status in {"failed", "crashed"}:
+                logger.error(f"{message}")
+                if stepwise:
+                    keep_running = False
+                    break
 
             df.at[index, "status"] = status
             df.at[index, "message"] = message
@@ -175,10 +174,10 @@ def run_failed_and_crashed_tests(*, device, stepwise, exclude):
 
 
 def print_summary():
-    stats_df = pd.DataFrame(columns=["name", "passed", "failed", "skipped", "crashed"])
+    stats_df = pd.DataFrame(columns=["name", "passed", "failed", "crashed", "skipped", "is_expected_to_fail"])
 
     def add_row(df, name):
-        df.loc[-1] = [name, 0, 0, 0, 0]
+        df.loc[-1] = [name] + [0] * len(df.columns[1:])
         df.index = df.index + 1
         df.reset_index(inplace=True, drop=True)
         return df

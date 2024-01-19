@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple
+
 import torch
 
 import ttnn
@@ -21,8 +23,12 @@ parameters = {
 }
 
 
-def skip(**_):
-    return False
+def skip(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
+
+
+def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
 
 
 def run(
@@ -35,7 +41,7 @@ def run(
     output_memory_config,
     *,
     device,
-):
+) -> Tuple[bool, Optional[str]]:
     input_shape = (batch_size, num_heads, sequence_size, target_sequence_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = ttnn.transformer._torch_attention_softmax(
