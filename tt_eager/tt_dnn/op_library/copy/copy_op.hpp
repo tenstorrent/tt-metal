@@ -37,29 +37,17 @@ struct Copy {
 operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tensor &output, bool backwards = false);
 operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tensor &output, bool backwards = false);
 
-inline Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
-    operation::run(Copy{dst_tensor.memory_config(), dst_tensor.dtype()}, {src_tensor, dst_tensor});
-    return dst_tensor;
-}
+Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
 
-inline Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt) {
-    return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);
-}
+Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt);
 
-inline Tensor typecast(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return operation::run(Copy{output_mem_config}, {input_tensor}).at(0);
-}
+Tensor typecast(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,  std::optional<const DataType> output_dtype = std::nullopt);
 
 //unary assign
-inline Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt) {
-    return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);
-}
+Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype = std::nullopt);
 
 // binary assign
-inline Tensor assign(const Tensor& input_a, const Tensor& input_b) {
-    operation::run(Copy{input_b.memory_config(), input_b.dtype()}, {input_a, input_b});
-    return input_b;
-}
+Tensor assign(const Tensor& input_a, const Tensor& input_b);
 
 }  // namespace tt_metal
 
