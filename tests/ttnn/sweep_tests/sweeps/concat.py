@@ -37,7 +37,7 @@ def is_expected_to_fail(
         dimension_range = f"[{-rank_of_tensors}, {rank_of_tensors - 1}]"
         return (
             True,
-            f"Dimension out of range (expected to be in range of {dimension_range}, but got {dimension_to_concatenate_on})",
+            f"TTNN: Dimension out of range (expected to be in range of {dimension_range}, but got {dimension_to_concatenate_on})",
         )
 
     return False, None
