@@ -78,6 +78,30 @@ tt::stl::reflection::Attributes Copy::attributes() const {
     };
 }
 
+Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
+    operation::run(Copy{dst_tensor.memory_config(), dst_tensor.dtype()}, {src_tensor, dst_tensor});
+    return dst_tensor;
+}
+
+Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
+    return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);
+}
+
+Tensor typecast(const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype ) {
+    return operation::run(Copy{output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {input_tensor}).at(0);
+}
+
+//unary assign
+Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config , std::optional<const DataType> output_dtype ) {
+    return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);
+}
+
+// binary assign
+Tensor assign(const Tensor& input_a, const Tensor& input_b) {
+    operation::run(Copy{input_b.memory_config(), input_b.dtype()}, {input_a, input_b});
+    return input_b;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

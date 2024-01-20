@@ -102,7 +102,6 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args, .defines = kernel_defines});
 
-<<<<<<< HEAD
     if (convert_dtype) {
         vector<uint32_t> compute_kernel_args = {
             num_units
@@ -114,24 +113,6 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
             tt_metal::ComputeConfig{.compile_args=compute_kernel_args}
         );
     }
-=======
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    vector<uint32_t> compute_kernel_args = {
-        uint(num_units) // per_core_tile_cnt
-    };
-
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/kernels/compute/eltwise_copy.cpp",
-        core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args
-        });
->>>>>>> 8f2e54a4b... #0: Add support for typecast
 
    if (tilized) {
         SetRuntimeArgs(

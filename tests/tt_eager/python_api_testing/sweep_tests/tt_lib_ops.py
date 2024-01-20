@@ -112,7 +112,7 @@ def typecast(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.typecast(t0, output_mem_config=output_mem_config)
 
-    return tt2torch_tensor(t1)
+    return tt2torch_tensor(t1).round()
 
 
 @setup_host_and_device

@@ -43,7 +43,7 @@ namespace tt::tt_metal::detail{
         detail::export_enum<BcastOpDim>(m_tensor);
 
         detail::bind_unary_op<true, true>(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
-        detail::bind_unary_op<true, true>(m_tensor, "typecast", &typecast, R"doc(  Returns a new tensor which is a new copy of input tensor with new datatype``{0}``.)doc");
+        detail::bind_unary_op<true, true>(m_tensor, "typecast", &typecast, R"doc(  Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.)doc");
         detail::bind_binary_op<false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
         detail::bind_unary_op<true, true>(m_tensor, "assign", py::overload_cast<const Tensor&, const MemoryConfig&, std::optional<const DataType>>(&assign), R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
 
