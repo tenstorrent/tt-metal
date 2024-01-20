@@ -27,9 +27,16 @@ def main():
 
     if status == "passed":
         logger.info(f"Passed")
-    elif status in {"failed", "crashed"}:
-        logger.info(f"Error: {message}")
+    elif status == "is_expected_to_fail":
+        logger.info(f'Failed as expected with the following error message: "{message}"')
+    elif status in "failed":
+        logger.info(f'Failed:"{message}"')
         exit(-1)
+    elif status in "crashed":
+        logger.info(f'Crashed: "{message}"')
+        exit(-1)
+    elif status in "skipped":
+        logger.info(f'Skipped: "{message}"')
     else:
         raise RuntimeError(f"Unknown status {status}")
 

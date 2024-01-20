@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -75,7 +75,22 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input shape");
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+        TT_FATAL(input_tensor.shard_spec().value().shard_shape[1] == input_tensor.shape()[-1]);
+        TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+        TT_FATAL(input_tensor.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+        uint32_t num_cores = core_grid.x * core_grid.y;
+        // 1 Head Per Core Max for now
+        TT_FATAL(this->num_q_heads <= num_cores);
+        TT_FATAL(this->num_kv_heads <= num_cores);
+        TT_FATAL((input_tensor.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor.shape()[-1]})));
+        TT_FATAL(this->num_q_heads >= this->num_kv_heads);
+        TT_FATAL(!this->transpose_k_heads);
+    } else {
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+    }
 
     if (optional_input_tensors.at(0).has_value()) {
         const auto& input_tensor_kv = optional_input_tensors.at(0).value();
@@ -89,6 +104,13 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
         TT_FATAL(input_shape_kv[0] == input_shape[0], "KV tensor batch dim must be same as Q tensor batch!");
         TT_FATAL(input_shape_kv[1] == 1, "Unsupported input shape");
         TT_FATAL(input_shape_kv[2] == input_shape[2], "KV tensor seq_len dim must be same as Q tensor seq_len!");
+        if (input_tensor_kv.is_sharded()) {
+            TT_FATAL(input_tensor.is_sharded());
+            TT_FATAL(input_tensor_kv.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+            TT_FATAL(input_tensor_kv.shard_spec().value().shard_shape[1] == input_tensor_kv.shape()[-1]);
+            TT_FATAL(input_tensor_kv.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+            TT_FATAL((input_tensor_kv.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor_kv.shape()[-1]})));
+        }
     }
 }
 
@@ -107,7 +129,18 @@ std::vector<Shape> NlpCreateHeads::compute_output_shapes(const std::vector<Tenso
 std::vector<Tensor> NlpCreateHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(false, "Sharding is not supported for NlpCreateHeads yet.");
+        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+        auto q_shard_grid = num_cores_to_corerange_set(this->num_q_heads, core_grid, true);
+        ShardSpec q_shard_spec{.shard_grid = q_shard_grid, .shard_shape = {TILE_HEIGHT, this->head_dim}};
+        auto kv_shard_grid = num_cores_to_corerange_set(this->num_kv_heads, core_grid, true);
+        ShardSpec kv_shard_spec{.shard_grid = kv_shard_grid, .shard_shape = {TILE_HEIGHT, this->head_dim}};
+        auto output_shapes = this->compute_output_shapes(input_tensors);
+        return {
+            create_sharded_device_tensor(output_shapes[0], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config, q_shard_spec),
+            create_sharded_device_tensor(output_shapes[1], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config, kv_shard_spec),
+            create_sharded_device_tensor(output_shapes[2], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config, kv_shard_spec)
+        };
+
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
     }
@@ -119,8 +152,11 @@ operation::ProgramWithCallbacks NlpCreateHeads::create_program(const std::vector
     auto& output_tensor = output_tensors.at(0);
 
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-
-    return  multi_core_nlp_create_qkv_heads(input_tensor, input_tensor_kv, this->num_q_heads, this->num_kv_heads, this->head_dim, this->transpose_k_heads, output_tensors, compute_with_storage_grid_size);
+    if (input_tensor.is_sharded()) {
+        return  multi_core_nlp_create_qkv_heads_sharded(input_tensor, input_tensor_kv, this->num_q_heads, this->num_kv_heads, this->head_dim, this->transpose_k_heads, output_tensors, compute_with_storage_grid_size);
+    } else {
+        return  multi_core_nlp_create_qkv_heads(input_tensor, input_tensor_kv, this->num_q_heads, this->num_kv_heads, this->head_dim, this->transpose_k_heads, output_tensors, compute_with_storage_grid_size);
+    }
 }
 
 tt::stl::reflection::Attributes NlpCreateHeads::attributes() const {

@@ -44,15 +44,14 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
-    dtype_to_use = torch.bfloat16
-    input_features = inputs.input_features.type(dtype_to_use)
+    input_features = inputs.input_features
     decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
     attention_mask = None
 
     parameters = preprocess_model_parameters(
         tt_model_name,
-        initialize_model=lambda: WhisperModel.from_pretrained(model_name).to(dtype_to_use).eval(),
+        initialize_model=lambda: WhisperModel.from_pretrained(model_name).eval(),
         convert_to_ttnn=functional_whisper.convert_to_ttnn,
         custom_preprocessor=functional_whisper.custom_preprocessor,
         device=device,

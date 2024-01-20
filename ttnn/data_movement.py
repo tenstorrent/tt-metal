@@ -179,7 +179,7 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
                 "All dimensions must be the same size except for the dimension along which the contenation is taking place."
             )
 
-    output_tensor = _torch_concat(tensors, dim=0)
+    output_tensor = _torch_concat(tensors, dim=dim)
 
     return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
 

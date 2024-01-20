@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple
+
 import torch
 
 import ttnn
@@ -24,10 +26,14 @@ parameters = {
 }
 
 
-def skip(*, broadcast, input_b_layout, **_):
+def skip(*, broadcast, input_b_layout, **_) -> Tuple[bool, Optional[str]]:
     if broadcast in {"w", "hw"} and input_b_layout == ttnn.ROW_MAJOR_LAYOUT:
-        return True
-    return False
+        return True, "Broadcasting along width is not supported for row major layout"
+    return False, None
+
+
+def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
 
 
 def run(
@@ -44,7 +50,7 @@ def run(
     output_memory_config,
     *,
     device,
-):
+) -> Tuple[bool, Optional[str]]:
     input_shape_a = (*batch_sizes, height, width)
     input_shape_b = (*batch_sizes, height, width)
     if broadcast == "hw":

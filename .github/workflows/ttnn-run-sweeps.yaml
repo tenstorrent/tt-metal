@@ -1,0 +1,40 @@
+name: "ttnn - Run sweeps"
+
+on:
+  schedule:
+    - cron: "0 1,7,13,19 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  run-ttnn-sweeps:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: dev
+    runs-on: model-runner-${{ matrix.arch }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+        with:
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Run ttnn sweeps
+        timeout-minutes: 30
+        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ttnn_sweeps
+      - name: Assert that csvs exist in expected ttnn results folder
+        run: ls -hal tests/ttnn/sweep_tests/results/*.csv
+      - name: Upload ttnn sweep reports csvs
+        uses: actions/upload-artifact@v3
+        with:
+          name: ttnn-sweeps-report-csv-${{ matrix.arch }}
+          path: tests/ttnn/sweep_tests/results/*.csv

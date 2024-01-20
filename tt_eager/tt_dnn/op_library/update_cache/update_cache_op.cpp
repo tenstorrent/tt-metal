@@ -27,13 +27,24 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
 
     TT_FATAL(input_tensor.shape()[-1] == cache_tensor.shape()[-1]);
-    TT_FATAL(cache_tensor.shape()[1] == 1);
-    TT_FATAL(input_tensor.shape()[0] * input_tensor.shape()[1] == 1);
-
+    TT_FATAL(input_tensor.shape()[0] == 1);
+    TT_FATAL(input_tensor.shape()[1] == cache_tensor.shape()[1]);
+    TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     if (this->op_type == UpdateCacheOpType::FILL) {
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor.shape()[1] == 1);
+        TT_FATAL(cache_tensor.shape()[1] == 1);
         TT_FATAL(this->batch_idx < cache_tensor.shape()[0]);
         TT_FATAL(input_tensor.shape()[-2] <= cache_tensor.shape()[-2]);
     } else if (this->op_type == UpdateCacheOpType::UPDATE) {
+        if (input_tensor.is_sharded()) {
+            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+            TT_FATAL(input_tensor.shard_spec().value().shard_shape[1] == input_tensor.shape()[-1]);
+            // Require even work division for now
+            TT_FATAL((input_tensor.volume() / input_tensor.shape()[-1]) % input_tensor.shard_spec().value().shard_shape[0] == 0);
+        } else {
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        }
         TT_FATAL(cache_tensor.shape()[0] == input_tensor.shape()[-2]);
     }
 }
@@ -57,7 +68,7 @@ operation::ProgramWithCallbacks UpdateCache::create_program(const std::vector<Te
             if (this->op_type == UpdateCacheOpType::FILL) {
                 return fill_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
             } else {
-                TT_ASSERT(false, "Unsupported parallelization strategy for op");
+                return update_cache_multi_core(cache_tensor, input_tensor, this->update_idx);
             }
         case UpdateCacheOpParallelizationStrategy::SINGLE_CORE:
         default:
@@ -73,8 +84,8 @@ operation::ProgramWithCallbacks UpdateCache::create_program(const std::vector<Te
 
 UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(1);
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     if (this->op_type == UpdateCacheOpType::FILL) {
+        uint32_t num_tiles = input_tensor.volume() / TILE_HW;
         if (num_tiles > 1) {
             return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
         }
@@ -82,7 +93,13 @@ UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(c
             return UpdateCacheOpParallelizationStrategy::SINGLE_CORE;
         }
     } else {
-        return UpdateCacheOpParallelizationStrategy::SINGLE_CORE;
+        uint32_t num_batch_heads = input_tensor.shape()[1] * input_tensor.shape()[-2] / TILE_HEIGHT;
+        if (num_batch_heads > 1 || input_tensor.is_sharded()) {
+            return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
+        }
+        else{
+            return UpdateCacheOpParallelizationStrategy::SINGLE_CORE;
+        }
     }
 }
 

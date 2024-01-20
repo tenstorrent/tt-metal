@@ -25,6 +25,21 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     uint32_t HW = H*W;
     TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+    if (this->dim == TransposeOpDim::WH) {
+        if (input_tensor.is_sharded()) {
+            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+            const auto& shard_spec = input_tensor.shard_spec().value();
+            TT_FATAL(shard_spec.shard_shape[1] == W);
+            TT_FATAL(shard_spec.shard_shape[0] % H == 0);
+            TT_FATAL(this->output_mem_config.is_sharded());
+            TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+        } else {
+            TT_FATAL(!this->output_mem_config.is_sharded());
+        }
+    } else {
+        TT_FATAL(!input_tensor.is_sharded());
+        TT_FATAL(!this->output_mem_config.is_sharded());
+    }
     if (this->dim == TransposeOpDim::HC) {
         TT_FATAL(C % TILE_HEIGHT == 0);
         TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16);
@@ -76,6 +91,24 @@ std::vector<Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &i
 
 std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    // This is only for WH
+    if (this->output_mem_config.is_sharded()) {
+        if (this->dim == TransposeOpDim::WH) {
+            ShardSpec shard_spec = input_tensor.shard_spec().value();
+            shard_spec.shard_shape[0] = shard_spec.shard_shape[0] / input_tensor.shape()[-2] * input_tensor.shape()[-1];
+            shard_spec.shard_shape[1] = input_tensor.shape()[-2];
+            const auto output_shape = this->compute_output_shapes(input_tensors)[0];
+            return {create_sharded_device_tensor(
+                output_shape,
+                input_tensor.dtype(),
+                input_tensor.layout(),
+                input_tensor.device(),
+                this->output_mem_config,
+                shard_spec)};
+        } else {
+            TT_ASSERT(false, "Unsupported sharding");
+        }
+    }
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
@@ -87,7 +120,11 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
 
     switch (parallelization_strategy) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            return transpose_wh_multi_core(input_tensor, output_tensor);
+            if (input_tensor.is_sharded()) {
+                return transpose_wh_multi_core_sharded(input_tensor, output_tensor);
+            } else {
+                return transpose_wh_multi_core(input_tensor, output_tensor);
+            }
             break;
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
             return transpose_hc_multi_core(input_tensor, output_tensor);
@@ -101,7 +138,7 @@ TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const
     const auto& input_tensor = input_tensors.at(0);
     auto ashape = input_tensor.shape();
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    if (this->dim == TransposeOpDim::WH && num_tiles > 1) {
+    if (this->dim == TransposeOpDim::WH && (num_tiles > 1 || input_tensor.is_sharded())) {
         return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
     } else if (this->dim == TransposeOpDim::HC && num_tiles > 1) { // Always true for legal shape until requirement on tile size IO is no longer required
         return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
