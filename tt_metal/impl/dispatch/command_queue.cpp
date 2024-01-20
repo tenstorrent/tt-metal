@@ -33,7 +33,7 @@ namespace detail{
         static std::mutex cq_creation_mutex;
         {
             std::lock_guard<std::mutex> lock(cq_creation_mutex);
-            if ( command_queues[device->id()] == nullptr )
+            if ( command_queues[device->id()] == nullptr || command_queues[device->id()]->device != device )
                 command_queues[device->id()] = std::make_unique<HWCommandQueue>(device, cmd_queue_channel);
         }
         return *(command_queues[id]);
