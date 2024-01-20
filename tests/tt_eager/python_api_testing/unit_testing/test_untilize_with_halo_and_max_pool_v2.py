@@ -48,11 +48,17 @@ def volume(shape):
 )
 @pytest.mark.parametrize(
     "kernel_size",
-    ((3, 3),),
+    (
+        (2, 2),
+        (3, 3),
+    ),
 )
 @pytest.mark.parametrize(
     "padding",
-    ((1, 1),),
+    (
+        (0, 0),
+        (1, 1),
+    ),
 )
 @pytest.mark.parametrize(
     "stride",
@@ -90,6 +96,9 @@ def test_run_max_pool(
     if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
         logger.info("Invalid case")
         pytest.skip()
+
+    if (kernel_h == 3 and pad_h != 1) or (kernel_h == 2 and pad_h != 0):
+        pytest.skip(f"Unsupported case with kernel_h: {kernel_h}, pad_h: {pad_h}")
 
     out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
