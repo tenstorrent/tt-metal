@@ -345,7 +345,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                     tt::log_info(
                         tt::LogOp,
-                        "Operation {:100} finished in {:15} nanoseconds",
+                        "Finished Operation {:50} in {:15} nanoseconds",
                         op.get_type_name(),
                         elapsed_seconds);
 #endif
