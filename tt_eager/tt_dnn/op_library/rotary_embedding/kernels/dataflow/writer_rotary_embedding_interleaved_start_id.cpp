@@ -15,6 +15,8 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
+
+    #ifndef OUT_SHARDED
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const DataFormat data_format = get_dataformat(cb_id_out);
 
@@ -23,6 +25,7 @@ void kernel_main() {
         .page_size = tile_bytes,
         .data_format = data_format
     };
+    #endif
 
     #ifdef DECODE_MODE
     uint32_t cos_sin_offset = get_arg_val<uint32_t>(3);
@@ -50,8 +53,11 @@ void kernel_main() {
     cb_push_back(untilized_cos_sync_cb_id, Wt);
     #endif
 
+    #ifdef OUT_SHARDED
+    cb_wait_front(cb_id_out, num_tiles);
+    #else
     uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i<end_id; i ++) {
+    for (uint32_t i = start_id; i<end_id; ++i) {
         cb_wait_front(cb_id_out, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 
@@ -61,4 +67,5 @@ void kernel_main() {
 
         cb_pop_front(cb_id_out, onetile);
     }
+    #endif
 }

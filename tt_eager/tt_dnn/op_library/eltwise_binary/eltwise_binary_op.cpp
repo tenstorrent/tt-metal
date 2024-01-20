@@ -178,7 +178,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_grid_cores = core_grid.x * core_grid.y;
             uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
-            shard_spec.shard_grid = num_cores_to_corerange_set(target_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
+            shard_spec.shard_grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
             shard_spec.shard_shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.shape()[-1]};
             shard_spec.shard_orientation = ShardOrientation::ROW_MAJOR;
         }

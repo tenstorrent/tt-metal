@@ -19,7 +19,7 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector< std::vector< std::vector<uint32_t> > > get_runtime_args(const Tensor &input_tensor,
+std::vector< std::array< std::vector<uint32_t>, 3 > > get_runtime_args(const Tensor &input_tensor,
                                                        Tensor &output_tensor,
                                                        uint32_t num_cores_total,
                                                        uint32_t num_cores,
@@ -43,7 +43,7 @@ std::vector< std::vector< std::vector<uint32_t> > > get_runtime_args(const Tenso
     uint32_t num_tensor_tiles = input_tensor.volume() / TILE_HW;
 
     auto HtWt = Ht * Wt;
-    std::vector< std::vector< std::vector<uint32_t> > > ret_val(num_cores_total);
+    std::vector< std::array< std::vector<uint32_t>, 3 > > ret_val(num_cores_total);
 
 
     for(uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
@@ -244,6 +244,158 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
+operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a, Tensor &output) {
+
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+
+    tt_metal::Buffer *src0_buffer = a.buffer();
+
+    int32_t num_tiles = a.volume()/TILE_HW;
+
+    tt_metal::Device *device = a.device();
+
+     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
+
+    auto& shard_spec = a.shard_spec().value();
+
+    auto& all_cores = shard_spec.shard_grid;
+    uint32_t num_cores = all_cores.num_cores();
+    uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
+
+    Shape output_shape = output.shape();
+
+    tt_metal::Buffer *dst_buffer = output.buffer();
+
+    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t num_input_tiles = num_tiles_per_shard;
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+		.set_page_size(src0_cb_index, src0_single_tile_size).set_globally_allocated_address(*a.buffer());
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
+    uint32_t num_output_tiles = num_tiles_per_shard;
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+		.set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(*output.buffer());;
+    auto cb_output = tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
+
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) src0_cb_index,
+    };
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) output_cb_index,
+    };
+
+    std::vector<uint32_t> compute_compile_time_args = {
+        (std::uint32_t) src0_cb_index,
+        (std::uint32_t) output_cb_index,
+    };
+
+    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
+        total_cores,
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+
+    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        total_cores,
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+
+
+    auto compute_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/transpose/kernels/compute/transpose_wh_sharded.cpp",
+        total_cores,
+        tt_metal::ComputeConfig{.compile_args = compute_compile_time_args}
+    );
+
+    uint32_t Wt = shard_spec.shard_shape[1] / TILE_WIDTH;
+    uint32_t Ht = a.shape()[-2] / TILE_HEIGHT;
+    uint32_t HtWt = Ht * Wt;
+    uint32_t N = shard_spec.shard_shape[0] / a.shape()[-2];
+    uint32_t NHtWt = N * HtWt;
+
+
+    // TODO: Optimize to only zero args on unused cores
+    tt_metal::SetRuntimeArgs(program, reader_kernel_id, total_cores, {0});
+    tt_metal::SetRuntimeArgs(program, compute_kernel_id, total_cores, {0, 0, 0, 0, 0});
+    tt_metal::SetRuntimeArgs(program, writer_kernel_id, total_cores, {0});
+    tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, {NHtWt});
+    tt_metal::SetRuntimeArgs(program, compute_kernel_id, all_cores, {NHtWt, HtWt, N, Ht, Wt});
+    tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, {NHtWt});
+
+
+    auto override_runtime_args_callback = [
+            reader_kernel_id,
+            compute_kernel_id,
+            writer_kernel_id,
+            cb_src0,
+            cb_output,
+            src0_single_tile_size,
+            dst_single_tile_size,
+            total_cores
+        ]
+    (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
+    ) {
+
+        const auto& src_tensor = input_tensors.at(0);
+        const auto& dst_tensor = output_tensors.at(0);
+
+        const auto src_buffer = src_tensor.buffer();
+        const auto dst_buffer = dst_tensor.buffer();
+
+        bool src0_sharded = src_tensor.is_sharded();
+        bool out_sharded = dst_tensor.is_sharded();
+
+        auto& shard_spec = src_tensor.shard_spec().value();
+
+        uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
+
+        if (src0_sharded) {
+            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+            UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_shard * src0_single_tile_size);
+        }
+
+        if (out_sharded) {
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_shard * dst_single_tile_size);
+        }
+
+        uint32_t Wt = shard_spec.shard_shape[1] / TILE_WIDTH;
+        uint32_t Ht = src_tensor.shape()[-2] / TILE_HEIGHT;
+        uint32_t HtWt = Ht * Wt;
+        uint32_t N = shard_spec.shard_shape[0] / src_tensor.shape()[-2];
+        uint32_t NHtWt = N * HtWt;
+
+        const auto& all_cores = shard_spec.shard_grid;
+
+        // TODO: Optimize to only zero args on unused cores
+        tt_metal::SetRuntimeArgs(program, reader_kernel_id, total_cores, {0});
+        tt_metal::SetRuntimeArgs(program, compute_kernel_id, total_cores, {0, 0, 0, 0, 0});
+        tt_metal::SetRuntimeArgs(program, writer_kernel_id, total_cores, {0});
+        tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, {NHtWt});
+        tt_metal::SetRuntimeArgs(program, compute_kernel_id, all_cores, {NHtWt, HtWt, N, Ht, Wt});
+        tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, {NHtWt});
+    };
+
+   return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+}
 
 }  // namespace tt_metal
 

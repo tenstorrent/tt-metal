@@ -24,6 +24,7 @@
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -696,6 +697,14 @@ void TensorModule(py::module &m_tensor) {
         &load_tensor,
         R"doc(
             Load tensor to file
+        )doc"
+    );
+
+    m_tensor.def(
+        "num_cores_to_corerange_set",
+        &num_cores_to_corerange_set,
+        R"doc(
+            Create a CoreRangeSet containing the specified number of cores
         )doc"
     );
 
