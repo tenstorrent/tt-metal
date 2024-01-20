@@ -122,7 +122,7 @@ constexpr auto decorate_operation(const Function& function) {
 #ifdef TTNN_ENABLE_LOGGING
         const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
         tt::log_info(
-            tt::LogOp, "Operation {:100} finished in {:15} nanoseconds", operation.get_type_name(), elapsed_seconds);
+            tt::LogOp, "Finished Operation {:50} in {:15} nanoseconds", operation.get_type_name(), elapsed_seconds);
 
 #endif
         return output_tensors;
@@ -230,7 +230,7 @@ std::vector<Tensor> run_device_operation(
                 const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                 tt::log_info(
                     tt::LogOp,
-                    "Program   {:100} finished in {:15} nanoseconds",
+                    "Finished Program   {:50} in {:15} nanoseconds",
                     operation.get_type_name(),
                     elapsed_seconds);
 #endif

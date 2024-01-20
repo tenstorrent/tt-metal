@@ -134,7 +134,11 @@ bool is_sharded(const TensorMemoryLayout & layout);
 
 class Buffer {
    public:
-    Buffer() : device_(nullptr) {}
+    Buffer() :
+        device_(nullptr),
+        buffer_type_(BufferType::DRAM),
+        buffer_layout_(TensorMemoryLayout::INTERLEAVED),
+        shard_parameters_(std::nullopt) {}
 
     Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
         const TensorMemoryLayout buffer_layout=TensorMemoryLayout::INTERLEAVED,
