@@ -456,6 +456,14 @@ ALWI void power_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_power_init<APPROX>() ));
 }
 
+ALWI void max_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_max<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void max_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_max_init<APPROX>() ));
+}
+
 //exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
 /**
  * Performs element-wise computation of 2^x value where x is each element of a tile
