@@ -48,9 +48,15 @@ struct MorehNorm {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->p), std::cref(this->dim)); }
 };
 
-Tensor moreh_norm(const Tensor &input, float p, std::variant<int64_t, std::vector<int64_t>> dims);
+Tensor moreh_norm(
+    const Tensor &input,
+    float p,
+    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> output = std::nullopt);
 
 Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim);
+
+// [[maybe_unused]] Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
 
 }  // namespace primary
 

@@ -617,8 +617,10 @@ void py_module(py::module& m_primary) {
         "moreh_norm",
         &moreh_norm,
         py::arg("input").noconvert(),
-        py::arg("p").noconvert(),
-        py::arg("dim").noconvert(),
+        py::arg("p").noconvert() = 2.0f,
+        py::arg("dim").noconvert() = std::nullopt,
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
         "Performs a moreh_norm operation.");
 
     m_primary.def(

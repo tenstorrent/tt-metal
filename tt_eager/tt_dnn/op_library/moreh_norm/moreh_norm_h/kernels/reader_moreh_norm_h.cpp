@@ -52,12 +52,12 @@ void kernel_main() {
     const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
 
     auto start_output_tile_idx = tile_offset;
-    for (uint32_t j = 0; j < num_cols_per_core; ++j) {
-        const auto w_idx = start_output_tile_idx % Wt;
-        const auto nc_idx = start_output_tile_idx / Wt;
+    for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
+        const auto inner_idx = start_output_tile_idx % Wt;
+        const auto outer_idx = start_output_tile_idx / Wt;
 
-        auto input_tile_idx = nc_idx * Ht * Wt + w_idx;
-        for (uint32_t h = 0; h < Ht; ++h) {
+        auto input_tile_idx = outer_idx * Ht * Wt + inner_idx;
+        for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
             cb_reserve_back(cb_id_input, 1);
             if (input_is_dram) {
                 noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr);
