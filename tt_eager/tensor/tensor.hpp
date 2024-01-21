@@ -130,18 +130,27 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
 
 
 namespace std {
+
 template <>
 struct hash<tt::tt_metal::Tensor> {
-    std::size_t operator()(const tt::tt_metal::Tensor &tensor) const {
-        std::size_t hash = std::hash<tt::tt_metal::TensorMemoryLayout>()(tensor.memory_config().memory_layout);
-        hash ^= std::hash<tt::tt_metal::BufferType>()(tensor.memory_config().buffer_type);
-        for(int idx=0; idx < tensor.shape().rank(); idx++){
-            hash ^= std::hash<uint32_t>()(tensor.shape()[idx]);
+    uint64_t operator()(const tt::tt_metal::Tensor &tensor) const {
+        if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
+            return tt::stl::hash::hash_objects(0,
+                    typeid(tt::tt_metal::Tensor).hash_code(),
+                    tensor.storage_type(),
+                    std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage()),
+                    tensor.shape(),
+                    tensor.layout(),
+                    tensor.dtype());
         }
-        hash ^= std::hash<tt::tt_metal::Layout>()(tensor.layout());
-        hash ^= std::hash<tt::tt_metal::DataType>()(tensor.dtype());
-        return hash;
-
+        else {
+            return tt::stl::hash::hash_objects(0,
+                    typeid(tt::tt_metal::Tensor).hash_code(),
+                    tensor.storage_type(),
+                    tensor.shape(),
+                    tensor.layout(),
+                    tensor.dtype());
+        }
     }
 };
 }
