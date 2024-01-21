@@ -11,20 +11,20 @@ from models.utility_functions import skip_for_wormhole_b0
 
 
 def generate_input_shapes():
-    batch_size = 32
-    kv_heads = 1
-    q_len = 1
-    q_heads = 71
-    seq_len = 128
-    K = 64
-    yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
-
     batch_size = 64
     kv_heads = 1
     q_len = 1
     q_heads = 10
     seq_len = 32
     K = 96
+    yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
+
+    batch_size = 32
+    kv_heads = 1
+    q_len = 1
+    q_heads = 71
+    seq_len = 128
+    K = 64
     yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
 
 
