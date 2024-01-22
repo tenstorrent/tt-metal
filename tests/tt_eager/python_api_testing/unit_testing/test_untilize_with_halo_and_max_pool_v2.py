@@ -13,7 +13,6 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 import tt_lib as ttl
 from tt_lib.utils import _nearest_32
@@ -201,7 +200,7 @@ def test_run_max_pool(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
     )
 
-    ttact_tilize = (
+    ttact_sharded = (
         ttl.tensor.Tensor(
             act_padded.flatten().tolist(),
             act_shape_padded,
@@ -212,32 +211,17 @@ def test_run_max_pool(
         .to(device, sharded_mem_config)
         # .to(device, interleaved_mem_config)
     )
-    ttact_sharded = ttact_tilize
-    # ttact_sharded = ttl.tensor.interleaved_to_sharded(
-    #     ttact_tilize,
-    #     grid_size,
-    #     [in_nhw // ncores_nhw, act_padded.shape[-1]],
-    #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-    #     ttl.tensor.ShardOrientation.ROW_MAJOR,
-    # )
     assert in_h * in_w == act_shape_padded[-2]
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
-    halo_reader_patterns_cache = {}
-    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
-        device, sliding_window_op_params, halo_reader_patterns_cache, pad_val=pad_val
-    )
-    out_untilize = tt_py_untilize_with_halo_op(ttact_sharded)
-    ttact_sharded.deallocate()
+
     max_pool_reader_patterns_cache = {}
-    max_pool = TTPyMaxPool(sliding_window_op_params, device, grid_size, max_pool_reader_patterns_cache)
+    max_pool = TTPyMaxPool(sliding_window_op_params, device, max_pool_reader_patterns_cache, pad_val=pad_val)
 
-    out_padded = max_pool(out_untilize)
-
-    # out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
+    out_padded = max_pool(ttact_sharded)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     # Clear the cache maps
-    halo_reader_patterns_cache.clear()
+    # halo_reader_patterns_cache.clear()
     max_pool_reader_patterns_cache.clear()
 
     out_shape_padded = out_padded.shape()
