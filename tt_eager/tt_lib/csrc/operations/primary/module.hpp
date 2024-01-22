@@ -622,6 +622,7 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert() = std::nullopt,
         py::kw_only(),
         py::arg("output").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a moreh_norm operation.");
 
     // moreh_norm_backward
