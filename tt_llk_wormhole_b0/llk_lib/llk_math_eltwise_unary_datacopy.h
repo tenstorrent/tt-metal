@@ -122,13 +122,11 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
         uint outerloop = num_faces;
 
         if (is_fp32_dest_acc_en || is_int_fpu_en) {
-            TT_LOG("MT: Running with ELWADD");
             //use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else {
-            TT_LOG("MT: Running with MOVA2D");
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(0, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
