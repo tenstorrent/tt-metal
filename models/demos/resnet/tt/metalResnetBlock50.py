@@ -1543,10 +1543,6 @@ class ResNet(nn.Module):
                 num_cores_w=grid_size[0],
                 num_cores_nhw=self.first_conv_num_cores_nhw,
             )
-            # assert "halo" in self.reader_patterns_cache
-            # self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(
-            #     self.device, max_pool_op_params, self.reader_patterns_cache["halo"], pad_val=0xF7FF
-            # )
             self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, self.max_pool_reader_patterns_cache)
         else:
             self.maxpool = TtMaxPool(
