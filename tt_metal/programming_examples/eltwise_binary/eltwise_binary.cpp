@@ -46,6 +46,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
     }
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_CODE"] = op_code.c_str();
+    printf("hello %s\n", op_name.c_str());
     return defines;
 }
 
