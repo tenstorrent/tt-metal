@@ -34,10 +34,9 @@ def is_expected_to_fail(
         return True, "You must have at least two tensors to concat!"
 
     if dimension_to_concatenate_on >= rank_of_tensors:
-        dimension_range = f"[{-rank_of_tensors}, {rank_of_tensors - 1}]"
         return (
             True,
-            f"TTNN: Dimension out of range (expected to be in range of {dimension_range}, but got {dimension_to_concatenate_on})",
+            f"ttnn: Dimension out of range: dim {dimension_to_concatenate_on} cannot be used for tensors of rank {rank_of_tensors}",
         )
 
     return False, None
