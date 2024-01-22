@@ -116,6 +116,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_h/moreh_norm_h.cpp \
 	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/moreh_norm_w.cpp \
 	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_other/moreh_norm_other.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/single_core/moreh_dot_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/moreh_dot_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot_backward/single_core/moreh_dot_backward_op_single_core.cpp \
