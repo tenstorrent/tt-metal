@@ -31,7 +31,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
 struct MorehNorm {
     float p;
     int64_t dim;
-    // MemoryConfig output_mem_config;
+    MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -39,24 +39,20 @@ struct MorehNorm {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    // static constexpr auto attribute_names = std::make_tuple("p", "dim", "output_mem_config");
-    // const auto attribute_values() const {
-    //     return std::make_tuple(std::cref(this->p), std::cref(this->dim), std::cref(this->output_mem_config));
-    // }
-
-    static constexpr auto attribute_names = std::make_tuple("p", "dim");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->p), std::cref(this->dim)); }
+    static constexpr auto attribute_names = std::make_tuple("p", "dim", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::cref(this->p), std::cref(this->dim), std::cref(this->output_mem_config));
+    }
 };
 
-Tensor moreh_norm(
+[[maybe_unused]] Tensor moreh_norm(
     const Tensor &input,
     float p,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> output = std::nullopt);
+    const std::optional<std::reference_wrapper<const Tensor>> output = std::nullopt,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim);
-
-// [[maybe_unused]] Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
+Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output);
 
 }  // namespace primary
 

@@ -28,6 +28,15 @@ namespace primary {
 
 namespace {
 
+inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
+    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(
+        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
+    TT_ASSERT(
+        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
+}
+
 inline Shape compute_output_shape(const Shape &input_shape, int64_t dim) {
     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
     auto output_shape = input_shape;
@@ -46,9 +55,10 @@ inline Shape compute_output_shape(const Shape &input_shape, int64_t dim) {
     return Shape(output_shape, output_padding);
 }
 
-inline Tensor create_output_tensor(const Tensor &input, int64_t dim) {
+inline Tensor create_output_tensor(const Tensor &input, int64_t dim, const MemoryConfig &output_mem_config) {
     const auto output_shape = compute_output_shape(input.shape(), dim);
-    const auto &output = create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device());
+    const auto &output =
+        create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device(), output_mem_config);
     return std::move(output);
 }
 
@@ -64,17 +74,24 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void MorehNorm::validate(const std::vector<Tensor> &input_tensors) const {}
+void MorehNorm::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto &input = input_tensors.at(0);
+    const auto &output = input_tensors.at(1);
+
+    check_tensor(input, "moreh_norm");
+    check_tensor(output, "moreh_norm");
+}
 
 std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
-Tensor moreh_norm(
+[[maybe_unused]] Tensor moreh_norm(
     const Tensor &input,
     float p,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const std::optional<std::reference_wrapper<const Tensor>> output) {
+    const std::optional<std::reference_wrapper<const Tensor>> output,
+    const MemoryConfig &output_mem_config) {
     if (dim == std::nullopt) {
         std::vector<int64_t> dims(input.shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
@@ -82,75 +99,47 @@ Tensor moreh_norm(
     }
 
     if (std::holds_alternative<int64_t>(dim.value())) {
-        return moreh_norm_impl(input, p, std::get<int64_t>(dim.value()));
+        const auto d = std::get<int64_t>(dim.value());
+        if (output.has_value()) {
+            return moreh_norm_impl(input, p, d, output->get());
+        }
+        return moreh_norm_impl(input, p, d, create_output_tensor(input, d, output_mem_config));
     }
 
     auto dims = std::get<std::vector<int64_t>>(dim.value());
+
+    if (dims.size() == 1) {
+        const auto d = dims[0];
+        if (output.has_value()) {
+            return moreh_norm_impl(input, p, d, output->get());
+        }
+        return moreh_norm_impl(input, p, d, create_output_tensor(input, d, output_mem_config));
+    }
+
     std::sort(dims.begin(), dims.end(), std::greater<int64_t>());
+    const auto innermost_dim = dims[0];
+    const auto outermost_dim = dims[dims.size() - 1];
 
-    for (const auto e : dims) {
-        std::cout << e << std::endl;
+    auto tmp_output =
+        moreh_norm_impl(input, p, innermost_dim, create_output_tensor(input, innermost_dim, output_mem_config));
+
+    using idx_t = decltype(dims.size());
+    for (idx_t idx = 1; idx < dims.size() - 1; ++idx) {
+        tmp_output =
+            moreh_norm_impl(tmp_output, p, dims[idx], create_output_tensor(tmp_output, dims[idx], output_mem_config));
     }
 
-    auto output_tensor = moreh_norm_impl(input, p, dims[0]);
-    dims.erase(dims.begin());
-
-    for (const auto d : dims) {
-        output_tensor = moreh_norm_impl(output_tensor, p, d);
+    if (output.has_value()) {
+        return moreh_norm_impl(tmp_output, p, outermost_dim, output->get());
     }
-    return output_tensor;
+    return moreh_norm_impl(
+        tmp_output, p, outermost_dim, create_output_tensor(tmp_output, outermost_dim, output_mem_config));
 }
 
-Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim) {
-    auto output = create_output_tensor(input, dim);
+Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
     operation::run(MorehNorm{.p = p, .dim = dim}, {input, output});
     return output;
 }
-
-// Tensor moreh_norm(
-//     const Tensor &input,
-//     float p,
-//     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-//     const std::optional<std::reference_wrapper<const Tensor>> output) {
-//     if (dim == std::nullopt) {
-//         std::vector<int64_t> dims(input.shape().rank());
-//         std::iota(dims.begin(), dims.end(), 0);
-//         dim = std::make_optional(dims);
-//     }
-
-//     if (std::holds_alternative<int64_t>(dim.value())) {
-//         const auto d = std::get<int64_t>(dim.value());
-//         if (output.has_value() && (output != std::nullopt)) {
-//             return moreh_norm_impl(input, p, d, output->get());
-//         }
-//         const auto &created_output = create_output_tensor(input, d);
-//         return moreh_norm_impl(input, p, d, created_output);
-//     }
-
-//     auto dims = std::get<std::vector<int64_t>>(dim.value());
-//     std::sort(dims.begin(), dims.end(), std::greater<int64_t>());
-
-//     // for (const auto e : dims) {
-//     //     std::cout << e << std::endl;
-//     // }
-
-//     auto output_tensor = create_output_tensor(input, dims[0]);
-
-//     // auto output_tensor = moreh_norm_impl(input, p, dims[0], output_tensor);
-//     output_tensor = moreh_norm_impl(input, p, dims[0], output_tensor);
-//     dims.erase(dims.begin());
-
-//     for (const auto d : dims) {
-//         output_tensor = moreh_norm_impl(output_tensor, p, d, output_tensor);
-//     }
-//     return output_tensor;
-// }
-
-// [[maybe_unused]] Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
-//     // const auto &output = create_output_tensor(input, dim);
-//     operation::run(MorehNorm{.p = p, .dim = dim}, {input, output});
-//     return std::move(output);
-// }
 
 operation::ProgramWithCallbacks MorehNorm::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {

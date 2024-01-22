@@ -48,7 +48,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
     const auto num_output_tiles = output.volume() / TILE_HW;
 
     uint32_t outer_stride{1};
-    for (uint32_t j = dim; j < input_rank; ++j) {
+    for (int64_t j = dim; j < input_rank; ++j) {
         outer_stride *= input_shape[j];
     }
     outer_stride /= TILE_HW;
@@ -58,12 +58,6 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
         num_inner_tiles *= input_shape[j];
     }
     num_inner_tiles /= TILE_HW;
-
-    std::cout << "dim: " << dim << std::endl;
-    std::cout << "num_reduced_tiles_along_dim: " << num_reduced_tiles_along_dim << std::endl;
-    std::cout << "num_output_tiles: " << num_output_tiles << std::endl;
-    std::cout << "outer_stride: " << outer_stride << std::endl;
-    std::cout << "num_inner_tiles: " << num_inner_tiles << std::endl;
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     auto [floored_recip_p, recip_p_decimal, recip_p_is_negative] =
@@ -83,10 +77,6 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
          core_group_2,
          num_output_tiles_per_core_group_1,
          num_output_tiles_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_output_tiles);
-
-    std::cout << "num_cores_to_be_used: " << num_cores_to_be_used << std::endl;
-    std::cout << "num_output_tiles_per_core_group_1: " << num_output_tiles_per_core_group_1 << std::endl;
-    std::cout << "num_output_tiles_per_core_group_2: " << num_output_tiles_per_core_group_2 << std::endl;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -211,10 +201,65 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
     ////////////////////////////////////////////////////////////////////////////
     //                      Callback SetUp
     ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback =
-        [](const Program &program, const std::vector<Buffer *> &, const std::vector<Buffer *> &) {};
+    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
+                                           writer_kernels_id = writer_kernels_id,
+                                           compute_kernels_id_1 = compute_kernels_id_1,
+                                           compute_kernels_id_2 = compute_kernels_id_2,
+                                           num_cores_to_be_used = num_cores_to_be_used,
+                                           num_cores_y = num_cores_y,
+                                           core_group_1 = core_group_1,
+                                           core_group_2 = core_group_2](
+                                              const void *operation,
+                                              Program &program,
+                                              const std::vector<Tensor> &input_tensors,
+                                              const std::vector<std::optional<const Tensor>> &,
+                                              const std::vector<Tensor> &) {
+        const auto p = static_cast<const MorehNorm *>(operation)->p;
 
-    return {std::move(program), override_runtime_args_callback};
+        auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
+        auto [floored_recip_p, recip_p_decimal, recip_p_is_negative] =
+            get_floored_p_and_decimal_and_p_is_negative(1.0f / p);
+
+        auto input_buffer = input_tensors.at(0).buffer();
+        auto output_buffer = input_tensors.at(1).buffer();
+
+        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            {
+                auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                runtime_args[0] = input_buffer->address();
+                runtime_args[2] = *reinterpret_cast<uint32_t *>(&decimal);
+                runtime_args[3] = *reinterpret_cast<uint32_t *>(&recip_p_decimal);
+                SetRuntimeArgs(program, reader_kernels_id, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                runtime_args[0] = output_buffer->address();
+                SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
+            }
+
+            {
+                KernelHandle compute_kernel_id;
+                if (core_group_1.core_coord_in_core_ranges(core)) {
+                    compute_kernel_id = compute_kernels_id_1;
+                } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                    compute_kernel_id = compute_kernels_id_2;
+                } else {
+                    TT_THROW("Core not in specified core ranges.");
+                }
+                auto runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
+                runtime_args[2] = floored_p;
+                runtime_args[3] = static_cast<uint32_t>(p_is_negative);
+                runtime_args[4] = floored_recip_p;
+                runtime_args[5] = static_cast<uint32_t>(recip_p_is_negative);
+                SetRuntimeArgs(program, compute_kernel_id, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary
