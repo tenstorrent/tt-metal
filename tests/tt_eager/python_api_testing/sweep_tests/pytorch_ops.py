@@ -1394,6 +1394,57 @@ def unary_div_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
+def unary_add_bw(x, y, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.add(in_data, torch.tensor(scalar))
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def unary_mul_bw(x, y, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.mul(in_data, torch.tensor(scalar))
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def unary_assign_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.clone(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def binary_assign_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.clone(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def div_bw(x, y, z, *args, **kwargs):
     grad_data = x
     in_data = y
@@ -1408,6 +1459,73 @@ def div_bw(x, y, z, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return [in_data.grad, other_data.grad]
+
+
+def rsqrt_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.rsqrt(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def addcdiv_bw(x, y, z, w, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data1 = z
+    other_data2 = w
+
+    in_data.requires_grad = True
+    other_data1.requires_grad = True
+    other_data2.requires_grad = True
+
+    in_data.retain_grad()
+    other_data1.retain_grad()
+    other_data1.retain_grad()
+    pyt_y = torch.addcdiv(in_data, other_data1, other_data2, value=scalar)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data1.grad, other_data2.grad]
+
+
+def addcmul_bw(x, y, z, w, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data1 = z
+    other_data2 = w
+
+    in_data.requires_grad = True
+    other_data1.requires_grad = True
+    other_data2.requires_grad = True
+
+    in_data.retain_grad()
+    other_data1.retain_grad()
+    other_data1.retain_grad()
+    pyt_y = torch.addcmul(in_data, other_data1, other_data2, value=scalar)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data1.grad, other_data2.grad]
+
+
+def addalpha_bw(x, y, z, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data1 = z
+
+    in_data.requires_grad = True
+    other_data1.requires_grad = True
+
+    in_data.retain_grad()
+    other_data1.retain_grad()
+    other_data1.retain_grad()
+    pyt_y = torch.add(in_data, other_data1, alpha=scalar)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data1.grad]
 
 
 def ttnn_layernorm_weights_bias(x, y, z, *args, **kwargs):

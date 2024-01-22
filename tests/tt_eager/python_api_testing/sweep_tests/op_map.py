@@ -1011,9 +1011,41 @@ op_map = {
         "tt_lib_op": tt_lib_ops.unary_div_bw,
         "pytorch_op": pytorch_ops.unary_div_bw,
     },
+    "unary-add-bw": {
+        "tt_lib_op": tt_lib_ops.unary_add_bw,
+        "pytorch_op": pytorch_ops.unary_add_bw,
+    },
+    "unary-mul-bw": {
+        "tt_lib_op": tt_lib_ops.unary_mul_bw,
+        "pytorch_op": pytorch_ops.unary_mul_bw,
+    },
+    "unary-assign-bw": {
+        "tt_lib_op": tt_lib_ops.unary_assign_bw,
+        "pytorch_op": pytorch_ops.unary_assign_bw,
+    },
+    "binary-assign-bw": {
+        "tt_lib_op": tt_lib_ops.binary_assign_bw,
+        "pytorch_op": pytorch_ops.binary_assign_bw,
+    },
     "div-bw": {
         "tt_lib_op": tt_lib_ops.div_bw,
         "pytorch_op": pytorch_ops.div_bw,
+    },
+    "addcdiv-bw": {
+        "tt_lib_op": tt_lib_ops.addcdiv_bw,
+        "pytorch_op": pytorch_ops.addcdiv_bw,
+    },
+    "addcmul-bw": {
+        "tt_lib_op": tt_lib_ops.addcmul_bw,
+        "pytorch_op": pytorch_ops.addcmul_bw,
+    },
+    "addalpha-bw": {
+        "tt_lib_op": tt_lib_ops.addalpha_bw,
+        "pytorch_op": pytorch_ops.addalpha_bw,
+    },
+    "rsqrt-bw": {
+        "tt_lib_op": tt_lib_ops.rsqrt_bw,
+        "pytorch_op": pytorch_ops.rsqrt_bw,
     },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
