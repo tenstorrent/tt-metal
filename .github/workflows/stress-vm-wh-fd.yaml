@@ -26,4 +26,3 @@ jobs:
           arch: ${{ matrix.runner-info.arch }}
           dispatch: 'fast'
           machine: ${{ matrix.runner-info.machine-type }}
-          token: ${{ secrets.CHECKOUT_TOKEN }}
