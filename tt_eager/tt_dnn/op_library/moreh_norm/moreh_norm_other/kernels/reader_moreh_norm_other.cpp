@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
 #include "tt_eager/tt_dnn/op_library/moreh_norm/kernel_utils/common.hpp"
 
 void kernel_main() {

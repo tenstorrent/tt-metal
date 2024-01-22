@@ -21,6 +21,7 @@
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
+#include "tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
@@ -622,6 +623,19 @@ void py_module(py::module& m_primary) {
         py::kw_only(),
         py::arg("output").noconvert() = std::nullopt,
         "Performs a moreh_norm operation.");
+
+    // moreh_norm_backward
+    m_primary.def(
+        "moreh_norm_backward",
+        &moreh_norm_backward,
+        py::arg("input").noconvert(),
+        py::arg("output").noconvert(),
+        py::arg("output_grad").noconvert(),
+        py::arg("p").noconvert() = 2.0f,
+        py::kw_only(),
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_norm_backward operation.");
 
     m_primary.def(
         "moreh_layernorm",
