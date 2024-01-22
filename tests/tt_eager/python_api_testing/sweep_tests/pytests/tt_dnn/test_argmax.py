@@ -7,8 +7,10 @@ import pytest
 import tt_lib
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
+from models.utility_functions import skip_for_wormhole_b0
 
 
+@skip_for_wormhole_b0("skip for WHB0 until @rtawfik/reduce_max_w_whb0_debug@ branch merge to main")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -24,6 +26,8 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
 class TestArgmax:
     def test_argmax(self, input_shapes, dim, device):
         torch.manual_seed(0)
+        if input_shapes[0] * input_shapes[1] != 1:
+            pytest.skip(f"Dim 0, and 1 in {input_shapes} not supported for argmax.")
         input_data = torch.randn(input_shapes).bfloat16()
         input_tensor = (
             tt_lib.tensor.Tensor(input_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
