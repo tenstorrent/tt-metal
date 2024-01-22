@@ -256,7 +256,9 @@ namespace kernel_profiler{
 
             if ( currEndIndex < PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
-                uint64_t dram_bank_dst_noc_addr = get_noc_addr_helper(dram_bank_to_noc_xy[0][core_flat_id / num_cores_per_bank], dram_address);
+                uint64_t dram_bank_dst_noc_addr = get_noc_addr_helper(
+                        dram_bank_to_noc_xy[0][core_flat_id / num_cores_per_bank],
+                        bank_to_dram_offset[core_flat_id / num_cores_per_bank] + dram_address);
                 noc_async_write(
                         PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
                         dram_bank_dst_noc_addr,
