@@ -11,16 +11,11 @@ inputs:
   machine:
     description: 'Virtual machine or Bare metal'
     required: true
-  token:
-    description: 'Github checkout token'
-    required: true
 
 runs:
   using: "composite"
   steps:
     - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
-      with:
-        token: ${{ token }}
     - name: Set up dynamic env vars for build
       run: |
         echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
