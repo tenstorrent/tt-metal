@@ -354,7 +354,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 num_embeddings = shape[2]
                 embedding_dim = shape[3]
 
-                input_rows_shape = [batch_size, 1, num_rows, 1]
+                input_rows_shape = [batch_size, 1, 1, num_rows]
                 weights_shape = [1, 1, num_embeddings, embedding_dim]
 
                 return [input_rows_shape, weights_shape]

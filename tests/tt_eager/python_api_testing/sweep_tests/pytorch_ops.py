@@ -1080,7 +1080,7 @@ def embeddings(x, y, *args, **kwargs):
     x_ref = torch.clamp(x_ref, min=0, max=y.shape[-2] - 1)
 
     batch_size = x_shape[0]
-    num_rows = x_shape[2]
+    num_rows = x_shape[3]
     num_embeddings = y_shape[2]
     embedding_dim = y_shape[3]
 
