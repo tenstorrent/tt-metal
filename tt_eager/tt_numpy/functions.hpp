@@ -168,20 +168,25 @@ static Tensor index_trilu(const Shape& shape, const int32_t diag, DataType data_
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
 
     auto index = 0;
-    for(uint32_t w = 0; w < shape[0]; w++) {
-        for(int32_t z = 0; z < shape[1]; z++) {
-            for(int32_t y = 0; y < shape[2]; y++) {
-                for(int32_t x = 0; x < shape[3]; x++) {
+    auto rank = shape.rank();
+    auto penultimate = rank-2;
+    auto ultimate = rank-1;
+    auto offset = shape[penultimate]*shape[ultimate];
+    auto iterations = 1;
+    for(int itr = 0; itr < rank-2; itr++) iterations *= shape[itr];
+    for(uint32_t itr = 0; itr < iterations; itr++) {
+            for(int32_t y = 0; y < shape[penultimate]; y++) {
+                for(int32_t x = 0; x < shape[ultimate]; x++) {
 		            int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
                     if constexpr (std::is_same_v<T, bfloat16>) {
-                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+                        owned_buffer[index+y*shape[ultimate]+x] = static_cast<T>(static_cast<float>(value));
                     } else {
-                        owned_buffer[index++] = static_cast<T>(value);
+                        owned_buffer[index+y*shape[ultimate]+x] = static_cast<T>(value);
                     }
                 } // dim X
 	        } // dim Y
-	    } // dim Z
-    } // dim W
+            index += offset;
+    }
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
@@ -198,16 +203,21 @@ static Tensor index_width(const Shape& shape, DataType data_type,
 
     auto index = 0;
     auto value = 0;
-    for(uint32_t w = 0; w < shape[0]; w++) {
-        for(int32_t z = 0; z < shape[1]; z++) {
-            for(int32_t y = 0; y < shape[2]; y++) {
-                for(int32_t x = 0; x < shape[3]; x++) {
-                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+    auto rank = shape.rank();
+    auto penultimate = rank-2;
+    auto ultimate = rank-1;
+    auto offset = shape[penultimate]*shape[ultimate];
+    auto iterations = 1;
+    for(int itr = 0; itr < rank-2; itr++) iterations *= shape[itr];
+    for(uint32_t itr = 0; itr < iterations; itr++) {
+            for(int32_t y = 0; y < shape[penultimate]; y++) {
+                for(int32_t x = 0; x < shape[ultimate]; x++) {
+                        owned_buffer[index+y*shape[ultimate]+x] = static_cast<T>(static_cast<float>(value));
                         value = value + 1;
                 } // dim X
                 value = 0;
 	        } // dim Y
-	    } // dim Z
+            index += offset;
     } // dim W
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
@@ -225,16 +235,21 @@ static Tensor index_height(const Shape& shape, DataType data_type,
 
     auto index = 0;
     auto value = 0;
-    for(uint32_t w = 0; w < shape[0]; w++) {
-        for(int32_t z = 0; z < shape[1]; z++) {
-            for(int32_t y = 0; y < shape[2]; y++) {
-                for(int32_t x = 0; x < shape[3]; x++) {
-                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+    auto rank = shape.rank();
+    auto penultimate = rank-2;
+    auto ultimate = rank-1;
+    auto offset = shape[penultimate]*shape[ultimate];
+    auto iterations = 1;
+    for(int itr = 0; itr < rank-2; itr++) iterations *= shape[itr];
+    for(uint32_t itr = 0; itr < iterations; itr++) {
+            for(int32_t y = 0; y < shape[penultimate]; y++) {
+                for(int32_t x = 0; x < shape[ultimate]; x++) {
+                        owned_buffer[index+y*shape[ultimate]+x] = static_cast<T>(static_cast<float>(value));
                 } // dim X
                 value = value + 1;
 	        } // dim Y
             value = 0;
-	    } // dim Z
+            index += offset;
     } // dim W
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
@@ -251,15 +266,21 @@ static Tensor index_hw(const Shape& shape, DataType data_type,
 
     auto index = 0;
     auto value = 0;
-    for(uint32_t w = 0; w < shape[0]; w++) {
-        for(int32_t z = 0; z < shape[1]; z++) {
-            for(int32_t y = 0; y < shape[2]; y++) {
-                for(int32_t x = 0; x < shape[3]; x++) {
-                        owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+    auto rank = shape.rank();
+    auto penultimate = rank-2;
+    auto ultimate = rank-1;
+    auto offset = shape[penultimate]*shape[ultimate];
+    auto iterations = 1;
+    for(int itr = 0; itr < rank-2; itr++) iterations *= shape[itr];
+    for(uint32_t itr = 0; itr < iterations; itr++) {
+            for(int32_t y = 0; y < shape[penultimate]; y++) {
+                for(int32_t x = 0; x < shape[ultimate]; x++) {
+                        owned_buffer[index+y*shape[ultimate]+x] = static_cast<T>(static_cast<float>(value));
                         value = value + 1;
                 } // dim X
 	        } // dim Y
-	    } // dim Z
+            value = 0;
+            index += offset;
     } // dim W
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {

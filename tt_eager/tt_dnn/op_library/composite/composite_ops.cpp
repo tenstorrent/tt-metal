@@ -1311,12 +1311,13 @@ Tensor repeat(const Tensor& input_a, const Shape& shape_b, const MemoryConfig& o
 
 
 // Argmax returns the index of maximum element in the tensor
-Tensor _argmax(const Tensor& input_a, int dim, const MemoryConfig& output_mem_config) {
+Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_mem_config) {
 
+    uint32_t dim = input_a.shape().get_normalized_index(_dim);
     auto& input_shape = input_a.shape();
-    int size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
+    int size = input_a.volume();
     TT_ASSERT((input_shape[0] == 1 && input_shape[1] == 1), "Unsupported shapes, supported shapes [1, 1, N, M]");
-    if (dim == 3 || dim == -1)
+    if (dim == 3 )
     {
         Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::W);
@@ -1331,10 +1332,10 @@ Tensor _argmax(const Tensor& input_a, int dim, const MemoryConfig& output_mem_co
         result = where(eq(result, full_like(result, size)), res_index, result);
         res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
         std::vector<int64_t> permute_dims = {0, 1, 3, 2};
-        Tensor transpose_res = permute(res_index,permute_dims);
+        Tensor transpose_res = permute(res_index,permute_dims,output_mem_config);
         return transpose_res;
     }
-    else if (dim == 2 || dim == -2)
+    else if (dim == 2 )
     {
         Tensor tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::H);
@@ -1370,19 +1371,20 @@ Tensor _argmax(const Tensor& input_a, int dim, const MemoryConfig& output_mem_co
     }
 
 }
-Tensor argmax(const Tensor& input_a, int dim, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+Tensor argmax(const Tensor& input_a, int64_t dim, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     return operation::decorate_as_composite(__func__, _argmax)(input_a, dim, output_mem_config);
 }
 
 
 // Argmax returns the index of maximum element in the tensor
-Tensor _argmin(const Tensor& input_a, int dim, const MemoryConfig& output_mem_config) {
+Tensor _argmin(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_mem_config) {
 
+    uint32_t dim = input_a.shape().get_normalized_index(_dim);
     auto& input_shape = input_a.shape();
-    int size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
+    int size = input_a.volume();
     TT_ASSERT((input_shape[0] == 1 && input_shape[1] == 1), "Unsupported shapes, supported shapes [1, 1, N, M]");
 
-    if (dim == 3 || dim == -1)
+    if (dim == 3 )
     {
         Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor min_val = reduce(input_a, ReduceOpMath::MIN, ReduceOpDim::W);
@@ -1397,10 +1399,10 @@ Tensor _argmin(const Tensor& input_a, int dim, const MemoryConfig& output_mem_co
         result = where(eq(result, full_like(result, size)), res_index, result);
         res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
         std::vector<int64_t> permute_dims = {0, 1, 3, 2};
-        Tensor transpose_res = permute(res_index,permute_dims);
+        Tensor transpose_res = permute(res_index,permute_dims,output_mem_config);
         return transpose_res;
     }
-    else if (dim == 2 || dim == -2)
+    else if (dim == 2 )
     {
         Tensor tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor min_val = reduce(input_a, ReduceOpMath::MIN, ReduceOpDim::H);
@@ -1436,7 +1438,7 @@ Tensor _argmin(const Tensor& input_a, int dim, const MemoryConfig& output_mem_co
     }
 
 }
-Tensor argmin(const Tensor& input_a, int dim,const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+Tensor argmin(const Tensor& input_a, int64_t dim,const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     return operation::decorate_as_composite(__func__, _argmin)(input_a, dim, output_mem_config);
 }
 }//namespace tt_metal
