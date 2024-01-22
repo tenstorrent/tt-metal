@@ -325,6 +325,19 @@ def exp(x, *args, **kwargs):
     return torch.exp(x)
 
 
+def exp_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = torch.exp(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def exp2(x, *args, **kwargs):
     return torch.exp2(x)
 
@@ -503,6 +516,19 @@ def log10(x, *args, **kwargs):
 
 def tanh(x, *args, **kwargs):
     return torch.tanh(x)
+
+
+def tanh_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = torch.tanh(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
 
 
 def tanhshrink(x, *args, **kwargs):
@@ -788,8 +814,42 @@ def max(x, y, *args, **kwargs):
     return torch.max(x, y)
 
 
+def max_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.max(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
 def min(x, y, *args, **kwargs):
     return torch.min(x, y)
+
+
+def min_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.min(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
 
 
 def squared_difference(x, y, *args, **kwargs):
@@ -823,12 +883,56 @@ def add(x, y, *args, **kwargs):
         return torch.add(x, y)
 
 
+def add_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        pyt_y = torch.add(in_data, other_data, alpha=scalar)
+        pyt_y.backward(gradient=grad_data)
+    else:
+        pyt_y = torch.add(in_data, other_data)
+        pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
 def sub(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return torch.sub(x, y, alpha=scalar)
     else:
         return torch.sub(x, y)
+
+
+def sub_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        pyt_y = torch.sub(in_data, other_data, alpha=scalar)
+        pyt_y.backward(gradient=grad_data)
+    else:
+        pyt_y = torch.sub(in_data, other_data)
+        pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
 
 
 def mul(x, y, *args, **kwargs):
