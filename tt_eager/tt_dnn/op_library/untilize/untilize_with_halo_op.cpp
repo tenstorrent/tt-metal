@@ -153,13 +153,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     untilize_with_halo_helpers::init_neighbor_core_xy_mapping(grid_size);
 
     int32_t ncores_x = grid_size.x;     // distributing data to cores row-wise
-    CoreRangeSet all_cores = input.shard_spec().value().shard_grid;
+    CoreRangeSet all_cores = input.shard_spec().value().grid;
     int32_t ncores = 0;
     for (const auto& core_range : all_cores.ranges()) {
         ncores += core_range.size();
     }
     CoreRangeSet core_range_cliff = CoreRangeSet({});
-    uint32_t nblocks_per_core = input.shard_spec().value().shard_shape[0] / TILE_HEIGHT;
+    uint32_t nblocks_per_core = input.shard_spec().value().shape[0] / TILE_HEIGHT;
     uint32_t nblocks_per_core_cliff = 0;
 
     uint32_t in_hw = pc.in_h * pc.in_w;
@@ -173,7 +173,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     int32_t halo_out_nsticks = (pc.in_w + 2 * pc.pad_w) * pc.pad_h + pc.window_w / 2;   // output sticks from the writer
 
     if (1) {
-        log_debug(LogOp, "shard_shape: {},{}", input.shard_spec().value().shard_shape[0], input.shard_spec().value().shard_shape[1]);
+        log_debug(LogOp, "shard_shape: {},{}", input.shard_spec().value().shape[0], input.shard_spec().value().shape[1]);
         log_debug(LogOp, "ncores: {}", ncores);
         log_debug(LogOp, "ncores_x: {}", ncores_x);
         log_debug(LogOp, "nblocks_per_core: {}", nblocks_per_core);
@@ -773,7 +773,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
 
     int32_t ncores_x = grid_size.x;
     int32_t ncores_y = grid_size.y;
-    CoreRangeSet all_cores = a.shard_spec().value().shard_grid;
+    CoreRangeSet all_cores = a.shard_spec().value().grid;
     int32_t ncores = all_cores.num_cores();
     int32_t ncores_col = 1;
     if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -789,7 +789,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = input_shape[3] * output.element_size();
 
-    auto shard_shape = a.shard_spec().value().shard_shape;
+    auto shard_shape = a.shard_spec().value().shape;
 
     if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         ntiles = input_shape[0] * input_shape[1] * shard_shape[0] * shard_shape[1];
@@ -798,9 +798,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         block_size_nbytes = shard_shape[1] * output.element_size();
         auto core_range = *(all_cores.ranges().begin());
         int32_t ncores_y = core_range.end.y - core_range.start.y + 1;
-        TT_ASSERT(a.shard_spec().value().shard_shape[1] * ncores_y == input_shape[3], "Input shape in W should be same as shard width * num cores along each row!");
+        TT_ASSERT(a.shard_spec().value().shape[1] * ncores_y == input_shape[3], "Input shape in W should be same as shard width * num cores along each row!");
     } else {
-        TT_ASSERT(a.shard_spec().value().shard_shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
+        TT_ASSERT(a.shard_spec().value().shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
     }
 
     // TODO: hard coded for now. need to pass these args in.
@@ -836,7 +836,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         log_debug(LogOp, "pad_w: {}", pad_w);
         log_debug(LogOp, "window_h: {}", window_h);
         log_debug(LogOp, "window_w: {}", window_w);
-        log_debug(LogOp, "shard_shape: {},{}", a.shard_spec().value().shard_shape[0], a.shard_spec().value().shard_shape[1]);
+        log_debug(LogOp, "shard_shape: {},{}", a.shard_spec().value().shape[0], a.shard_spec().value().shape[1]);
         log_debug(LogOp, "ncores: {}", ncores);
         log_debug(LogOp, "ncores_col: {}", ncores_col);
         log_debug(LogOp, "ncores_x: {}", ncores_x);
@@ -1317,10 +1317,10 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
     uint32_t nbatch = input_shape[0];
 
     // get ncores from shard shape and input shape
-    auto shard_shape = input.shard_spec().value().shard_shape;
+    auto shard_shape = input.shard_spec().value().shape;
     uint32_t ncores = in_nhw / shard_shape[0];
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto core_range = *(input.shard_spec().value().shard_grid.ranges().begin());
+        auto core_range = *(input.shard_spec().value().grid.ranges().begin());
         ncores = core_range.end.x - core_range.start.x + 1;
     }
 
@@ -1351,15 +1351,17 @@ std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Te
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     auto shard_spec = input_tensor.shard_spec().value();
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-    uint32_t ncores = input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0];
+    uint32_t ncores = input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shape[0];
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto core_range = *(input_tensor.shard_spec().value().shard_grid.ranges().begin());
+        auto core_range = *(input_tensor.shard_spec().value().grid.ranges().begin());
         ncores = core_range.end.x - core_range.start.x + 1;
     }
-    shard_spec.shard_shape[0] = output_shape[0] * div_up(output_shape[2], ncores);
+    shard_spec.shape[0] = output_shape[0] * div_up(output_shape[2], ncores);
     shard_spec.halo = true;
     // log_debug(LogOp, "derived ncores: {}", ncores);
-    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
+    auto mem_config = this->output_mem_config;
+    mem_config.shard_spec = shard_spec;
+    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -1389,7 +1391,7 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
     uint32_t dilation_h = 1;
     uint32_t dilation_w = 1;
 
-    CoreRangeSet all_cores = input_tensor_a.shard_spec().value().shard_grid;
+    CoreRangeSet all_cores = input_tensor_a.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
 
     // TODO: Uplift to support different num of sticks per core
@@ -1398,11 +1400,11 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
     uint32_t halo_out_nsticks = (in_w + window_w / 2 + 2 * pad_w);  // left or right halo
 
     if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
+        TT_ASSERT(input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR);
         TT_ASSERT(all_cores.ranges().size() == 1);
         auto core_range = *(all_cores.ranges().begin());
         ncores = core_range.end.x - core_range.start.x + 1;
-        in_nsticks_per_core = input_tensor_a.shard_spec().value().shard_shape[0];
+        in_nsticks_per_core = input_tensor_a.shard_spec().value().shape[0];
     }
 
     auto input_shape = input_tensor_a.shape();

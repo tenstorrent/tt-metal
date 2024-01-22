@@ -380,9 +380,9 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
     tt_metal::Device *device = input.device();
 
     auto shard_spec = input.shard_spec().value();
-    uint32_t num_tiles_per_shard = shard_spec.shard_shape[0] * shard_spec.shard_shape[1] / TILE_HW;
-    uint32_t num_tiles_per_row = shard_spec.shard_shape[1] / TILE_WIDTH;
-    auto all_cores = shard_spec.shard_grid;
+    uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
+    uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
+    auto all_cores = shard_spec.grid;
     uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
     uint32_t num_cores = all_cores.num_cores();
 
@@ -505,17 +505,17 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
 
-    auto all_cores = output_shard_spec.shard_grid;
+    auto all_cores = output_shard_spec.grid;
 
     uint32_t num_batches = output.volume() / (output.shape()[-2] * output.shape()[-1]);
 
-    uint32_t num_input_rows = input_shard_spec.shard_shape[0];
-    uint32_t input_shard_width_bytes = input_shard_spec.shard_shape[1] * a.element_size();
+    uint32_t num_input_rows = input_shard_spec.shape[0];
+    uint32_t input_shard_width_bytes = input_shard_spec.shape[1] * a.element_size();
     uint32_t input_shard_size_bytes = num_input_rows * input_shard_width_bytes;
-    uint32_t ntiles_per_core = output_shard_spec.shard_shape[0] * output_shard_spec.shard_shape[1] / TILE_HW;
+    uint32_t ntiles_per_core = output_shard_spec.shape[0] * output_shard_spec.shape[1] / TILE_HW;
     uint32_t ntiles_per_batch = ntiles_per_core / num_batches;
-    uint32_t ntiles_per_block = output_shard_spec.shard_shape[1] / TILE_WIDTH;
-    uint32_t nblocks_per_core = output_shard_spec.shard_shape[0] / TILE_HEIGHT;
+    uint32_t ntiles_per_block = output_shard_spec.shape[1] / TILE_WIDTH;
+    uint32_t nblocks_per_core = output_shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_padded_rows = output.shape()[-2] - a.shape()[-2];
 
     uint32_t src0_cb_index = CB::c_in1;

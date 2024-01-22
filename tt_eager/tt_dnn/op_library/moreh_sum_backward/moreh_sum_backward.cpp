@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -15,58 +15,60 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Tensor &dst) {
-    Program program{};
+operation::ProgramWithCallbacks moreh_sum_backward_program(const Tensor &output_grad, const Tensor &input_grad) {
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Device Setup
+    ////////////////////////////////////////////////////////////////////////////
+    auto *device = output_grad.device();
+    auto program = Program();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(dst.dtype());
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
+    ////////////////////////////////////////////////////////////////////////////
+    //                         Parameters Setup
+    ////////////////////////////////////////////////////////////////////////////
+    const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    Buffer *src_buffer = src.buffer();
-    Buffer *dst_buffer = dst.buffer();
+    const auto &output_grad_shape = output_grad.shape();
+    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
+    const auto output_grad_n = output_grad_shape[0];
+    const auto output_grad_c = output_grad_shape[1];
+    const auto output_grad_ht = output_grad_shape[2] / TILE_HEIGHT;
+    const auto output_grad_wt = output_grad_shape[3] / TILE_WIDTH;
+    const auto output_grad_origin_h = output_grad_shape_wo_padding[2];
+    const auto output_grad_origin_w = output_grad_shape_wo_padding[3];
 
-    // src shape
-    const auto &src_shape = src.shape();
-    uint32_t src_B1 = src_shape[0];
-    uint32_t src_B2 = src_shape[1];
-    uint32_t Ht = src_shape[2] / TILE_HEIGHT;
-    uint32_t Wt = src_shape[3] / TILE_WIDTH;
-    uint32_t HtWt = Ht * Wt;
-    uint32_t src_B2HtWt = src_B2 * HtWt;
+    const auto &input_grad_shape = input_grad.shape();
+    const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto input_grad_n = input_grad_shape[0];
+    const auto input_grad_c = input_grad_shape[1];
+    const auto input_grad_ht = input_grad_shape[2] / TILE_HEIGHT;
+    const auto input_grad_wt = input_grad_shape[3] / TILE_WIDTH;
+    const auto input_grad_origin_h = input_grad_shape_wo_padding[2];
+    const auto input_grad_origin_w = input_grad_shape_wo_padding[3];
 
-    // dst shape
-    const auto &dst_shape = dst.shape();
-    uint32_t dst_B1 = dst_shape[0];
-    uint32_t dst_B2 = dst_shape[1];
-
-    uint32_t num_read_tiles_per_core = 1;
-    if (src_B1 != dst_B1)
-        num_read_tiles_per_core *= src_B1;
-    if (src_B2 != dst_B2)
-        num_read_tiles_per_core *= src_B2;
-
-    uint32_t read_tile_offset = (src_B1 != dst_B1 && src_B2 == dst_B2) ? (src_B2HtWt) : (HtWt);
-    bool b1_batched = (src_B1 == dst_B1 && src_B1 != 1 && src_B2 != dst_B2) ? (true) : (false);
-    uint32_t num_dst_tiles = dst.volume() / TILE_HW;
+    const auto n_need_bcast = (output_grad_n != input_grad_n);
+    const auto c_need_bcast = (output_grad_c != input_grad_c);
+    const auto ht_need_bcast = (output_grad_origin_h != input_grad_origin_h);
+    const auto wt_need_bcast = (output_grad_origin_w != input_grad_origin_w);
+    const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device *device = dst.device();
     CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
     CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
 
-    const uint32_t in0_t = 2;   // src
+    const uint32_t in0_t = 2;   // input
     const uint32_t in1_t = 1;   // zero
-    const uint32_t im0_t = 1;   // temp
-    const uint32_t out0_t = 2;  // dst
+    const uint32_t out0_t = 2;  // output
     const auto
         [num_cores_to_be_used,
          all_cores,
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_dst_tiles);
+         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -76,35 +78,27 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},        // src
-            {CB::c_in1, in1_t},        // zero
-            {CB::c_intermed0, im0_t},  // temp
-            {CB::c_out0, out0_t},      // dst
+            {CB::c_in0, in0_t},    // input
+            {CB::c_in1, in1_t},    // zero
+            {CB::c_out0, out0_t},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(src.memory_config().buffer_type == BufferType::DRAM)};
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(dst.memory_config().buffer_type == BufferType::DRAM)};
-
-    const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_matmul_backward/kernels/reader_moreh_sum.cpp";
-
-    const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_matmul_backward/kernels/writer_moreh_sum.cpp";
-
+    std::vector<uint32_t> reader_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args;
+    const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/kernels/reader_moreh_sum_backward.cpp";
+    const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/kernels/writer_moreh_sum_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
-    const auto compute_kernel_file =
-        "tt_eager/tt_dnn/op_library/moreh_matmul_backward/kernels/moreh_sum_multi_core.cpp";
+    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/kernels/moreh_sum_backward.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
@@ -137,22 +131,45 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
             program,
             reader_kernel_id,
             core,
-            {src_buffer->address(),
-             num_read_tiles_per_core,
+            {output_grad.buffer()->address(),
              num_tiles_per_core,
-             read_tile_offset,
              tile_offset,
-             static_cast<uint32_t>(b1_batched),
-             HtWt,
-             src_B2HtWt});
+             static_cast<uint32_t>(is_dram(output_grad)),
+             output_grad_n,
+             output_grad_c,
+             output_grad_ht,
+             output_grad_wt,
+             input_grad_n,
+             input_grad_c,
+             input_grad_ht,
+             input_grad_wt,
+             n_need_bcast,
+             c_need_bcast,
+             ht_need_bcast,
+             wt_need_bcast});
 
-        SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, tile_offset});
+        SetRuntimeArgs(
+            program,
+            writer_kernel_id,
+            core,
+            {input_grad.buffer()->address(),
+             num_tiles_per_core,
+             tile_offset,
+             static_cast<uint32_t>(is_dram(input_grad))});
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            SetRuntimeArgs(program, compute_kernel_1_id, core, {num_read_tiles_per_core, num_tiles_per_core});
+            SetRuntimeArgs(
+                program,
+                compute_kernel_1_id,
+                core,
+                {num_tiles_per_core, n_need_bcast, c_need_bcast, ht_need_bcast, wt_need_bcast});
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_read_tiles_per_core, num_tiles_per_core});
+            SetRuntimeArgs(
+                program,
+                compute_kernel_2_id.value(),
+                core,
+                {num_tiles_per_core, n_need_bcast, c_need_bcast, ht_need_bcast, wt_need_bcast});
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
@@ -165,19 +182,19 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
-        Buffer *src_buffer = input_tensors.at(0).buffer();
-        Buffer *dst_buffer = input_tensors.at(1).buffer();
+        const auto *output_grad_buffer = input_tensors.at(0).buffer();
+        const auto *input_grad_buffer = input_tensors.at(1).buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+                runtime_args[0] = output_grad_buffer->address();
                 SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
+                runtime_args[0] = input_grad_buffer->address();
                 SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
@@ -185,6 +202,7 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt

@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
     uint32_t max_block_size = 1, num_tiles_per_shard = 0;
     if (shard_spec.has_value()) {
-        num_tiles_per_shard = shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW;
+        num_tiles_per_shard = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         max_block_size = find_max_block_size(num_tiles_per_shard);
     }
 
@@ -208,23 +208,23 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         vector<CoreCoord> cores;
 
         if (shard_spec.has_value()) {
-            all_cores = shard_spec.value().shard_grid;
+            all_cores = shard_spec.value().grid;
             num_cores = all_cores.num_cores();
             core_group_1 = all_cores;
             core_group_2 = CoreRangeSet({});
-            num_tiles_per_core_group_1 = shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW;
+            num_tiles_per_core_group_1 = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
             num_tiles_per_core_group_2 = 0;
             block_size_per_core_group_1 = find_max_block_size(num_tiles_per_core_group_1);
             max_block_size = block_size_per_core_group_1;
 
             block_cnt_per_core_group_1 = num_tiles_per_core_group_1 / block_size_per_core_group_1;
             block_cnt_per_core_group_2 = num_tiles_per_core_group_2 / block_size_per_core_group_2;
-            row_major = shard_spec.value().shard_orientation == ShardOrientation::ROW_MAJOR;
+            row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
             if (block_sharded) {
-                block_height = shard_spec.value().shard_shape[0] / TILE_HEIGHT;
-                block_width = shard_spec.value().shard_shape[1] / TILE_WIDTH;
+                block_height = shard_spec.value().shape[0] / TILE_HEIGHT;
+                block_width = shard_spec.value().shape[1] / TILE_WIDTH;
                 block_size = block_width * block_height;
-                end_core = (*shard_spec.value().shard_grid.ranges().begin()).end;
+                end_core = (*shard_spec.value().grid.ranges().begin()).end;
                 output_width = output.shape()[-1] / TILE_WIDTH;
                 uint32_t output_height = output.volume() / output.shape()[-1] / TILE_HEIGHT;
                 last_unpadded_block_height = block_height -  (round_up(output_height, block_height) - output_height);

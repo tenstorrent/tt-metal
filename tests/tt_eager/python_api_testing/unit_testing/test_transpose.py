@@ -16,7 +16,6 @@ def transpose(
     dim1,
     input_mem_config=ttl.tensor.MemoryConfig(),
     output_mem_config=ttl.tensor.MemoryConfig(),
-    input_shard_spec=None,
     input_dtype=ttl.tensor.DataType.BFLOAT16,
     expected_program_cache_size=None,
 ):
@@ -31,10 +30,8 @@ def transpose(
         input_dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE)
-    if input_shard_spec is not None:
-        xt = xt.to(device, input_mem_config, input_shard_spec)
-    else:
-        xt = xt.to(device, input_mem_config)
+
+    xt = xt.to(device, input_mem_config)
     xtt = ttl.tensor.transpose(xt, dim0, dim1, output_mem_config)
     assert list(xtt.shape()) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
@@ -132,7 +129,6 @@ def test_transpose_wh_program_cache(device, use_program_cache):
 
 def test_transpose_wh_sharded_program_cache(device, use_program_cache):
     compute_grid_size = device.compute_with_storage_grid_size()
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
     input_dtype = ttl.tensor.DataType.BFLOAT8_B
 
     N = 32
@@ -152,6 +148,9 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         ttl.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
+    mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+    )
 
     transpose(
         input_shape,
@@ -160,7 +159,6 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         dim1=-1,
         input_mem_config=mem_config,
         output_mem_config=mem_config,
-        input_shard_spec=input_shard_spec,
         input_dtype=input_dtype,
         expected_program_cache_size=1,
     )
@@ -185,6 +183,10 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         False,
     )
 
+    mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+    )
+
     transpose(
         input_shape,
         device,
@@ -192,7 +194,6 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         dim1=-1,
         input_mem_config=mem_config,
         output_mem_config=mem_config,
-        input_shard_spec=input_shard_spec,
         input_dtype=input_dtype,
         expected_program_cache_size=1,
     )
@@ -217,6 +218,10 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         False,
     )
 
+    mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+    )
+
     transpose(
         input_shape,
         device,
@@ -224,7 +229,6 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         dim1=-1,
         input_mem_config=mem_config,
         output_mem_config=mem_config,
-        input_shard_spec=input_shard_spec,
         input_dtype=input_dtype,
         expected_program_cache_size=1,
     )

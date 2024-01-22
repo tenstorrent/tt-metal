@@ -267,7 +267,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     auto& shard_spec = a.shard_spec().value();
 
-    auto& all_cores = shard_spec.shard_grid;
+    auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
 
@@ -320,10 +320,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         tt_metal::ComputeConfig{.compile_args = compute_compile_time_args}
     );
 
-    uint32_t Wt = shard_spec.shard_shape[1] / TILE_WIDTH;
+    uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t Ht = a.shape()[-2] / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
-    uint32_t N = shard_spec.shard_shape[0] / a.shape()[-2];
+    uint32_t N = shard_spec.shape[0] / a.shape()[-2];
     uint32_t NHtWt = N * HtWt;
 
 
@@ -377,13 +377,13 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
             UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_shard * dst_single_tile_size);
         }
 
-        uint32_t Wt = shard_spec.shard_shape[1] / TILE_WIDTH;
+        uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;
         uint32_t Ht = src_tensor.shape()[-2] / TILE_HEIGHT;
         uint32_t HtWt = Ht * Wt;
-        uint32_t N = shard_spec.shard_shape[0] / src_tensor.shape()[-2];
+        uint32_t N = shard_spec.shape[0] / src_tensor.shape()[-2];
         uint32_t NHtWt = N * HtWt;
 
-        const auto& all_cores = shard_spec.shard_grid;
+        const auto& all_cores = shard_spec.grid;
 
         // TODO: Optimize to only zero args on unused cores
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, total_cores, {0});

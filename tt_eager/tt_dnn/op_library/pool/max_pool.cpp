@@ -89,7 +89,9 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
         CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.shape()[-1]};
         auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR, .halo = false};
-        return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), this->out_mem_config_, shard_spec)};
+        auto mem_config = this->out_mem_config_;
+        mem_config.shard_spec = shard_spec;
+        return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, inputs, input.dtype(), input.layout(), out_mem_config_);
     }

@@ -50,11 +50,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     // Current sharding only supports width, and that input and output are sharded
     if (in_sharded) {
-        all_cores = a.shard_spec().value().shard_grid;
+        all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet({});
-        num_cols_per_core_group_1 = NC * (a.shard_spec().value().shard_shape[1] / TILE_WIDTH);
+        num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / TILE_WIDTH);
         num_cols_per_core_group_2 = 0;
     }
     string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);

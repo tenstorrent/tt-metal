@@ -60,12 +60,16 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
         ShardSpec shard_spec_k = ShardSpec{.shard_grid=all_cores,
                 .shard_shape={per_core_M_k, per_core_N_k}, .shard_orientation=ShardOrientation::COL_MAJOR};
         // create sharded tensors
+        auto mem_config_qv = this->output_mem_config;
+        mem_config_qv.shard_spec = shard_spec_qv;
+        auto mem_config_k = this->output_mem_config;
+        mem_config_k.shard_spec = shard_spec_k;
         auto out_tensor_q = create_sharded_device_tensor(Shape{batch, num_heads, M, K}, input_tensor.dtype(),
-                Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec_qv);
+                Layout::TILE, input_tensor.device(), mem_config_qv);
         auto out_tensor_k = create_sharded_device_tensor(Shape{batch, num_heads, K, M}, input_tensor.dtype(),
-                Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec_k);
+                Layout::TILE, input_tensor.device(), mem_config_k);
         auto out_tensor_v = create_sharded_device_tensor(Shape{batch, num_heads, M, K}, input_tensor.dtype(),
-                Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec_qv);
+                Layout::TILE, input_tensor.device(), mem_config_qv);
         return {out_tensor_q, out_tensor_k, out_tensor_v};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);

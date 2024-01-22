@@ -451,27 +451,19 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 
 template <typename T, template<typename> typename BufferType>
 inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape,
-            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpec> shard_spec) {
+            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
 
-    std::optional<ShardSpecBuffer> shard_spec_buffer = std::nullopt;
-    if(shard_spec.has_value()){
-        auto page_shape = get_sharded_page_shape(layout, shape, data_type, shard_spec.value().num_cores(), shard_spec.value().shard_shape);
-        std::array<uint32_t, 2> tensor2d_size = {shape[0]*shape[1] * shape[2]/ page_shape[0],
-                                                shape[3]/page_shape[1]
-                                            };
-        shard_spec_buffer = ShardSpecBuffer(shard_spec.value(), page_shape, tensor2d_size);
-    }
 
-    auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer);
+    auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
     write_data_to_device_buffer<T>(data_to_write, device_buffer, shape, data_type, layout, memory_config);
     return device_buffer;
 }
 
 template <typename T>
-inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpec> shard_spec) {
+inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec) {
 
     return std::visit(
         [&device, &shape, &data_type, &layout, memory_config, shard_spec] (auto&& storage) -> DeviceBuffer {
@@ -568,35 +560,23 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
     auto data_type = tensor.dtype();
     auto layout = tensor.layout();
 
+    std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
+    if(memory_config.is_sharded()){
+        auto page_shape = get_sharded_page_shape(layout, shape, data_type, memory_config.shard_spec.value().num_cores(), memory_config.shard_spec.value().shape);
+        std::array<uint32_t, 2> tensor2d_size = {shape[0]*shape[1] * shape[2]/ page_shape[0],
+                                                shape[3]/page_shape[1]
+                                            };
+        shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
+    }
+
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.storage(), target_device, shape,
         data_type, layout, memory_config,
-        std::nullopt
+        shard_spec_buffer_opt
     );
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, memory_config.shard_spec);
 }
 
-
-template <typename T>
-inline Tensor to_device_sharded(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config, const ShardSpec &shard_spec) {
-    TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
-    if (tensor.storage_type() ==  StorageType::OWNED) {
-        TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
-    }
-    TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
-    TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
-
-    auto shape = tensor.shape();
-    auto data_type = tensor.dtype();
-    auto layout = tensor.layout();
-
-    auto device_buffer = tensor_impl::to_device_buffer<T>(
-        tensor.storage(), target_device, shape, data_type,
-        layout, memory_config,
-        std::make_optional<ShardSpec>(shard_spec)
-    );
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, shard_spec);
-}
 
 template <typename T>
 inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
@@ -891,7 +871,7 @@ template <typename T>
 Tensor extract_shard(const Tensor & tensor, const uint32_t & core_id){
 
     auto buffer= tensor.buffer();
-    auto buffer_shard_shape = buffer->shard_shape();
+    auto buffer_shard_shape = buffer->shard_spec().shape();
     std::array <uint32_t, 4> shard_shape_array = {1,1,buffer_shard_shape[0],buffer_shard_shape[1]};
     Shape shard_shape(shard_shape_array);
     std::vector<uint32_t> device_data;

@@ -119,7 +119,7 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             // If we aren't height sharded, we require all sharding schemes to match until we add blocked reader/writers for width and block sharding
             TT_FATAL((input_tensor_b.memory_config().is_sharded()));
-            TT_FATAL(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
         }
         if (input_tensor_b.memory_config().is_sharded()) {
             TT_FATAL(input_tensor_a.memory_config() == input_tensor_b.memory_config());
@@ -168,7 +168,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
         return {};
     }
     if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec{.shard_grid=CoreRangeSet({}), .shard_shape={0, 0}};
+        ShardSpec shard_spec{.grid=CoreRangeSet({}), .shape={0, 0}};
         if (input_tensor_a.memory_config().is_sharded()) {
             shard_spec = input_tensor_a.shard_spec().value();
         } else if (input_tensor_b.memory_config().is_sharded()) {
@@ -178,11 +178,13 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_grid_cores = core_grid.x * core_grid.y;
             uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
-            shard_spec.shard_grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
-            shard_spec.shard_shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.shape()[-1]};
-            shard_spec.shard_orientation = ShardOrientation::ROW_MAJOR;
+            shard_spec.grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
+            shard_spec.shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.shape()[-1]};
+            shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+        auto mem_config = this->output_mem_config;
+        mem_config.shard_spec = shard_spec;
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
     }
     return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }

@@ -24,12 +24,12 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor &input, Ten
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto shard_spec = input.shard_spec().value();
-    auto shard_shape = shard_spec.shard_shape;
-    auto shard_grid = shard_spec.shard_grid;
+    auto shard_shape = shard_spec.shape;
+    auto shard_grid = shard_spec.grid;
     auto input_shape = input.shape();
     auto input_dtype = input.dtype();
     auto input_layout = input.layout();
-    TT_FATAL(input_layout == output.layout() && input_dtype == output.dtype() && shard_shape == output.shard_spec().value().shard_shape && input_shape == output.shape());
+    TT_FATAL(input_layout == output.layout() && input_dtype == output.dtype() && shard_shape == output.shard_spec().value().shape && input_shape == output.shape());
     const uint32_t src_cb_sharded = CB::c_in0;
     const uint32_t dst_cb_sharded = CB::c_in1;
     uint32_t tile_size_bytes = tile_size(cb_data_format);

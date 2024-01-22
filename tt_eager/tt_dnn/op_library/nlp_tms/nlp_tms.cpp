@@ -77,9 +77,9 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-        TT_FATAL(input_tensor.shard_spec().value().shard_shape[1] == input_tensor.shape()[-1]);
+        TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.shape()[-1]);
         TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-        TT_FATAL(input_tensor.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+        TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         uint32_t num_cores = core_grid.x * core_grid.y;
         // 1 Head Per Core Max for now
@@ -107,8 +107,8 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
         if (input_tensor_kv.is_sharded()) {
             TT_FATAL(input_tensor.is_sharded());
             TT_FATAL(input_tensor_kv.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            TT_FATAL(input_tensor_kv.shard_spec().value().shard_shape[1] == input_tensor_kv.shape()[-1]);
-            TT_FATAL(input_tensor_kv.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+            TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == input_tensor_kv.shape()[-1]);
+            TT_FATAL(input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
             TT_FATAL((input_tensor_kv.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor_kv.shape()[-1]})));
         }
     }
@@ -131,14 +131,18 @@ std::vector<Tensor> NlpCreateHeads::create_output_tensors(const std::vector<Tens
     if (this->output_mem_config.is_sharded()) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         auto q_shard_grid = num_cores_to_corerange_set(this->num_q_heads, core_grid, true);
-        ShardSpec q_shard_spec{.shard_grid = q_shard_grid, .shard_shape = {TILE_HEIGHT, this->head_dim}};
+        ShardSpec q_shard_spec{.grid = q_shard_grid, .shape = {TILE_HEIGHT, this->head_dim}};
+        auto q_mem_config = this->output_mem_config;
+        q_mem_config.shard_spec = q_shard_spec;
         auto kv_shard_grid = num_cores_to_corerange_set(this->num_kv_heads, core_grid, true);
-        ShardSpec kv_shard_spec{.shard_grid = kv_shard_grid, .shard_shape = {TILE_HEIGHT, this->head_dim}};
+        ShardSpec kv_shard_spec{.grid = kv_shard_grid, .shape = {TILE_HEIGHT, this->head_dim}};
+        auto kv_mem_config = this->output_mem_config;
+        kv_mem_config.shard_spec = kv_shard_spec;
         auto output_shapes = this->compute_output_shapes(input_tensors);
         return {
-            create_sharded_device_tensor(output_shapes[0], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config, q_shard_spec),
-            create_sharded_device_tensor(output_shapes[1], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config, kv_shard_spec),
-            create_sharded_device_tensor(output_shapes[2], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), this->output_mem_config, kv_shard_spec)
+            create_sharded_device_tensor(output_shapes[0], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), q_mem_config),
+            create_sharded_device_tensor(output_shapes[1], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), kv_mem_config),
+            create_sharded_device_tensor(output_shapes[2], input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), kv_mem_config)
         };
 
     } else {
@@ -182,9 +186,9 @@ void NlpConcatHeads::validate(const std::vector<Tensor>& input_tensors) const {
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         auto shard_spec = input_tensor.shard_spec().value();
-        TT_FATAL(shard_spec.shard_shape[1] == input_tensor.shape()[-1]);
-        TT_FATAL(shard_spec.shard_shape[0] % input_tensor.shape()[-2] == 0);
-        TT_FATAL(input_tensor.shape()[1] % (shard_spec.shard_shape[0] / input_tensor.shape()[-2]) == 0);
+        TT_FATAL(shard_spec.shape[1] == input_tensor.shape()[-1]);
+        TT_FATAL(shard_spec.shape[0] % input_tensor.shape()[-2] == 0);
+        TT_FATAL(input_tensor.shape()[1] % (shard_spec.shape[0] / input_tensor.shape()[-2]) == 0);
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     } else {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
@@ -205,9 +209,11 @@ std::vector<Tensor> NlpConcatHeads::create_output_tensors(const std::vector<Tens
     if (this->output_mem_config.is_sharded()) {
         ShardSpec shard_spec = input_tensor.shard_spec().value();
         uint32_t num_cores = shard_spec.num_cores();
-        uint32_t heads_per_shard = shard_spec.shard_shape[0] / input_tensor.shape()[-2];
-        shard_spec.shard_shape = {shard_spec.shard_shape[0] / heads_per_shard, shard_spec.shard_shape[1] * heads_per_shard};
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
+        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.shape()[-2];
+        shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
+        auto mem_config = this->output_mem_config;
+        mem_config.shard_spec = shard_spec;
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::TILE, input_tensor.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
     }

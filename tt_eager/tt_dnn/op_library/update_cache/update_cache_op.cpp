@@ -39,9 +39,9 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     } else if (this->op_type == UpdateCacheOpType::UPDATE) {
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            TT_FATAL(input_tensor.shard_spec().value().shard_shape[1] == input_tensor.shape()[-1]);
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.shape()[-1]);
             // Require even work division for now
-            TT_FATAL((input_tensor.volume() / input_tensor.shape()[-1]) % input_tensor.shard_spec().value().shard_shape[0] == 0);
+            TT_FATAL((input_tensor.volume() / input_tensor.shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0);
         } else {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
