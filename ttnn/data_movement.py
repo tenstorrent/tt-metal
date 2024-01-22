@@ -160,9 +160,18 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
     if len(tensors) < 2:
         raise RuntimeError("You must have at least two tensors to concat!")
 
+    rank = len(tensors[0].shape)
+    original_dim = dim
+    if dim < 0:
+        dim = rank + dim
+    if dim < 0 or dim >= rank:
+        raise RuntimeError(
+            f"ttnn: Dimension out of range: dim {original_dim} cannot be used for tensors of rank {rank}"
+        )
+
     for input_tensor in tensors:
         if not ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            raise RuntimeError("All tensors must be on device!")
+            raise RuntimeError("ttnn: All tensors must be on device!")
 
     dtype = tensors[0].dtype
     device = tensors[0].device
@@ -178,13 +187,6 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
             raise ValueError(
                 "All dimensions must be the same size except for the dimension along which the contenation is taking place."
             )
-
-    rank_of_tensors = len(tensors[0].shape)
-    if dim >= rank_of_tensors:
-        dimension_range = f"[{-rank_of_tensors}, {rank_of_tensors - 1}]"
-        raise RuntimeError(
-            f"TTNN: Dimension out of range (expected to be in range of {dimension_range}, but got {dim})"
-        )
 
     output_tensor = _torch_concat(tensors, dim=dim)
 
