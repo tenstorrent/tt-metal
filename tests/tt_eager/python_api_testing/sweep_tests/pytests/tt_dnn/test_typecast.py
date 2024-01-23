@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrigmemhtText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,24 @@ mem_configs = [
 
 
 @pytest.mark.parametrize(
+    "output_type",
+    [
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+        # ttl.tensor.DataType.FLOAT32,
+        # ttl.tensor.DataType.UINT16,
+        # ttl.tensor.DataType.UINT32,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_type",
+    [
+        torch.float32,
+        torch.float16,
+        torch.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
     "input_shapes",
     [
         [[1, 1, 32, 32]],  # Single core
@@ -44,6 +62,8 @@ mem_configs = [
 class TestTypecast:
     def test_run_typecast_op(
         self,
+        input_type,
+        output_type,
         input_shapes,
         input_mem_config,
         dst_mem_config,
@@ -51,12 +71,14 @@ class TestTypecast:
         function_level_defaults,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=10), torch.float32)
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=10), input_type)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args["dtype"] = [output_type]
         test_args["input_mem_config"] = [input_mem_config]
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
+
         run_single_pytorch_test(
             "typecast",
             input_shapes,
