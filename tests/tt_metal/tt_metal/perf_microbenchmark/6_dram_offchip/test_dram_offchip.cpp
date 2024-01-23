@@ -242,10 +242,9 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            CommandQueue &cq = *tt::tt_metal::detail::GLOBAL_CQ;
             auto t_begin = std::chrono::steady_clock::now();
-            tt_metal::EnqueueProgram(cq, program, false);
-            tt_metal::Finish(cq);
+            EnqueueProgram(::detail::GetCommandQueue(device), program, false);
+            Finish(::detail::GetCommandQueue(device));
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

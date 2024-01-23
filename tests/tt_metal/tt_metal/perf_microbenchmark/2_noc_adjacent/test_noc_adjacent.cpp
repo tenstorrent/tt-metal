@@ -130,7 +130,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();
@@ -214,8 +213,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(cq, program, false);
-            Finish(cq);
+            EnqueueProgram(::detail::GetCommandQueue(device), program, false);
+            Finish(::detail::GetCommandQueue(device));
             auto t_end = std::chrono::steady_clock::now();
             unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;

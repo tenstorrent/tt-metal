@@ -67,7 +67,6 @@ int main(int argc, char** argv) {
         // Device setup
         int device_id = 0;
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
         // Application setup
         uint32_t single_tile_size = 2 * 1024;
@@ -91,8 +90,8 @@ int main(int argc, char** argv) {
             // Execute application
             {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueWriteBuffer(cq, buffer, src_vec, false);
-                Finish(cq);
+                EnqueueWriteBuffer(::detail::GetCommandQueue(device), buffer, src_vec, false);
+                Finish(::detail::GetCommandQueue(device));
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 h2d_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
@@ -106,7 +105,7 @@ int main(int argc, char** argv) {
 
             {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueReadBuffer(cq, buffer, result_vec, true);
+                EnqueueReadBuffer(::detail::GetCommandQueue(device), buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 d2h_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
