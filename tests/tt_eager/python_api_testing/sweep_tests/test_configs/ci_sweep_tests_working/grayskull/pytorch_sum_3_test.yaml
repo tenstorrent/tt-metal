@@ -20,10 +20,13 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: sum_3_sweep.csv
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
   - sum-3:
       shape:
@@ -45,8 +48,11 @@ test-list:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: sum_3_sweep.csv
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
