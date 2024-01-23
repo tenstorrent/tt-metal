@@ -139,8 +139,6 @@ void MAIN {
         cb_push_back(cb_dx, onetile);
         REL();
 
-        cb_pop_front(cb_x, onetile);
-        cb_pop_front(cb_y, onetile);
         cb_pop_front(cb_dy, onetile);
     }
 
