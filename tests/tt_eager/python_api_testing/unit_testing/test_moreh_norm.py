@@ -4,10 +4,9 @@
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose, skip_for_wormhole_b0
 from loguru import logger
 
 TILE_HEIGHT = 32
@@ -34,178 +33,195 @@ def to_npu(
     return npu_tensor
 
 
-# if __name__ == "__main__":
-#     print("test_moreh_norm.py")
-#     device = ttl.device.CreateDevice(0)
+def make_cpu_tensors(input_shape, dim):
+    if dim is None:
+        dim = list(range(len(input_shape)))
 
-#     torch.manual_seed(2024)
-#     torch.set_printoptions(edgeitems=32, linewidth=1000, precision=2)
+    if isinstance(dim, int):
+        dim = [dim]
 
-#     input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH)
+    # output_grad_shape
+    output_grad_shape = input_shape[:]
 
-#     input_shape = (2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13)
+    for d in dim:
+        output_grad_shape[d] = 1
 
-#     # cpu_x = torch.randint(0, 3, input_shape, dtype=torch.float32).requires_grad_()
-#     cpu_x = torch.randint(-9, 10, input_shape, dtype=torch.float32).requires_grad_()
-#     # aa = to_npu(a.bfloat16(), device)
+    # input
+    cpu_input = torch.empty(input_shape, dtype=torch.float32).uniform_(-1, 1).requires_grad_()
 
-#     # print("a")
-#     # print(a)
-#     # print(a.shape)
+    # output_grad
+    cpu_output_grad = torch.empty(output_grad_shape, dtype=torch.float32).uniform_(-1, 1)
 
-#     # dim = 0
-#     # dim = 1
-#     # dim = 2
-#     # dim = 3
+    return cpu_input, cpu_output_grad
 
-#     # dim = [2, 3]
-#     # dim = (0, 1, 2, 3)
-#     # dim = [0, 2, 3]
-#     dim = [0, 2]
-#     # dim = (2,)
-#     # dim = [2]
-#     # dim = 2
-#     # dim = 3
-#     # dim = None
 
-#     p = 2.0
-#     # p = 2.5
-#     # p = -2.0
-#     # p = -3.3
-#     # p = -1.5
-#     # print(a)
-
-#     cpu_y = torch.norm(cpu_x, p=p, dim=dim, keepdim=True)
-
-#     # cpu_dy = torch.randint(0, 3, cpu_y.shape, dtype=torch.float32)
-#     cpu_dy = torch.randint(-9, 10, cpu_y.shape, dtype=torch.float32)
-#     print("cpu_dy")
-#     # print(cpu_dy)
-#     print(cpu_dy.shape)
-
-#     cpu_y.backward(cpu_dy)
-#     # print("cpu_x.grad")
-#     # print(cpu_x.grad)
-
-#     npu_x = to_npu(cpu_x.bfloat16(), device)
-#     npu_y = to_npu(cpu_y.bfloat16(), device)
-#     npu_dy = to_npu(cpu_dy.bfloat16(), device)
-
-#     npu_dx = to_npu(torch.zeros(input_shape, dtype=torch.bfloat16), device)
-#     ttl.operations.primary.moreh_norm_backward(npu_x, npu_y, npu_dy, p=p, input_grad=npu_dx)
-
-#     # npu_dx = ttl.operations.primary.moreh_norm_backward(npu_x, npu_y, npu_dy, p=p)
-
-#     # print("npu_y")
-#     # print(npu_y)
-
-#     # print("npu_dy")
-#     # print(npu_dy)
-
-#     cpu_dx = cpu_x.grad
-#     npu_dx = to_cpu(npu_dx, list(cpu_dx.shape))
-
-#     # print("cpu_dx")
-#     # print(cpu_dx)
-#     # print(cpu_dx.shape)
-
-#     # print("npu_dx")
-#     # print(npu_dx)
-#     # print(npu_dx.shape)
-
-#     # aa = to_npu(a.bfloat16(), device)
-
-#     # a_grad = (x.pow(p - 1.0) * y * dy) / y.pow(p)
-#     # print(a_grad)
-
-#     # print(torch.allclose(a_grad, a.grad))
-
-#     atol = rtol = 0.1
-#     print(torch.allclose(npu_dx.float(), cpu_dx, atol=atol, rtol=rtol))
-
-#     ttl.device.CloseDevice(device)
-
-# input_grad = (input.pow(p - 1.0) * output.unsqueeze(dim) * output_grad.unsqueeze(dim)) / (output.unsqueeze(dim).pow(p))
-
-# input_grad = (input.pow(p - 1.0) * output * output_grad) / (output.pow(p))
-
-if __name__ == "__main__":
-    print("test_moreh_norm.py")
-    device = ttl.device.CreateDevice(0)
-
-    torch.manual_seed(2024)
-    torch.set_printoptions(edgeitems=32, linewidth=1000)
-
-    # input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH)
-
-    # input_shape = (1, 1, TILE_HEIGHT, 2 * TILE_WIDTH)
-
-    # input_shape = (2, 1, TILE_HEIGHT, TILE_WIDTH)
-
-    # input_shape = (1, 2, TILE_HEIGHT, TILE_WIDTH)
-
-    # input_shape = (1, 2, 2 * TILE_HEIGHT, TILE_WIDTH)
-
-    # input_shape = (1, 2, 2 * TILE_HEIGHT, 2 * TILE_WIDTH)
-
-    # input_shape = (2, 2, TILE_HEIGHT, TILE_WIDTH)
-
-    # input_shape = (1, 1, 2 * TILE_HEIGHT, TILE_WIDTH)
-
-    # input_shape = (1, 1, TILE_HEIGHT + 15, 2 * TILE_WIDTH)
-
-    # input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH - 15)
-
-    # input_shape = (1, 1, TILE_HEIGHT - 15, TILE_WIDTH)
-
-    # input_shape = (1, 1, TILE_HEIGHT, TILE_WIDTH + 15)
-
-    # input_shape = (2, 2, 2 * TILE_HEIGHT, 2 * TILE_WIDTH)
-
-    input_shape = (2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13)
-
-    cpu_x = torch.randint(-5, 6, input_shape, dtype=torch.float32)
-    npu_x = to_npu(cpu_x.bfloat16(), device)
-
-    print(cpu_x.shape)
-
-    # dim = 0
-    # dim = 1
-    # dim = 2
-    # dim = 3
-
-    # dim = [2, 3]
-    # dim = (0, 1, 2, 3)
-    dim = [0, 2, 3]
-    # dim = (2,)
-    # dim = [2]
-    # dim = 2
-    # dim = 3
-    dim = None
-
-    p = 2.0
-    # p = 2.5
-    # p = -2.0
-    # p = -3.3
-    # p = -1.5
-    # print(a)
-
+def torch_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False):
     cpu_y = torch.norm(cpu_x, p=p, dim=dim, keepdim=True)
-    npu_y = to_npu(torch.zeros(cpu_y.shape, dtype=torch.bfloat16), device)
-    ttl.operations.primary.moreh_norm(npu_x, p=p, dim=dim, output=npu_y)
 
-    # cpu_y = torch.norm(cpu_x, p=p, dim=dim, keepdim=True)
-    # npu_y = ttl.operations.primary.moreh_norm(npu_x, p=p, dim=dim)
+    cpu_dx = None
+    if do_backward:
+        cpu_y.backward(cpu_dy)
+        cpu_dx = cpu_x.grad
 
-    # b = torch.norm(a, p=p, keepdim=True)
-    # bb = ttl.operations.primary.moreh_norm(aa, p=p)
+    return cpu_y, cpu_dx
 
-    print(cpu_y.shape)
-    print()
-    npu_y = to_cpu(npu_y, list(cpu_y.shape))
-    # print(npu_y)
 
-    atol = rtol = 0.1
-    print(torch.allclose(npu_y.float(), cpu_y, atol=atol, rtol=rtol))
+def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
+    npu_x = to_npu(cpu_x.bfloat16(), device)
+    if do_backward:
+        npu_dy = to_npu(cpu_dy.bfloat16(), device)
 
-    ttl.device.CloseDevice(device)
+    npu_y = ttl.operations.primary.moreh_norm(npu_x, p=p, dim=dim)
+
+    npu_dx = None
+    if do_backward:
+        npu_dx = ttl.operations.primary.moreh_norm_backward(npu_x, npu_y, npu_dy, p=p)
+        npu_dx = to_cpu(npu_dx, list(cpu_x.shape))
+
+    npu_y = to_cpu(npu_y, list(cpu_dy.shape))
+
+    return npu_y, npu_dx
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("p", [2.0, 2.5, -2.5], ids=["p=2.0", "p=2.5", "p=-2.5"])
+@pytest.mark.parametrize(
+    "dim",
+    [
+        None,
+        0,
+        1,
+        2,
+        3,
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 2, 3],
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2],
+        [1, 2, 3],
+        [1, 3],
+        [2, 3],
+    ],
+    ids=[
+        "global_norm",
+        "N",
+        "C",
+        "H",
+        "W",
+        "NC",
+        "NCH",
+        "NCHW",
+        "NCW",
+        "NHW",
+        "CH",
+        "CHW",
+        "CW",
+        "HW",
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, TILE_HEIGHT, TILE_WIDTH],
+        [2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13],
+        [16, 16, 8 * TILE_HEIGHT + 13, 8 * TILE_WIDTH + 13],
+    ],
+)
+def test_moreh_norm(input_shape, p, dim, device):
+    torch.manual_seed(2024)
+
+    cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
+
+    # expected
+    expected_y, _ = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, do_backward=False)
+
+    # actual
+    actual_y, _ = tt_norm(cpu_x, cpu_dy, p=p, dim=dim, device=device, do_backward=False)
+
+    # Set rtol and atol
+    rtol = atol = 0.1
+    if dim is None:
+        rtol = atol = 0.2
+    if isinstance(dim, list):
+        if len(dim) == 3:
+            rtol = atol = 0.15
+        elif len(dim) == 4:
+            rtol = atol = 0.2
+
+    # Check output
+    pass_y, out_y = comp_allclose(expected_y, actual_y, rtol=rtol, atol=atol)
+    logger.info(f"output's {out_y}")
+    assert pass_y
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("p", [2.0], ids=["p=2.0"])
+@pytest.mark.parametrize(
+    "dim",
+    [
+        None,
+        0,
+        1,
+        2,
+        3,
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 2, 3],
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2],
+        [1, 2, 3],
+        [1, 3],
+        [2, 3],
+    ],
+    ids=[
+        "global_norm",
+        "N",
+        "C",
+        "H",
+        "W",
+        "NC",
+        "NCH",
+        "NCHW",
+        "NCW",
+        "NHW",
+        "CH",
+        "CHW",
+        "CW",
+        "HW",
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, TILE_HEIGHT, TILE_WIDTH],
+        [2, 2, 2 * TILE_HEIGHT + 13, 2 * TILE_WIDTH + 13],
+        [16, 16, 8 * TILE_HEIGHT + 13, 8 * TILE_WIDTH + 13],
+    ],
+)
+def test_moreh_norm_backward(input_shape, p, dim, device):
+    torch.manual_seed(2024)
+
+    cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
+
+    # expected
+    _, expected_dx = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, do_backward=True)
+
+    # actual
+    _, actual_dx = tt_norm(cpu_x, cpu_dy, p=p, dim=dim, device=device, do_backward=True)
+
+    # Set rtol and atol
+    rtol = atol = 0.1
+    if dim is None:
+        rtol = atol = 0.2
+    if isinstance(dim, list):
+        if len(dim) == 3:
+            rtol = atol = 0.15
+        elif len(dim) == 4:
+            rtol = atol = 0.2
+
+    # Check input_grad
+    pass_dx, out_dx = comp_allclose(expected_dx, actual_dx, rtol=rtol, atol=atol)
+    logger.info(f"input_grad's {out_dx}")
+    assert pass_dx

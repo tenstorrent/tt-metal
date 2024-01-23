@@ -14,6 +14,7 @@
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "tt_eager/tt_numpy/functions.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -89,7 +90,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
         get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
 
-    TT_ASSERT(decimal_minus_one == decimal);
+    TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -156,25 +157,23 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
         "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "writer_moreh_norm_backward.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, {});
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, {});
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
-
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_norm_backward/kernels/"
         "moreh_norm_backward_kernel.cpp";
 
-    const auto compute_kernels_id_1 = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_input_tiles_per_core_group_1, {}}, compute_defines);
+    const auto compute_kernels_id_1 =
+        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_input_tiles_per_core_group_1});
 
     KernelHandle compute_kernels_id_2{0};
     if (!core_group_2.ranges().empty()) {
-        compute_kernels_id_2 = CreateComputeKernel(
-            program, compute_kernel_file, {core_group_2, num_input_tiles_per_core_group_2, {}}, compute_defines);
+        compute_kernels_id_2 =
+            CreateComputeKernel(program, compute_kernel_file, {core_group_2, num_input_tiles_per_core_group_2});
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -264,7 +263,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
         auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
             get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
 
-        TT_ASSERT(decimal_minus_one == decimal);
+        TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
 
         auto input_buffer = input_tensors.at(0).buffer();
         auto output_buffer = input_tensors.at(1).buffer();
