@@ -111,9 +111,6 @@ set_up_kernels:
 set_up_kernels/clean:
 	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
 
-hugepage-check:
-	bash -c "python3.8 $(TT_METAL_HOME)/infra/machine_setup/scripts/setup_hugepages.py check" || (echo "$?"; exit 1)
-
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
 endif
@@ -129,7 +126,6 @@ endif
 LIBS_TO_BUILD =
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \
-	hugepage-check \
 	python_env/dev \
 	git_hooks
 endif
