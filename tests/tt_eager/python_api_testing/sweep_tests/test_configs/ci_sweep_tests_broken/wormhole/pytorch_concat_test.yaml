@@ -8,6 +8,7 @@ test-list:
         num-shapes: 2
         num-samples: 32
         args-sampling-strategy: "all"
+        method: "concat"
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
       datagen:
@@ -18,7 +19,7 @@ test-list:
           high: 100
       comparison:
         function: comp_equal
-      args-gen: gen_random_dim_args
+      args-gen: gen_concat_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
@@ -33,6 +34,7 @@ test-list:
         num-shapes: 2
         num-samples: 32
         args-sampling-strategy: "all"
+        method: "concat"
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
       datagen:
@@ -43,7 +45,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_random_dim_args
+      args-gen: gen_concat_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT8_B"]
@@ -58,6 +60,7 @@ test-list:
         num-shapes: 2
         num-samples: 32
         args-sampling-strategy: "all"
+        method: "concat"
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
       datagen:
@@ -68,7 +71,7 @@ test-list:
           high: 100
       comparison:
         function: comp_equal
-      args-gen: gen_random_dim_args
+      args-gen: gen_concat_args
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
