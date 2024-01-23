@@ -6,7 +6,6 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 static constexpr uint32_t l1_db_cb_addr_offset = 7 * 16;
-static constexpr uint32_t NUM_COMMAND_SLOTS = 2;
 
 FORCE_INLINE
 uint32_t get_db_cb_l1_base(bool db_buf_switch) {
