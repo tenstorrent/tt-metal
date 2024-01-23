@@ -18,7 +18,8 @@ Tensor
    ttnn/reallocate
    ttnn/to_memory_config
 
-Miscellaneous
+
+Memory Config
 *************
 
 .. toctree::
@@ -114,3 +115,12 @@ Embedding
    :maxdepth: 1
 
    ttnn/embedding
+
+
+Model Conversion
+****************
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/model_preprocessing/preprocess_model_parameters

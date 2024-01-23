@@ -35,7 +35,7 @@ def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, 
     torch_attention_mask = torch.zeros(1, sequence_size) if functional_bert == ttnn_optimized_functional_bert else None
 
     torch_parameters = preprocess_model_parameters(
-        f"torch_{model_name}",
+        model_name=f"torch_{model_name}",
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
@@ -58,7 +58,7 @@ def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, 
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),

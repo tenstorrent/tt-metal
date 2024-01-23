@@ -297,7 +297,7 @@ def test_t5_for_conditional_generation(model_name, batch_size, sequence_size):
     torch_output = model(torch_input_ids, decoder_input_ids=torch_decoder_input_ids).logits
 
     parameters = preprocess_model_parameters(
-        f"torch_{model_name}",
+        model_name=f"torch_{model_name}",
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
     )

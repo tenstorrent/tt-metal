@@ -478,7 +478,7 @@ if __name__ == "__main__":
 
     # Sanity check the torch functional approach
     parameters = preprocess_model_parameters(
-        f"torch_{model_name}",
+        model_name=f"torch_{model_name}",
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         convert_to_ttnn=lambda *_: False,

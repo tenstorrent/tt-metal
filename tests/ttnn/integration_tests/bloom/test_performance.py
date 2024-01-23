@@ -56,7 +56,7 @@ def test_performance_of_bloom_for_question_answering(
         raise ValueError(f"Unknown functional_bloom: {functional_bloom}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: BloomForQuestionAnswering.from_pretrained(model_name).eval(),
         device=device,
         custom_preprocessor=functional_bloom.custom_preprocessor,
