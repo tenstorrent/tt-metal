@@ -268,9 +268,9 @@ void Device::initialize_command_queue() {
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     this->manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
-    detail::CompileCommandQueuePrograms(this, this->command_queue_programs);
     // TODO (abhullar): remove this condition with https://github.com/tenstorrent-metal/tt-metal/issues/3953
     if (this->is_mmio_capable()) {
+        detail::CompileCommandQueuePrograms(this, this->command_queue_programs);
         TT_ASSERT(this->command_queue_programs.size() == 1);
         detail::CommandQueueInit(this);
         Program& command_queue_program = *this->command_queue_programs[0];
