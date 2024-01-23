@@ -41,6 +41,10 @@ def clone(x, *args, **kwargs):
 def typecast(x, pt_input_dtype, pt_output_dtype, *args, **kwargs):
     return x.to(pt_input_dtype[0]).to(pt_output_dtype[0])
 
+    
+def concat(x, y, *args, dim, **kwargs):
+    return torch.concat([x, y], dim)
+
 
 def move(x, *args, **kwargs):
     return x
@@ -1376,6 +1380,10 @@ def complex_conj(x, *args, **kwargs):
 
 def complex_abs(x, *args, **kwargs):
     return torch.abs(x)
+
+
+def complex_polar(x, y, *args, **kwargs):
+    return torch.polar(x.to(torch.float32), y.to(torch.float32))
 
 
 def complex_imag(x, *args, **kwargs):

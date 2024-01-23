@@ -1448,6 +1448,28 @@ def gen_logical_immediate_args(
         yield input_info
 
 
+def gen_concat_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            dim = -1
+
+            for i in range(len(input_shapes[0])):
+                if input_shapes[0][i] != input_shapes[1][i]:
+                    dim = i
+
+            if dim == -1:
+                num_dims = len(input_shapes[0])
+                dim = random.randint(0, num_dims - 1)
+
+            input_info.update({"dim": dim})
+            yield input_info
+
+
 def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
     for input_info in gen_dtype_layout_device(
         input_shapes,

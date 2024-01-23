@@ -32,6 +32,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.copy,
         "pytorch_op": pytorch_ops.copy,
     },
+    "concat": {
+        "tt_lib_op": tt_lib_ops.concat,
+        "pytorch_op": pytorch_ops.concat,
+    },
     "move": {
         "tt_lib_op": tt_lib_ops.move,
         "pytorch_op": pytorch_ops.move,
@@ -1002,6 +1006,10 @@ op_map = {
     "complex-abs": {
         "tt_lib_op": tt_lib_ops.complex_abs,
         "pytorch_op": pytorch_ops.complex_abs,
+    },
+    "complex-polar": {
+        "tt_lib_op": tt_lib_ops.complex_polar,
+        "pytorch_op": pytorch_ops.complex_polar,
     },
     "complex-imag": {
         "tt_lib_op": tt_lib_ops.complex_imag,
