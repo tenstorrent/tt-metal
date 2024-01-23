@@ -77,7 +77,7 @@ def copy(
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = ttl.tensor.copy(t0, t1)
 
-    return tt2torch_tensor(t1)
+    return tt2torch_tensor(t2)
 
 
 @setup_host_and_device
@@ -114,6 +114,28 @@ def typecast(
     t1 = ttl.tensor.typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def concat(
+    x,
+    y,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    xtt = (t0, t1)
+    t2 = ttl.tensor.concat(xtt, dim, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t2)
 
 
 @setup_host_and_device
@@ -2562,6 +2584,15 @@ def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_co
     tt_result = tt2torch_tensor(tt_result)
 
     return tt_result
+
+
+@setup_host_and_device
+def complex_polar(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    tt_result = ttl.tensor.polar(t0, t1, output_mem_config=output_mem_config)
+    return ttl_complex_2_torch_complex(tt_result)
 
 
 @setup_host_and_device

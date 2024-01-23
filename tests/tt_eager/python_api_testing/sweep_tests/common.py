@@ -298,6 +298,30 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             ):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "concat":
+            assert len(start_shape) == 4
+            assert len(end_shape) == 4
+
+            shape_start = start_shape + start_shape
+            shape_end = end_shape + end_shape
+            new_interval = interval + interval
+
+            def _concat_shapes(shape):
+                a_shape = [shape[0], shape[1], shape[2], shape[3]]
+                b_shape = [shape[0], shape[1], shape[2], shape[3]]
+
+                dim = random.randint(0, 3)
+
+                # Concatinating dim is different
+                b_shape[dim] = shape[4 + dim]
+
+                return [a_shape, b_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                shape_start, shape_end, new_interval, _concat_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "layernorm":
             assert len(start_shape) == 4
             assert len(end_shape) == 4
