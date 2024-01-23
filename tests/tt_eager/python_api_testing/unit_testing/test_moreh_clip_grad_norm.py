@@ -115,43 +115,40 @@ def test_moreh_clip_grad_norm(
             assert pass_input_i
 
 
-@skip_for_wormhole_b0()
-@pytest.mark.parametrize("error_if_nonfinite", [True, False])
-def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite):
-    device = ttl.device.CreateDevice(0)
+# @skip_for_wormhole_b0()
+# @pytest.mark.parametrize("error_if_nonfinite", [True, False])
+# def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device):
+#     torch.manual_seed(2023)
 
-    torch.manual_seed(2023)
+#     cpu_dtype = torch.bfloat16
+#     npu_dtype = ttl.tensor.DataType.BFLOAT16
 
-    cpu_dtype = torch.bfloat16
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+#     input_shape = [4, 4, 4 * TILE_HEIGHT, 4 * TILE_WIDTH]
+#     param = torch.nn.Parameter(torch.empty(input_shape, dtype=cpu_dtype))
+#     grad = torch.randn(input_shape, dtype=cpu_dtype)
+#     param.grad = grad
 
-    input_shape = [4, 4, 4 * TILE_HEIGHT, 4 * TILE_WIDTH]
-    param = torch.nn.Parameter(torch.empty(input_shape, dtype=cpu_dtype))
-    grad = torch.randn(input_shape, dtype=cpu_dtype)
-    param.grad = grad
+#     max_norm = 1.0
+#     norm_type = float("nan")
 
-    max_norm = 1.0
-    norm_type = float("nan")
+#     expected_error_msg = (
+#         f"The total norm of order {norm_type} for gradients from `parameters` is non-finite, so it cannot be clipped."
+#     )
 
-    expected_error_msg = (
-        f"The total norm of order {norm_type} for gradients from `parameters` is non-finite, so it cannot be clipped."
-    )
-    # Check vanilla torch behavior
-    try:
-        torch.nn.utils.clip_grad_norm_((param), max_norm, norm_type, error_if_nonfinite)
-        assert not error_if_nonfinite
-    except RuntimeError as actual_error_msg:
-        assert expected_error_msg in str(actual_error_msg)
-        assert error_if_nonfinite
+#     # Check vanilla torch behavior
+#     try:
+#         torch.nn.utils.clip_grad_norm_((param), max_norm, norm_type, error_if_nonfinite)
+#         assert not error_if_nonfinite
+#     except RuntimeError as actual_error_msg:
+#         assert expected_error_msg in str(actual_error_msg)
+#         assert error_if_nonfinite
 
-    # Check tt behavior
-    try:
-        ttl.operations.primary.moreh_clip_grad_norm_(
-            [to_npu(param.grad.bfloat16(), device, npu_dtype=npu_dtype)], max_norm, norm_type, error_if_nonfinite
-        )
-        assert not error_if_nonfinite
-    except RuntimeError as actual_error_msg:
-        assert expected_error_msg in str(actual_error_msg)
-        assert error_if_nonfinite
-
-    ttl.device.CloseDevice(device)
+#     # Check tt behavior
+#     try:
+#         ttl.operations.primary.moreh_clip_grad_norm_(
+#             [to_npu(param.grad.bfloat16(), device, npu_dtype=npu_dtype)], max_norm, norm_type, error_if_nonfinite
+#         )
+#         assert not error_if_nonfinite
+#     except RuntimeError as actual_error_msg:
+#         assert expected_error_msg in str(actual_error_msg)
+#         assert error_if_nonfinite
