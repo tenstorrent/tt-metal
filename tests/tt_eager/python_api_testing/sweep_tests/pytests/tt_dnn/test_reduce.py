@@ -14,7 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0
 
 shapes = (
     [[1, 1, 32, 32]],  # Single core
@@ -49,7 +48,6 @@ shapes2 = (
 )
 
 
-@pytest.mark.skipif(is_wormhole_b0(), reason="poor PCC")
 @pytest.mark.parametrize("input_shapes", shapes2)
 @pytest.mark.parametrize("minmax", ["min", "max"])
 def test_run_reduce_max_w_test(input_shapes, minmax, device, function_level_defaults):
