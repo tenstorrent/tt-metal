@@ -22,8 +22,6 @@ jobs:
     runs-on: model-runner-${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount

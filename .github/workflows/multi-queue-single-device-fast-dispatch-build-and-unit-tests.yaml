@@ -23,8 +23,6 @@ jobs:
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

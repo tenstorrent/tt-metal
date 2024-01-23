@@ -43,8 +43,6 @@ jobs:
       fetch_depth: 0
       bump_each_commit: false
       release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
-    secrets:
-      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   create-changelog:
     needs: create-tag
     permissions: read-all
@@ -76,8 +74,6 @@ jobs:
       environment: dev
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
-    secrets:
-      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   release-run-frequent-slow-dispatch:
     uses: ./.github/workflows/full-regressions-and-models.yaml
     secrets: inherit

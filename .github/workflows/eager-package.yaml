@@ -12,9 +12,6 @@ on:
       arch:
         required: True
         type: string
-    secrets:
-      CHECKOUT_TOKEN:
-        required: True
 
 jobs:
   build-eager-package:
@@ -26,7 +23,6 @@ jobs:
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
           fetch-depth: 0
       - uses: ./.github/actions/install-metal-deps
         with:
