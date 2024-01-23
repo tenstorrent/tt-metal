@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023-24 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
-
 import tt_lib as ttl
 
 
@@ -17,9 +16,7 @@ import tt_lib as ttl
         ((32, 32, 32, 32), 0),
     ),  # single tile
 )
-def test_softmax_for_dim_hw(shape_dim, device):
-    ttl.program_cache.enable()
-
+def test_sum_for_dim_hw(use_program_cache, shape_dim, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -38,3 +35,32 @@ def test_softmax_for_dim_hw(shape_dim, device):
     tt_npu = ttl.tensor.sum(dev_x, dim)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
+
+
+@pytest.mark.parametrize(
+    "shape_dim",
+    (
+        ((1, 1, 32, 32), 3),
+        ((1, 1, 32, 32), 2),
+        ((32, 32, 32, 32), 1),
+        ((32, 32, 32, 32), 0),
+    ),  # single tile
+)
+def test_sum_global(use_program_cache, shape_dim, device):
+    shape, dim = shape_dim
+    torch.manual_seed(0)
+
+    N = shape[0]
+    C = shape[1]
+    H = shape[2]
+    W = shape[3]
+
+    input_shape = (N, C, H, W)
+    x = 1.0 + torch.ones(input_shape).bfloat16()
+
+    value = x.sum()
+
+    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    tt_npu = ttl.tensor.global_sum(dev_x)
+    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    assert torch.equal(tt_dev[0, 0, 0, 0].bfloat16(), torch.Tensor([value]).bfloat16()[0])

@@ -29,7 +29,7 @@ string dim_to_kernel_name(ReduceOpDim reduce_dim, ReduceOpMath reduce_op){
         case ReduceOpDim::H: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp"; break;
         case ReduceOpDim::W: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp"; break;
         case ReduceOpDim::HW: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp"; break;
-        default: TT_ASSERT(false && "Undefined dim");
+        default: TT_FATAL(false && "Undefined dim");
     }
     return kernel_name;
 }
@@ -190,12 +190,13 @@ Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config
     return mean(input_tensor,2,output_mem_config);
 }
 Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return mean(input_tensor,4,output_mem_config);
+    float inv_volume = 1.0f/input_tensor.volume();
+    return mul_unary_sfpu( inv_volume, global_sum(input_tensor,output_mem_config), output_mem_config);
 }
 Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config) {
     tt::tt_metal::Shape shape = input_tensor.shape();
 
-    TT_ASSERT( aggregate_dims >= 2 && aggregate_dims <= 4, "mean aggregate dimensions should be [HW],[CHW] or [NCHW]");
+    TT_FATAL( aggregate_dims >= 2 && aggregate_dims <= 4, "mean aggregate dimensions should be [HW],[CHW] or [NCHW]");
     switch( aggregate_dims ) {
         case 4:
         case 3:
@@ -212,14 +213,15 @@ Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const Memo
     return scaled_sum_hw;
 }
 
-Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
-    TT_ASSERT( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+template <ReduceOpMath OpKind>
+Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
-        return reduce(input_tensor, ReduceOpMath::SUM, ReduceOpDim::W, scaler1, output_mem_config);
+        return reduce(input_tensor, OpKind, ReduceOpDim::W, scaler1, output_mem_config);
     } else if ( dim == 2 ) {
-        return reduce(input_tensor, ReduceOpMath::SUM, ReduceOpDim::H, scaler1, output_mem_config);
+        return reduce(input_tensor, OpKind, ReduceOpDim::H, scaler1, output_mem_config);
     }
 
     // Other sum dims will autoformat first before doing composite operations
@@ -228,7 +230,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
     // Get the device
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         device = AutoFormat::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+        TT_FATAL(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = input_tensor.device();
     }
@@ -248,7 +250,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose(formatted_input_tensor, 1, -2, output_mem_config);
-        output = sum(output, 2, output_mem_config);
+        output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
         output = transpose(output, 1, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
@@ -262,16 +264,47 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose(input_tensor, 0, -2, output_mem_config);
-        output = sum(output, 2, output_mem_config);
+        output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
         output = transpose(output, 0, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
 }
 
-Tensor global_sum(Tensor& val, const MemoryConfig& output_mem_config) {
+
+Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    return reduce_on_dim<ReduceOpMath::SUM>(input_tensor, dim, output_mem_config);
+}
+
+Tensor min(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    return reduce_on_dim<ReduceOpMath::MIN>(input_tensor, dim, output_mem_config);
+}
+
+Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    return reduce_on_dim<ReduceOpMath::MAX>(input_tensor, dim, output_mem_config);
+}
+
+
+using ReduceFnT = Tensor(*)(const Tensor&,unsigned int, const MemoryConfig&);
+Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_mem_config) {
+    Tensor result = val;
     for(int rank = val.shape().rank()-1; rank >=0; rank--)
-        val = sum(val, rank, output_mem_config);
-    return val;
+        result = f(result, rank, output_mem_config);
+    return result;
+}
+
+Tensor global_sum(const Tensor& val, const MemoryConfig& output_mem_config) {
+    return  global_reduce(sum,val,output_mem_config);
+}
+
+Tensor global_max(const Tensor& val, const MemoryConfig& output_mem_config) {
+    return  global_reduce(max,val,output_mem_config);
+}
+
+Tensor global_min(const Tensor& val, const MemoryConfig& output_mem_config) {
+    return  global_reduce(min,val,output_mem_config);
 }
 
 }  // namespace tt_metal
