@@ -116,8 +116,8 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
         "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
         "writer_moreh_norm_w.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, {});
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, {});
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -130,13 +130,13 @@ operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, 
         "tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/kernels/"
         "moreh_norm_w_kernel.cpp";
 
-    const auto compute_kernels_id_1 = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, {}}, compute_defines);
+    const auto compute_kernels_id_1 =
+        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1}, compute_defines);
 
     KernelHandle compute_kernels_id_2{0};
     if (!core_group_2.ranges().empty()) {
         compute_kernels_id_2 = CreateComputeKernel(
-            program, compute_kernel_file, {core_group_2, num_rows_per_core_group_2, {}}, compute_defines);
+            program, compute_kernel_file, {core_group_2, num_rows_per_core_group_2}, compute_defines);
     }
 
     ////////////////////////////////////////////////////////////////////////////
