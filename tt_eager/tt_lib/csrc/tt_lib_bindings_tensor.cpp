@@ -323,12 +323,23 @@ void TensorModule(py::module &m_tensor) {
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
 
     detail::bind_unary_op(m_tensor, "mean_hw", tt::tt_metal::mean_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
+    detail::bind_unary_op(m_tensor, "global_mean", tt::tt_metal::global_mean, R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");
+    detail::bind_unary_op(m_tensor, "global_sum", tt::tt_metal::global_sum, R"doc(  Returns a new tensor with the sum of the input tensor ``{0}`` on all axes.)doc");
+    detail::bind_unary_op(m_tensor, "global_max", tt::tt_metal::global_max, R"doc(  Returns a new tensor with the max of the input tensor ``{0}`` on all axes.)doc");
+    detail::bind_unary_op(m_tensor, "global_min", tt::tt_metal::global_min, R"doc(  Returns a new tensor with the min of the input tensor ``{0}`` on all axes.)doc");
 
     detail::bind_unary_op_with_param(
         m_tensor, "sum", &sum,
         py::arg("dim"),
         R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
-        R"doc("dimension to sum along", "int", "0, 1, 2, or 3")doc"
+        R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc"
+    );
+
+    detail::bind_unary_op_with_param(
+        m_tensor, "max", tt::tt_metal::max,
+        py::arg("dim"),
+        R"doc(Returns a tensor that is a max  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
+        R"doc("dimension along which to apply max", "int", "0, 1, 2, or 3")doc"
     );
 
     m_tensor.def("downsample", &downsample,
