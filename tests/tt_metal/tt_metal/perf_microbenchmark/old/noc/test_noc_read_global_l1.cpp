@@ -328,24 +328,26 @@ int main(int argc, char **argv) {
                             log_info(LogTest, "{}/{} - comparision passed", r, c);
                         }
                     }
-
-                    pass &= tt_metal::CloseDevice(device);
                 }
-                catch (const std::exception &e) {
-                    pass = false;
-                    // Capture the exception error message
-                    log_error(LogTest, "{}", e.what());
-                    // Capture system call errors that may have returned from driver/kernel
-                    log_error(LogTest, "System error message: {}", std::strerror(errno));
-                }
-
-                if (pass) {
-                    log_info(LogTest, "Test Passed");
-                } else {
-                    TT_THROW("Test Failed");
-                }
-
-                TT_FATAL(pass);
-
-                return 0;
             }
+        }
+
+        pass &= tt_metal::CloseDevice(device);
+    } catch (const std::exception &e) {
+        pass = false;
+        // Capture the exception error message
+        log_error(LogTest, "{}", e.what());
+        // Capture system call errors that may have returned from driver/kernel
+        log_error(LogTest, "System error message: {}", std::strerror(errno));
+    }
+
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+    } else {
+        TT_THROW("Test Failed");
+    }
+
+    TT_FATAL(pass);
+
+    return 0;
+}

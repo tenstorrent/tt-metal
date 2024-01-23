@@ -329,8 +329,8 @@ int main(int argc, char** argv) {
                 log_debug(LogTest, "calling EnqueueProgram");
                 std::chrono::duration<double, std::nano> duration;
                 auto t_begin = std::chrono::high_resolution_clock::now();
-                EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-                Finish(*::detail::GLOBAL_CQ);
+                EnqueueProgram(::detail::GetCommandQueue(device), program, false);
+                Finish(::detail::GetCommandQueue(device));
                 log_debug(LogTest, "EnqueProgram done");
                 auto t_end = std::chrono::high_resolution_clock::now();
                 duration = t_end - t_begin;
