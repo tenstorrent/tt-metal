@@ -13,7 +13,6 @@
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
-#include "llk_unpack_A_api.h"
 #endif
 
 
@@ -102,10 +101,9 @@ ALWI void reduce_tile(PoolType reduce_op, ReduceDim dim, uint32_t icb0, uint32_t
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1) ));
 }
 
-ALWI void reduce_tile_math(uint32_t in_scalar_cb_id, uint32_t idst)
+ALWI void reduce_tile_math(uint32_t idst)
 {
     MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
-    UNPACK(( llk_unpack_A(in_scalar_cb_id, 0) ));
 }
 #endif
 

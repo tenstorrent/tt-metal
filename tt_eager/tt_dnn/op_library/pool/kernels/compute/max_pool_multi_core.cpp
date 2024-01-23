@@ -123,49 +123,30 @@ inline void reduce_h(uint32_t out_nelems,
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
-template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c>
-inline void reduce_h_fused(uint32_t out_nelems,
-                     uint32_t in_cb_id,
-                     uint32_t in_scalar_cb_id,
-                     uint32_t in_ntiles_hwc,
-                     uint32_t out_ntiles_c,
-                     uint32_t out_cb_id) {
-    MATH(( DPRINT << "HERE 0" << ENDL() ));
-    MATH(( DPRINT << "HERE 0.1" << ENDL() ));
-    tilize_init_unpack(in_cb_id, in_ntiles_hwc);        // <-- UNPACK next iter
-    cb_wait_front(in_cb_id, 1);
-    MATH(( DPRINT << "HERE 0.2" << ENDL() ));
-    unpack_tilize_block(in_cb_id, in_ntiles_hwc);
-    MATH(( DPRINT << "HERE 0.3" << ENDL() ));
-    cb_pop_front(in_cb_id, 1);
-    tilize_uninit();
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c, uint32_t out_ntiles_c, uint32_t out_nelems>
+inline void reduce_h_fused(
+    const uint32_t in_cb_id,
+    const uint32_t in_scalar_cb_id,
+    const uint32_t in_ntiles_hwc,
+    const uint32_t out_cb_id) {
 
-    MATH(( DPRINT << "HERE 1" << ENDL() ));
-
-    UNPACK(( llk_unpack_B_init() ));
-    // UNPACK(( llk_unpack_A(in_scalar_cb_id, 0) ));
-
-    MATH(( DPRINT << "HERE 1.1" << ENDL() ));
-    MATH(( DPRINT << "HERE 1.2" << ENDL() ));
+    constexpr uint32_t num_output_tiles = out_ntiles_c * out_nelems;
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
     tile_regs_acquire();
-    MATH(( DPRINT << "HERE 1.3" << ENDL() ));
-    for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
-        // add to accumulator all the in_ntiles_hw in a column of tiles
-        reduce_tile_math(in_scalar_cb_id, c_i);      // <-- MATH
-    }
+    for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+        cb_wait_front(in_cb_id, 1);
+        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc);
 
-    MATH(( DPRINT << "HERE 2" << ENDL() ));
+        for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
+            reduce_tile_math(in_ntiles_c*out_elem_i + c_i);
+        }
+        cb_pop_front(in_cb_id, 1);
+    }
 
     tile_regs_wait();
     tile_regs_commit();
-    MATH(( DPRINT << "HERE 2.1" << ENDL() ));
-    pack_untilize_dst<in_ntiles_c>(out_cb_id);  // <-- PACK
-    MATH(( DPRINT << "HERE 2.2" << ENDL() ));
+    pack_untilize_dst<num_output_tiles>(out_cb_id);  // <-- PACK
     tile_regs_release();
-    MATH(( DPRINT << "HERE 2.3" << ENDL() ));
-
-    MATH(( DPRINT << "HERE 3" << ENDL() ));
 
     cb_push_back(out_cb_id, out_ntiles_c * out_nelems);
 }
@@ -192,8 +173,10 @@ void MAIN {
     const uint32_t out_h_per_core = get_compile_time_arg_val(11);
     const uint32_t nsticks_per_core = get_compile_time_arg_val(12);
     const uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(13);
+    const uint32_t num_output_tiles = out_ntiles_c * out_nelems;
 
-    tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
+    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
+    pack_untilize_dst_init_short<num_output_tiles>();
 
     // #if DEBUG_PRINT == 1
     //     print_cb_details(in_cb_id);
@@ -201,9 +184,6 @@ void MAIN {
     //     print_cb_details(in_tiled_cb_id);
     //     print_cb_details(out_cb_id);
     // #endif
-
-    // reduce_init_delta_math();
-    // pack_untilize_dst_init_short<in_ntiles_c>();
 
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {
@@ -215,7 +195,7 @@ void MAIN {
         // Reduce H
         // reduce_h_orig(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
         // reduce_h<in_ntiles_hw, in_ntiles_c>(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
-        reduce_h_fused<in_ntiles_hw, in_ntiles_c>(out_nelems, in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+        reduce_h_fused<in_ntiles_hw, in_ntiles_c, out_ntiles_c, out_nelems>(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
         // kernel_profiler::mark_time(12);
     }
     cb_pop_front(in_scalar_cb_id, 1);

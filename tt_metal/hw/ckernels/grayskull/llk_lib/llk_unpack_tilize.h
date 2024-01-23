@@ -97,6 +97,4 @@ inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uin
 #ifdef PERF_DUMP
     first_unpack_recorded = true;
 #endif
-
-    DPRINT << "UNPT" << ENDL();
 }
