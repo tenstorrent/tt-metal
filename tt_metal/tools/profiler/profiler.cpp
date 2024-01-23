@@ -32,7 +32,8 @@ void DeviceProfiler::readRiscProfilerResults(
     std::pair<uint32_t, CoreCoord> deviceCore = {device_id,worker_core};
     TT_ASSERT (device_core_data.find(deviceCore) != device_core_data.end(), "Device {}, workder core {},{} not present in recorded data" , device_id, worker_core.x, worker_core.y);
 
-    uint32_t coreFlatID = get_flat_id(worker_core.x, worker_core.y);
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+    uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
     uint32_t startIndex = coreFlatID * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     vector<std::uint32_t> control_buffer;

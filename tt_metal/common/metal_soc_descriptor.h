@@ -56,6 +56,9 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
 
     tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const;
 
+    std::map<CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
+    void generate_physical_routing_to_profiler_flat_id();
+
    private:
     void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);
     void load_dram_metadata_from_device_descriptor();

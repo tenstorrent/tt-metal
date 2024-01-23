@@ -4,24 +4,6 @@
 
 #pragma once
 
-inline __attribute__((always_inline)) uint32_t get_flat_id(uint32_t coreX, uint32_t coreY)
-{
-    constexpr uint32_t DRAM_ROW = 6;
-    uint32_t coreFlatID = 0;
-
-    if (coreY > DRAM_ROW){
-        coreX --;
-        coreY --;
-        coreY --;
-    }
-    else{
-        coreX --;
-        coreY --;
-    }
-    coreFlatID = coreY * 3 + (coreX / 3) * 30 + (coreX % 3) ;
-    return coreFlatID;
-}
-
 namespace kernel_profiler{
 
     constexpr static uint32_t PADDING_MARKER = ((1<<16) - 1);

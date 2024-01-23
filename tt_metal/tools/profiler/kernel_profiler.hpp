@@ -81,7 +81,7 @@ namespace kernel_profiler{
         uint32_t noc_x = noc_id & NOC_ID_MASK;
         uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
 
-        uint16_t core_flat_id = get_flat_id(noc_x, noc_y);
+        uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
 
         //TODO(MO): Clean up magic numbers
         briscBuffer [ID_LL] = runCounter;
@@ -222,20 +222,10 @@ namespace kernel_profiler{
         uint32_t noc_x = noc_id & NOC_ID_MASK;
         uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
 
-        uint16_t core_flat_id = get_flat_id(noc_x, noc_y);
+        uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
 
-        uint32_t num_cores_per_bank = 0;
-        if (NUM_DRAM_BANKS == 8)
-        {
-            num_cores_per_bank = 15;
-        }
-        else if (NUM_DRAM_BANKS == 12)
-        {
-            num_cores_per_bank = 8;
-        }
-
-
+        uint32_t num_cores_per_bank = profiler_core_count/NUM_DRAM_BANKS;
 
         finish();
         int hostIndex;

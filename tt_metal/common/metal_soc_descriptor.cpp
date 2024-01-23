@@ -288,6 +288,27 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     }
 }
 
+void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
+#if defined(PROFILER)
+    for (auto &core : this->physical_workers)
+    {
+        this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
+    }
+
+    for (auto &core : this->physical_ethernet_cores)
+    {
+        this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
+    }
+
+    int flat_id = 0;
+    for (auto &core : this->physical_routing_to_profiler_flat_id)
+    {
+        this->physical_routing_to_profiler_flat_id[core.first] = flat_id;
+        flat_id++;
+    }
+#endif
+}
+
 // UMD initializes and owns tt_SocDescriptor
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in
 // tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
@@ -302,4 +323,5 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t
     this->generate_physical_descriptors_from_virtual(harvesting_mask);
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
+    this->generate_physical_routing_to_profiler_flat_id();
 }

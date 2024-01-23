@@ -376,7 +376,8 @@ namespace tt::tt_metal{
                 dram_noc_coord_per_bank,
                 dram_offsets_per_bank,
                 l1_noc_coord_per_bank,
-                l1_offset_per_bank
+                l1_offset_per_bank,
+                soc_d.physical_routing_to_profiler_flat_id
             );
 
             // Determine which noc-coords are harvested
