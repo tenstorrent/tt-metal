@@ -7,13 +7,11 @@
 void kernel_main() {
     constexpr uint32_t host_issue_queue_read_ptr_addr = get_compile_time_arg_val(0);
     constexpr uint32_t issue_queue_start_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t command_start_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t data_section_addr = get_compile_time_arg_val(3);
-    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(5);
-
-    // Only the issue queue size is a runtime argument
-    uint32_t issue_queue_size = get_arg_val<uint32_t>(0);
+    uint32_t issue_queue_size = get_compile_time_arg_val(2); // not constexpr since can change
+    constexpr uint32_t command_start_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t data_section_addr = get_compile_time_arg_val(4);
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
 
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
@@ -52,9 +50,20 @@ void kernel_main() {
         uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
         uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
-        uint32_t finish = command_ptr[DeviceCommand::finish_idx];
+        uint32_t restart = command_ptr[DeviceCommand::restart_idx];
 
-        if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
+        if (restart) {
+            // Restart read/write pointers
+            issue_queue_size = command_ptr[DeviceCommand::new_issue_queue_size_idx];
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CQ_ISSUE_WRITE_PTR)[0] = issue_queue_start_addr >> 4;
+            setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
+            notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
+            wait_consumer_space_available(db_semaphore_addr);
+            relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
+            update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr);
+            db_buf_switch = false; // Restart the db buf switch as well
+            continue;
+        } else if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
             cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
             cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
@@ -63,21 +72,14 @@ void kernel_main() {
         }
 
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
-        while (db_semaphore_addr[0] == 0)
-            ;  // Check that there is space in the consumer
+        wait_consumer_space_available(db_semaphore_addr);
         program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
         relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         if (stall) {
-            while (*db_semaphore_addr != 2)
-                ;
+            wait_consumer_idle(db_semaphore_addr);
         }
-        // Decrement the semaphore value
-        noc_semaphore_inc(producer_noc_encoding | uint32_t(db_semaphore_addr), -1);  // Two's complement addition
-        noc_async_write_barrier();
 
-        // Notify the consumer
-        noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
-        noc_async_write_barrier();  // Barrier for now
+        update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr);
 
         // Fetch data and send to the consumer
         produce<consumer_cmd_base_addr, consumer_data_buffer_size>(
