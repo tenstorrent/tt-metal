@@ -48,6 +48,17 @@ inline void llk_unpack_AB_init(
     _llk_unpack_AB_init_<BType>(transpose, acc_to_dest);
 }
 
+//Only need func for wormhole_b0 due to unpack src A transpose
+template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_reduce_init(
+    const std::uint32_t operandA /*not used*/,
+    const std::uint32_t operandB /*not used*/,
+    const std::uint32_t transpose = 0 /*not used*/,
+    const std::uint32_t within_face_16x16_transpose = 0 /*not used*/,
+    const std::uint32_t acc_to_dest = 0 /*not used*/) {
+    _llk_unpack_AB_init_<BType>();
+}
+
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA,
