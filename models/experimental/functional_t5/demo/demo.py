@@ -113,7 +113,7 @@ def run_functional_t5_question_and_answering_inference(
 
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
@@ -176,7 +176,7 @@ def run_functional_t5_question_and_answering_inference_squadv2(
     )
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,

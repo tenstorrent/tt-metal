@@ -188,7 +188,7 @@ def test_torch_whisper():
     expected_last_hidden_state = model(input_features, decoder_input_ids=decoder_input_ids).last_hidden_state
 
     parameters = preprocess_model_parameters(
-        f"torch_functional_whisper_not_contiguous_{dtype_to_use}",
+        model_name=f"torch_functional_whisper_not_contiguous_{dtype_to_use}",
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
