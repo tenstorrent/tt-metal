@@ -57,7 +57,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),

@@ -106,7 +106,7 @@ def run_bloom_causal_LM_inference(
     profiler.start("preprocessing_parameter")
 
     parameters = preprocess_model_parameters(
-        f"ttnn-functional-bloom-for-causal-lm",
+        model_name=f"ttnn-functional-bloom-for-causal-lm",
         initialize_model=lambda: BloomForCausalLM.from_pretrained(model_version).eval(),
         device=device,
         custom_preprocessor=functional_model.custom_preprocessor,
@@ -177,7 +177,7 @@ def run_bloom_causal_LM_inference_hellaswag(
     num_heads = config.n_head
 
     parameters = preprocess_model_parameters(
-        f"ttnn-functional-bloom-for-causal-lm",
+        model_name=f"ttnn-functional-bloom-for-causal-lm",
         initialize_model=lambda: BloomForCausalLM.from_pretrained(model_version).eval(),
         device=device,
         custom_preprocessor=functional_model.custom_preprocessor,

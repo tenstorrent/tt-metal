@@ -71,7 +71,7 @@ def run_roberta_question_and_answering_inference(
 
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.RobertaForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
@@ -185,7 +185,7 @@ def run_roberta_question_and_answering_inference_squad_v2(
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.RobertaForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),

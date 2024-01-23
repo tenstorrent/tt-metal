@@ -50,7 +50,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
     attention_mask = None
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: WhisperModel.from_pretrained(model_name).eval(),
         convert_to_ttnn=functional_whisper.convert_to_ttnn,
         custom_preprocessor=functional_whisper.custom_preprocessor,

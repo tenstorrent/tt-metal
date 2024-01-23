@@ -18,22 +18,22 @@ def _torch_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, n
     head_size = hidden_size // num_heads
 
     tensor = torch.reshape(input_tensor, (batch_size, sequence_size, 3, num_heads, head_size))
-    query_layer, key_layer, value_layer = (
+    query, key, value = (
         tensor[..., 0, :, :],
         tensor[..., 1, :, :],
         tensor[..., 2, :, :],
     )
 
-    query_layer = torch.reshape(query_layer, (batch_size, sequence_size, num_heads, head_size))
-    query_layer = torch.permute(query_layer, (0, 2, 1, 3)).contiguous().clone()
+    query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+    query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
 
-    key_layer = torch.reshape(key_layer, (batch_size, sequence_size, num_heads, head_size))
-    key_layer = torch.permute(key_layer, (0, 2, 3, 1)).contiguous().clone()
+    key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
+    key = torch.permute(key, (0, 2, 3, 1)).contiguous().clone()
 
-    value_layer = torch.reshape(value_layer, (batch_size, sequence_size, num_heads, head_size))
-    value_layer = torch.permute(value_layer, (0, 2, 1, 3)).contiguous().clone()
+    value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+    value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
 
-    return query_layer, key_layer, value_layer
+    return query, key, value
 
 
 def _fallback_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
@@ -51,29 +51,53 @@ def split_query_key_value_and_split_heads(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """
-    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads: int, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
+    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, kv_input_tensor: Optional[ttnn.Tensor] = None, *, num_heads: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
 
-    Splits tensor of shape [batch_size, sequence_size, 3 * hidden_size] into 3 tensors (Query, Key, Value) of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes them, to make them ready for computing attention scores. Equivalent pytorch code:
+    Splits :attr:`input_tensor` of shape ``[batch_size, sequence_size, 3 * hidden_size]`` into 3 tensors (Query, Key, Value) of shape ``[batch_size, sequence_size, hidden_size]``.
+    Then, reshapes and permutes the output tensors, to make them ready for computing attention scores.
 
-        batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-        hidden_size = three_times_hidden_size // 3
-        head_size = hidden_size // num_heads
+    If :attr:`kv_input_tensor` is passed in, then :attr:`input_tensor` of shape ``[batch_size, sequence_size, hidden_size]`` is only used for Query,
+    and :attr:`kv_input_tensor` of shape ``[batch_size, sequence_size, 2 * hidden_size]`` is used for Key and Value.
 
-        query_layer, key_layer, value_layer = torch.split(input_tensor, [hidden_size, hidden_size, hidden_size], dim=-1)
+    Equivalent pytorch code:
 
-        query_layer = torch.reshape(query_layer, (batch_size, sequence_size, num_heads, head_size))
-        query_layer = torch.permute(query_layer, (0, 2, 1, 3)).contiguous().clone()
+    .. code-block:: python
 
-        key_layer = torch.reshape(key_layer, (batch_size, sequence_size, num_heads, head_size))
-        key_layer = torch.permute(key_layer, (0, 2, 3, 1)).contiguous().clone()
+        if kv_input_tensor is None:
+            batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
+            hidden_size = three_times_hidden_size // 3
+            head_size = hidden_size // num_heads
 
-        value_layer = torch.reshape(value_layer, (batch_size, sequence_size, num_heads, head_size))
-        value_layer = torch.permute(value_layer, (0, 2, 1, 3)).contiguous().clone()
+            query, key, value = torch.split(input_tensor, [hidden_size, hidden_size, hidden_size], dim=-1)
+
+            query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+            query = torch.permute(query, (0, 2, 1, 3))
+
+            key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
+            key = torch.permute(key, (0, 2, 3, 1))
+
+            value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+            value = torch.permute(value, (0, 2, 1, 3))
+        else:
+            batch_size, sequence_size, hidden_size = input_tensor.shape
+            head_size = hidden_size // num_heads
+
+            query = input_tensor
+            key, value = torch.split(kv_input_tensor, [hidden_size, hidden_size], dim=-1)
+
+            query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+            query = torch.permute(query, (0, 2, 1, 3))
+
+            key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
+            key = torch.permute(key, (0, 2, 3, 1))
+
+            value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+            value = torch.permute(value, (0, 2, 1, 3))
 
     Args:
-        * :attr:`input_tensor`: Input Tensor
+        * :attr:`input_tensor`: Input Tensor for Query, Key and Value. If :attr:`kv_input_tensor` is not None, then :attr:`input_tensor` is only used for Query.
+        * :attr:`kv_input_tensor`: Input Tensor for Key and Value. If passed in, :attr:`input_tensor` has to be used only for Query.
         * :attr:`num_heads`: num heads to split into
-        * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
@@ -322,7 +346,7 @@ def concatenate_heads(
     """
     concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size], concatenates heads back along the width dimension and return the tensor of [batch_size, sequence_size, num_heads * head_size]
+    Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
     Args:
         * :attr:`input_tensor`: Input Tensor

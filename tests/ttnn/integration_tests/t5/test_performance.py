@@ -59,7 +59,7 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
         raise ValueError(f"Unknown functional_t5: {functional_t5}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval(),
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,
