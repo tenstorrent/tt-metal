@@ -225,7 +225,8 @@ namespace kernel_profiler{
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
 
-        uint32_t num_cores_per_bank = profiler_core_count/NUM_DRAM_BANKS;
+        //uint32_t num_cores_per_bank = profiler_core_count/NUM_DRAM_BANKS;
+        uint32_t num_cores_per_bank = 6;
 
         finish();
         int hostIndex;

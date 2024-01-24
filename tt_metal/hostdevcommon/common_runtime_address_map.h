@@ -66,8 +66,12 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_T
 constexpr static std::uint32_t PROFILER_L1_END_ADDRESS = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
 
 constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
-constexpr static std::uint32_t PROFILER_CORE_COUNT = 120;
-constexpr static std::uint32_t PROFILER_DRAM_BANK_COUNT = 8;
+
+//constexpr static std::uint32_t PROFILER_CORE_COUNT = 120;
+//constexpr static std::uint32_t PROFILER_DRAM_BANK_COUNT = 8;
+
+constexpr static std::uint32_t PROFILER_CORE_COUNT = 72;
+constexpr static std::uint32_t PROFILER_DRAM_BANK_COUNT = 12;
 constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 900;
 
 constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_L1_MARKER_UINT32_SIZE * (PROFILER_L1_PROGRAM_ID_COUNT +  PROFILER_L1_GUARANTEED_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;

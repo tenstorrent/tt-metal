@@ -15,8 +15,10 @@ namespace tt {
 namespace tt_metal {
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
-    const auto &all_logical_cores = program.logical_cores();
-    detail::DumpDeviceProfileResults(device, program.logical_cores());
+    auto worker_cores_used_in_program =
+        device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
+
+    detail::DumpDeviceProfileResults(device, worker_cores_used_in_program);
 }
 
 
@@ -37,20 +39,18 @@ void InitDeviceProfiler(Device *device){
     };
     tt_metal_device_profiler.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
 
-    CoreCoord compute_with_storage_size = device->logical_grid_size();
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
-
     std::vector<uint32_t> control_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();
 
-    for (size_t x=start_core.x; x <= end_core.x; x++)
+    auto device_id = device->id();
+    for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
     {
-        for (size_t y=start_core.y; y <= end_core.y; y++)
-        {
-            CoreCoord curr_core = {x, y};
-            tt_metal::detail::WriteToDeviceL1(device, curr_core, PROFILER_L1_BUFFER_CONTROL, control_buffer);
-        }
+        CoreCoord curr_core = {core.first.x, core.first.y};
+        tt::llrt::write_hex_vec_to_core(
+                device_id,
+                curr_core,
+                control_buffer,
+                PROFILER_L1_BUFFER_CONTROL);
     }
 
     std::vector<uint32_t> inputs_DRAM(PROFILER_FULL_HOST_BUFFER_SIZE/sizeof(uint32_t), 0);
@@ -61,24 +61,18 @@ void InitDeviceProfiler(Device *device){
 
 void DumpDeviceProfileResults(Device *device) {
 #if defined(PROFILER)
-    CoreCoord compute_with_storage_size = device->logical_grid_size();
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
-
-    std::unordered_map<CoreType, std::vector<CoreCoord>> logicalCores;
-    for (size_t y=start_core.y; y <= end_core.y; y++)
+    std::vector<CoreCoord> workerCores;
+    auto device_id = device->id();
+    for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
     {
-        for (size_t x=start_core.x; x <= end_core.x; x++)
-        {
-            CoreCoord logical_core = {x, y};
-            logicalCores[CoreType::WORKER].push_back(logical_core);
-        }
+        CoreCoord curr_core = {core.first.x, core.first.y};
+        workerCores.push_back(curr_core);
     }
-    DumpDeviceProfileResults(device, logicalCores);
+    DumpDeviceProfileResults(device, workerCores);
 #endif
 }
 
-void DumpDeviceProfileResults(Device *device, const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores){
+void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores){
 #if defined(PROFILER)
     ZoneScoped;
     const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
@@ -89,13 +83,8 @@ void DumpDeviceProfileResults(Device *device, const std::unordered_map<CoreType,
     TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
     if (getDeviceProfilerState())
     {
-        auto device_id = device->id();
         tt_metal_device_profiler.setDeviceArchitecture(device->arch());
-        if (logical_cores.find(CoreType::WORKER) != logical_cores.end()) {
-            auto worker_cores_used_in_program =
-                device->worker_cores_from_logical_cores(logical_cores.at(CoreType::WORKER));
-            tt_metal_device_profiler.dumpResults(device, worker_cores_used_in_program);
-        }
+        tt_metal_device_profiler.dumpResults(device, worker_cores);
     }
     InitDeviceProfiler(device);
 #endif

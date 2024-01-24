@@ -295,10 +295,10 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
     }
 
-    for (auto &core : this->physical_ethernet_cores)
-    {
-        this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
-    }
+    //for (auto &core : this->physical_ethernet_cores)
+    //{
+        //this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
+    //}
 
     int flat_id = 0;
     for (auto &core : this->physical_routing_to_profiler_flat_id)

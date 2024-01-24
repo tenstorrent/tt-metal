@@ -80,7 +80,8 @@ void __attribute__((section("code_l1"))) router_init() {
 }
 
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
-    kernel_profiler::init_profiler();
+    //kernel_profiler::init_profiler();
+    //kernel_profiler::mark_time(CC_MAIN_START);
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();

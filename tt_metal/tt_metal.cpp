@@ -454,7 +454,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
 
         }//Profiler scope end
-        DumpDeviceProfileResults(device, program);
+        DumpDeviceProfileResults(device);
     }
 
     bool ConfigureDeviceWithProgram(Device *device, Program &program) {

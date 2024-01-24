@@ -143,7 +143,7 @@ namespace tt::tt_metal{
          * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
          * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
          * */
-        void DumpDeviceProfileResults(Device *device,const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores);
+        void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores);
         void DumpDeviceProfileResults(Device *device);
 
         /**
