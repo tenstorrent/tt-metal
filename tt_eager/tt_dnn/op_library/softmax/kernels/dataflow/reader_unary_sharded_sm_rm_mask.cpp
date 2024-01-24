@@ -4,33 +4,8 @@
 
 // #include "debug/dprint.h"
 #include "dataflow_api.h"
-
-FORCE_INLINE void generate_bcast_scaler() {
-    constexpr auto cb_bcast_scaler = tt::CB::c_in1;
-    uint32_t scaler = get_arg_val<uint32_t>(0);
-    cb_reserve_back(cb_bcast_scaler, 1);
-    auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_bcast_scaler));
-    uint32_t idx = 0;
-    for (uint32_t k = 0; k < 4; ++k) {
-        uint32_t curr_idx = idx;
-        for (uint32_t j = 0; j < 8; ++j) {
-            ptr[curr_idx] = scaler;
-            curr_idx++;
-        }
-        idx += 128;
-    }
-    cb_push_back(cb_bcast_scaler, 1);
-}
-
-// HW-bcast scale for fused scale-attn-softmax
-FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
-    constexpr auto cb_fused_scale = tt::CB::c_in2;
-    uint32_t u = get_arg_val<uint32_t>(1);
-    cb_reserve_back(cb_fused_scale, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_fused_scale));
-    ptr[0] = u>>16;
-    cb_push_back(cb_fused_scale, 1);
-}
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
 
@@ -61,7 +36,9 @@ void kernel_main() {
     };
     #endif
 
-    generate_inv_sqrt_hw_bcast_tile();
+    constexpr auto cb_fused_scale = tt::CB::c_in2;
+    const uint32_t pre_scale = get_arg_val<uint32_t>(1);
+    generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
     cb_reserve_back(cb_attn, block_wt);
     uint32_t l1_write_addr = get_write_ptr(cb_attn);
@@ -76,5 +53,9 @@ void kernel_main() {
     cb_push_back(cb_attn, block_wt);
     #endif
 
-    generate_bcast_scaler();
+    {
+        constexpr uint32_t cb_reduce_scaler = tt::CB::c_in1;
+        const uint32_t reduce_scaler = get_arg_val<uint32_t>(0);
+        generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    }
 }

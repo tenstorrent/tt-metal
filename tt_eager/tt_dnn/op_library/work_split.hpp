@@ -109,42 +109,75 @@ inline int find_max_block_size(uint32_t val, uint32_t max_block_size=8) {
     return result;
 }
 
-inline std::set<CoreRange> num_cores_to_corerange_set(const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
+inline std::set<CoreRange> num_cores_to_corerange_set(const CoreCoord start_core, const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
 	uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-
-	TT_ASSERT(target_num_cores <= num_cores_x * num_cores_y, "Target number of cores is greater than total number of cores of specified core grid");
-	std::set<CoreRange> all_cores_set;
+    uint32_t total_available_cores = 0;
+    TT_FATAL(start_core.x < num_cores_x && start_core.y < num_cores_y, "Start core must be within grid size");
     if (row_wise) {
-        if (target_num_cores > num_cores_x) {
-            CoreRange start_block = {.start={0, 0}, .end={num_cores_x - 1, target_num_cores / num_cores_x - 1}};
+        // Full Rows
+        total_available_cores += (num_cores_y - 1 - start_core.y) * num_cores_x;
+        // Partial Rows
+        total_available_cores += num_cores_x - start_core.x;
+    } else {
+        // Full Cols
+        total_available_cores += (num_cores_x - 1 - start_core.x) * num_cores_y;
+        // Partial Cols
+        total_available_cores += num_cores_y - start_core.y;
+    }
+	TT_FATAL(target_num_cores <= total_available_cores, "Target number of cores is greater than total number of available cores");
+	std::set<CoreRange> all_cores_set;
+    uint32_t leftover_size = target_num_cores;
+    CoreCoord s_core = start_core;
+    if (row_wise) {
+        // Partial row at start
+        if (s_core.x != 0 && leftover_size > num_cores_x - start_core.x) {
+            CoreRange start_block = {.start=s_core, .end={num_cores_x - 1, s_core.y}};
             all_cores_set.insert(start_block);
-            auto leftover_stick_size = target_num_cores % num_cores_x;
-            if (leftover_stick_size > 0) {
-                auto leftover_start_y = target_num_cores / num_cores_x;
-                CoreRange leftover_block = {.start={0, leftover_start_y}, .end={leftover_stick_size - 1, leftover_start_y}};
-                all_cores_set.insert(leftover_block);
-            }
-        } else {
-            CoreRange start_block = {.start={0, 0}, .end={target_num_cores - 1, 0}};
-            all_cores_set.insert(start_block);
+            s_core = {0, s_core.y + 1};
+            leftover_size -= start_block.size();
+        }
+        // Full rows
+        if (leftover_size > num_cores_x) {
+            uint32_t num_full_rows = leftover_size / num_cores_x;
+            CoreRange full_block = {.start=s_core, .end={num_cores_x - 1, s_core.y + num_full_rows - 1}};
+            all_cores_set.insert(full_block);
+            leftover_size -= full_block.size();
+            s_core = {0, s_core.y + num_full_rows};
+        }
+        // Partial row at end
+        if (leftover_size > 0) {
+            CoreRange leftover_block = {.start=s_core, .end={s_core.x + leftover_size - 1, s_core.y}};
+            all_cores_set.insert(leftover_block);
         }
     } else {
-        if (target_num_cores > num_cores_y) {
-            CoreRange start_block = {.start={0, 0}, .end={target_num_cores / num_cores_y - 1, num_cores_y - 1}};
+        // Partial col at start
+        if (s_core.y != 0 && leftover_size > num_cores_y - start_core.y) {
+            CoreRange start_block = {.start=s_core, .end={s_core.x, num_cores_y - 1}};
             all_cores_set.insert(start_block);
-            auto leftover_stick_size = target_num_cores % num_cores_y;
-            if (leftover_stick_size > 0) {
-                auto leftover_start_x = target_num_cores / num_cores_y;
-                CoreRange leftover_block = {.start={leftover_start_x, 0}, .end={leftover_start_x, leftover_stick_size - 1}};
-                all_cores_set.insert(leftover_block);
-            }
-        } else {
-            CoreRange start_block = {.start={0, 0}, .end={0, target_num_cores - 1}};
-            all_cores_set.insert(start_block);
+            s_core = {s_core.x + 1, 0};
+            leftover_size -= start_block.size();
+        }
+        // Full cols
+        if (leftover_size > num_cores_y) {
+            uint32_t num_full_cols = leftover_size / num_cores_y;
+            CoreRange full_block = {.start=s_core, .end={s_core.x + num_full_cols - 1, num_cores_y - 1}};
+            all_cores_set.insert(full_block);
+            leftover_size -= full_block.size();
+            s_core = {s_core.x + num_full_cols, 0};
+        }
+        // Partial row at end
+        if (leftover_size > 0) {
+            CoreRange leftover_block = {.start=s_core, .end={s_core.x, s_core.y + leftover_size - 1}};
+            all_cores_set.insert(leftover_block);
         }
     }
 	return all_cores_set;
+}
+
+// TODO: Get rid of old function
+inline std::set<CoreRange> num_cores_to_corerange_set(const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
+	return num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise);
 }
 
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores

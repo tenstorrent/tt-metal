@@ -260,12 +260,14 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     tt_metal::Device *device = a.device();
 
-     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
 
     auto shard_spec = a.shard_spec().value();
+
+    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
@@ -326,14 +328,19 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t N = shard_spec.shape[0] / a.shape()[-2];
     uint32_t NHtWt = N * HtWt;
 
+    auto bbox = all_cores.bounding_box();
+    vector<CoreCoord> cores = grid_to_cores_with_noop(bbox.end.x, bbox.end.y, num_cores_x, num_cores_y, row_major);
 
-    // TODO: Optimize to only zero args on unused cores
-    tt_metal::SetRuntimeArgs(program, reader_kernel_id, total_cores, {0});
-    tt_metal::SetRuntimeArgs(program, compute_kernel_id, total_cores, {0, 0, 0, 0, 0});
-    tt_metal::SetRuntimeArgs(program, writer_kernel_id, total_cores, {0});
-    tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, {NHtWt});
-    tt_metal::SetRuntimeArgs(program, compute_kernel_id, all_cores, {NHtWt, HtWt, N, Ht, Wt});
-    tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, {NHtWt});
+    std::vector< std::vector<uint32_t> > unary_reader_args = { cores.size(), std::vector<uint32_t>(1) };
+    std::vector< std::vector<uint32_t> > unary_compute_args = { cores.size(), std::vector<uint32_t>(5) };
+    std::vector< std::vector<uint32_t> > unary_writer_args = { cores.size(), std::vector<uint32_t>(1) };
+    std::fill(unary_reader_args.begin(), unary_reader_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+    std::fill(unary_compute_args.begin(), unary_compute_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt, HtWt, N, Ht, Wt});
+    std::fill(unary_writer_args.begin(), unary_writer_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+
+    tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, unary_reader_args);
+    tt_metal::SetRuntimeArgs(program, compute_kernel_id, cores, unary_compute_args);
+    tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, unary_writer_args);
 
 
     auto override_runtime_args_callback = [
@@ -344,7 +351,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
             cb_output,
             src0_single_tile_size,
             dst_single_tile_size,
-            total_cores
+            num_cores_x,
+            num_cores_y
         ]
     (
         const void* operation,
@@ -384,14 +392,20 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         uint32_t NHtWt = N * HtWt;
 
         const auto& all_cores = shard_spec.grid;
+        bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-        // TODO: Optimize to only zero args on unused cores
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, total_cores, {0});
-        tt_metal::SetRuntimeArgs(program, compute_kernel_id, total_cores, {0, 0, 0, 0, 0});
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, total_cores, {0});
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, {NHtWt});
-        tt_metal::SetRuntimeArgs(program, compute_kernel_id, all_cores, {NHtWt, HtWt, N, Ht, Wt});
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, {NHtWt});
+        auto bbox = all_cores.bounding_box();
+        vector<CoreCoord> cores = grid_to_cores_with_noop(bbox.end.x, bbox.end.y, num_cores_x, num_cores_y, row_major);
+        std::vector< std::vector<uint32_t> > unary_reader_args = { cores.size(), std::vector<uint32_t>(1) };
+        std::vector< std::vector<uint32_t> > unary_compute_args = { cores.size(), std::vector<uint32_t>(5) };
+        std::vector< std::vector<uint32_t> > unary_writer_args = { cores.size(), std::vector<uint32_t>(1) };
+        std::fill(unary_reader_args.begin(), unary_reader_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+        std::fill(unary_compute_args.begin(), unary_compute_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt, HtWt, N, Ht, Wt});
+        std::fill(unary_writer_args.begin(), unary_writer_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+
+        tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, unary_reader_args);
+        tt_metal::SetRuntimeArgs(program, compute_kernel_id, cores, unary_compute_args);
+        tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, unary_writer_args);
     };
 
    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};

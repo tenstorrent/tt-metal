@@ -4,62 +4,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
-
-FORCE_INLINE void generate_bcast_scaler() {
-    constexpr uint32_t cb_in_2 = 2;
-    uint32_t scaler = get_arg_val<uint32_t>(4);
-    cb_reserve_back(cb_in_2, 1);
-    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_in_2);
-    // Fill tile with zeros
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_in_2));
-    uint32_t idx = 0;
-    for (uint32_t k = 0; k < 4; ++k) {
-        uint32_t curr_idx = idx;
-        for (uint32_t j = 0; j < 8; ++j) {
-            ptr[curr_idx] = scaler;
-            curr_idx++;
-        }
-        idx += 128;
-    }
-    cb_push_back(cb_in_2, 1);
-}
-
-FORCE_INLINE void generate_epsilon() {
-    constexpr uint32_t eps_cb_id = 3;
-    union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(5);
-    cb_reserve_back(eps_cb_id, 1);
-    uint16_t eps = uint16_t(u.u>>16);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(eps_cb_id));
-    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(eps_cb_id);
-    // Fill tile with zeros
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-
-    uint32_t idx = 0;
-    for (int k = 0; k < 4; k+=2) {
-        uint32_t curr_idx = idx;
-        for (int j = 0; j < 16; ++j) {
-            ptr[curr_idx] = eps;
-            idx += 16;
-        }
-        curr_idx += 512;
-    }
-    cb_push_back(eps_cb_id, 1);
-}
-
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -138,8 +84,14 @@ void kernel_main() {
 
 
     // Generate constant tiles for layernorm compute
-    generate_bcast_scaler();
-    generate_epsilon();
+    {
+        constexpr uint32_t cb_in_2 = 2;
+        uint32_t scaler = get_arg_val<uint32_t>(4);
+        generate_reduce_scaler(cb_in_2, scaler);
+    }
+    constexpr uint32_t eps_cb_id = 3;
+    const uint32_t eps = get_arg_val<uint32_t>(5);
+    generate_bcast_col_scalar(eps_cb_id, eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;

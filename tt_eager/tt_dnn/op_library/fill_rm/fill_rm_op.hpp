@@ -42,6 +42,6 @@ Tensor fill_ones_rm (uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hO
     return fill_rm(N, C, H, W, hOnes, wOnes, any, 1.0, 0.0, output_mem_config);
 }
 
-}  // namespace ll_buda
+}  // namespace tt_metal
 
 }  // namespace tt

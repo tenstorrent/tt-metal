@@ -16,6 +16,18 @@ namespace tt {
 
 namespace tt_metal {
 
+operation::ProgramWithCallbacks layernorm_multi_core(
+    const Tensor &a,
+    const std::optional<const Tensor> b,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
+    Tensor& output,
+    float eps,
+    bool rms_norm = false,
+    MathFidelity fidelity = MathFidelity::HiFi4,
+    DataType im_data_format = DataType::BFLOAT16
+);
+
 struct LayerNorm {
     float eps;
     MemoryConfig output_mem_config;
@@ -97,7 +109,13 @@ struct LayerNormInterleavedMultiCoreProgramConfig {
     DataType im_data_format;
     DataType out_data_format;
 
-    tt::stl::reflection::Attributes attributes() const;
+    tt::stl::reflection::Attributes attributes() const {
+        return {
+            {"math_fidelity", math_fidelity},
+            {"im_data_format", im_data_format},
+            {"out_data_format", out_data_format}
+        };
+    };
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
@@ -109,7 +127,18 @@ struct LayerNormShardedMultiCoreProgramConfig {
     DataType out_data_format;
     bool inplace;
 
-    tt::stl::reflection::Attributes attributes() const;
+    tt::stl::reflection::Attributes attributes() const {
+        return {
+            {"compute_with_storage_grid_size", compute_with_storage_grid_size},
+            {"subblock_w", subblock_w},
+            {"block_h", block_h},
+            {"block_w", block_w},
+            {"math_fidelity", math_fidelity},
+            {"im_data_format", im_data_format},
+            {"out_data_format", out_data_format},
+            {"inplace", inplace},
+        };
+    };
 };
 
 
@@ -118,6 +147,21 @@ using LayerNormProgramConfig = std::variant<
     LayerNormInterleavedMultiCoreProgramConfig,
     LayerNormShardedMultiCoreProgramConfig
 >;
+
+operation::ProgramWithCallbacks layernorm_multi_core_sharded(
+    const Tensor &a,
+    const std::optional<const Tensor> b,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
+    Tensor& output,
+    float eps,
+    MathFidelity fidelity,
+    DataType im_data_format,
+    CoreCoord compute_grid_size,
+    uint32_t subblock_wt,
+    uint32_t block_ht,
+    uint32_t block_wt
+);
 
 struct LayerNorm {
     float eps;

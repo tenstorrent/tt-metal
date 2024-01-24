@@ -75,6 +75,8 @@ void kernel_main() {
 
     uint64_t in0_mcast_receiver_semaphore_noc_addr = in0_multicast_data_noc | (uint64_t) in0_mcast_receiver_semaphore_addr;
 
+    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+
     cb_reserve_back(cb_id_in2, batch * in0_block_num_tiles);
     uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
     uint64_t local_read_addr = get_noc_addr(l1_write_addr_in2);
@@ -85,8 +87,6 @@ void kernel_main() {
                 // Operand 0
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
                 uint64_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-
-                noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
                 // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block
