@@ -228,12 +228,13 @@ std::vector<Tensor> run_device_operation(
             }
 
             if (USE_FAST_DISPATCH) {
+                CommandQueue cq ( device, 0);
 #ifndef TTNN_ENABLE_LOGGING
-                EnqueueProgram(tt::tt_metal::detail::GetCommandQueue(device), program, false);
+                EnqueueProgram(cq, program, false);
 #else
                 const auto start{std::chrono::steady_clock::now()};
-                EnqueueProgram(tt::tt_metal::detail::GetCommandQueue(device), program, false);
-                Finish(tt::tt_metal::detail::GetCommandQueue(device));
+                EnqueueProgram(cq, program, false);
+                Finish(cq);
                 const auto end{std::chrono::steady_clock::now()};
                 const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                 tt::log_info(
