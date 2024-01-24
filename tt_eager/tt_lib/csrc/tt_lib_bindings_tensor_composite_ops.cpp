@@ -218,16 +218,14 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op_with_param(
             m_tensor, "argmax", &argmax,
             py::arg("dim"),
-            R"doc(Returns the indices of the maximum value of all elements in the ``input`` tensor.)
-            Currently supported dimension are H, W, and HW. By default it returns argmax across HW. Suported dimension [1, 1, H, W])doc",
+            R"doc(Returns the indices of the maximum value of all elements in the ``input`` tensor. Currently supported dimension are H, W, and HW. By default it returns argmax across HW. Suported shapes [1, 1, H, W])doc",
             R"doc("dim", "int", "")doc"
         );
 
         detail::bind_unary_op_with_param(
             m_tensor, "argmin", &argmin,
             py::arg("dim"),
-            R"doc(Returns the indices of the minimum value of all elements in the ``input`` tensor.)
-            Currently supported dimension are H, W, and HW. By default it returns argmin across HW. Suported dimension [1, 1, H, W])doc",
+            R"doc(Returns the indices of the minimum value of all elements in the ``input`` tensor. Currently supported dimension are H, W, and HW. By default it returns argmin across HW. Suported shapes [1, 1, H, W])doc",
             R"doc("dim", "int", "")doc"
         );
 

@@ -7,10 +7,8 @@ import pytest
 import tt_lib
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
-from models.utility_functions import skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0("skip for WHB0 until @rtawfik/reduce_max_w_whb0_debug@ branch merge to main")
 @pytest.mark.parametrize(
     "input_shapes",
     (
