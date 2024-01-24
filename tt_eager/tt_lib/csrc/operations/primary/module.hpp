@@ -488,7 +488,7 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a softmax operation. Returns a output tensor.");
+        "Performs a softmax operation. Returns an output tensor.");
     m_primary.def(
         "moreh_softmax_backward",
         &moreh_softmax_backward,
@@ -497,7 +497,7 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a softmax backward operation. Returns a input grad tensor.");
+        "Performs a softmax backward operation. Returns an input grad tensor.");
     m_primary.def(
         "moreh_softmin",
         &moreh_softmin,
@@ -505,7 +505,7 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a softmax operation. Returns a output tensor.");
+        "Performs a softmin operation. Returns an output tensor.");
     m_primary.def(
         "moreh_softmin_backward",
         &moreh_softmin_backward,
@@ -514,7 +514,7 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a softmin backward operation. Returns a input grad tensor.");
+        "Performs a softmin backward operation. Returns an input grad tensor.");
     m_primary.def(
         "moreh_arange",
         &moreh_arange,
