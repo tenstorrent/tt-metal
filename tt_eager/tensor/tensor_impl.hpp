@@ -574,7 +574,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
         data_type, layout, memory_config,
         shard_spec_buffer_opt
     );
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, memory_config.shard_spec);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 

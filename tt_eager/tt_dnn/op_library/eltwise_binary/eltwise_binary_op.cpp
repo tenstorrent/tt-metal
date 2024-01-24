@@ -229,11 +229,11 @@ const operation::Hash EltwiseBinary::compute_program_hash(
         this->op_type,
         parallelization_strategy,
         input_tensor_a.dtype(),
-        input_tensor_a.memory_config().memory_layout,
+        input_tensor_a.memory_config(),
         input_tensor_b.dtype(),
-        input_tensor_b.memory_config().memory_layout,
+        input_tensor_b.memory_config(),
         this->output_dtype,
-        this->output_mem_config.memory_layout,
+        this->output_mem_config,
         this->in_place);
 
     if (this->fused_activations.has_value()) {

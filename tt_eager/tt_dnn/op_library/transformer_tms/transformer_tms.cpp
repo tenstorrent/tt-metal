@@ -95,6 +95,7 @@ tt::stl::reflection::Attributes SplitFusedQKVAndSplitHeads::attributes() const {
     return {
         {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
         {"output_mem_config", this->output_mem_config},
+        {"num_heads", this->num_heads},
     };
 }
 
