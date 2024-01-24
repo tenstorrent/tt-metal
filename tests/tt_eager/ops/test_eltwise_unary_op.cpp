@@ -72,15 +72,16 @@ void test_operation_infrastructure() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     using namespace tt::tt_metal;
 
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(device_id);
+
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE);
+    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
     auto op = operation::DeviceOperation(EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}, MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
-    TT_FATAL(
-        program_hash == 8760077129436357413ULL,
-        fmt::format("Actual value is {}", program_hash));
+    TT_FATAL(program_hash == 12562815007089060282ULL, fmt::format("Actual value is {}", program_hash));
 
     auto profiler_info = op.create_profiler_info({input_tensor});
     TT_FATAL(
@@ -91,6 +92,8 @@ void test_operation_infrastructure() {
         profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::SINGLE_CORE",
         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value())
     );
+
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 }
 
 void test_shape_padding() {
@@ -99,8 +102,6 @@ void test_shape_padding() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
-
-
 
     auto input_shape = Shape{1, 1, 13, 18};
     auto padded_input_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
