@@ -551,6 +551,19 @@ def tan(x, *args, **kwargs):
     return torch.tan(x)
 
 
+def tan_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = torch.tan(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def atan(x, *args, **kwargs):
     return torch.atan(x)
 
@@ -937,6 +950,23 @@ def sub_bw(x, y, z, *args, **kwargs):
 
 def mul(x, y, *args, **kwargs):
     return torch.mul(x, y)
+
+
+def mul_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.mul(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
 
 
 def matmul(x, y, *args, **kwargs):
