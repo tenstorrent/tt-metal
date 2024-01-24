@@ -5,7 +5,7 @@
 
 from typing import Optional
 
-import ttnn.tensor as ttnn
+import ttnn.core as ttnn
 
 import tt_lib as ttl
 

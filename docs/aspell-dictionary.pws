@@ -1,4 +1,4 @@
-personal_ws-1.1 en 455
+personal_ws-1.1 en 457
 ABI
 ADDI
 API
@@ -137,6 +137,7 @@ TRISC
 TSLICE
 TTNN
 TTNN's
+TensTorrent's
 TensorMemoryLayout
 Tensorflow
 Tenstorrent
@@ -421,6 +422,7 @@ triscs
 tt
 ttDNN
 ttnn
+ttnn's
 txt
 ublock
 ublocks

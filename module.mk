@@ -127,7 +127,8 @@ LIBS_TO_BUILD =
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \
 	python_env/dev \
-	git_hooks
+	git_hooks \
+	ttnn/dev_install
 endif
 
 LIBS_TO_BUILD += \
@@ -144,6 +145,7 @@ include $(UMD_HOME)/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/tt_eager/module.mk
+include $(TT_METAL_HOME)/ttnn/module.mk
 include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/tests/module.mk
 
