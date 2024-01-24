@@ -23,22 +23,19 @@ mem_configs = [
 
 
 @pytest.mark.parametrize(
-    "output_type",
-    [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
-        # ttl.tensor.DataType.FLOAT32,
-        # ttl.tensor.DataType.UINT16,
-        # ttl.tensor.DataType.UINT32,
-    ],
+    "pt_input_dtype, tt_input_dtype",
+    (
+        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16),
+        (torch.float16, ttl.tensor.DataType.BFLOAT16),
+        (torch.float32, ttl.tensor.DataType.FLOAT32),
+    ),
 )
 @pytest.mark.parametrize(
-    "input_type",
-    [
-        torch.float32,
-        torch.float16,
-        torch.bfloat16,
-    ],
+    "pt_output_dtype, tt_output_dtype",
+    (
+        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16),
+        (torch.float32, ttl.tensor.DataType.BFLOAT8_B),
+    ),
 )
 @pytest.mark.parametrize(
     "input_shapes",
@@ -62,8 +59,10 @@ mem_configs = [
 class TestTypecast:
     def test_run_typecast_op(
         self,
-        input_type,
-        output_type,
+        pt_output_dtype,
+        tt_output_dtype,
+        pt_input_dtype,
+        tt_input_dtype,
         input_shapes,
         input_mem_config,
         dst_mem_config,
@@ -71,10 +70,11 @@ class TestTypecast:
         function_level_defaults,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=10), input_type)
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=10), pt_input_dtype)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["dtype"] = [output_type]
+        test_args["pt_output_dtype"] = [pt_output_dtype]
+        test_args["tt_output_dtype"] = [tt_output_dtype]
         test_args["input_mem_config"] = [input_mem_config]
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc

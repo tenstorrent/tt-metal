@@ -34,8 +34,8 @@ def clone(x, *args, **kwargs):
     return torch.clone(x)
 
 
-def typecast(x, *args, **kwargs):
-    return x.to(torch.float32).round()
+def typecast(x, pt_output_dtype, *args, **kwargs):
+    return x.to(pt_output_dtype[0])
 
 
 def move(x, *args, **kwargs):
