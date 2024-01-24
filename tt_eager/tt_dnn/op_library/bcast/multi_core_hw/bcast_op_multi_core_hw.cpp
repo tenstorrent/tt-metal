@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     uint32_t num_tensor_tiles = NC*Ht*Wt;
 
-	uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
+	uint32_t bnc1 = (bN*bC == 1);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
 		uint32_t num_tensor_tiles = NC*Ht*Wt;
 
-		uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
+		uint32_t bnc1 = (bN*bC == 1);
 
    	 	auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 

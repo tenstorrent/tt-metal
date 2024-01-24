@@ -5,43 +5,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-// #include "debug/dprint.h"
-
-FORCE_INLINE void generate_bcast_scaler_c() {
-    constexpr uint32_t cb_in_4 = tt::CB::c_in4;
-    union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(0);
-    cb_reserve_back(cb_in_4, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_4));
-
-    for (int k = 0; k < 4; k++)
-    for (int j = 0; j < 16; j++)
-        ptr[(k << 8) + j] = uint16_t(u.u>>16);
-    cb_push_back(cb_in_4, 1);
-}
-
-FORCE_INLINE void generate_bcast_scaler_w() {
-    constexpr uint32_t cb_in_2 = tt::CB::c_in2;
-    union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(1);
-    cb_reserve_back(cb_in_2, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
-
-    for (int k = 0; k < 4; k++)
-    for (int j = 0; j < 16; j++)
-        ptr[(k << 8) + j] = uint16_t(u.u>>16);
-    cb_push_back(cb_in_2, 1);
-}
-
-FORCE_INLINE void generate_epsilon() {
-    constexpr uint32_t eps_cb_id = tt::CB::c_in3;
-    union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(2);
-    cb_reserve_back(eps_cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(eps_cb_id));
-
-    for (int k = 0; k < 4; k+=2)
-    for (int j = 0; j < 16; j++)
-        ptr[(k << 8) + (j << 4)] = uint16_t(u.u>>16);
-    cb_push_back(eps_cb_id, 1);
-}
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker              = get_compile_time_arg_val(0) == 1;
@@ -62,11 +27,19 @@ void kernel_main() {
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
 
-    generate_bcast_scaler_w();
-    if constexpr(is_all_to_all_worker) {
-        generate_bcast_scaler_c();
+    {
+        constexpr uint32_t cb_in_2 = tt::CB::c_in2;
+        const uint32_t scalar_w = get_arg_val<uint32_t>(1);
+        generate_reduce_scaler(cb_in_2, scalar_w);
     }
-    generate_epsilon();
+    if constexpr(is_all_to_all_worker) {
+        constexpr uint32_t cb_in_4 = tt::CB::c_in4;
+        const uint32_t scalar_c = get_arg_val<uint32_t>(0);
+        generate_reduce_scaler(cb_in_4, scalar_c);
+    }
+    constexpr uint32_t eps_cb_id = 3;
+    const uint32_t eps = get_arg_val<uint32_t>(2);
+    generate_bcast_col_scalar(eps_cb_id, eps);
 
     #define stick_size_is_pow2 get_compile_time_arg_val(6) == 1
     #if (stick_size_is_pow2)

@@ -48,27 +48,39 @@ void kernel_main() {
         .data_format = in1_data_format
     };
 
+    #ifdef BCAST_SCALAR
+    cb_reserve_back(cb_id_in1, onetile);
+    l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+    noc_async_read_tile(i1, s1, l1_write_addr_in1);
+    noc_async_read_barrier();
+    cb_push_back(cb_id_in1, onetile);
+    #endif
+
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_reserve_back(cb_id_in0, onetile);
-            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(i, s0, l1_write_addr_in0);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
+            for (uint32_t wt = 0; wt < Wt; wt++) {
+                cb_reserve_back(cb_id_in0, onetile);
+                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                noc_async_read_tile(i, s0, l1_write_addr_in0);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, onetile);
+                i++; // input tile iterates over NC Ht Wt
 
-            // for each H,W-tile of the first tensor we push one tile from the second arg tile list
-            // but we don't advance the second tile index for H,W
-            cb_reserve_back(cb_id_in1, onetile);
-            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-            noc_async_read_tile(i1, s1, l1_write_addr_in1);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in1, onetile);
-
-            i ++; // input tile iterates over NC Ht Wt
-        } // wt loop
+                #ifndef BCAST_SCALAR
+                // for each H,W-tile of the first tensor we push one tile from the second arg tile list
+                // but we don't advance the second tile index for H,W
+                cb_reserve_back(cb_id_in1, onetile);
+                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+                noc_async_read_tile(i1, s1, l1_write_addr_in1);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in1, onetile);
+                #endif
+            } // wt loop
         } // ht loop
-        if (nc1 == 0)
+        #ifndef BCAST_SCALAR
+        if (nc1 == 0) {
             i1 ++; // bcast-HW tile iterates only for nc loop and only if NC>1
+        }
+        #endif
     } // nc loop
 }
