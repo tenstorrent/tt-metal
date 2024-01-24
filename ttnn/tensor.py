@@ -668,9 +668,12 @@ def _torch_identity(input_tensor):
 
 @decorate_operation(torch_function=_torch_identity)
 def reallocate(input_tensor: Tensor) -> Tensor:
-    ttl_input_tensor = input_tensor.value
-    ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
-    return Tensor(ttl_output_tensor)
+    def impl(input_tensor):
+        ttl_input_tensor = input_tensor.value
+        ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
+        return Tensor(ttl_output_tensor)
+
+    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.reallocate")(input_tensor)
 
 
 @decorate_operation()

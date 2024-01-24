@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
 
-    auto& shard_spec = a.shard_spec().value();
+    auto shard_spec = a.shard_spec().value();
 
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();

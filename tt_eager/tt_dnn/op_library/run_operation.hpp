@@ -196,7 +196,7 @@ inline void log_operation(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
     tt::log_debug(
         tt::LogOp,
-        "Operation: \"{}\" ({})",
+        "Launching Operation: \"{}\" ({})",
         operation.get_type_name(),
         detail::operation_type_to_string<OperationType>());
 

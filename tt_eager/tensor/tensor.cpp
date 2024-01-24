@@ -25,8 +25,8 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout, std::optional<ShardSpec> shard_spec)
-    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout), shard_spec_(shard_spec) {
+Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) :
+    storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -47,7 +47,6 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
         this->storage_
     );
 }
-
 
 Tensor::~Tensor() {
     this->deallocate();
@@ -343,7 +342,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
                                                             data_type, layout, memory_config,
                                                             std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
                                                             );
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, shard_spec);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 }  // namespace tt_metal
