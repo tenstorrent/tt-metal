@@ -18,9 +18,15 @@ DeviceCommand::DeviceCommand() {
     this->desc[this->sharded_buffer_num_cores_idx] = 1;
 }
 
-void DeviceCommand::wrap(WrapRegion wrap_region) { this->desc[this->wrap_idx] = (uint32_t)wrap_region; }
+void DeviceCommand::set_restart() { this->desc[this->restart_idx] = 1; }
 
-void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
+void DeviceCommand::set_issue_queue_size(uint32_t new_issue_queue_size) { this->desc[this->new_issue_queue_size_idx] = new_issue_queue_size; }
+
+void DeviceCommand::set_completion_queue_size(uint32_t new_completion_queue_size) { this->desc[this->new_completion_queue_size_idx] = new_completion_queue_size; }
+
+void DeviceCommand::set_wrap(WrapRegion wrap_region) { this->desc[this->wrap_idx] = (uint32_t)wrap_region; }
+
+void DeviceCommand::set_finish() { this->desc[this->finish_idx] = 1; }
 
 void DeviceCommand::set_num_workers(const uint32_t num_workers) { this->desc.at(this->num_workers_idx) = num_workers; }
 
