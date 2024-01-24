@@ -143,6 +143,7 @@ class DeviceProfiler {
         //DRAM buffer for device side results
         Buffer output_dram_buffer;
 
+
         //Set the device side file flag
         void setNewLogFlag(bool new_log_flag);
 

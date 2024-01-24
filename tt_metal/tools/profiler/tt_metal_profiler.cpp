@@ -31,10 +31,17 @@ void InitDeviceProfiler(Device *device){
 #if defined(PROFILER)
     ZoneScoped;
 
+    auto device_id = device->id();
+    uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_channels();
+    uint32_t coreCountPerDram = tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
+
+    uint32_t pageSize =
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
+
     tt::tt_metal::InterleavedBufferConfig dram_config{
                 .device= device,
-                .size = PROFILER_FULL_HOST_BUFFER_SIZE,
-                .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_DRAM_BANK,
+                .size = pageSize * dramBankCount,
+                .page_size =  pageSize,
                 .buffer_type = tt::tt_metal::BufferType::DRAM
     };
     tt_metal_device_profiler.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
@@ -42,7 +49,6 @@ void InitDeviceProfiler(Device *device){
     std::vector<uint32_t> control_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();
 
-    auto device_id = device->id();
     for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
     {
         CoreCoord curr_core = {core.first.x, core.first.y};
@@ -53,7 +59,7 @@ void InitDeviceProfiler(Device *device){
                 PROFILER_L1_BUFFER_CONTROL);
     }
 
-    std::vector<uint32_t> inputs_DRAM(PROFILER_FULL_HOST_BUFFER_SIZE/sizeof(uint32_t), 0);
+    std::vector<uint32_t> inputs_DRAM(tt_metal_device_profiler.output_dram_buffer.size()/sizeof(uint32_t), 0);
     tt_metal::detail::WriteToBuffer(tt_metal_device_profiler.output_dram_buffer, inputs_DRAM);
 
 #endif

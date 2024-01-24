@@ -364,6 +364,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
+    int core_count_per_dram,
     const std::map<CoreCoord, int32_t>& profiler_flat_id_map
 ) {
     stringstream ss;
@@ -416,7 +417,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "extern int32_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
-    ss << "extern uint16_t profiler_core_count;" << endl;
+    ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
@@ -444,8 +445,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << endl;
 
 #if defined(PROFILER)
-    ss << "uint16_t profiler_core_count __attribute__((used)) = ";
-    ss << profiler_flat_id_map.size() <<  ";" << endl;
+    ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
+    ss << core_count_per_dram <<  ";" << endl;
     ss << endl;
 
     ss << "int32_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y] __attribute__((used)) = {" << endl;
@@ -502,9 +503,10 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
+    int core_count_per_dram,
     const std::map<CoreCoord, int32_t>& profiler_flat_id_map
 ) {
-    string output_string = generate_bank_to_noc_coord_descriptor_string(grid_size, dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map, profiler_flat_id_map);
+    string output_string = generate_bank_to_noc_coord_descriptor_string(grid_size, dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map, core_count_per_dram, profiler_flat_id_map);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");

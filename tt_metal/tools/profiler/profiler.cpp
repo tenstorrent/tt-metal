@@ -288,7 +288,7 @@ void DeviceProfiler::dumpResults (
     ZoneScoped;
     auto device_id = device->id();
     device_core_frequency = tt::Cluster::instance().get_device_aiclk(device_id);
-    std::vector<uint32_t> profile_buffer(PROFILER_FULL_HOST_BUFFER_SIZE/sizeof(uint32_t), 0);
+    std::vector<uint32_t> profile_buffer(output_dram_buffer.size()/sizeof(uint32_t), 0);
 
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
 

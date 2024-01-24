@@ -225,9 +225,6 @@ namespace kernel_profiler{
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
 
-        //uint32_t num_cores_per_bank = profiler_core_count/NUM_DRAM_BANKS;
-        uint32_t num_cores_per_bank = 6;
-
         finish();
         int hostIndex;
         int deviceIndex;
@@ -241,15 +238,15 @@ namespace kernel_profiler{
 
             uint32_t dram_address =
                 dram_profiler_address +
-                (core_flat_id % num_cores_per_bank) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                (core_flat_id % profiler_core_count_per_dram) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
             if ( currEndIndex < PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
                 uint64_t dram_bank_dst_noc_addr = get_noc_addr_helper(
-                        dram_bank_to_noc_xy[0][core_flat_id / num_cores_per_bank],
-                        bank_to_dram_offset[core_flat_id / num_cores_per_bank] + dram_address);
+                        dram_bank_to_noc_xy[0][core_flat_id / profiler_core_count_per_dram],
+                        bank_to_dram_offset[core_flat_id / profiler_core_count_per_dram] + dram_address);
                 noc_async_write(
                         PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
                         dram_bank_dst_noc_addr,

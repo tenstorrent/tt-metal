@@ -144,6 +144,16 @@ namespace tt::tt_metal{
          * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
          * */
         void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores);
+
+        /**
+         * Traverse all cores and read device side profiler data and dump results into device side CSV log
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
+         * */
         void DumpDeviceProfileResults(Device *device);
 
         /**
@@ -377,6 +387,7 @@ namespace tt::tt_metal{
                 dram_offsets_per_bank,
                 l1_noc_coord_per_bank,
                 l1_offset_per_bank,
+                soc_d.profiler_ceiled_core_count_perf_dram_bank,
                 soc_d.physical_routing_to_profiler_flat_id
             );
 

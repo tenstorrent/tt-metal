@@ -306,6 +306,14 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
         this->physical_routing_to_profiler_flat_id[core.first] = flat_id;
         flat_id++;
     }
+
+    int coreCount = this->physical_routing_to_profiler_flat_id.size();
+    this->profiler_ceiled_core_count_perf_dram_bank = coreCount / this->get_num_dram_channels();
+    if ((coreCount % this->get_num_dram_channels()) > 0)
+    {
+        this->profiler_ceiled_core_count_perf_dram_bank++;
+    }
+
 #endif
 }
 
