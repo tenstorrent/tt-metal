@@ -311,7 +311,7 @@ namespace tt::tt_metal{
         inline void ClearCommandQueueProgramCache(Device *device)
         {
             if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                ClearProgramCache(GetCommandQueue(device));
+                ClearProgramCache(device);
             }
         }
 
