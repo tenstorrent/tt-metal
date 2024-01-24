@@ -34,7 +34,7 @@ def to_npu(
 
 
 def make_cpu_tensors(input_shape, dim):
-    if dim is None:
+    if dim is None or dim == []:
         dim = list(range(len(input_shape)))
 
     if isinstance(dim, int):
@@ -88,6 +88,7 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
 @pytest.mark.parametrize(
     "dim",
     [
+        [],
         None,
         0,
         1,
@@ -104,7 +105,8 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
         [2, 3],
     ],
     ids=[
-        "global_norm",
+        "global_norm(dim=[])",
+        "global_norm(dim=None)",
         "N",
         "C",
         "H",
@@ -141,7 +143,7 @@ def test_moreh_norm(input_shape, p, dim, device):
 
     # Set rtol and atol
     rtol = atol = 0.1
-    if dim is None:
+    if dim is None or dim == []:
         rtol = atol = 0.2
     if isinstance(dim, list):
         if len(dim) == 3:
@@ -160,6 +162,7 @@ def test_moreh_norm(input_shape, p, dim, device):
 @pytest.mark.parametrize(
     "dim",
     [
+        [],
         None,
         0,
         1,
@@ -176,7 +179,8 @@ def test_moreh_norm(input_shape, p, dim, device):
         [2, 3],
     ],
     ids=[
-        "global_norm",
+        "global_norm(dim=[])",
+        "global_norm(dim=None)",
         "N",
         "C",
         "H",
@@ -213,7 +217,7 @@ def test_moreh_norm_backward(input_shape, p, dim, device):
 
     # Set rtol and atol
     rtol = atol = 0.1
-    if dim is None:
+    if dim is None or dim == []:
         rtol = atol = 0.2
     if isinstance(dim, list):
         if len(dim) == 3:
