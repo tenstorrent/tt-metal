@@ -29,7 +29,15 @@ struct MorehArange {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names =
+        std::make_tuple("start", "end", "step", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->start),
+            std::cref(this->end),
+            std::cref(this->step),
+            std::cref(this->output_mem_config));
+    }
 };
 
 Tensor moreh_arange(float start, float end, float step, const Tensor& any, const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

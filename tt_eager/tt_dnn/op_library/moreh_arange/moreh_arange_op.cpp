@@ -147,15 +147,6 @@ operation::ProgramWithCallbacks MorehArange::create_program(
         this->core_range);
 }
 
-tt::stl::reflection::Attributes MorehArange::attributes() const {
-    return {
-        {"start", this->start},
-        {"end", this->end},
-        {"step", this->step},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor moreh_arange(float start, float end, float step, const Tensor &any, const MemoryConfig &output_mem_config) {
     auto device = any.device();
     auto grid_coord = device->compute_with_storage_grid_size();
