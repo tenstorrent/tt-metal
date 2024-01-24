@@ -489,7 +489,9 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                 TT_THROW("Device storage doesn't support to_device_buffer");
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                if constexpr (std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T,uint32_t>) {
+                if constexpr (
+                    std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T, std::uint32_t> or
+                    std::is_same_v<T, std::uint16_t>) {
                     auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
                     TT_ASSERT(
                         compute_buffer_size(shape, data_type) == data_to_write.size(),
@@ -501,8 +503,7 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                             "Tensor shape incompatible for specified layout");
                     }
                     return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config,  shard_spec);
-                }
-                else {
+                } else {
                     TT_THROW("Borrowed storage doesn't support this data type");
                 }
             }
