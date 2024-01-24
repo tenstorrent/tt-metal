@@ -164,12 +164,14 @@ bool operator!=(const Shape&, const Shape&);
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+    std::optional <ShardSpec>  shard_spec = std::nullopt;
     bool is_sharded() const;
 
     static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type");
     const auto attribute_values() const {
         return std::make_tuple(std::cref(this->memory_layout), std::cref(this->buffer_type));
     }
+    ~MemoryConfig(){;}
 };
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
@@ -193,9 +195,15 @@ struct DeviceStorage {
 
     const MemoryConfig memory_config() const {
         const auto& buffer = this->buffer;
+
+        std::optional<ShardSpec> shard_spec_opt = std::nullopt;
+        if(is_sharded(buffer->buffer_layout())){
+            shard_spec_opt = buffer->shard_spec().tensor_shard_spec;
+        }
         return MemoryConfig{
             .memory_layout = buffer->buffer_layout(),
             .buffer_type = buffer->buffer_type(),
+            .shard_spec = shard_spec_opt
         };
     }
 
@@ -274,3 +282,70 @@ bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);
 }  // namespace tt_metal
 
 }  // namespace tt
+
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::MemoryConfig> {
+    uint64_t operator()(const tt::tt_metal::MemoryConfig &mem_config) const {
+        return tt::stl::hash::hash_objects(0,
+             typeid(tt::tt_metal::MemoryConfig).hash_code(),
+             mem_config.memory_layout,
+             mem_config.buffer_type
+             );
+    }
+};
+
+
+template <>
+struct hash<tt::tt_metal::DeviceStorage> {
+    uint64_t operator()(const tt::tt_metal::DeviceStorage &storage) const {
+        return tt::stl::hash::hash_objects(0,
+             typeid(tt::tt_metal::DeviceStorage).hash_code(),
+             storage.buffer,
+             storage.memory_config()
+             );
+    }
+};
+
+
+template <>
+struct hash<tt::tt_metal::Padding::PadDimension> {
+    uint64_t operator()(const tt::tt_metal::Padding::PadDimension &pad_dimension) const {
+        return tt::stl::hash::hash_objects(0,
+             typeid(tt::tt_metal::Padding::PadDimension).hash_code(),
+             pad_dimension.front,
+             pad_dimension.back
+             );
+    }
+};
+
+
+template <>
+struct hash<tt::tt_metal::Padding> {
+    uint64_t operator()(const tt::tt_metal::Padding &padding) const {
+
+        uint64_t hash = tt::stl::hash::hash_objects(0, typeid(tt::tt_metal::Padding).hash_code(),
+            padding.rank_, padding.pad_value_);
+        for (const auto& pad_dim : padding.pad_dimensions_) {
+            hash = tt::stl::hash::hash_objects(hash, pad_dim);
+        }
+        return hash;
+    }
+};
+template <>
+struct hash<tt::tt_metal::Shape> {
+    uint64_t operator()(const tt::tt_metal::Shape &shape) const {
+
+        uint64_t hash = tt::stl::hash::hash_objects(0, typeid(tt::tt_metal::Shape).hash_code(),
+            shape.rank(), shape.padding());
+        for(int idx=0; idx < shape.rank(); idx++){
+            hash = tt::stl::hash::hash_objects(hash, shape[idx]);
+        }
+        return hash;
+
+    }
+};
+
+}

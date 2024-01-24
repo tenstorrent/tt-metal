@@ -4,11 +4,15 @@
 
 import torch
 import pytest
+import tt_lib
+from pathlib import Path
+import os
 
 from transformers import GPT2LMHeadModel
 
 from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_block as nanogpt_block
+from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -19,13 +23,15 @@ from models.utility_functions import (
 
 
 @pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16,),
+)
+@pytest.mark.parametrize(
     "pcc",
     ((0.99,),),
 )
-def test_nanogpt_block(device, pcc, reset_seeds):
-
+def test_nanogpt_block(device, pcc, dtype, reset_seeds):
     model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
-    sd = model_hf.state_dict()
     config = model_hf.config
     model_hf.eval()
     block = 0
@@ -36,8 +42,16 @@ def test_nanogpt_block(device, pcc, reset_seeds):
     pt_out = pt_block.forward(test_in)
 
     tt_test_in = torch_to_tt_tensor_rm(test_in, device)
+    model_version = "gpt2"
+    tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_block = nanogpt_block.TtBlock(config, sd, base_address, device)
+    if (
+        tt_cache_path == (str(Path(f"models/experimental/nanogpt/datasets/{model_version}")) + "/")
+        and len(os.listdir(f"models/experimental/nanogpt/datasets/{model_version}")) < 320
+    ):
+        store_weights(model_version=model_version, file_name=tt_cache_path, dtype=dtype, base_address=base_address)
+
+    tt_block = nanogpt_block.TtBlock(config, base_address, device, tt_cache_path, dtype)
     tt_block.eval()
 
     tt_out = tt_block.forward(tt_test_in)

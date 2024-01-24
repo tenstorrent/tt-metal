@@ -102,6 +102,9 @@ For Wormhole B0:
 
 The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
 
+As a suggestion, please install the dependencies in a **virtual environment**
+to ensure that your system Python installation does not get polluted.
+
 #### Installing TTKMD (kernel-mode driver)
 
 Please refer to the Tenstorrent [tt-kmd](https://github.com/tenstorrent/tt-kmd) page to get the specific version you need and install.
@@ -140,7 +143,11 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 **NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
 
-4. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
+4. If you are working on a Tenstorrent cloud machine, you may have additional steps to complete Hugepages setup. Please refer to the [Hugepages section](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM#installing-hugepages-extra-steps) in the cloud machine setup instructions and come back to this step to continue.
+
+   If you are not working on a Tenstorrent cloud machine, please skip this step and continue reading.
+
+5. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
 
 ### Step 4. Installing developer dependencies
 
@@ -271,7 +278,7 @@ make tests
 1. Initialize the Python virtual environment [see documentation](#Environment-setup)
 2. Run the specific test point with pytest tool, e.g.
    ```
-   $ pytest tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
+   $ pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
    ```
 3. If you have any issues with import paths for python libraries include the following environment variable,
    ```

@@ -20,13 +20,13 @@ template <bool APPROXIMATION_MODE, int ITERATIONS=8>
 inline void calculate_mask()
 {
     const bool exponent_size_8 = true;
-    const int mask_val_idx = 16;
+    const int mask_val_idx = 32;
     #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        vFloat mask = dst_reg[32];
+        vFloat mask = dst_reg[mask_val_idx];
         v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) {
-            dst_reg[0] = 0;
+            dst_reg[0] = vConst0;
         }
         v_endif;
         dst_reg++;

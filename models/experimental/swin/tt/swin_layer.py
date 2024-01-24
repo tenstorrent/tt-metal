@@ -42,12 +42,8 @@ class TtSwinLayer(nn.Module):
         self.window_size = config.window_size
         self.input_resolution = input_resolution
 
-        gamma_before = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.layernorm_before.weight"], self.device
-        )
-        beta_before = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.layernorm_before.bias"], self.device
-        )
+        gamma_before = torch_to_tt_tensor_rm(state_dict[f"{base_address}.layernorm_before.weight"], self.device)
+        beta_before = torch_to_tt_tensor_rm(state_dict[f"{base_address}.layernorm_before.bias"], self.device)
         self.LayerNorm_before = fallback_ops.LayerNorm(
             gamma_before, beta_before, normalized_shape=dim, eps=config.layer_norm_eps
         )
@@ -62,12 +58,8 @@ class TtSwinLayer(nn.Module):
             device,
         )
 
-        gamma_after = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.layernorm_after.weight"], self.device
-        )
-        beta_after = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.layernorm_after.bias"], self.device
-        )
+        gamma_after = torch_to_tt_tensor_rm(state_dict[f"{base_address}.layernorm_after.weight"], self.device)
+        beta_after = torch_to_tt_tensor_rm(state_dict[f"{base_address}.layernorm_after.bias"], self.device)
 
         self.LayerNorm_after = fallback_ops.LayerNorm(
             gamma_after,
@@ -121,15 +113,11 @@ class TtSwinLayer(nn.Module):
             img_mask = torch_to_tt_tensor_rm(img_mask, self.device, put_on_device=False)
             mask_windows = window_partition(img_mask, self.window_size, self.device, False)
 
-            mask_windows = fallback_ops.reshape(
-                mask_windows, -1, self.window_size * self.window_size, 1, 1
-            )
+            mask_windows = fallback_ops.reshape(mask_windows, -1, self.window_size * self.window_size, 1, 1)
 
             mask_windows = tt_to_torch_tensor(mask_windows).squeeze()
             attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-            attn_mask = attn_mask.masked_fill(
-                attn_mask != 0, float(-100.0)
-            ).masked_fill(attn_mask == 0, float(0.0))
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
 
             attn_mask = torch_to_tt_tensor_rm(attn_mask, self.device, put_on_device=False)
         else:
@@ -163,9 +151,7 @@ class TtSwinLayer(nn.Module):
 
         hidden_states = self.LayerNorm_before(hidden_states)
 
-        hidden_states = fallback_ops.reshape(
-            hidden_states, batch_size, height, width, channels
-        )
+        hidden_states = fallback_ops.reshape(hidden_states, batch_size, height, width, channels)
 
         # pad hidden_states to multiples of window size
         hidden_states, pad_values = self.maybe_pad(hidden_states, height, width)
@@ -174,27 +160,20 @@ class TtSwinLayer(nn.Module):
         hidden_states = tt_to_torch_tensor(hidden_states)
         # cyclic shift
         if self.shift_size > 0:
-            shifted_hidden_states = torch.roll(
-                hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
+            shifted_hidden_states = torch.roll(hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
         else:
             shifted_hidden_states = hidden_states
 
         # partition windows
-        shifted_hidden_states = torch_to_tt_tensor_rm(
-            shifted_hidden_states, self.device
+        shifted_hidden_states = torch_to_tt_tensor_rm(shifted_hidden_states, self.device)
+        hidden_states_windows = window_partition(shifted_hidden_states, self.window_size, self.device, False).to(
+            self.device
         )
-        hidden_states_windows = window_partition(
-            shifted_hidden_states, self.window_size, self.device, False
-        ).to(self.device)
 
         hidden_states_windows = fallback_ops.reshape(
-            hidden_states_windows, -1, self.window_size * self.window_size, channels, 1
+            hidden_states_windows, 1, -1, self.window_size * self.window_size, channels
         )
         attn_mask = self.get_attn_mask(height_pad, width_pad, dtype=hidden_states.dtype)
-
-        if attn_mask is not None:
-            attn_mask = attn_mask.to(hidden_states_windows.device())
 
         attention_outputs = self.attention(
             hidden_states_windows,
@@ -205,9 +184,7 @@ class TtSwinLayer(nn.Module):
 
         attention_output = attention_outputs[0]
 
-        attention_windows = fallback_ops.reshape(
-            attention_output, -1, self.window_size, self.window_size, channels
-        )
+        attention_windows = fallback_ops.reshape(attention_output, -1, self.window_size, self.window_size, channels)
 
         shifted_windows = window_reverse(
             attention_windows, self.window_size, height_pad, width_pad, self.device, False
@@ -216,9 +193,7 @@ class TtSwinLayer(nn.Module):
         shifted_windows = tt_to_torch_tensor(shifted_windows)
         # reverse cyclic shift
         if self.shift_size > 0:
-            attention_windows = torch.roll(
-                shifted_windows, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-            )
+            attention_windows = torch.roll(shifted_windows, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             attention_windows = shifted_windows
         attention_windows = torch_to_tt_tensor_rm(attention_windows, self.device)
@@ -226,18 +201,12 @@ class TtSwinLayer(nn.Module):
         was_padded = pad_values[3] > 0 or pad_values[5] > 0
         if was_padded:
             attention_windows = attention_windows[:, :height, :width, :]
-        attention_windows = fallback_ops.reshape(
-            attention_windows, 1, batch_size, height * width, channels
-        )
+        attention_windows = fallback_ops.reshape(attention_windows, 1, batch_size, height * width, channels)
         hidden_states = tt_lib.tensor.add(shortcut, attention_windows)
 
         layer_output = self.LayerNorm_after(hidden_states)
         layer_output = self.intermediate(layer_output)
         layer_output = tt_lib.tensor.add(hidden_states, self.output(layer_output))
 
-        layer_outputs = (
-            (layer_output, attention_outputs[1])
-            if output_attentions
-            else (layer_output,)
-        )
+        layer_outputs = (layer_output, attention_outputs[1]) if output_attentions else (layer_output,)
         return layer_outputs

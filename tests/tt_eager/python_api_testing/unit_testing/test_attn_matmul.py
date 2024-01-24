@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 
 import tt_lib as ttl
@@ -27,20 +28,18 @@ def generate_input_shapes():
     yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
 
 
-@skip_for_wormhole_b0()
-def test_attn_matmul(device):
+@pytest.mark.parametrize("in0_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("in1_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("out_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_attn_matmul(in0_dtype, in1_dtype, out_dtype, device):
     torch.manual_seed(0)
 
     for input_shape_a, input_shape_b in generate_input_shapes():
         input_tensor_a = torch.randn(input_shape_a).bfloat16()
         input_tensor_b = torch.randn(input_shape_b).bfloat16()
 
-        tt_input_tensor_a = (
-            ttl.tensor.Tensor(input_tensor_a, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-        )
-        tt_input_tensor_b = (
-            ttl.tensor.Tensor(input_tensor_b, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-        )
+        tt_input_tensor_a = ttl.tensor.Tensor(input_tensor_a, in0_dtype).to(ttl.tensor.Layout.TILE).to(device)
+        tt_input_tensor_b = ttl.tensor.Tensor(input_tensor_b, in1_dtype).to(ttl.tensor.Layout.TILE).to(device)
 
         compute_grid_size = device.compute_with_storage_grid_size()
 
@@ -51,7 +50,7 @@ def test_attn_matmul(device):
             output_mem_config=ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
-            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            output_dtype=out_dtype,
         )
         tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -61,20 +60,18 @@ def test_attn_matmul(device):
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
-def test_attn_matmul_with_program_cache(device, use_program_cache):
+@pytest.mark.parametrize("in0_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("in1_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("out_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_attn_matmul_with_program_cache(in0_dtype, in1_dtype, out_dtype, device, use_program_cache):
     torch.manual_seed(0)
 
     for input_shape_a, input_shape_b in generate_input_shapes():
         input_tensor_a = torch.randn(input_shape_a).bfloat16()
         input_tensor_b = torch.randn(input_shape_b).bfloat16()
 
-        tt_input_tensor_a = (
-            ttl.tensor.Tensor(input_tensor_a, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-        )
-        tt_input_tensor_b = (
-            ttl.tensor.Tensor(input_tensor_b, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-        )
+        tt_input_tensor_a = ttl.tensor.Tensor(input_tensor_a, in0_dtype).to(ttl.tensor.Layout.TILE).to(device)
+        tt_input_tensor_b = ttl.tensor.Tensor(input_tensor_b, in1_dtype).to(ttl.tensor.Layout.TILE).to(device)
 
         compute_grid_size = device.compute_with_storage_grid_size()
 
@@ -85,7 +82,7 @@ def test_attn_matmul_with_program_cache(device, use_program_cache):
             output_mem_config=ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
-            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            output_dtype=out_dtype,
         )
         tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

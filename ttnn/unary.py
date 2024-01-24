@@ -71,7 +71,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
 
         """
     setattr(THIS_MODULE, name, unary_function)
-    __all__.append(name)
 
 
 TTL_UNARY_FUNCTIONS = [
@@ -87,3 +86,5 @@ TTL_UNARY_FUNCTIONS = [
 
 for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
     register_ttl_unary_function(unary_function_name, ttl_unary_function)
+
+__all__ = []

@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = grid_size.y;
 
-    CoreRangeSet all_cores = input_tensor.shard_spec().value().shard_grid;
+    CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     uint32_t ncores_c = 1;
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(LogOp, "ncores_c: {}", ncores_c);
     TT_ASSERT(ncores_nhw == ncores);
 
-    auto shard_shape = input_tensor.shard_spec().value().shard_shape;
+    auto shard_shape = input_tensor.shard_spec().value().shape;
     uint32_t ntiles_per_block = shard_shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_shape[0] / TILE_HEIGHT;
     uint32_t input_npages = ntiles_per_block * nblocks_per_core;
@@ -564,16 +564,18 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
 
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto core_range = *(shard_spec.shard_grid.ranges().begin());
+        auto core_range = *(shard_spec.grid.ranges().begin());
         TT_FATAL(ncores_nhw_ == core_range.end.x - core_range.start.x + 1);
     } else {
-        TT_FATAL(ncores_nhw_ == shard_spec.shard_grid.num_cores());
+        TT_FATAL(ncores_nhw_ == shard_spec.grid.num_cores());
     }
     auto out_shard_spec = shard_spec;
-    out_shard_spec.shard_shape[0] = output_shape[0] * div_up(output_shape[2], ncores_nhw_);
+    out_shard_spec.shape[0] = output_shape[0] * div_up(output_shape[2], ncores_nhw_);
     out_shard_spec.halo = true;
     // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config_, out_shard_spec)};
+    auto mem_config = out_mem_config_;
+    mem_config.shard_spec = out_shard_spec;
+    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {

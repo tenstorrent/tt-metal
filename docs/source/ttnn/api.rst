@@ -16,6 +16,17 @@ Tensor
    ttnn/load_tensor
    ttnn/deallocate
    ttnn/reallocate
+   ttnn/to_memory_config
+
+
+Memory Config
+*************
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/create_sharded_memory_config
+
 
 Operations
 **********
@@ -104,3 +115,12 @@ Embedding
    :maxdepth: 1
 
    ttnn/embedding
+
+
+Model Conversion
+****************
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/model_preprocessing/preprocess_model_parameters

@@ -120,19 +120,15 @@ Starting off with the test:
         torch_output = model(torch_hidden_states)
 
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: model.to(torch.bfloat16),
+            initialize_model=lambda: model,
             device=device, # Device to put the parameters on
         )
 
-        hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        hidden_states = ttnn.to_device(hidden_states, device)
+        hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         output = ttnn_functional_bert.bert_intermediate(
             hidden_states,
             parameters=parameters,
         )
-        output = ttnn.from_device(output)
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
         output = ttnn.to_torch(output)
 
         assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.999)
@@ -158,13 +154,64 @@ Then implementing the function using ttnn operations:
 Step 3 - Optimizing the model
 *****************************
 
-Once the model is implemented, it can be optimized using the following steps:
+Starting off with the test:
+
+.. code-block:: python
+
+    import pytest
+    import torch
+    import transformers
+
+    import ttnn
+    import ttnn_functional_bert
+
+    from models.utility_functions import torch_random
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
+    @pytest.mark.parametrize("batch_size", [1])
+    @pytest.mark.parametrize("sequence_size", [384])
+    def test_bert_intermediate(device, model_name, batch_size, sequence_size):
+        torch.manual_seed(0)
+
+        config = transformers.BertConfig.from_pretrained(model_name)
+        model = transformers.models.bert.modeling_bert.BertIntermediate(config).eval()
+
+        torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1)
+        torch_output = model(torch_hidden_states)
+
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model,
+            device=device, # Device to put the parameters on
+            custom_preprocessor=ttnn_functional_bert.custom_preprocessor, # Use custom_preprocessor to set ttnn.bfloat8_b data type for the weights and biases
+        )
+
+        hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        output = ttnn_functional_bert.bert_intermediate(
+            hidden_states,
+            parameters=parameters,
+        )
+        output = ttnn.to_torch(output)
+
+        assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.999)
+
+And the optimized model can be something like this:
 
 .. code-block:: python
 
     # ttnn_optimized_functional_bert.py
 
     import ttnn
+    import transformers
+
+    def custom_preprocessor(model, name):
+
+        parameters = {}
+        if isinstance(model, transformers.models.bert.modeling_bert.BertIntermediate):
+            parameters["weight"] = ttnn.model_preprocessing.preprocess_linear_weight(model.weight, dtype=ttnn.bfloat8_b)
+            parameters["bias"] = ttnn.model_preprocessing.preprocess_linear_bias(model.bias, dtype=ttnn.bfloat8_b)
+
+        return parameters
 
     def bert_intermediate(
         hidden_states,

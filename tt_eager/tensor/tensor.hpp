@@ -42,7 +42,6 @@ class Tensor {
         void deallocate(bool force=false);
 
         Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
-        Tensor to(Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) const;
 
         Tensor to(Layout target_layout) const;
 
@@ -119,10 +118,39 @@ class Tensor {
 
 };
 
+
+
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec);
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config);
 
 }  // namespace tt_metal
 
 }  // namespace tt
+
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::Tensor> {
+    uint64_t operator()(const tt::tt_metal::Tensor &tensor) const {
+        if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
+            return tt::stl::hash::hash_objects(0,
+                    typeid(tt::tt_metal::Tensor).hash_code(),
+                    tensor.storage_type(),
+                    std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage()),
+                    tensor.shape(),
+                    tensor.layout(),
+                    tensor.dtype());
+        }
+        else {
+            return tt::stl::hash::hash_objects(0,
+                    typeid(tt::tt_metal::Tensor).hash_code(),
+                    tensor.storage_type(),
+                    tensor.shape(),
+                    tensor.layout(),
+                    tensor.dtype());
+        }
+    }
+};
+}

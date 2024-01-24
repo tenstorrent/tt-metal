@@ -65,7 +65,15 @@ enum class UnaryOpType {
     RDIV = 47,
     SILU = 48,
     IDENTITY = 49,
-    NEG = 50
+    NEG = 50,
+    ADD_UNARY = 51,
+    SUB_UNARY = 52,
+    MUL_UNARY = 53,
+    DIV_UNARY = 54,
+    ADD_UNARY_SFPU = 55,
+    SUB_UNARY_SFPU = 56,
+    MUL_UNARY_SFPU = 57,
+    DIV_UNARY_SFPU = 58
 };
 
 template <typename T>
@@ -83,7 +91,16 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::ERFC:
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
-        case UnaryOpType::EXP: return true;
+        case UnaryOpType::EXP:
+        case UnaryOpType::ADD_UNARY:
+        case UnaryOpType::SUB_UNARY:
+        case UnaryOpType::MUL_UNARY:
+        case UnaryOpType::DIV_UNARY:
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::MUL_UNARY_SFPU:
+        case UnaryOpType::DIV_UNARY_SFPU:
+            return true;
         default: return false;
     }
     return false;
@@ -159,6 +176,51 @@ struct make_eltwise_unary {
     }
 };
 
+
+template <UnaryOpType unary_op_type, typename T = float>
+struct make_eltwise_symmetric_binop_unary_with_param {
+    Tensor operator()(
+        const Tensor& input_tensor,
+        T param,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+    Tensor operator()(
+        T param,
+        const Tensor& input_tensor,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+};
+
+template <UnaryOpType unary_op_type,UnaryOpType unary_op_rev_type, typename T = float>
+struct make_eltwise_asymmetric_binop_unary_with_param {
+    Tensor operator()(
+        const Tensor& input_tensor,
+        T param,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+    Tensor operator()(
+        T param,
+        const Tensor& input_tensor,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_rev_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+};
+
 inline Tensor relu_without_autoformat(
     const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run_without_autoformat(
@@ -212,6 +274,10 @@ constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
+constexpr auto add_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY_SFPU>{};
+constexpr auto mul_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY_SFPU>{};
+constexpr auto sub_unary_sfpu = make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::SUB_UNARY_SFPU,UnaryOpType::RSUB>{};
+constexpr auto div_unary_sfpu = make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::DIV_UNARY_SFPU,UnaryOpType::RDIV>{};
 
 inline Tensor exp(
     const Tensor& input_tensor,

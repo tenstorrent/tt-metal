@@ -52,6 +52,7 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
     tilize_init_short(in0_cb, num_tiles);
+    cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(sync_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     tilize_block(in0_cb, num_tiles, out_cb);
@@ -94,21 +95,28 @@ void MAIN {
     constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
+    binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
     UNTILIZE_TILES(sin_cb, untilized_sin_cb, Wt);
     UNTILIZE_TILES(cos_cb, untilized_cos_cb, Wt);
+    unpack_reconfig_data_format_srca(cos_cb, untilized_sin_cb);
+    pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
     TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);
     TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
+    #else
+    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
     #endif
     uint32_t in1_idx = 0;
-    for (uint32_t i = 0; i < num_rows; i++) {
-        for (uint32_t j = 0; j < Wt; j++) {
+    for (uint32_t i = 0; i < num_rows; ++i) {
+        for (uint32_t j = 0; j < Wt; ++j) {
             #ifdef DECODE_MODE
             in1_idx = j;
             #endif
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1)
+                unpack_reconfig_data_format(rotated_in_cb, scalar_cb);
+                pack_reconfig_data_format(rotated_in_interm_cb);
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
                 ACQ();
@@ -118,9 +126,13 @@ void MAIN {
                 REL();
                 cb_push_back(rotated_in_interm_cb, onetile);
                 cb_pop_front(rotated_in_cb, onetile);
+                unpack_reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
+                pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin
                 MUL_TILES(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
             } else {
+                unpack_reconfig_data_format(rotated_in_cb, updated_sin_cb);
+                pack_reconfig_data_format(out_cb, sin_interm_cb);
                 // Multiply rotated input by sin
                 MUL_TILES(rotated_in_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
             }
@@ -133,11 +145,14 @@ void MAIN {
             cb_wait_front(sin_interm_cb, onetile);
             cb_reserve_back(out_cb, onetile);
 
+            unpack_reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
+            pack_reconfig_data_format(cos_interm_cb, out_cb);
             ACQ();
             add_tiles_init();
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             pack_tile(0, out_cb);
             REL();
+
             cb_push_back(out_cb, onetile);
             cb_pop_front(cos_interm_cb, onetile);
             cb_pop_front(sin_interm_cb, onetile);

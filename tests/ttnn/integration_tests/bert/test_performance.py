@@ -52,12 +52,12 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
     if functional_bert == ttnn_functional_bert:
         tt_model_name = f"ttnn_{model_name}"
     elif functional_bert == ttnn_optimized_functional_bert:
-        tt_model_name = f"ttnn_optimized_{model_name}"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),

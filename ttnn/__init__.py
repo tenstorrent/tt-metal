@@ -14,6 +14,10 @@ from ttnn.tensor import (
     MathFidelity,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
+    ShardStrategy,
+    ShardOrientation,
+    DEFAULT_SHARD_ORIENTATION,
+    create_sharded_memory_config,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -27,6 +31,7 @@ from ttnn.tensor import (
     from_device,
     to_layout,
     reshape,
+    to_memory_config,
     deallocate,
     reallocate,
     load_tensor,
@@ -91,3 +96,4 @@ import ttnn.decorators
 import ttnn.transformer
 import ttnn.model_preprocessing
 from ttnn.conv import Conv2D
+from ttnn.max_pool import MaxPool2D

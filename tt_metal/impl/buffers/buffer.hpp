@@ -42,49 +42,68 @@ enum class ShardOrientation {
 
 
 struct ShardSpec {
-    CoreRangeSet shard_grid;
-    std::array<uint32_t, 2> shard_shape;
-    ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
+    CoreRangeSet grid;
+    std::array<uint32_t, 2> shape;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
 
     ShardSpec(const CoreRangeSet & core_sets_,
                     const std::array<uint32_t,2> & shard_shape_,
                     const ShardOrientation & shard_orientation_ = ShardOrientation::ROW_MAJOR,
                     const bool & halo_ = false):
-                    shard_grid(core_sets_), shard_shape(shard_shape_),
-                    shard_orientation(shard_orientation_), halo(halo_)
+                    grid(core_sets_), shape(shard_shape_),
+                    orientation(shard_orientation_), halo(halo_)
                     {;}
 
-    const uint32_t num_cores() const { return this->shard_grid.num_cores(); }
-    const uint32_t numel() const { return this->shard_shape[0] * this->shard_shape[1]; }
+    const uint32_t num_cores() const { return this->grid.num_cores(); }
+    const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
     tt::stl::reflection::Attributes attributes() const;
 
 };
 
 
-struct ShardSpecBuffer:  ShardSpec {
+struct ShardSpecBuffer {
+    ShardSpec tensor_shard_spec;
     std::array<uint32_t, 2> page_shape;
-    std::array<uint32_t, 2 > tensor2d_size;
+    std::array<uint32_t, 2 > tensor2d_shape;
     ShardSpecBuffer(const CoreRangeSet & core_sets_,
                 const std::array<uint32_t,2> & shard_shape_,
                 const ShardOrientation & shard_orientation_,
                 const bool & halo_,
                 const std::array<uint32_t, 2> & page_shape,
                 const std::array<uint32_t, 2> & tensor2d_shape
-                ): ShardSpec(core_sets_, shard_shape_, shard_orientation_, halo_)
+                ): tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_, halo_)
                 {
                     this->page_shape = page_shape;
-                    this-> tensor2d_size = tensor2d_shape;
+                    this->tensor2d_shape = tensor2d_shape;
                 }
     ShardSpecBuffer(
             const ShardSpec & shard_spec,
             const std::array<uint32_t, 2> & page_shape,
             const std::array<uint32_t, 2> & tensor2d_shape
-            ): ShardSpec(shard_spec)
+            ): tensor_shard_spec(shard_spec)
             {
                 this->page_shape = page_shape;
-                this-> tensor2d_size = tensor2d_shape;
+                this-> tensor2d_shape = tensor2d_shape;
             }
+    CoreRangeSet grid() const {
+        return tensor_shard_spec.grid;
+    }
+    std::array<uint32_t, 2>  shape() const {
+        return tensor_shard_spec.shape;
+    }
+    ShardOrientation orientation() const {
+        return tensor_shard_spec.orientation;
+    }
+    bool halo() const {
+        return tensor_shard_spec.halo;
+    }
+    uint32_t size() const{
+        auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
+        auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
+        return width_in_pages * height_in_pages;
+
+    }
 };
 
 
@@ -110,6 +129,9 @@ struct ShardedBufferConfig {
 };
 
 bool is_sharded(const TensorMemoryLayout & layout);
+
+
+
 class Buffer {
    public:
     Buffer() : device_(nullptr) {}
@@ -152,50 +174,34 @@ class Buffer {
 
     uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    // SHARDED API STARTS HERE
+    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
+    uint64_t page_address(uint32_t page_index) const;
+
     uint64_t core_address(uint32_t core_id) const;
 
-    CoreRangeSet shard_grid() const {
+    ShardSpecBuffer shard_spec() const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return shard_parameters_.value().shard_grid;
+        TT_ASSERT(shard_parameters_.has_value());
+        return this->shard_parameters_.value();
     }
 
-    ShardOrientation shard_orientation() const {
+    CoreCoord get_core_from_dev_page_id(uint32_t dev_page_id) const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return shard_parameters_.value().shard_orientation;
+        TT_ASSERT(dev_page_id < dev_page_to_core_mapping_.size());
+        return all_cores_[dev_page_to_core_mapping_[dev_page_id]];
     }
 
-
-    uint32_t shard_size() const {
+    uint32_t get_mapped_page_id(uint32_t input_id) const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto p_shape = this->page_shape();
-        auto width_in_pages = shard_parameters_.value().shard_shape[0] / p_shape[0];
-        auto height_in_pages = shard_parameters_.value().shard_shape[1] / p_shape[1];
-        return width_in_pages * height_in_pages;
+        TT_ASSERT(input_id < dev_page_to_core_mapping_.size());
+        return dev_page_to_host_page_mapping_[input_id];
     }
 
-
-    std::array<uint32_t, 2> page_shape() const {
+    uint32_t get_bank_id_from_page_id (uint32_t page_id) const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return {shard_parameters_.value().page_shape[0], shard_parameters_.value().page_shape[1]};
-    }
-
-
-    std::array<uint32_t,2> shard_shape() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto p_shape = page_shape();
-        return {shard_parameters_.value().shard_shape[0],
-                shard_parameters_.value().shard_shape[1]};
-    }
-
-    std::array<uint32_t, 2> tensor2d_size() const {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return {shard_parameters_.value().tensor2d_size[0], shard_parameters_.value().tensor2d_size[1]};
-    }
-
-
-    std::vector<uint32_t> dev_page_to_core_mapping() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return dev_page_to_core_mapping_;
+        auto core_id = dev_page_to_core_mapping_[page_id];
+        return core_bank_indices_[core_id];
     }
 
     std::vector<CoreCoord> all_cores() const{
@@ -208,22 +214,12 @@ class Buffer {
         return core_host_page_indices_;
     }
 
-    std::vector < uint32_t> core_bank_indices() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_bank_indices_;
-    }
-
-    std::vector < uint32_t> dev_page_to_host_page_mapping() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return dev_page_to_host_page_mapping_;
-    }
-
     uint32_t num_cores() const{
         if(!is_sharded(this->buffer_layout_))
             return 1;
         else{
             auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = num_pages/this->shard_size();
+            auto shards_for_compute = num_pages/this->shard_spec().size();
             return shards_for_compute;
         }
     }

@@ -334,11 +334,7 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
         return input_tensor_a.reshape(N, C, H, W);
     }
     if (input_tensor_a.shape() == output_shape) {
-        if (input_tensor_a.memory_config() != output_mem_config) {
-            return clone(input_tensor_a, output_mem_config);
-        } else {
-            return input_tensor_a;
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
     if (input_tensor_a.layout() == Layout::ROW_MAJOR && ((compute_volume(output_shape) / output_shape[-1]) % TILE_HEIGHT != 0 || output_shape[-1] % TILE_WIDTH != 0 || input_tensor_a.shape()[-1] % TILE_WIDTH != 0 || (input_tensor_a.volume() / input_tensor_a.shape()[-1]) % TILE_HEIGHT != 0)) {
         TT_ASSERT(input_tensor_a.dtype()==DataType::BFLOAT16);

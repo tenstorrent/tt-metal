@@ -592,11 +592,7 @@ tt::stl::reflection::Attributes Pad::attributes() const {
 
 Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
     if (input_tensor.shape() == output_tensor_shape) {
-        if (input_tensor.memory_config() != output_mem_config) {
-            return clone(input_tensor, output_mem_config);
-        } else {
-            return input_tensor;
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore}, {input_tensor}).at(0);
 
@@ -604,7 +600,7 @@ Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const S
 
 void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED or input_tensor.storage_type() == StorageType::BORROWED);
+    TT_FATAL(input_tensor.storage_type() != StorageType::DEVICE);
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_FATAL(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
     TT_FATAL(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");

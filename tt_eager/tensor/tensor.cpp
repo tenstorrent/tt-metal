@@ -79,17 +79,6 @@ void Tensor::deallocate(bool force) {
 
 
 
-
-Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) const {
-    ZoneScoped;
-    if (storage_type() == StorageType::DEVICE) {
-        TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
-        return *this;
-    }
-    tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
-    return tensor_impl::to_device_wrapper_sharded(*this, target_device, mem_config, shard_spec);
-}
-
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     ZoneScoped;
 
@@ -97,19 +86,6 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
         TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
         return *this;
     }
-    TT_ASSERT(!mem_config.is_sharded() &&
-                " Cannot be sharded, if sharded use to(Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec)  instead");
-    std::string mem_config_str;
-    if(mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED)
-        mem_config_str = "INTERLEAVED ";
-    else if(mem_config.memory_layout == TensorMemoryLayout::SINGLE_BANK)
-        mem_config_str = "SINGLE_BANK ";
-    else if(mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED)
-        mem_config_str = "BLOCK_SHARDED ";
-    else if(mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)
-        mem_config_str = "HEIGHT_SHARDED ";
-    else if(mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
-        mem_config_str = "HEIGHT_SHARDED ";
 
     tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
     return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
@@ -254,14 +230,13 @@ bool Tensor::is_allocated() const {
 
 std::vector<uint32_t> Tensor::host_page_ordering(){
     auto cores = buffer()->all_cores();
-    auto shard_size = buffer()->shard_size();
+    auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
-    auto dp_map = buffer()->dev_page_to_host_page_mapping();
 
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(dp_map[page_id]);
+        ret_vec.push_back(buffer()->get_mapped_page_id(page_id));
     }
     return ret_vec;
 }
@@ -319,12 +294,13 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec) {
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
+    TT_ASSERT(memory_config.shard_spec.has_value());
     TT_ASSERT(memory_config.buffer_type == BufferType::L1);
-    auto& shard_grid = shard_spec.shard_grid;
-    auto& shard_shape = shard_spec.shard_shape;
+    auto shard_spec = memory_config.shard_spec.value();
+    auto& shard_shape = shard_spec.shape;
 
     uint32_t num_cores = shard_spec.num_cores();
 
@@ -353,7 +329,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     }
 
     auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
-    auto page_shape = tensor_impl::get_sharded_page_shape(layout, shape, data_type, shard_spec.num_cores(), shard_spec.shard_shape);
+    auto page_shape = tensor_impl::get_sharded_page_shape(layout, shape, data_type, shard_spec.num_cores(), shard_spec.shape);
     std::array<uint32_t,2> tensor2d_size = {shape[0]*shape[1] * shape[2]/page_shape[0],
                                                 shape[3]/page_shape[1]
                                             };

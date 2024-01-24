@@ -64,43 +64,31 @@ void MAIN {
         unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
         // fused attn
-        #if CAUSAL_MASK
         cb_wait_front(cb_scale_mask, block_w);
         cb_wait_front(cb_fused_attn, block_w);
         index_subblock_w_offset = 0;
+        #ifdef CAUSAL_MASK
+        add_tiles_init();
+        #else
+        add_bcast_rows_init_short();
+        #endif
+        exp_tile_init(EXP_APPROX);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             ACQ();
-            add_tiles_init();
+            #ifdef CAUSAL_MASK
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
                 add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
             }
-            cb_reserve_back(cb_exps, subblock_w);
-            exp_tile_init(true);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile(w,true);
-                pack_tile(w, cb_exps);
-            }
-            cb_push_back(cb_exps, subblock_w);
-            REL();
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_pop_front(cb_scale_mask, block_w);
-        cb_pop_front(cb_fused_attn, block_w);
-        #else
-        cb_wait_front(cb_fused_attn, block_w);
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
-            add_bcast_rows_init_short();
+            #else
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
                 add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
             }
+            #endif
             cb_reserve_back(cb_exps, subblock_w);
-            exp_tile_init(true);
             for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile(w,true);
+                exp_tile(w,EXP_APPROX);
                 pack_tile(w, cb_exps);
             }
             cb_push_back(cb_exps, subblock_w);
@@ -108,24 +96,26 @@ void MAIN {
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_scale_mask, block_w);
-        #endif // CAUSAL_MASK
+        #ifdef CAUSAL_MASK
+        cb_pop_front(cb_fused_attn, block_w);
+        #endif
 
         #else
         unpack_reconfig_data_format(cb_in0, cb_in0);
         pack_reconfig_data_format(cb_exps);
         // exp(x)
         index_subblock_w_offset = 0;
+        copy_tile_to_dst_init_short();
+        exp_tile_init(EXP_APPROX);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             ACQ();
-            copy_tile_init();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
                 copy_tile(cb_in0, index, w);
             }
             cb_reserve_back(cb_exps, subblock_w);
-            exp_tile_init(true);
             for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile(w, true);
+                exp_tile(w, EXP_APPROX);
                 pack_tile(w, cb_exps);
             }
             cb_push_back(cb_exps, subblock_w);

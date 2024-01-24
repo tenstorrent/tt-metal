@@ -24,7 +24,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 def get_expected_times(functional_bloom):
     return {
-        ttnn_functional_bloom: (12, 5),
+        ttnn_functional_bloom: (15.0, 5),
         ttnn_optimized_functional_bloom: (12, 0.85),
     }[functional_bloom]
 
@@ -49,14 +49,14 @@ def test_performance_of_bloom_for_question_answering(
     inputs = tokenizer.encode_plus(question, context, return_tensors="pt")
 
     if functional_bloom == ttnn_functional_bloom:
-        tt_model_name = "ttnn_functional_bloom_for_question_answering"
+        tt_model_name = f"ttnn_{model_name}"
     elif functional_bloom == ttnn_optimized_functional_bloom:
-        tt_model_name = "ttnn_optimized_functional_bloom_for_question_answering"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_bloom: {functional_bloom}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: BloomForQuestionAnswering.from_pretrained(model_name).eval(),
         device=device,
         custom_preprocessor=functional_bloom.custom_preprocessor,

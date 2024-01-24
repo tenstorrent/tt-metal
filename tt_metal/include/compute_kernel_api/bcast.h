@@ -81,6 +81,14 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
     UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
 }
 
+/**
+ * Please refer to documentation for add_tiles_bcast
+ */
+ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
+{
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    UNPACK(( llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1) ));
+}
 
 
 /**
@@ -237,6 +245,16 @@ ALWI void add_bcast_cols_init_short()
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL>() ));
     // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_init<BroadcastType::COL>(0, 1) ));
+}
+
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_scalar to be executed correctly.
+ */
+ALWI void add_bcast_scalar_init_short()
+{
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::SCALAR, MATH_FIDELITY>() )); // TODO(AP)
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::SCALAR>(0, 1) ));
 }
 
 /**

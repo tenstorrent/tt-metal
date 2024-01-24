@@ -37,7 +37,7 @@ def test_bloom_for_question_answering(device, use_program_cache, ttnn_model, bat
     torch_end_logits = torch_output.end_logits
 
     parameters = preprocess_model_parameters(
-        f"ttnn_functional_bloom_for_question_answering",
+        model_name=f"ttnn_functional_bloom_for_question_answering",
         initialize_model=lambda: torch_model,
         device=device,
         custom_preprocessor=ttnn_model.custom_preprocessor,

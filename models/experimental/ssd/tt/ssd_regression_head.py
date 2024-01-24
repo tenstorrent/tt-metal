@@ -48,9 +48,7 @@ class TtSSDregressionhead(nn.Module):
                 device=device,
             )
             self.regression_head.append(self.conv)
-            weight = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.{i}.1.weight"], device, put_on_device=False
-            )
+            weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.{i}.1.weight"], device, put_on_device=False)
 
             self.convolution = fallback_ops.Conv2d(
                 weights=weight,
@@ -85,4 +83,4 @@ class TtSSDregressionhead(nn.Module):
             result = torch_to_tt_tensor_rm(result, self.device)
             all_results.append(result)
 
-        return tt_lib.tensor.concat(all_results, 2)
+        return fallback_ops.concat(all_results, 2)

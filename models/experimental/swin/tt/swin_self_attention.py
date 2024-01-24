@@ -114,13 +114,11 @@ class TtSwinSelfAttention(nn.Module):
         relative_position_bias = torch_to_tt_tensor_rm(relative_position_bias, self.device, put_on_device=False)
         relative_position_bias = fallback_ops.reshape(
             relative_position_bias,
-            self.window_size[0] * self.window_size[1],
-            self.window_size[0] * self.window_size[1],
             -1,
+            self.window_size[0] * self.window_size[1],
+            self.window_size[0] * self.window_size[1],
             1,
         )
-        relative_position_bias = tt_lib.tensor.permute(relative_position_bias, (2, 0, 1, 3))
-
         attention_scores = tt_lib.tensor.permute(attention_scores, (1, 2, 3, 0))
         attention_scores = tt_lib.tensor.bcast(
             attention_scores,

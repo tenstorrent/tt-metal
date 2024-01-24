@@ -157,9 +157,6 @@ class TTPyUntilizeWithHalo(TTPyOp):
             r_data_src_start_offsets_per_core = [src_start_idx[core_id][3] for core_id in range(num_cores_nhw)]
             # print(f'r_data_src_start_offset: {self.r_data_src_start_offsets_per_core}')
             rr_data_src_start_offsets_per_core = [src_start_idx[core_id][4] for core_id in range(num_cores_nhw)]
-            height_sharded_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-            )
 
             block_sharding = num_cores_nhw == num_cores_w
             if not block_sharding:
@@ -218,9 +215,12 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
                 shard_halo = False
                 shard_spec = ttl.tensor.ShardSpec(shard_grid, config_shard_shape, shard_orientation, shard_halo)
+                height_sharded_mem_config = ttl.tensor.MemoryConfig(
+                    ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+                )
 
                 tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16).to(
-                    device, height_sharded_mem_config, shard_spec
+                    device, height_sharded_mem_config
                 )
                 # ttl.device.DumpDeviceMemoryState(device)
 

@@ -1223,7 +1223,9 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
                     all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_cores_x - 1, num_cores_y - 1}}});
                     shard_orientation = ShardOrientation::COL_MAJOR;
                     ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=shard_orientation};
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), out_data_format, Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
+                    auto mem_config = this->output_mem_config;
+                    mem_config.shard_spec = shard_spec;
+                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), out_data_format, Layout::TILE, input_tensor.device(), mem_config)};
                 }
             } else if constexpr(std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormInterleavedMultiCoreProgramConfig>) {
                 DataType out_data_format = program_config.out_data_format;

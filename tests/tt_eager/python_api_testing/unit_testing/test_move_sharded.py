@@ -29,10 +29,7 @@ def run_move_op(shape, device):
     For non_overlap, multi-core is run for num_tiles > 1.
     """
     torch.manual_seed(1234)
-    height_sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
-    )
+
     dtype = ttl.tensor.DataType.BFLOAT16
     layout = ttl.tensor.Layout.ROW_MAJOR
     shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
@@ -68,7 +65,12 @@ def run_move_op(shape, device):
     )
     dummy_tensor = torch.zeros(dummy_shape)
     tt_dummy_tensor = ttl.tensor.Tensor(dummy_tensor, dtype)
-    tt_dummy_tensor = tt_dummy_tensor.to(device, height_sharded_mem_config, dummy_shard_spec)
+    dummy_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+        shard_spec=dummy_shard_spec,
+    )
+    tt_dummy_tensor = tt_dummy_tensor.to(device, dummy_mem_config)
     logger.info(f"shape={shape}")
     input_volume = shape[2] * shape[3]
     tensor = []
@@ -76,7 +78,12 @@ def run_move_op(shape, device):
         tensor.append(val)
     torch_tensor = torch.tensor(tensor).reshape(shape)
     tt_tensor = ttl.tensor.Tensor(torch_tensor, dtype)
-    tt_tensor = tt_tensor.to(device, height_sharded_mem_config, shard_spec)
+    height_sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    tt_tensor = tt_tensor.to(device, height_sharded_mem_config)
 
     # Free up dummy tensor from memory to make available to move
     tt_dummy_tensor.deallocate()

@@ -64,6 +64,30 @@ struct Softmax {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
+operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
+    const Tensor &input_tensor,
+    const Tensor &output_tensor,
+    const std::optional<const Tensor> mask,
+    std::optional<float> scale,
+    MathFidelity fidelity,
+    DataType im_data_format,
+    bool causal_mask
+);
+
+operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
+    const Tensor &input_tensor,
+    const Tensor &output_tensor,
+    const std::optional<const Tensor> mask,
+    std::optional<float> scale,
+    MathFidelity fidelity,
+    DataType im_data_format,
+    bool causal_mask,
+    CoreCoord grid_size,
+    uint32_t subblock_wt,
+    uint32_t block_ht,
+    uint32_t block_wt
+);
+
 // const ref prevents in-place
 Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgramConfig& program_config = transformers::SoftmaxDefaultProgramConfig{});
 
