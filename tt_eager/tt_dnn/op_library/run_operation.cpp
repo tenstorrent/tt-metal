@@ -163,7 +163,7 @@ std::vector<Tensor> run_device_operation(
         profile_scope = std::make_unique<op_profiler::OpProfileScope>(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
     }
 
-    std::function<std::variant<Program, std::reference_wrapper<Program>>(
+    std::function<std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>(
         const DeviceOperation&,
         const std::vector<Tensor>&,
         const std::vector<std::optional<const Tensor>>&,
@@ -204,10 +204,10 @@ std::vector<Tensor> run_device_operation(
         get_or_create_program = [](const DeviceOperation& operation,
                                    const std::vector<Tensor>& input_tensors,
                                    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                                   std::vector<Tensor>& output_tensors) -> Program {
+                                   std::vector<Tensor>& output_tensors) -> std::shared_ptr<Program> {
             auto program_with_callbacks =
                 operation.create_program(input_tensors, optional_input_tensors, output_tensors);
-            return std::move(program_with_callbacks.program);
+            return std::make_shared<Program>(std::move(program_with_callbacks.program));
         };
     }
 
@@ -217,7 +217,7 @@ std::vector<Tensor> run_device_operation(
 
     // Enqueue or Launch Program
     std::visit(
-        [&operation, &input_tensors, &optional_input_tensors](auto& program) {
+        [&operation, &input_tensors, &optional_input_tensors](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
 
             if (!operation::skip_profile) {
@@ -226,22 +226,25 @@ std::vector<Tensor> run_device_operation(
                     detail::setup_profiler(operation, input_tensors, program);
                 }
             }
-
-            if (USE_FAST_DISPATCH) {
-                CommandQueue cq ( device, 0);
+            using T = std::decay_t<decltype(program)>;
+            if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
+                if (do_profile) {
+                    detail::setup_profiler(operation, input_tensors, program);
+                }
+                if (USE_FAST_DISPATCH) {
 #ifndef TTNN_ENABLE_LOGGING
-                EnqueueProgram(cq, program, false);
+                    EnqueueProgram(device->command_queue(), program, false);
 #else
-                const auto start{std::chrono::steady_clock::now()};
-                EnqueueProgram(cq, program, false);
-                Finish(cq);
-                const auto end{std::chrono::steady_clock::now()};
-                const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
-                tt::log_info(
-                    tt::LogOp,
-                    "Finished Program   {:50} in {:15} nanoseconds",
-                    operation.get_type_name(),
-                    elapsed_seconds);
+                    const auto start{std::chrono::steady_clock::now()};
+                    EnqueueProgram(device->command_queue(), program, false);
+                    Finish(device->command_queue());
+                    const auto end{std::chrono::steady_clock::now()};
+                    const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
+                    tt::log_info(
+                        tt::LogOp,
+                        "Program   {:100} finished in {:15} nanoseconds",
+                        operation.get_type_name(),
+                        elapsed_seconds);
 #endif
                 if (!operation::skip_profile) {
                     // Only need to dump device data when in dispatch mode
@@ -254,7 +257,7 @@ std::vector<Tensor> run_device_operation(
                 ::detail::LaunchProgram(device, program);
             }
         },
-        program);
+        program );
 
     if (!operation::skip_profile) {
         op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);

@@ -1129,21 +1129,33 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool 
     } );
 }
 
-void EnqueueProgram(
-    CommandQueue& cq, Program& program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
+void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
     ZoneScoped;
     TT_ASSERT(cq.id == 0, "EnqueueProgram only supported on first command queue on device for time being.");
     detail::DispatchStateCheck(true);
+    std::visit ( [&cq, blocking, trace](auto&& program) {
+            using T = std::decay_t<decltype(program)>;
+            if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
+                cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), program, blocking] {
+                    TT_ASSERT(cq_channel == 0, "EnqueueProgram only supported on first command queue on device for time being.");
+                    detail::CompileProgram(device, program);
 
-    detail::CompileProgram(cq.device(), program);
-
-    program.allocate_circular_buffers();
-    detail::ValidateCircularBufferRegion(program, cq.device());
-
-    cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &program, trace, blocking] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
-        hcq.enqueue_program(program, trace, blocking);
-    } );
+                    program.get().allocate_circular_buffers();
+                    detail::ValidateCircularBufferRegion(program, device);
+                    HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
+                    hcq.enqueue_program(program, blocking, trace);
+                } );
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
+                cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), program, blocking] {
+                    TT_ASSERT(cq_channel == 0, "EnqueueProgram only supported on first command queue on device for time being.");
+                    detail::CompileProgram(device, *program);
+                    program->allocate_circular_buffers();
+                    detail::ValidateCircularBufferRegion(*program, device);
+                    HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
+                    hcq.enqueue_program(*program, blocking, trace);
+                } );
+            }
+        }, program);
 }
 
 void Finish(CommandQueue& cq) {
