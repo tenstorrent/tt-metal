@@ -78,6 +78,7 @@ def create_query_key_value(hidden_states, weight, bias, num_heads):
     query_key_value = ttnn.linear(
         hidden_states, weight, bias=bias, core_grid=(9, 12), memory_config=BLOOM_MEMORY_CONFIG, dtype=BLOOM_DTYPE
     )
+    ttnn.deallocate(hidden_states)
     query, key, value = split_query_key_value_and_split_heads(query_key_value, num_heads=num_heads)
     ttnn.deallocate(query_key_value)
 
@@ -161,8 +162,6 @@ def multi_head_attention(
     query_layer, key_layer, value_layer = create_query_key_value(
         hidden_states, query_key_value_weight, query_key_value_bias, num_heads=num_heads
     )
-    value_layer = ttnn.reallocate(value_layer)
-
     attention_scores = compute_attention_scores(query_layer, key_layer, alibi)
     attention_probs = compute_attention_probs(attention_scores, causal_mask)
     context_layer = compute_context_layer(attention_probs, value_layer)
@@ -186,6 +185,8 @@ def mlp(
         memory_config=BLOOM_MEMORY_CONFIG,
         dtype=BLOOM_DTYPE,
     )
+    ttnn.deallocate(hidden_states)
+
     ff2_output = ttnn.linear(
         ff1_output,
         dense_4h_to_h_weight,
@@ -211,12 +212,11 @@ def bloom(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TODO(arakhmati): put hidden_states in L1
     hidden_states = ttnn.layer_norm(
         inputs_embeds,
         weight=parameters.transformer.word_embeddings_layernorm.weight,
         bias=parameters.transformer.word_embeddings_layernorm.bias,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=BLOOM_MEMORY_CONFIG,
     )
     ttnn.deallocate(inputs_embeds)
 
@@ -238,10 +238,8 @@ def bloom(
             layer_parameters.self_attention.dense.bias,
             num_heads=num_heads,
         )
-        ttnn.deallocate(normalized_hidden_states)
 
-        # TODO(arakhmati): put attention_output in L1
-        attention_output = ttnn.add(attention_output, hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention_output = ttnn.add(attention_output, hidden_states, memory_config=BLOOM_MEMORY_CONFIG)
         ttnn.deallocate(hidden_states)
 
         normalized_attention_output = ttnn.layer_norm(
@@ -258,10 +256,8 @@ def bloom(
             layer_parameters.mlp.dense_4h_to_h.weight,
             layer_parameters.mlp.dense_4h_to_h.bias,
         )
-        ttnn.deallocate(normalized_attention_output)
 
-        # TODO(arakhmati): put mlp_output in L1
-        mlp_output = ttnn.add(mlp_output, attention_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mlp_output = ttnn.add(mlp_output, attention_output, memory_config=BLOOM_MEMORY_CONFIG)
         ttnn.deallocate(attention_output)
 
         hidden_states = mlp_output
