@@ -309,32 +309,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     };
 }
 
-EnqueueRestartCommand::EnqueueRestartCommand(
-    uint32_t command_queue_channel,
-    Device* device,
-    SystemMemoryManager& manager
-): command_queue_channel(command_queue_channel), manager(manager) {
-    this->device = device;
-}
-
-const DeviceCommand EnqueueRestartCommand::assemble_device_command(uint32_t) {
-    DeviceCommand cmd;
-    cmd.set_restart();
-    cmd.set_issue_queue_size(this->manager.get_issue_queue_size(this->command_queue_channel));
-    cmd.set_completion_queue_size(this->manager.get_completion_queue_size(this->command_queue_channel));
-    cmd.set_finish();
-    return cmd;
-}
-
-void EnqueueRestartCommand::process() {
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_channel);
-    const DeviceCommand cmd = this->assemble_device_command(0);
-    uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_channel);
-    this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->manager.issue_queue_push_back(cmd_size, false, this->command_queue_channel);
-}
-
 // EnqueueReadBufferCommandSection
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     uint32_t command_queue_id,
@@ -451,6 +425,8 @@ void EnqueueReadBufferCommand::process() {
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
     this->manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
 }
+
+EnqueueCommandType EnqueueReadBufferCommand::type() { return this->type_; }
 
 // EnqueueWriteBufferCommand section
 EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
@@ -597,6 +573,9 @@ void EnqueueWriteBufferCommand::process() {
 
     auto cmd_desc = cmd.get_desc();
 }
+
+
+EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
 
 EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
@@ -770,17 +749,20 @@ void EnqueueProgramCommand::process() {
 
     this->manager.issue_queue_push_back(cmd_size, LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
     if (tracing) {
-        Trace::TraceNode trace_node = {.command = cmd, .data = trace_host_data, .command_type = this->type(), .num_data_bytes = cmd.get_data_size()};
+        uint32_t trace_node_num_bytes = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + sizeof(uint32_t) * trace_host_data.size();
+        Trace::TraceNode trace_node = {.command = cmd, .data = trace_host_data, .command_type = this->type(), .num_bytes = trace_node_num_bytes};
         Trace& trace_ = trace.value();
         trace_.record(trace_node);
     }
 }
 
+EnqueueCommandType EnqueueProgramCommand::type() { return this->type_; }
+
 FinishCommand::FinishCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager) : command_queue_id(command_queue_id), manager(manager) { this->device = device; }
 
 const DeviceCommand FinishCommand::assemble_device_command(uint32_t) {
     DeviceCommand command;
-    command.set_finish();
+    command.finish();
     return command;
 }
 
@@ -793,6 +775,8 @@ void FinishCommand::process() {
     this->manager.issue_queue_push_back(cmd_size, false, this->command_queue_id);
 }
 
+EnqueueCommandType FinishCommand::type() { return this->type_; }
+
 // EnqueueWrapCommand section
 EnqueueWrapCommand::EnqueueWrapCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region) : command_queue_id(command_queue_id), manager(manager), wrap_region(wrap_region) {
     this->device = device;
@@ -800,7 +784,7 @@ EnqueueWrapCommand::EnqueueWrapCommand(uint32_t command_queue_id, Device* device
 
 const DeviceCommand EnqueueWrapCommand::assemble_device_command(uint32_t) {
     DeviceCommand command;
-    command.set_wrap(this->wrap_region);
+    command.wrap(this->wrap_region);
     return command;
 }
 
@@ -825,6 +809,8 @@ void EnqueueWrapCommand::process() {
         this->manager.wrap_issue_queue_wr_ptr(this->command_queue_id);
     }
 }
+
+EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
 
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device, uint32_t id): manager(*device->manager) {
@@ -1011,6 +997,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
 
 void CommandQueue::enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking) {
     ZoneScopedN("CommandQueue_enqueue_program");
+    TT_FATAL(not blocking, "EnqueueProgram only has support for non-blocking mode currently");
 
     // Need to relay the program into DRAM if this is the first time
     // we are seeing it
@@ -1036,7 +1023,7 @@ void CommandQueue::enqueue_program(Program& program, std::optional<std::referenc
             std::make_unique<Buffer>(
                 this->device, program_data_size_in_bytes, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM));
 
-        this->enqueue_write_buffer(*program_to_buffer.at(program_id), program_pages.data(), false);
+        this->enqueue_write_buffer(*program_to_buffer.at(program_id), program_pages.data(), blocking);
 
         map<uint64_t, ProgramMap>& program_to_dev_map = this->program_to_dev_map(device->id());
         program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
@@ -1110,34 +1097,49 @@ void CommandQueue::wrap(DeviceCommand::WrapRegion wrap_region, bool blocking) {
     this->enqueue_command(command, blocking);
 }
 
-void CommandQueue::restart() {
-    ZoneScopedN("CommandQueue_restart");
-    tt::log_debug(tt::LogDispatch, "EnqueueRestart for channel {}", this->id);
-    EnqueueRestartCommand command(this->id, this->device, this->manager);
-    this->enqueue_command(command, false);
-    this->wait_finish();
+void CommandQueue::reset() {
+    // Place the cores into reset since need to update a lot of core info
+    tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->device->id(), this->device->worker_core_from_logical_core(this->issue_queue_reader_core)));
+    tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->device->id(), this->device->worker_core_from_logical_core(this->completion_queue_writer_core)));
+    tt::Cluster::instance().l1_barrier(this->device->id());
 
-    // Reset the manager
-    this->manager.reset(this->id);
+    detail::CommandQueueInit(this->device);
+}
+
+void CommandQueue::launch(launch_msg_t& msg) {
+    tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->device->id(), this->device->worker_core_from_logical_core(this->issue_queue_reader_core)));
+    tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->device->id(), this->device->worker_core_from_logical_core(this->completion_queue_writer_core)));
+
+    std::unordered_set<CoreCoord> not_done_cores = {
+        this->device->worker_core_from_logical_core(this->issue_queue_reader_core),
+        this->device->worker_core_from_logical_core(this->completion_queue_writer_core)};
+
+    llrt::internal_::wait_until_cores_done(this->device->id(), RUN_MSG_INIT, not_done_cores);
+
+    tt::llrt::write_launch_msg_to_core(this->device->id(), this->device->worker_core_from_logical_core(this->issue_queue_reader_core), &msg);
+    tt::llrt::write_launch_msg_to_core(this->device->id(), this->device->worker_core_from_logical_core(this->completion_queue_writer_core), &msg);
+    llrt::internal_::wait_until_cores_done(this->device->id(), RUN_MSG_GO, not_done_cores);
 }
 
 Trace::Trace(CommandQueue& command_queue): command_queue(command_queue) {
     this->trace_complete = false;
-    this->num_data_bytes = 0;
+    this->num_bytes = 0;
 }
 
 void Trace::record(const TraceNode& trace_node) {
     TT_ASSERT(not this->trace_complete, "Cannot record any more for a completed trace");
-    this->num_data_bytes += trace_node.num_data_bytes;
+    this->num_bytes += trace_node.num_bytes;
     this->history.push_back(trace_node);
 }
 
 void Trace::create_replay() {
+    this->command_queue.reset();
+
     // Reconstruct the hugepage from the command cache
     SystemMemoryManager& manager = this->command_queue.manager;
     const uint32_t command_queue_id = this->command_queue.id;
     const bool lazy_push = true;
-    for (auto& [device_command, data, command_type, num_data_bytes]: this->history) {
+    for (auto& [device_command, data, command_type, num_bytes]: this->history) {
         uint32_t issue_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
         device_command.update_buffer_transfer_src(0, issue_write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
         manager.cq_write(device_command.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_write_ptr);
@@ -1208,45 +1210,42 @@ void ClearProgramCache(CommandQueue& cq) {
 }
 
 Trace BeginTrace(CommandQueue& command_queue) {
+    Finish(command_queue); // Ensures that nothing being executed in command queue prior to beginning our trace
     // Resets the command queue state
-    command_queue.restart();
+    command_queue.reset();
+    Program& command_queue_program = *command_queue.device->command_queue_programs[command_queue.id];
+    launch_msg_t msg = command_queue_program.kernels_on_core(command_queue.issue_queue_reader_core)->launch_msg;
+    command_queue.launch(msg);
 
     return Trace(command_queue);
 }
 
 void EndTrace(Trace& trace) {
     TT_ASSERT(not trace.trace_complete, "Already completed this trace");
+    Finish(trace.command_queue);
     SystemMemoryManager& manager = trace.command_queue.manager;
     const uint32_t command_queue_id = trace.command_queue.id;
-    TT_FATAL(trace.num_data_bytes + trace.history.size() * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND <= manager.get_issue_queue_limit(command_queue_id), "Trace does not fit in issue queue");
+    TT_FATAL(trace.num_bytes <= manager.get_issue_queue_limit(command_queue_id), "Trace does not fit in system memory");
     trace.trace_complete = true;
-    manager.set_issue_queue_size(command_queue_id, trace.num_data_bytes + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * trace.history.size());
-    trace.command_queue.restart();
     trace.create_replay();
-    manager.reset(trace.command_queue.id);
+
+    // Resend dispatch kernels to device with updated limits
+    manager.set_custom_issue_limit_for_trace(command_queue_id, trace.num_bytes);
+    trace.command_queue.reset();
+    CommandQueue& command_queue = trace.command_queue;
+    Program& command_queue_program = *command_queue.device->command_queue_programs[command_queue_id];
+    launch_msg_t msg = command_queue_program.kernels_on_core(command_queue.issue_queue_reader_core)->launch_msg;
+    command_queue.launch(msg);
 }
 
 void EnqueueTrace(Trace& trace, bool blocking) {
     // Run the trace
-    CommandQueue& command_queue = trace.command_queue;
-    uint32_t trace_size = trace.history.size() * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + trace.num_data_bytes;
-    command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
-    command_queue.manager.issue_queue_push_back(trace_size, false, command_queue.id);
+    trace.command_queue.manager.issue_queue_push_back(trace.num_bytes, false, trace.command_queue.id);
 
     // This will block because the wr toggles will be different between the host and the device
     if (blocking) {
-        command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
+        trace.command_queue.manager.issue_queue_reserve_back(0, trace.command_queue.id);
     }
-}
-
-namespace detail {
-
-void EnqueueRestart(CommandQueue& cq) {
-    ZoneScoped;
-    detail::DispatchStateCheck(true);
-    cq.restart();
-}
-
 }
 
 }  // namespace tt::tt_metal
