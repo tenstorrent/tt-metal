@@ -131,6 +131,11 @@ Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, D
 
 Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config);
 
+// template<typename Buffer>
+// void *get_host_buffer(const Tensor &tensor);
+void *get_raw_host_data_ptr(const Tensor &tensor);
+void memcpy(Tensor &dst, const Tensor &src);
+
 }  // namespace tt_metal
 
 }  // namespace tt

@@ -55,7 +55,7 @@ Buffer<T> get_as(Tensor& tensor) {
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
             } else {
-                TT_THROW("Must be an owned storage");
+                TT_THROW("Tensor must have OwnedStorage");
             }
         },
         tensor.storage()
@@ -71,7 +71,7 @@ const Buffer<T> get_as(const Tensor& tensor) {
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
             } else {
-                TT_THROW("Must be a owned storage");
+                TT_THROW("Tensor must have OwnedStorage");
             }
         },
         tensor.storage()

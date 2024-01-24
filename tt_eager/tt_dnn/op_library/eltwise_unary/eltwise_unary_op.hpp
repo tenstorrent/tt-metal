@@ -281,7 +281,7 @@ constexpr auto div_unary_sfpu = make_eltwise_asymmetric_binop_unary_with_param<U
 
 inline Tensor exp(
     const Tensor& input_tensor,
-    bool fast_and_approx = false,
+    bool fast_and_approx,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::EXP>{}(input_tensor, fast_and_approx, output_mem_config);
 }

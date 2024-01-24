@@ -36,7 +36,10 @@ struct Buffer {
     inline const std::vector<T>& get() const { return *this->shared_vector_; }
     inline void reset() { this->shared_vector_.reset(); }
 
-  private:
+    inline void* data() noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
+    inline const void* data() const noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
+
+   private:
     std::shared_ptr<std::vector<T>> shared_vector_;
     T* pointer_for_faster_access_;
     std::size_t size_;
