@@ -2,93 +2,76 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+from typing import Optional, Tuple
 
 import torch
-import pytest
-import math
-from models.utility_functions import skip_for_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc
 import ttnn
 
 
-@skip_for_wormhole_b0()
-## max-pool params:
-## kernel_h, kernel_w
-## stride_h, stride_w
-## pad_h, pad_w
-## dilation_h, dilation_w
-@pytest.mark.parametrize(
-    "act_shape",  ## NCHW
-    (
-        (  ## Only resnet shapes supported for now in untilize with halo + maxpool
-            [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
-            [16, 64, 112, 112],
-            # [20, 64, 112, 112],
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (2, 2),
-        (3, 3),
-    ),
-)
-@pytest.mark.parametrize(
-    "padding",
-    (
-        (0, 0),
-        (1, 1),
-    ),
-)
-@pytest.mark.parametrize(
-    "stride",
-    ((2, 2),),
-)
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
-@pytest.mark.parametrize(
-    "nblocks",
-    (1,),
-)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_run_max_pool(
+parameters = {
+    "act_shape": [  ## NCHW
+        [1, 64, 112, 112],
+        [4, 64, 112, 112],
+        [8, 64, 112, 112],
+        [16, 64, 112, 112],
+    ],
+    "kernel_size": ((3, 3),),
+    "padding": ((1, 1),),
+    "stride": ((2, 2),),
+    "dilation": ((1, 1),),  ## default
+    "nblocks": (1,),
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+}
+
+
+def skip(
     act_shape,
     kernel_size,
     padding,
     stride,
     dilation,
     nblocks,
-    device,
     dtype,
-):
-    if act_shape[0] >= 16 and dtype == ttnn.bfloat16:
-        pytest.skip("Configuration does not fit in L1")
+) -> Tuple[bool, Optional[str]]:
+    in_n, in_c, in_h, in_w = act_shape
+    kernel_h, kernel_w = kernel_size
+    pad_h, pad_w = padding
 
+    if act_shape[0] >= 16 and dtype == ttnn.bfloat16:
+        return True, "Configuration does not fit in L1"
+
+    if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
+        return True, "Invalid case"
+
+    if nblocks != 1:
+        return True, f"Unsupported case: nblocks = {nblocks}"
+
+    if in_c != 64:
+        return True, "Current maxpool writer needs nchannels to be 64!"
+
+    return False, None
+
+
+def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
+    return False, None
+
+
+def run(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    nblocks,
+    dtype,
+    device,
+) -> Tuple[bool, Optional[str]]:
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding
     stride_h, stride_w = stride
     dilation_h, dilation_w = dilation
-
-    if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
-        logger.info("Invalid case")
-        pytest.skip()
-
-    if (kernel_h == 3 and pad_h != 1) or (kernel_h == 2 and pad_h != 0):
-        pytest.skip("kernel size and padding combination not supported")
-
-    out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-    if out_w % nblocks != 0:
-        logger.info(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
-        pytest.skip()
-
-    if in_c != 64:
-        logger.info("Current maxpool writer needs nchannels to be 64!")
-        pytest.skip()
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -152,18 +135,4 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    assert_with_pcc(out_pytorch, golden_pytorch)
-
-    ## do more rigorous comparision for each element
-    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttnn.bfloat8_b:
-        atol = 0.35
-
-    allclose = torch.allclose(out_pytorch, golden_pytorch, atol=atol)
-    isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch, atol=atol))
-    isequal = torch.equal(out_pytorch, golden_pytorch)
-
-    assert allclose
-    assert isclose
-    if dtype == ttnn.bfloat16:
-        assert isequal
+    return check_with_pcc(out_pytorch, golden_pytorch)
