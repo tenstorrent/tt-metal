@@ -41,7 +41,7 @@ Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
 
 Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt);
 
-Tensor typecast(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,  std::optional<const DataType> output_dtype = std::nullopt);
+Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //unary assign
 Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype = std::nullopt);

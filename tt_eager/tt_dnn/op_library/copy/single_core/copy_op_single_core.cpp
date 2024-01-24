@@ -38,7 +38,6 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_units = 2;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
-    uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
 		.set_page_size(src0_cb_index, aligned_input_unit_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
