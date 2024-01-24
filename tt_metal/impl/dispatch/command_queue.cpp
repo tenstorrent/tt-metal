@@ -40,6 +40,13 @@ namespace detail{
     }
 }
 
+namespace detail{
+    void ClearProgramCache(Device * device) {
+        detail::DispatchStateCheck(true);
+        program_to_buffer(device->id()).clear();
+        program_to_dev_map(device->id()).clear();
+    }
+}
 
 uint32_t get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
@@ -1223,7 +1230,7 @@ void HWCommandQueue::enqueue_program(Program& program, std::optional<std::refere
     // data to land in DRAM first
     bool stall = false;
     // No shared cache so far, can come at a later time
-    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer = this->program_to_buffer(this->device->id());
+    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer = ::program_to_buffer(this->device->id());
     if (not program_to_buffer.count(program_id)) {
         stall = true;
         ProgramMap program_to_device_map = ConstructProgramMap(this->device, program);
@@ -1240,13 +1247,13 @@ void HWCommandQueue::enqueue_program(Program& program, std::optional<std::refere
 
         this->enqueue_write_buffer(*program_to_buffer.at(program_id), program_pages.data(), false);
 
-        map<uint64_t, ProgramMap>& program_to_dev_map = this->program_to_dev_map(device->id());
+        map<uint64_t, ProgramMap>& program_to_dev_map = ::program_to_dev_map(device->id());
         program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
     }
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
 
-    uint32_t host_data_num_pages = this->program_to_dev_map(this->device->id()).at(program_id).runtime_arg_page_transfers.size() + this->program_to_dev_map(this->device->id()).at(program_id).cb_config_page_transfers.size();
+    uint32_t host_data_num_pages = ::program_to_dev_map(this->device->id()).at(program_id).runtime_arg_page_transfers.size() + ::program_to_dev_map(this->device->id()).at(program_id).cb_config_page_transfers.size();
 
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
@@ -1261,8 +1268,8 @@ void HWCommandQueue::enqueue_program(Program& program, std::optional<std::refere
     EnqueueProgramCommand command(
         this->id,
         this->device,
-        *this->program_to_buffer(this->device->id()).at(program_id),
-        this->program_to_dev_map(this->device->id()).at(program_id),
+        *::program_to_buffer(this->device->id()).at(program_id),
+        ::program_to_dev_map(this->device->id()).at(program_id),
         this->manager,
         program,
         stall,
@@ -1371,7 +1378,7 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, 
 
     std::future<void> f;
     cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, &dst, blocking ]{
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
+        HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_read_buffer(buffer, dst.data(), blocking);
     }, f );
     f.get();
@@ -1382,7 +1389,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src,
     // TODO(agrebenisan): Move to deprecated
     detail::DispatchStateCheck(true);
     cq.submit ( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, data_ptr = src.data(), blocking ] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
+        HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_write_buffer(buffer, data_ptr, blocking);
     });
 }
@@ -1391,7 +1398,7 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blockin
     detail::DispatchStateCheck(true);
     std::future<void> f;
     cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, dst, blocking] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
+        HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_read_buffer(buffer, dst, blocking);
     }, f );
     f.get();
@@ -1403,7 +1410,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool 
     detail::DispatchStateCheck(true);
 
     cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel(), &buffer, src, blocking] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
+        HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
         hcq.enqueue_write_buffer(buffer, src, blocking);
     } );
 }
@@ -1428,21 +1435,12 @@ void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     std::future<void> f;
     cq.submit( [device = cq.device(), cq_channel = cq.command_queue_channel()] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_channel);
+        HWCommandQueue & hcq = GetHWCommandQueue(device, cq_channel);
         hcq.finish();
     }, f);
     f.get();
 }
 
-namespace detail
-{
-    void ClearProgramCache(CommandQueue& cq) {
-        detail::DispatchStateCheck(true);
-        HWCommandQueue & hcq = detail::GetHWCommandQueue( cq.device(), cq.command_queue_channel() );
-        hcq.program_to_buffer(cq.device()->id()).clear();
-        hcq.program_to_dev_map(cq.device()->id()).clear();
-    }
-}
 
 Trace BeginTrace(CommandQueue& command_queue) {
     // Resets the command queue state

@@ -457,7 +457,7 @@ inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 namespace detail
 {
-    void ClearProgramCache( CommandQueue & cq);
+    void ClearProgramCache( Device * device);
 }
 
 } // namespace tt::tt_metal
