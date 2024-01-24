@@ -4,7 +4,7 @@
 
 from typing import Tuple, Union, Dict
 
-import ttnn.tensor as ttnn
+import ttnn.core as ttnn
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
     TTPyCompositeConv,
