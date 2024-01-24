@@ -30,6 +30,7 @@ protected:
         tt::llrt::OptionsG.set_watcher_interval(interval_ms);
         tt::llrt::OptionsG.set_watcher_dump_all(false);
         tt::llrt::OptionsG.set_watcher_append(false);
+        tt::llrt::watcher_clear_log();
 
         // Parent class initializes devices and any necessary flags
         CommonFixture::SetUp();
@@ -47,6 +48,7 @@ protected:
         tt::llrt::OptionsG.set_watcher_interval(0);
         tt::llrt::OptionsG.set_watcher_dump_all(false);
         tt::llrt::OptionsG.set_watcher_append(false);
+        tt::llrt::watcher_server_clear_error_flag();
     }
 
     void RunTestOnDevice(

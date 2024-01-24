@@ -12,6 +12,7 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "llrt/watcher.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 #include "dev_msgs.h"
 #include <algorithm> // for copy() and assign()
@@ -1085,6 +1086,12 @@ void CommandQueue::wait_finish() {
         // a full print buffer. Poll the print server for this case and throw if it happens.
         if (DPrintServerHangDetected()) {
             TT_THROW("Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        }
+
+        // If the watcher has detected a sanitization error, the server will have closed and a flag
+        // will have been raised. Poll the watcher server and throw if it happens.
+        if (tt::llrt::watcher_server_killed_due_to_error()) {
+            TT_THROW("Command Queue could not finish: device hang due to illegal NoC transaction. See build/watcher.log for details.");
         }
     } while (finish != 1);
     // Reset this value to 0 before moving on
