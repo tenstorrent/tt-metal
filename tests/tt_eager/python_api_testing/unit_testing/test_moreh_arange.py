@@ -6,7 +6,6 @@ import torch
 
 import tt_lib as ttl
 import pytest
-from models.utility_functions import skip_for_wormhole_b0
 
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
@@ -21,7 +20,6 @@ from loguru import logger
         (10, 32 * 3, 1),  # multiple cores
     ),
 )
-@skip_for_wormhole_b0()
 def test_arange_simple(start_end_step, device):
     start, end, step = start_end_step
 
@@ -70,7 +68,6 @@ def test_arange_simple(start_end_step, device):
         (10, 32 * 3, 1),  # multiple cores
     ),
 )
-@skip_for_wormhole_b0()
 def test_arange_inplace_simple(start_end_step, device):
     start, end, step = start_end_step
 
