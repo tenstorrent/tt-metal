@@ -523,7 +523,7 @@ void py_module(py::module& m_primary) {
         py::arg("step"),
         py::arg("any").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a arange operation. Returns a output tensor.");
+        "Performs an arange operation. Returns an output tensor.");
 
     m_primary.def(
         "moreh_arange_inplace",
@@ -532,7 +532,7 @@ void py_module(py::module& m_primary) {
         py::arg("start"),
         py::arg("end"),
         py::arg("step"),
-        "Performs a arange operation. Returns a output tensor.");
+        "Performs an arange operation. Returns an output tensor.");
     m_primary.def(
         "moreh_sum",
         &moreh_sum,
