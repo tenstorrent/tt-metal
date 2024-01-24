@@ -275,7 +275,6 @@ constexpr void raise_unsupported_storage() {
     static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }
 
-
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
 bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);
 

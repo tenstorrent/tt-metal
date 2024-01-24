@@ -40,6 +40,9 @@ namespace tt_metal {
 
    bool is_arch_gs(const tt::ARCH& arch);
    bool is_arch_whb0(const tt::ARCH& arch);
+
+   bool is_cpu_tensor(const Tensor& tensor);
+   bool is_device_tensor(const Tensor& tensor);
 }
 
 }

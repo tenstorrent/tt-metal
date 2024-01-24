@@ -30,7 +30,10 @@ struct Buffer {
     inline const T* begin() const noexcept { return this->data_ptr_; }
     inline const T* end() const noexcept { return this->data_ptr_ + this->size(); }
 
-  private:
+    inline void* data() noexcept { return static_cast<void*>(this->data_ptr_); }
+    inline const void* data() const noexcept { return static_cast<void*>(this->data_ptr_); }
+
+   private:
     T* data_ptr_;
     std::size_t size_;
 };

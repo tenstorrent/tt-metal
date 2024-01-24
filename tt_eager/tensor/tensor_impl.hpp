@@ -128,7 +128,7 @@ constexpr inline uint32_t packed_buffer_size_bytes(uint32_t volume_unpacked_data
 template <>
 constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(bfloat16);
-    return (volume_unpacked_data/num_type_in_u32) * sizeof(uint32_t);
+    return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 // ======================================================================================
@@ -347,7 +347,7 @@ std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape,
             if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
                 ss << "...";
             }
-            if(z < shape[1] - 1)
+            if (z < shape[1] - 1)
                 ss << "]," << std::endl << std::endl;
             else
                 ss << "]";
@@ -355,7 +355,7 @@ std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape,
         if (shape[-3] > MAX_NUM_ELEMENTS_TO_PRINT[-3]) {
             ss << "...";
         }
-        if(w < shape[0] - 1)
+        if (w < shape[0] - 1)
             ss << "]," << std::endl << std::endl << std::endl;
         else
             ss << "]";
@@ -363,10 +363,9 @@ std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape,
     if (shape[-4] > MAX_NUM_ELEMENTS_TO_PRINT[-4]) {
         ss << "...";
     }
-    ss << "], dtype=" <<  dtype << " )" << std::endl;
+    ss << "], dtype=" << dtype << " )" << std::endl;
     return ss.str();
 }
-
 
 template <typename BufferType>
 std::string to_string_row_major(const BufferType& buffer, const Shape& shape, DataType dtype) {
@@ -434,18 +433,19 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     }
 }
 
-template <typename T, template<typename> typename BufferType>
-inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, DeviceBuffer buffer, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+template <typename T, template <typename> typename BufferType>
+inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& device_buffer) {
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(buffer->device()), *buffer, std::begin(data_to_write), false);
+        EnqueueWriteBuffer(
+            tt::tt_metal::detail::GetCommandQueue(device_buffer.device()), device_buffer, host_buffer.data(), false);
     } else {
-        auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
-        ::detail::WriteToBuffer(*buffer, uint32_data);
+        auto uint32_data = pack_vec_into_uint32_vec<T>(host_buffer);
+        ::detail::WriteToBuffer(device_buffer, uint32_data);
     }
 }
 
@@ -458,7 +458,7 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
 
 
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
-    write_data_to_device_buffer<T>(data_to_write, device_buffer, shape, data_type, layout, memory_config);
+    write_data_to_device_buffer<T>(data_to_write, *device_buffer);
     return device_buffer;
 }
 
@@ -885,6 +885,52 @@ Tensor extract_shard(const Tensor & tensor, const uint32_t & core_id){
 
 }
 
+template <typename DataType>
+void* get_raw_host_data_ptr(const Tensor& tensor) {
+    return std::visit(
+        [](auto&& storage) -> void* {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                auto buffer = owned_buffer::get_as<DataType>(storage.buffer);
+                return buffer.data();
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                if constexpr (
+                    std::is_same_v<DataType, float> or std::is_same_v<DataType, bfloat16> or
+                    std::is_same_v<DataType, std::uint32_t> or std::is_same_v<DataType, std::uint16_t>) {
+                    auto buffer = borrowed_buffer::get_as<DataType>(storage.buffer);
+                    return buffer.data();
+                } else {
+                    TT_THROW("Borrowed storage doesn't support this data type");
+                }
+            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        tensor.storage());
+}
+
+template <typename DataType>
+void memcpy(Tensor& dst, const Tensor& src) {
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+
+    TT_ASSERT(dst.dtype() == src.dtype());
+    TT_ASSERT(dst.layout() == src.layout());
+
+    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
+        EnqueueReadBuffer(
+            tt::tt_metal::detail::GetCommandQueue(src.device()), *src.buffer(), get_raw_host_data_ptr(dst), true);
+    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
+        EnqueueWriteBuffer(
+            tt::tt_metal::detail::GetCommandQueue(dst.device()), *dst.buffer(), get_raw_host_data_ptr(src), false);
+    } else {
+        TT_THROW("Unsupported memcpy");
+    }
+}
 
 }  // namespace tensor_impl
 

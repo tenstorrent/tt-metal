@@ -184,7 +184,11 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
     return arch == tt::ARCH::WORMHOLE_B0;
   }
 
+  bool is_cpu_tensor(const Tensor& tensor) {
+      return tensor.storage_type() == StorageType::OWNED || tensor.storage_type() == StorageType::BORROWED;
+  }
 
+  bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 }
 
 }
