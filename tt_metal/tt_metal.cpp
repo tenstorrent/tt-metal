@@ -561,17 +561,17 @@ KernelHandle CreateKernel(Program &program, const std::string &file_name, const 
     return std::visit( [&](auto&& cfg) -> KernelHandle
                         {
                             CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-                            Kernel * kernel;
+                            std::shared_ptr<Kernel> kernel;
                             using T = std::decay_t<decltype(cfg)>;
                             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                                 detail::CheckDataMovementConfig(program, file_name, core_ranges);
-                                kernel = new DataMovementKernel(file_name, core_ranges, cfg);
+                                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                                kernel = new ComputeKernel(file_name, core_ranges, cfg);
+                                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
                             }
                             else if constexpr (std::is_same_v<T, experimental::EthernetConfig>) {
-                                kernel = new EthernetKernel(file_name, core_ranges, cfg);
+                                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
                             }
                             return detail::AddKernel(program, kernel);
                         },

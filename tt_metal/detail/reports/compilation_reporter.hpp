@@ -45,7 +45,7 @@ class CompilationReporter {
     CompilationReporter(const CompilationReporter&) = delete;
     CompilationReporter(CompilationReporter&& other) noexcept = delete;
 
-    void add_kernel_compile_stats(const Program &program, Kernel *kernel, bool cache_hit, size_t kernel_hash);
+    void add_kernel_compile_stats(const Program &program, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash);
 
     void flush_program_entry(const Program &program, bool persistent_compilation_cache_enabled);
     static CompilationReporter& inst();

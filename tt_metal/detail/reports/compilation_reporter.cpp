@@ -44,7 +44,7 @@ CompilationReporter::~CompilationReporter() {
     }
 }
 
-std::string kernel_attributes_str(Kernel *kernel) {
+std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
     std::string attr_str = "{";
     if (not kernel->compile_time_args().empty()) {
         attr_str += "Compile args: [";
@@ -77,7 +77,7 @@ std::string kernel_attributes_str(Kernel *kernel) {
     return attr_str;
 }
 
-void CompilationReporter::add_kernel_compile_stats(const Program &program, Kernel *kernel, bool cache_hit, size_t kernel_hash) {
+void CompilationReporter::add_kernel_compile_stats(const Program &program, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
     unique_lock<mutex> lock(mutex_);
 
     if (cache_hit) {
@@ -89,7 +89,7 @@ void CompilationReporter::add_kernel_compile_stats(const Program &program, Kerne
     std::string cache_status = cache_hit ? "cache hit" : "cache miss";
 
     int index = 0;
-    for (auto core_range : kernel->core_range_set().ranges()) {
+    for (const auto & core_range : kernel->core_range_set().ranges()) {
         if (index == 0) {
             kernel_stats += "\"" + core_range.str() + "\", " + cache_status + ", " + kernel_attributes_str(kernel) + ", " + std::to_string(kernel_hash) + "\n";
         } else {
