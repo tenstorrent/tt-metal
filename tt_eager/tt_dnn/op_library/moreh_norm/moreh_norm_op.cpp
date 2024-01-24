@@ -108,6 +108,12 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
 
     auto dims = std::get<std::vector<int64_t>>(dim.value());
 
+    if (dims.empty()) {
+        std::vector<int64_t> all_dims(input.shape().rank());
+        std::iota(all_dims.begin(), all_dims.end(), 0);
+        dims = all_dims;
+    }
+
     if (dims.size() == 1) {
         const auto d = dims[0];
         if (output.has_value()) {
