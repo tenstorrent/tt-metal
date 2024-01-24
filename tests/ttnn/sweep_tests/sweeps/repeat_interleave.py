@@ -27,24 +27,33 @@ def skip(make_repeat_a_tensor, rank_of_tensor, max_random_size_of_each_dim, layo
     return False, None
 
 
-def is_expected_to_fail(
-    make_repeat_a_tensor, rank_of_tensor, max_random_size_of_each_dim, dimension_to_repeat_on, **_
-) -> Tuple[bool, Optional[str]]:
-    # The following conditions represent what the error message should start with
-    # in those cases where there was a failure.
+def custom_numel(tensor):
+    total_elements = 1
+    for dimension in tensor.shape:
+        total_elements *= dimension
+    return total_elements
+
+
+args_used = {}
+
+
+def is_expected_to_fail(make_repeat_a_tensor, rank_of_tensor, **_) -> Tuple[bool, Optional[str]]:
+    repeats = args_used["repeats"]
+    tensor = args_used.get("tensor", None)
+    dim = args_used["dim"]
+    args_used.clear()
     dimension_range = f"[{-rank_of_tensor}, {rank_of_tensor - 1}]"
-    if not make_repeat_a_tensor and dimension_to_repeat_on >= rank_of_tensor:
-        return (
-            True,
-            f"TTNN: Dimension out of range (expected to be in range of {dimension_range}, but got {dimension_to_repeat_on})",
-        )
-    if make_repeat_a_tensor and dimension_to_repeat_on < rank_of_tensor:
-        return True, "TTNN: repeats must have the same size as input along dim"
-    if make_repeat_a_tensor and dimension_to_repeat_on >= rank_of_tensor:
-        return (
-            True,
-            f"TTNN: Dimension out of range (expected to be in range of {dimension_range}, but got {dimension_to_repeat_on})",
-        )
+
+    rank_of_tensor = len(tensor.shape)
+    if dim >= rank_of_tensor:
+        dimension_range = f"[{-rank_of_tensor}, {rank_of_tensor - 1}]"
+        return (True, f"ttnn: Dimension out of range (expected to be in range of {dimension_range}, but got {dim})")
+
+    if make_repeat_a_tensor:
+        if tensor.shape[dim] != custom_numel(repeats):
+            return (True, "ttnn: repeats must have the same size as input along dim")
+        elif len(repeats.shape) != 1:
+            return (True, "ttnn: repeats must be 0-dim or 1-dim tensor")
     return False, None
 
 
@@ -86,7 +95,12 @@ def run(
     input_tensors = ttnn.from_torch(
         torch_input_tensor, device=device, layout=layout, dtype=dtype, memory_config=memory_config
     )
+    global args_used
+    args_used["tensor"] = input_tensors
+    args_used["repeats"] = repeat
+    args_used["dim"] = dimension_to_repeat_on
     output_tensor = ttnn.repeat_interleave(input_tensors, repeat, dim=dimension_to_repeat_on)
+    args_used.clear()
     output_tensor = ttnn.to_torch(output_tensor)
 
     torch_output_tensor = torch.repeat_interleave(torch_input_tensor, torch_repeat, dim=dimension_to_repeat_on)
