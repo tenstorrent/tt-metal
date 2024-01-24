@@ -282,6 +282,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_tan,
         "pytorch_op": pytorch_ops.tan,
     },
+    "eltwise-tan-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_tan_bw,
+        "pytorch_op": pytorch_ops.tan_bw,
+    },
     "eltwise-asin": {
         "tt_lib_op": tt_lib_ops.eltwise_asin,
         "pytorch_op": pytorch_ops.asin,
@@ -582,6 +586,10 @@ op_map = {
     "eltwise-mul": {
         "tt_lib_op": tt_lib_ops.eltwise_mul,
         "pytorch_op": pytorch_ops.mul,
+    },
+    "eltwise-mul-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_mul_bw,
+        "pytorch_op": pytorch_ops.mul_bw,
     },
     "eltwise-min": {
         "tt_lib_op": tt_lib_ops.eltwise_min,
