@@ -225,7 +225,7 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
-                "output_tensor_start", "Start indices of input tensor", "List[int[4]]", "Must be all 0s", "Yes"
+                "output_tensor_start", "Start indices of input tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
                 "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
                 "pad_value", "Value to pad input tensor", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
@@ -468,6 +468,10 @@ namespace tt::tt_metal::detail{
         // Sharding ops
         m_tensor.def("interleaved_to_sharded", &interleaved_to_sharded,
             py::arg("input"), py::arg("grid_size"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
+            R"doc(Converts tensor from interleaved to sharded memory layout)doc"
+        );
+        m_tensor.def("interleaved_to_sharded_core_range_set", &interleaved_to_sharded_core_range_set,
+            py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from interleaved to sharded memory layout)doc"
         );
         m_tensor.def("sharded_to_interleaved", &sharded_to_interleaved,

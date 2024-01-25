@@ -7,6 +7,11 @@ from torch import nn
 
 from typing import List, Tuple, Union, Optional
 from packaging import version
+from collections import OrderedDict
+from PIL import Image
+import os
+import glob
+from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -30,9 +35,7 @@ def meshgrid(
         return torch.meshgrid(*tensors, indexing=indexing)
     else:
         if indexing != "ij":
-            raise ValueError(
-                'torch.meshgrid only supports `indexing="ij"` for torch<1.10.'
-            )
+            raise ValueError('torch.meshgrid only supports `indexing="ij"` for torch<1.10.')
         return torch.meshgrid(*tensors)
 
 
@@ -50,11 +53,7 @@ def window_partition(input_feature, window_size, device, put_on_device=True):
         window_size,
         num_channels,
     )
-    windows = (
-        input_feature.permute(0, 1, 3, 2, 4, 5)
-        .contiguous()
-        .view(-1, window_size, window_size, num_channels)
-    )
+    windows = input_feature.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, num_channels)
 
     windows = torch_to_tt_tensor_rm(windows, device, put_on_device=put_on_device)
     return windows
@@ -65,7 +64,7 @@ def window_reverse(windows, window_size, height, width, device, put_on_device=Tr
     Merges windows to produce higher resolution features.
     """
     num_channels = windows.shape()[-1]
-    windows = tt_to_torch_tensor(windows, device)
+    windows = tt_to_torch_tensor(windows)
     windows = windows.view(
         -1,
         height // window_size,
@@ -74,11 +73,7 @@ def window_reverse(windows, window_size, height, width, device, put_on_device=Tr
         window_size,
         num_channels,
     )
-    windows = (
-        windows.permute(0, 1, 3, 2, 4, 5)
-        .contiguous()
-        .view(-1, height, width, num_channels)
-    )
+    windows = windows.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, height, width, num_channels)
 
     windows = torch_to_tt_tensor_rm(windows, device, put_on_device=put_on_device)
     return windows
@@ -92,3 +87,39 @@ def get_shape(shape):
     else:
         new_shape = shape
     return new_shape
+
+
+class InputExample(object):
+    def __init__(self, image, label=None):
+        self.image = image
+        self.label = label
+
+
+def get_input(image_path):
+    img = Image.open(image_path)
+    return img
+
+
+def get_label(image_path):
+    _, image_name = image_path.rsplit("/", 1)
+    image_name_exact, _ = image_name.rsplit(".", 1)
+    _, label_id = image_name_exact.rsplit("_", 1)
+    label = list(IMAGENET2012_CLASSES).index(label_id)
+    return label
+
+
+def get_data(input_loc):
+    img_dir = input_loc + "/"
+    data_path = os.path.join(img_dir, "*G")
+    files = sorted(glob.glob(data_path))
+    examples = []
+    for f1 in files:
+        examples.append(
+            InputExample(
+                image=get_input(f1),
+                label=get_label(f1),
+            )
+        )
+    image_examples = examples
+
+    return image_examples

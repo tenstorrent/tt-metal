@@ -16,21 +16,17 @@ class DeviceCommand {
 
     // Constants
     //TODO: investigate other num_cores
+    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
-    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
+    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 22;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
-    static constexpr uint32_t DATA_SECTION_ADDRESS = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
-    static constexpr uint32_t PRODUCER_DATA_BUFFER_SIZE =
-        (MEM_L1_SIZE - (NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - L1_UNRESERVED_BASE);
-    static constexpr uint32_t CONSUMER_DATA_BUFFER_SIZE = (PRODUCER_DATA_BUFFER_SIZE - NUM_BYTES_IN_DEVICE_COMMAND) / 2;
-    static constexpr uint32_t DEVICE_COMMAND_DATA_ADDR = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
     static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
     // Ensure any changes to this device command have asserts modified/extended
-    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 20);
+    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 22);
     static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
 
     // Command header
@@ -53,6 +49,9 @@ class DeviceCommand {
     static constexpr uint32_t data_size_idx = 16;
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
     static constexpr uint32_t sharded_buffer_num_cores_idx = 18;
+    static constexpr uint32_t restart_idx = 19;
+    static constexpr uint32_t new_issue_queue_size_idx = 20;
+    static constexpr uint32_t new_completion_queue_size_idx = 21;
 
     // Denotes which portion of the command queue needs to be wrapped
     enum class WrapRegion : uint8_t {
@@ -61,9 +60,15 @@ class DeviceCommand {
         COMPLETION = 2
     };
 
-    void wrap(WrapRegion wrap_region);
+    void set_restart();
 
-    void finish();
+    void set_issue_queue_size(uint32_t new_issue_queue_size);
+
+    void set_completion_queue_size(uint32_t new_completion_queue_size);
+
+    void set_wrap(WrapRegion wrap_region);
+
+    void set_finish();
 
     void set_num_workers(const uint32_t num_workers);
 
@@ -93,7 +98,9 @@ class DeviceCommand {
 
     uint32_t get_data_size() const;
 
-    void add_buffer_transfer_instruction(
+    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
+
+    void add_buffer_transfer_interleaved_instruction(
         const uint32_t src,
         const uint32_t dst,
         const uint32_t num_pages,
@@ -104,9 +111,7 @@ class DeviceCommand {
         const uint32_t dst_page_index
     );
 
-    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
-
-    void add_buffer_transfer_instruction_sharded(
+    void add_buffer_transfer_sharded_instruction(
         const uint32_t src,
         const uint32_t dst,
         const uint32_t num_pages,
@@ -136,4 +141,15 @@ class DeviceCommand {
     std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND> desc;
     uint32_t buffer_transfer_idx;
     uint32_t program_transfer_idx;
+    void add_buffer_transfer_instruction_preamble(
+        const uint32_t src,
+        const uint32_t dst,
+        const uint32_t num_pages,
+        const uint32_t padded_page_size,
+        const uint32_t src_buf_type,
+        const uint32_t dst_buf_type,
+        const uint32_t src_page_index,
+        const uint32_t dst_page_index
+        );
+    void add_buffer_transfer_instruction_postamble();
 };

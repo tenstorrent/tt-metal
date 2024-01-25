@@ -24,6 +24,8 @@ from models.utility_functions import skip_for_wormhole_b0
 ])
 # fmt: on
 def test_matmul_with_matched_width_height(device, m, k, n):
+    torch.manual_seed(0)
+
     torch_input_tensor_a = torch.rand((m, k), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((k, n), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -39,7 +41,7 @@ def test_matmul_with_matched_width_height(device, m, k, n):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.99987)
 
 
 # fmt: off
@@ -68,7 +70,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k, n):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
 @pytest.mark.skip(reason="ttnn.reshape doesn't support reshaping the input tensors used in this test")
@@ -119,7 +121,7 @@ def test_matmul_with_matched_width_height_4D(device, n, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.999649)
 
 
 # fmt: off
@@ -146,7 +148,7 @@ def test_matmul_same_shape_and_valid(device, n, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.999877)
 
 
 # fmt: off
@@ -288,26 +290,80 @@ def test_tutorial_matmul_with_tilized_input_in_l1_memory_and_user_specified_core
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.skip(reason="#4617: matmul pcc at 0.93 when comparing to torch")
 @skip_for_wormhole_b0()
-def test_specific_tensor_combination(device):
-    current_dir = os.path.dirname(os.path.realpath(__file__))
-    tensor_file = os.path.join(current_dir, "tensor_a.pt")
-    torch_input_tensor_a = torch.load(tensor_file)
-    tensor_file = os.path.join(current_dir, "tensor_b.pt")
-    torch_input_tensor_b = torch.load(tensor_file)
+def test_interleaved_to_block_sharded_matmul(device):
+    torch.manual_seed(0)
+    grid_size = (5, 8)
 
-    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    M = 1600
+    K = 256
+    N = 1024
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+
+    torch_input_tensor_a = torch.randn(in0_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(in1_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b)
-    input_tensor_a = ttnn.to_device(input_tensor_a, device)
-    input_tensor_b = ttnn.to_device(input_tensor_b, device)
 
-    output = ttnn.matmul(input_tensor_a, input_tensor_b)
+    input_tensor_a = ttnn.to_device(input_tensor_a, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_tensor_b = ttnn.to_device(input_tensor_b, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.TILE_LAYOUT)
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        grid_size, [M // grid_size[0], K // grid_size[1]], ttnn.ShardStrategy.BLOCK
+    )
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_mem_config)
+
+    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=grid_size)
+    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
-    assert len(output.shape) == len(torch_output_tensor.shape)
-    assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+
+
+@skip_for_wormhole_b0()
+def test_height_sharded_matmul(device):
+    torch.manual_seed(0)
+    grid_size = (8, 12)
+    B = 12
+    H = 16
+    M = 384
+    K = 64
+    N = 384
+
+    in0_shape = [B, H, M, K]
+    in1_shape = [B, H, K, N]
+
+    torch_input_tensor_a = torch.randn(in0_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(in1_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b)
+
+    num_cores = grid_size[0] * grid_size[1]
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        grid_size, [B * H * M // num_cores, K], ttnn.ShardStrategy.HEIGHT
+    )
+
+    input_tensor_a = ttnn.to_device(input_tensor_a, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    input_tensor_b = ttnn.to_device(input_tensor_b, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.TILE_LAYOUT)
+
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_mem_config)
+
+    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=grid_size)
+    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+    output = ttnn.from_device(output)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, pcc=0.999)

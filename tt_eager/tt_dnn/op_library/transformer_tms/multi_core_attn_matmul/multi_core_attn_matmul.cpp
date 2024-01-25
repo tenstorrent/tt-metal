@@ -17,7 +17,7 @@ namespace primary {
 namespace transformers {
 
 
-operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DataType output_dtype) {
+operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size) {
 
     tt_metal::Program program{};
 
@@ -25,9 +25,11 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat interm_data_format = DataFormat::Float16_b;
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
     MathFidelity math_fidelity = MathFidelity::LoFi;
 
@@ -74,34 +76,34 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     uint32_t src1_addr = src1_buffer->address();
     uint32_t dst_addr = dst_buffer->address();
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = CB::c_in0;
     uint32_t cb0_num_input_tiles = Kt * 2;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		.set_page_size(src0_cb_index, in0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = CB::c_in1;
     uint32_t cb1_num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_num_input_tiles * in1_single_tile_size, {{src1_cb_index, output_data_format}})
+    tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
 		.set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    uint32_t cb_intermed0_index = 24;
-    tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(1 * output_single_tile_size, {{cb_intermed0_index, output_data_format}})
-		.set_page_size(cb_intermed0_index, output_single_tile_size);
-    auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
+    uint32_t cb_intermed0_index = CB::c_intermed0;
+    tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
+		.set_page_size(cb_intermed0_index, interm_single_tile_size);
+    auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm0_config);
 
-    uint32_t cb_intermed1_index = 25;
-    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(1 * output_single_tile_size, {{cb_intermed1_index, output_data_format}})
-		.set_page_size(cb_intermed1_index, output_single_tile_size);
-    auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
+    uint32_t cb_intermed1_index = CB::c_intermed1;
+    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
+		.set_page_size(cb_intermed1_index, interm_single_tile_size);
+    auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm1_config);
 
-    uint32_t cb_intermed2_index = 26;
-    tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(1 * output_single_tile_size, {{cb_intermed2_index, output_data_format}})
-		.set_page_size(cb_intermed2_index, output_single_tile_size);
-    auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+    uint32_t cb_intermed2_index = CB::c_intermed2;
+    tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
+		.set_page_size(cb_intermed2_index, interm_single_tile_size);
+    auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm2_config);
 
-    uint32_t output_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
 		.set_page_size(output_cb_index, output_single_tile_size);

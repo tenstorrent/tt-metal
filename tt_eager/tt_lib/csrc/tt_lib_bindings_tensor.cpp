@@ -24,6 +24,7 @@
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -209,12 +210,14 @@ void TensorModule(py::module &m_tensor) {
     pyMemoryConfig
         .def(
             py::init<>(
-                [](TensorMemoryLayout memory_layout, BufferType buffer_type) {
-                    return MemoryConfig{.memory_layout=memory_layout, .buffer_type=buffer_type};
+                [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
+                    return MemoryConfig{.memory_layout=memory_layout, .buffer_type=buffer_type, .shard_spec=shard_spec};
                 }
             ),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
-            py::arg("buffer_type") = BufferType::DRAM, R"doc(
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("shard_spec") = std::nullopt,
+            R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
                 Otherwise, tensor data will be stored in a DRAM bank selected by dram_channel (valid values are 0, 1, ..., 7).
@@ -237,6 +240,7 @@ void TensorModule(py::module &m_tensor) {
         )
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
+        .def_readonly("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
 
@@ -288,7 +292,11 @@ void TensorModule(py::module &m_tensor) {
                     return ShardSpec(core_sets, shard_shape, shard_orientation, halo);
                 }
             )
-        );
+        )
+        .def_readonly("shape", &ShardSpec::shape, "Shape of shard.")
+        .def_readonly("grid", &ShardSpec::grid, "Grid to layout shards.")
+        .def_readonly("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
+        ;
 
 
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
@@ -696,6 +704,14 @@ void TensorModule(py::module &m_tensor) {
         &load_tensor,
         R"doc(
             Load tensor to file
+        )doc"
+    );
+
+    m_tensor.def(
+        "num_cores_to_corerange_set",
+        &num_cores_to_corerange_set,
+        R"doc(
+            Create a CoreRangeSet containing the specified number of cores
         )doc"
     );
 

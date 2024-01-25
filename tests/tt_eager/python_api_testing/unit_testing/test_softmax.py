@@ -15,11 +15,9 @@ from tt_lib.utils import (
     is_close,
 )
 from models.utility_functions import print_diff_argmax, comp_pcc
-from models.utility_functions import skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax(device, inplace):
     torch.manual_seed(0)
@@ -43,7 +41,6 @@ def test_softmax(device, inplace):
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax_with_program_cache(device, use_program_cache, inplace):
     torch.manual_seed(0)
@@ -67,7 +64,6 @@ def test_softmax_with_program_cache(device, use_program_cache, inplace):
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "cb_dtype",
     (ttl.tensor.DataType.BFLOAT16,),
@@ -99,7 +95,6 @@ def test_softmax_mix_precision(device, inplace, in_dtype, cb_dtype):
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "seq_len",
     [64, 384],
@@ -195,7 +190,6 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, casual_mas
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "in0_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),

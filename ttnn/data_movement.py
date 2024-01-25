@@ -50,7 +50,7 @@ def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: 
         output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
     )
 
-    output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
+    # output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
     return output_tensor
 
 
@@ -135,9 +135,9 @@ def _torch_concat(tensors, dim=0, **_):
 
 
 # @decorate_operation(torch_function=_torch_concat)
-def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tensor:
+def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor:
     r"""
-    concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tensor
+    concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor
 
     Concats :attr:`tensors` in the given :attr:`dim`.
 
@@ -160,10 +160,20 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tenso
     if len(tensors) < 2:
         raise RuntimeError("You must have at least two tensors to concat!")
 
+    rank = len(tensors[0].shape)
+    original_dim = dim
+    if dim < 0:
+        dim = rank + dim
+    if dim < 0 or dim >= rank:
+        raise RuntimeError(
+            f"ttnn: Dimension out of range: dim {original_dim} cannot be used for tensors of rank {rank}"
+        )
+
     for input_tensor in tensors:
         if not ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            raise RuntimeError("All tensors must be on device!")
+            raise RuntimeError("ttnn: All tensors must be on device!")
 
+    dtype = tensors[0].dtype
     device = tensors[0].device
     layout = tensors[0].layout
 
@@ -178,9 +188,9 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: 0) -> ttnn.Tenso
                 "All dimensions must be the same size except for the dimension along which the contenation is taking place."
             )
 
-    output_tensor = _torch_concat(tensors, dim=0)
+    output_tensor = _torch_concat(tensors, dim=dim)
 
-    return ttnn.from_torch(output_tensor, device=device, layout=layout)
+    return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
 
 
 def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
@@ -217,4 +227,97 @@ def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     return output_tensors
 
 
-__all__ = ["pad", "reshape", "permute", "concat", "split"]
+def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
+    import torch
+
+    if isinstance(repeats, ttnn.Tensor):
+        repeats = ttnn.to_torch(repeats)
+
+    return torch.repeat_interleave(ttnn.to_torch(tensor), repeats, dim=dim)
+
+
+@decorate_operation(torch_function=_torch_repeat_interleave)
+def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
+    r"""
+    repeat_interleave(tensors: ttnn.Tensor, repeats : Union[ttnn.Tensor,int], dim: int = 0) -> ttnn.Tensor
+
+    Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
+
+    Args:
+        * :attr:`tensors`: the tensors to be concatenated.
+        * :attr:`repeats`: The number of repetitions for each element. repeats is broadcasted to fit the shape of the given axis.
+        * :attr:`dim`: the concatenating dimension.
+
+    Example::
+
+        >>> tensor = ttnn.repeats(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2, dim=3)), device)
+        >>> print(tensor)
+        tensor([[1, 2],
+        [1, 2],
+        [3, 4],
+        [3, 4]])
+
+    """
+
+    if not isinstance(tensor, ttnn.Tensor):
+        raise RuntimeError("ttnn: Expected tensor argument to be a ttnn.Tensor")
+
+    if not ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE):
+        raise RuntimeError("ttnn: Tensor must be on device!")
+
+    if not isinstance(repeats, int) and not isinstance(repeats, ttnn.Tensor):
+        raise RuntimeError("ttnn: Expected repeat to either be an int or a ttnn.Tensor")
+
+    # For now, don't require the repeat tensor to be on device.
+    # if type(repeats) == type(tensor) and not ttnn.has_storage_type_of(repeats, ttl.tensor.StorageType.DEVICE):
+    #     raise RuntimeError("Repeats tensor must be on device!")
+
+    rank_of_tensor = len(tensor.shape)
+    if dim >= rank_of_tensor:
+        dimension_range = f"[{-rank_of_tensor}, {rank_of_tensor - 1}]"
+        raise RuntimeError(
+            f"ttnn: Dimension out of range (expected to be in range of {dimension_range}, but got {dim})"
+        )
+
+    def custom_numel(tensor):
+        total_elements = 1
+        for dimension in tensor.shape:
+            total_elements *= dimension
+        return total_elements
+
+    if isinstance(repeats, ttnn.Tensor):
+        if tensor.shape[dim] != custom_numel(repeats):
+            raise RuntimeError("ttnn: repeats must have the same size as input along dim")
+        elif len(repeats.shape) != 1:
+            raise RuntimeError("ttnn: repeats must be 0-dim or 1-dim tensor")
+
+    dtype = tensor.dtype
+    device = tensor.device
+    layout = tensor.layout
+    rank = len(tensor.shape)
+    if dtype == ttnn.bfloat16 and rank == 4 and dim != 2 and dim != 3:
+        ttl_input_tensor = tensor.value
+        output_tensor = ttnn.Tensor(ttl.tensor.repeat_interleave(ttl_input_tensor, repeats, dim=dim))
+        *batch, _, _ = output_tensor.shape
+        *_, h, w = tensor.shape
+        *_, padded_h, padded_w = tensor.shape.padded()
+        if dim == 2:
+            *_, h, _ = output_tensor.shape
+            *_, padded_h, _ = output_tensor.shape.padded()
+        elif dim == 3:
+            *_, _, w = output_tensor.shape
+            *_, _, padded_w = output_tensor.shape.padded()
+        output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
+        return output_tensor
+    else:
+
+        def torch_repeat_interleave(tensor, repeats, dim=dim):
+            return _torch_repeat_interleave(tensor, repeats, dim)
+
+        output_tensor = ttl.tensor.decorate_external_operation(
+            torch_repeat_interleave, function_name="torch_repeat_interleave"
+        )(tensor, repeats, dim=dim)
+        return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
+
+
+__all__ = []

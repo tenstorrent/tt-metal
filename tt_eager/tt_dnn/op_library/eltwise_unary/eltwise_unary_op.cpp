@@ -67,6 +67,12 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::LEAKY_RELU:
             defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
             break;
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::MUL_UNARY_SFPU:
+        case UnaryOpType::DIV_UNARY_SFPU:
+            defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
+            break;
         case UnaryOpType::IDENTITY:
             defines["SFPU_OP_IDENTITY_INCLUDE"] = "1";
             break;
@@ -119,6 +125,10 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init({1});", fmt::format("erfc_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RDIV: op_init_and_name = {}; break;
         case UnaryOpType::RSUB: op_init_and_name = {"rsub_tile_init();", fmt::format("rsub_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::SUB_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("sub_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::ADD_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("add_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::MUL_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::DIV_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f/param0))}; break;
         default:
         TT_ASSERT( false && "unexpected parameterized type");
     };
@@ -292,8 +302,13 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_shape = input_tensor.shape();
 
-    operation::Hash hash =
-        tt::stl::hash::hash_objects(0, typeid(*this).hash_code(), compute_volume(input_shape), input_tensor.dtype());
+    operation::Hash hash = tt::stl::hash::hash_objects(
+        0,
+        typeid(*this).hash_code(),
+        compute_volume(input_shape),
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        this->output_mem_config);
     for (const auto& unary_with_param_op : this->op_chain) {
         hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.op_type);
         if (unary_with_param_op.param.has_value()) {

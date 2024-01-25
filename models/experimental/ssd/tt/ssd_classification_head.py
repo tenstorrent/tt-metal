@@ -46,9 +46,7 @@ class TtSSDclassificationhead(nn.Module):
                 device=device,
             )
             self.classification_head.append(self.conv)
-            weight = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.{i}.1.weight"], device, put_on_device=False
-            )
+            weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.{i}.1.weight"], device, put_on_device=False)
 
             self.convolution = fallback_ops.Conv2d(
                 weights=weight,
@@ -80,9 +78,7 @@ class TtSSDclassificationhead(nn.Module):
             result = result.permute(0, 3, 4, 1, 2)
             result = result.reshape(N, -1, self.num_classes)
 
-            result = torch_to_tt_tensor_rm(
-                result, device=self.device, put_on_device=False
-            )
+            result = torch_to_tt_tensor_rm(result, device=self.device, put_on_device=False)
             all_results.append(result)
 
-        return tt_lib.tensor.concat(all_results, 2)
+        return fallback_ops.concat(all_results, 2)

@@ -116,6 +116,11 @@ void Cluster::generate_cluster_descriptor() {
             this->device_to_mmio_device_[device_id] = closest_mmio_device_id;
         }
     }
+
+    uint32_t total_num_hugepages = get_num_hugepages();
+    TT_FATAL(total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
+        "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. Increase number of hugepages!", this->cluster_desc_->get_all_chips().size(), total_num_hugepages);
+
 }
 
 void Cluster::initialize_device_drivers() {

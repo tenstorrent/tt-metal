@@ -88,8 +88,8 @@ void kernel_main() {
     #endif
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    for (uint32_t i = 0; i<num_rows; i ++) {
-        for (uint32_t j = 0; j < Wt; j++) {
+    for (uint32_t i = 0; i<num_rows; ++i) {
+        for (uint32_t j = 0; j < Wt; ++j) {
 
             cb_reserve_back(rotated_input_cb_id, onetile);
             uint32_t rotated_input_l1_write_addr = get_write_ptr(rotated_input_cb_id);

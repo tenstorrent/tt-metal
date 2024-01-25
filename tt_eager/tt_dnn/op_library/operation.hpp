@@ -218,7 +218,7 @@ struct HostOperation final {
 };
 
 struct DeviceOperation final {
-    using storage_t = std::array<std::byte, 768>;
+    using storage_t = std::array<std::byte, 816>;
 
     inline const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 

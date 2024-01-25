@@ -83,3 +83,26 @@ inline void llk_unpack_AB(
 
     _llk_unpack_AB_<BType>(address_a, address_b, transpose_of_faces > 0);
 }
+
+template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_reduce_init(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t transpose = 0,
+    const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
+    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    const bool narrow_tile =
+        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
+
+    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // if we have the flag set with REDUCE_ROW, we don't need to do anything
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
+
+    constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
+    config_unpacker_x_end<UNP_SEL>(face_r_dim);
+
+    _llk_unpack_AB_mop_config_<BType>(transpose>0, num_faces, narrow_tile); // transpose of faces 0,2,1,3
+}

@@ -26,6 +26,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "rsqrt": torch.rsqrt,
             "relu": torch.relu,
             "silu": torch.nn.functional.silu,
+            "log": torch.log,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -70,7 +71,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
 
         """
     setattr(THIS_MODULE, name, unary_function)
-    __all__.append(name)
 
 
 TTL_UNARY_FUNCTIONS = [
@@ -80,8 +80,11 @@ TTL_UNARY_FUNCTIONS = [
     ("relu", ttl.tensor.relu),
     ("rsqrt", ttl.tensor.rsqrt),
     ("silu", ttl.tensor.silu),
+    ("log", ttl.tensor.log),
 ]
 
 
 for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
     register_ttl_unary_function(unary_function_name, ttl_unary_function)
+
+__all__ = []

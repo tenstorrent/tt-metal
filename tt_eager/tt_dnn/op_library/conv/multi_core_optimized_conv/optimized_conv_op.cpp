@@ -72,7 +72,7 @@ tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
     CBHandle cb_sharded_act_mcast_receiver = 0;
     if (input.is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
-        auto shard_shape = input.shard_spec().value().shard_shape;
+        auto shard_shape = input.shard_spec().value().shape;
         CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
 		    .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
         // incoming data is the input cb instead of raw l1/dram addr
@@ -876,7 +876,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
             uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
 
             if (weight_width_sliced) {
-                auto shard_shape = a.shard_spec().value().shard_shape;
+                auto shard_shape = a.shard_spec().value().shape;
                 uint32_t shard_size_bytes = shard_shape[0] * shard_shape[1] * a.element_size();
                 CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
                 auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);

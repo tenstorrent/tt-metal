@@ -1148,7 +1148,7 @@ FORCE_INLINE void noc_async_write_tile(
 
 FORCE_INLINE
 uint32_t get_semaphore(uint32_t semaphore_id) {
-    return SEMAPHORE_BASE + semaphore_id * sizeof(uint32_t);
+    return SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
 }
 
 FORCE_INLINE

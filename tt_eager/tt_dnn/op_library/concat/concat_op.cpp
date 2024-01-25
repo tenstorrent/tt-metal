@@ -69,11 +69,7 @@ operation::ProgramWithCallbacks Concat::create_program(
 Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim, const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensors.size() > 0, "need 1 or more tensors");
     if (input_tensors.size() == 1) {
-        if (input_tensors[0].memory_config() != output_mem_config) {
-            return clone(input_tensors[0], output_mem_config);
-        } else {
-            return input_tensors[0];
-        }
+        return AutoFormat::move_tensor_to_mem_config(input_tensors[0], output_mem_config);
     }
     uint32_t ref_rank = input_tensors[0].shape().rank();
     uint32_t normalized_dim =  input_tensors[0].shape().get_normalized_index(dim);
