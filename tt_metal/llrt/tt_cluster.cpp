@@ -46,6 +46,8 @@ Cluster::Cluster() {
 
     this->initialize_device_drivers();
 
+    this->initialize_ethernet_sockets();
+
     this->assert_risc_reset();
 }
 
@@ -562,27 +564,69 @@ uint64_t Cluster::get_pcie_base_addr_from_device(chip_id_t chip_id) const {
 }
 
 // Ethernet cluster api
-std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_chip_ids(chip_id_t chip_id) const {
-    std::unordered_set<chip_id_t> connected_chips;
+
+void Cluster::initialize_ethernet_sockets() {
+    for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
+        if (this->ethernet_sockets_.find(chip_id) == this->ethernet_sockets_.end()) {
+            this->ethernet_sockets_.insert({chip_id, {}});
+        }
+        for (const auto &[connected_chip_id, eth_cores] :
+             this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
+            if (this->ethernet_sockets_.at(chip_id).find(connected_chip_id) ==
+                this->ethernet_sockets_.at(chip_id).end()) {
+                this->ethernet_sockets_.at(chip_id).insert({connected_chip_id, {}});
+            }
+            if (this->ethernet_sockets_.find(connected_chip_id) == this->ethernet_sockets_.end()) {
+                this->ethernet_sockets_.insert({connected_chip_id, {}});
+            }
+            if (this->ethernet_sockets_.at(connected_chip_id).find(chip_id) ==
+                this->ethernet_sockets_.at(connected_chip_id).end()) {
+                this->ethernet_sockets_.at(connected_chip_id).insert({chip_id, {}});
+            } else {
+                continue;
+            }
+            for (const auto &eth_core : eth_cores) {
+                this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
+                this->ethernet_sockets_.at(connected_chip_id)
+                    .at(chip_id)
+                    .emplace_back(std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core))));
+            }
+        }
+    }
+}
+
+std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
+    chip_id_t chip_id) const {
+    const auto &soc_desc = get_soc_desc(chip_id);
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> connected_chips;
     const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
     if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
         return {};
     }
     for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
-        connected_chips.insert(std::get<0>(connected_chip_chan));
+        const auto &other_chip_id = std::get<0>(connected_chip_chan);
+        if (connected_chips.find(other_chip_id) == connected_chips.end()) {
+            std::vector<CoreCoord> active_ethernet_cores;
+
+            for (const auto &channel_pair :
+                 this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
+                ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
+                active_ethernet_cores.emplace_back(
+                    get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
+            }
+            connected_chips.insert({other_chip_id, active_ethernet_cores});
+        } else {
+            continue;
+        }
     }
     return connected_chips;
 }
 
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    const auto &connected_chips = this->get_ethernet_connected_chip_ids(chip_id);
-    for (auto &other_chip_id : connected_chips) {
-        for (const auto &channel_pair :
-             this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
-            ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
-            active_ethernet_cores.insert(get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
-        }
+    const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+    for (const auto &[other_chip_id, eth_cores] : connected_chips) {
+        active_ethernet_cores.insert(eth_cores.begin(), eth_cores.end());
     }
     return active_ethernet_cores;
 }
@@ -610,6 +654,16 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
         std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+}
+
+std::vector<CoreCoord> Cluster::get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const {
+    const auto &local_ethernet_sockets = this->ethernet_sockets_.at(local_chip);
+    TT_ASSERT(
+        local_ethernet_sockets.find(remote_chip) != local_ethernet_sockets.end(),
+        "Device {} is not connected to Device {}",
+        local_chip,
+        remote_chip);
+    return local_ethernet_sockets.at(remote_chip);
 }
 
 uint32_t Cluster::get_tensix_soft_reset_addr() const {

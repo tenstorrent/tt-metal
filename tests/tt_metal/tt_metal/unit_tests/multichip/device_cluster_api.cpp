@@ -36,10 +36,6 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
     ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 14);
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
-    // Check connectivity between chips
-    ASSERT_TRUE(device_0->get_ethernet_connected_chip_ids() == std::unordered_set({1}));
-    ASSERT_TRUE(device_1->get_ethernet_connected_chip_ids() == std::unordered_set({0}));
-
     for (const auto& core : device_0_active_eth_cores) {
         std::tuple<chip_id_t, CoreCoord> core_on_chip_1 = device_0->get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_1) == 1);
@@ -141,5 +137,21 @@ TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
     }
     // Check an invalid core type
     EXPECT_ANY_THROW(device_0->physical_core_from_logical_core({.x = 0, .y = 0}, CoreType::DRAM));
+}
+
+TEST_F(N300DeviceFixture, ValidateEthernetSockets) {
+    const auto& device_0 = this->devices_.at(0);
+    const auto& device_1 = this->devices_.at(1);
+
+    std::vector<CoreCoord> device_0_sockets = device_0->get_ethernet_sockets(1);
+    std::vector<CoreCoord> device_1_sockets = device_1->get_ethernet_sockets(0);
+
+    ASSERT_TRUE(device_0_sockets.size() == 2);
+    ASSERT_TRUE(device_1_sockets.size() == 2);
+    ASSERT_TRUE(
+        device_0->get_connected_ethernet_core(device_0_sockets.at(0)) == std::make_tuple(device_1->id(), device_1_sockets.at(0)));
+    ASSERT_TRUE(
+        device_0->get_connected_ethernet_core(device_0_sockets.at(1)) == std::make_tuple(device_1->id(), device_1_sockets.at(1)));
+    EXPECT_ANY_THROW(device_0->get_ethernet_sockets(2));
 }
 }  // namespace unit_tests::multichip::cluster

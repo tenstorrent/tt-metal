@@ -107,8 +107,9 @@ class Cluster {
     uint64_t get_pcie_base_addr_from_device(chip_id_t chip_id) const;
 
     // Ethernet cluster api
-    // Returns set of connected chip ids
-    std::unordered_set<chip_id_t> get_ethernet_connected_chip_ids(chip_id_t chip_id) const;
+    // Returns map of connected chip ids to active ethernet cores
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+        chip_id_t chip_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id) const;
@@ -118,6 +119,10 @@ class Cluster {
 
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+
+    // Returns a ethernet sockets between local chip and remote chip
+    // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
+    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const;
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
@@ -153,6 +158,7 @@ class Cluster {
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
     void configure_static_tlbs(chip_id_t mmio_device_id) const;
 
+    void initialize_ethernet_sockets();
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -224,6 +230,8 @@ class Cluster {
         REQUEST_ROUTING_CMD_QUEUE_BASE,
         RESPONSE_ROUTING_CMD_QUEUE_BASE,
         CMD_BUF_PTR_MASK};
+
+    std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };
 
 }  // namespace tt

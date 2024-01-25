@@ -101,8 +101,8 @@ class Device {
 
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
-    std::unordered_set<chip_id_t> get_ethernet_connected_chip_ids() const {
-        return tt::Cluster::instance().get_ethernet_connected_chip_ids(this->id_);
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips() const {
+        return tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(this->id_);
     }
 
     std::unordered_set<CoreCoord> get_active_ethernet_cores() const {
@@ -115,6 +115,10 @@ class Device {
 
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
         return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
+    }
+
+    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const {
+        return tt::Cluster::instance().get_ethernet_sockets(this->id_, connected_chip_id);
     }
 
     bool is_mmio_capable() const {
