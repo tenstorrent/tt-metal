@@ -383,6 +383,7 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
         core_id_y
     );
 
+    command.set_buffer_type(DeviceCommand::BufferType::SHARDED);
     command.set_sharded_buffer_num_cores(num_cores);
     return command;
 }
@@ -404,6 +405,7 @@ const DeviceCommand EnqueueReadInterleavedBufferCommand::create_buffer_transfer_
         this->src_page_index,
         dst_page_index);
 
+    command.set_buffer_type(DeviceCommand::BufferType::INTERLEAVED);
     command.set_sharded_buffer_num_cores(1);
     return command;
 }
@@ -486,6 +488,7 @@ const DeviceCommand EnqueueWriteInterleavedBufferCommand::create_buffer_transfer
         src_page_index,
         this->dst_page_index
     );
+    command.set_buffer_type(DeviceCommand::BufferType::INTERLEAVED);
     return command;
 
 }
@@ -525,6 +528,7 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
         core_id_y
     );
 
+    command.set_buffer_type(DeviceCommand::BufferType::SHARDED);
     command.set_sharded_buffer_num_cores(num_cores);
 
     return command;

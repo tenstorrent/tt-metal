@@ -135,6 +135,7 @@ FORCE_INLINE void write_buffers(
     volatile tt_l1_ptr uint32_t* command_ptr,
     const uint32_t completion_queue_start_addr,
     uint32_t num_destinations,
+    bool sharded,
     uint32_t sharded_buffer_num_cores,
     uint32_t consumer_cb_size,
     uint32_t consumer_cb_num_pages,
@@ -142,7 +143,6 @@ FORCE_INLINE void write_buffers(
     uint32_t producer_consumer_transfer_num_pages,
     bool db_buf_switch) {
 
-    bool sharded = sharded_buffer_num_cores > 1;
 
     for (uint32_t i = 0; i < num_destinations; i++) {
         const uint32_t bank_base_address = command_ptr[1];

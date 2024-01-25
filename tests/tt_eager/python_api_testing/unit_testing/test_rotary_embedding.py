@@ -144,8 +144,6 @@ def test_rotary_embedding_decode(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            if num_cores == 1:
-                pytest.skip("Issue #4706: Can't write 1 core sharded tensors directly to device")
             shard_grid = ttl.tensor.CoreRangeSet(
                 ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
