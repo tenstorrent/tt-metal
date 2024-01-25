@@ -286,6 +286,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, device)
 
     ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
+    ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
     ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
 
     (decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_decoder_inputs(

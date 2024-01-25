@@ -90,30 +90,49 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     if not ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
         RuntimeError("input_tensor must be on device!")
 
-    ttl_input_tensor = input_tensor.value
-
     if len(input_tensor.shape) != len(order):
         raise RuntimeError(
             "The number of dimensions in the tensor input does not match the length of the desired ordering"
         )
 
-    original_shape = tuple(input_tensor.shape)
-    original_shape_padded = tuple(input_tensor.shape.padded())
-    desired_shape = ttnn.Shape(
-        list([original_shape[i] for i in order]), list([original_shape_padded[i] for i in order])
-    )
-    if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
-        output_tensor = ttnn.Tensor(ttl.tensor.permute(ttl_input_tensor, order))
-        # permute is not currently keeping the original padding
-        return ttnn.reshape(output_tensor, desired_shape)
-    elif len(input_tensor.shape) < 4:
+    on_device = ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    device = input_tensor.device
+    layout = input_tensor.layout
+    dtype = input_tensor.dtype
+    rank = len(input_tensor.shape)
+
+    if len(input_tensor.shape) < 4:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
         ttl_input_tensor = input_tensor.value
         adjusted_order_for_4D_tensor = order
         while len(adjusted_order_for_4D_tensor) < 4:
             adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
-        output_tensor = ttnn.Tensor(ttl.tensor.permute(ttl_input_tensor, adjusted_order_for_4D_tensor))
-        return ttnn.reshape(output_tensor, desired_shape)
+        order = adjusted_order_for_4D_tensor
+
+    def has_padding(tensor):
+        if len(tensor.shape) > 1:
+            *_, h, w = tensor.shape
+            *_, h_padded, w_padded = tensor.shape.padded()
+            return h != h_padded or w != w_padded
+        return False
+
+    if has_padding(input_tensor):
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+    ttl_input_tensor = input_tensor.value
+
+    if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE) and len(input_tensor.shape) == 4:
+        output_tensor = ttnn.Tensor(ttl.tensor.permute(ttl_input_tensor, order))
+        output_tensor = ttnn.to_layout(output_tensor, layout)
+        rank_should_be_updated = len(output_tensor.shape) > rank
+        while rank_should_be_updated:
+            prior_rank = len(output_tensor.shape)
+            output_tensor = ttnn.squeeze(output_tensor)
+            rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
+
+        if on_device and not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE):
+            output_tensor = ttnn.to_device(output_tensor, device)
+        return output_tensor
     else:
 
         def torch_permute(tensor, order):
@@ -121,9 +140,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
 
         tensor = ttnn.to_torch(tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
-        tensor = ttnn.from_torch(
-            tensor, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device
-        )
+        tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
         return tensor
 
 

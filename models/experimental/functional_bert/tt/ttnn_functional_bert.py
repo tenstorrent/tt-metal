@@ -42,7 +42,9 @@ def bert_attention(
 
     context_layer = attention_probs @ value
     context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
+    context_layer = ttnn.to_layout(context_layer, ttnn.ROW_MAJOR_LAYOUT)
     context_layer = ttnn.reshape(context_layer, (batch_size, sequence_size, hidden_size))
+    context_layer = ttnn.to_layout(context_layer, ttnn.TILE_LAYOUT)
 
     self_output = context_layer
     self_output = self_output @ parameters.output.dense.weight
