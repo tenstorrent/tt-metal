@@ -99,4 +99,7 @@ from ttnn.operations.normalization import (
 
 from ttnn.operations import transformer
 from ttnn.operations.conv import Conv2D
-from ttnn.operations.max_pool import MaxPool2D
+from ttnn.operations.pooling import (
+    MaxPool2D,
+    average_pool2d,
+)
