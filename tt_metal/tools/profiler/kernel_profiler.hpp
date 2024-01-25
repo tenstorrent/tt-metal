@@ -95,12 +95,6 @@ namespace kernel_profiler{
         trisc0Buffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 2;
         trisc1Buffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 3;
         trisc2Buffer[ID_LH] = ((core_flat_id & 0xFF) << 3) | 4;
-        //briscBuffer[ID_LH] =  ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | briscKernelID;
-        //ncriscBuffer[ID_LH] = ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | ncriscKernelID;
-        //trisc0Buffer[ID_LH] = ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | triscsKernelID;
-        //trisc1Buffer[ID_LH] = ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | triscsKernelID;
-        //trisc2Buffer[ID_LH] = ((core_flat_id & 0xFF) << 24) | ((deviceBufferEndIndex & 0xFF) << 16) | triscsKernelID;
-
 #endif //BRISC_INIT
 
 #endif //PROFILE_KERNEL
@@ -225,6 +219,9 @@ namespace kernel_profiler{
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
 
+        uint32_t pageSize =
+            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * profiler_core_count_per_dram;
+
         finish();
         int hostIndex;
         int deviceIndex;
@@ -236,17 +233,20 @@ namespace kernel_profiler{
                 profiler_control_buffer[deviceIndex] +
                 profiler_control_buffer[hostIndex];
 
-            uint32_t dram_address =
-                dram_profiler_address +
+            uint32_t dram_offset =
                 (core_flat_id % profiler_core_count_per_dram) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                 profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
+            const InterleavedAddrGen<true> s = {
+                .bank_base_address = dram_profiler_address,
+                .page_size = pageSize
+            };
+
             if ( currEndIndex < PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
-                uint64_t dram_bank_dst_noc_addr = get_noc_addr_helper(
-                        dram_bank_to_noc_xy[0][core_flat_id / profiler_core_count_per_dram],
-                        bank_to_dram_offset[core_flat_id / profiler_core_count_per_dram] + dram_address);
+                uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+
                 noc_async_write(
                         PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
                         dram_bank_dst_noc_addr,
