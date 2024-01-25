@@ -109,14 +109,14 @@ struct SystemMemoryCQInterface {
     const uint32_t command_issue_region_size;
     const uint32_t command_completion_region_size;
 
-    const uint32_t issue_fifo_size;
+    uint32_t issue_fifo_size;
     uint32_t issue_fifo_limit;  // Last possible FIFO address
     const uint32_t offset;
     uint32_t issue_fifo_wr_ptr;
     bool issue_fifo_wr_toggle;
 
-    const uint32_t completion_fifo_size;
-    const uint32_t completion_fifo_limit;  // Last possible FIFO address
+    uint32_t completion_fifo_size;
+    uint32_t completion_fifo_limit;  // Last possible FIFO address
     uint32_t completion_fifo_rd_ptr;
     bool completion_fifo_rd_toggle;
 };
@@ -174,9 +174,10 @@ class SystemMemoryManager {
         cq_interface.completion_fifo_rd_toggle = 0;
     }
 
-    void set_custom_issue_limit_for_trace(const uint8_t cq_id, const uint32_t new_limit) {
+    void set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
         SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-        cq_interface.issue_fifo_limit = (new_limit >> 4);
+        cq_interface.issue_fifo_size = (issue_queue_size >> 4);
+        cq_interface.issue_fifo_limit = (CQ_START + cq_interface.offset + issue_queue_size) >> 4;
     }
 
     uint32_t get_issue_queue_size(const uint8_t cq_id) const {
