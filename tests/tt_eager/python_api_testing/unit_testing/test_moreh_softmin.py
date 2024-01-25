@@ -6,7 +6,7 @@ import torch
 
 import tt_lib as ttl
 import pytest
-from models.utility_functions import comp_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_pcc
 from loguru import logger
 import torch.nn.functional as F
 
@@ -24,7 +24,6 @@ import torch.nn.functional as F
         ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_for_dim_hw(shape_dim, device):
     ttl.program_cache.enable()
 
@@ -58,7 +57,6 @@ def test_softmin_for_dim_hw(shape_dim, device):
         ((2, 3, 32 * 4, 32 * 5), 2),
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     ttl.program_cache.enable()
 
@@ -99,7 +97,6 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
         ((1, 1, 32 * 2 + 10, 32), 2),  # mutiple tile with dim
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     ttl.program_cache.enable()
     shape, dim = shape_dim
@@ -142,7 +139,6 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
         ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_for_dim_nc(shape_dim, device):
     ttl.program_cache.enable()
     shape, dim = shape_dim
@@ -184,7 +180,6 @@ def test_softmin_for_dim_nc(shape_dim, device):
         ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_backward_for_dim_hw(shape_dim, device):
     ttl.program_cache.enable()
     shape, dim = shape_dim
@@ -226,7 +221,6 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
         ((2, 3, 32 * 4, 32 * 5), 2),
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     ttl.program_cache.enable()
     shape, dim = shape_dim
@@ -275,7 +269,6 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
         ((1, 1, 32 * 2 + 10, 32), 2),  # mutiple tile with dim
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     ttl.program_cache.enable()
     shape, dim = shape_dim
@@ -332,7 +325,6 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
         ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
     ),
 )
-@skip_for_wormhole_b0()
 def test_softmin_backward_for_dim_nc(shape_dim, device):
     ttl.program_cache.enable()
     shape, dim = shape_dim
