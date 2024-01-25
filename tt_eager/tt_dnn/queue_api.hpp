@@ -1,18 +1,20 @@
-void EnqueueAllocateDeviceBuffer(Queue&, DeviceBuffer&);
-void EnqueueAllocateHostBuffer(Queue&, HostBuffer&);
+void EnqueueAllocateDeviceBuffer(Queue&, DeviceBuffer&); // Part 2
+void EnqueueAllocateHostBuffer(Queue&, HostBuffer&); // Part 2
 
 
-void EnqueueDeallocate(Queue&, Tensor&);
-void EnqueueReallocate(Queue&, Tensor&);
+void EnqueueDeallocate(Queue&, Tensor&); // Part 2
+void EnqueueReallocate(Queue&, Tensor&); // TBD at a later time
 
 
-void EnqueueHostToDeviceTransfer(Queue&, Tensor& src, Tensor& dst);
-void EnqueueDeviceToHostTransfer(Queue&, Tensor& src, Tensor& dst);
+void EnqueueHostToDeviceTransfer(Queue&, Tensor& dst, void* src, size_t transfer_size);
+
+void EnqueueDeviceToHostTransfer(Queue&, Tensor& src, void* dst, size_t transfer_size, size_t src_offset = 0);
 
 
 void QueueRecordEvent(Queue&, Event&);
 void QueueWaitForEvent(Queue&, Event&);
 void EventSynchronize(Event&);
+void QueueSynchronize(Queue&);
 
 
 void EnqueueOperation(Queue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
@@ -23,57 +25,57 @@ void EnqueueOperation(Queue&, DeviceOperation&, const std::vector<Tensor>& input
 
 
 // Example
-auto Sqrt =
-   tt::tt_metal::EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}};
-void sqrt(Queue& queue, Tensor& input, Tensor& output) { EnqueueOperation(queue, Sqrt, {input, output}); }
-void sqrt(Tensor& input, Tensor& output) { EnqueueOperation(GetDefaultQueue(), Sqrt, {input, output}); }
+// auto Sqrt =
+//    tt::tt_metal::EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}};
+// void sqrt(Queue& queue, Tensor& input, Tensor& output) { EnqueueOperation(queue, Sqrt, {input, output}); }
+// void sqrt(Tensor& input, Tensor& output) { EnqueueOperation(GetDefaultQueue(), Sqrt, {input, output}); }
 
-void example() {
-
-
-   Tensor host_input_tensor = ...;
+// void example() {
 
 
-   Queue data_queue = GetDefaultQueue();
-   Queue math_queue = CreateNewQueue();
-   Queue third_queue = CreateNewQueue(); // throw error because only 2 queues are supported
-   size_t num_queues = GetNumQueues();
+//    Tensor host_input_tensor = ...;
 
 
-   Event data_transfer_event;
-   Event math_event;
+//    Queue data_queue = GetDefaultQueue();
+//    Queue math_queue = CreateNewQueue();
+//    Queue third_queue = CreateNewQueue(); // throw error because only 2 queues are supported
+//    size_t num_queues = GetNumQueues();
 
 
-   std::shared_ptr<Buffer> device_input_buffer = create_device_buffer(device, size);
-   Tensor device_input_tensor = Tensor{DeviceStorage{device_input_buffer, ...}, ...};
+//    Event data_transfer_event;
+//    Event math_event;
 
 
-   EnqueueAllocateDeviceBuffer(data_queue, device_input_buffer);
-   EnqueueHostToDeviceTransfer(data_queue, host_input_tensor, device_input_tensor);
+//    std::shared_ptr<Buffer> device_input_buffer = create_device_buffer(device, size);
+//    Tensor device_input_tensor = Tensor{DeviceStorage{device_input_buffer, ...}, ...};
 
 
-   std::shared<Buffer> device_output_buffer{device};
-   EnqueueAllocateDeviceBuffer(data_queue, device_output_buffer);
-   Tensor device_output_tensor = Tensor{DeviceStorage{device_output_buffer, ...}, ...};
+//    EnqueueAllocateDeviceBuffer(data_queue, device_input_buffer);
+//    EnqueueHostToDeviceTransfer(data_queue, host_input_tensor, device_input_tensor);
 
 
-   RecordEvent(data_queue, data_transfer_event);
-   WaitForEvent(math_queue, data_transfer_event);
+//    std::shared<Buffer> device_output_buffer{device};
+//    EnqueueAllocateDeviceBuffer(data_queue, device_output_buffer);
+//    Tensor device_output_tensor = Tensor{DeviceStorage{device_output_buffer, ...}, ...};
 
 
-   EnqueueOperation(math_queue, Sqrt, {device_input_tensor}, {device_output_tensor});
-   // OR to run on default_queue
-   sqrt(device_input_tensor, device_output_tensor);
+//    RecordEvent(data_queue, data_transfer_event);
+//    WaitForEvent(math_queue, data_transfer_event);
 
 
-   RecordEvent(math_queue, math_event);
+//    EnqueueOperation(math_queue, Sqrt, {device_input_tensor}, {device_output_tensor});
+//    // OR to run on default_queue
+//    sqrt(device_input_tensor, device_output_tensor);
 
 
-   owned_buffer::Buffer host_output_buffer;
-   EnqueueAllocateHostMemory(data_queue, host_output_buffer);
-   Tensor host_output_tensor = Tensor{OwnedStorage{host_buffer, ...}, ...};
+//    RecordEvent(math_queue, math_event);
 
 
-   WaitForEvent(data_queue, math_event);
-   EnqueueDeviceToHostTransfer(data_queue, device_output_tensor, host_output_tensor);
-}
+//    owned_buffer::Buffer host_output_buffer;
+//  //  EnqueueAllocateHostMemory(data_queue, host_output_buffer); // ???
+//    Tensor host_output_tensor = Tensor{OwnedStorage{host_buffer, ...}, ...};
+
+
+//    WaitForEvent(data_queue, math_event);
+//    EnqueueDeviceToHostTransfer(data_queue, device_output_tensor, host_output_tensor);
+// }
