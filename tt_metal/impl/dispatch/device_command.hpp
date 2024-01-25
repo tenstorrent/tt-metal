@@ -8,6 +8,31 @@
 #include "dev_mem_map.h"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
+struct CommandHeader {
+    uint32_t wrap = 0;
+    uint32_t finish = 0;
+    uint32_t num_workers = 0;
+    uint32_t num_buffer_transfers = 0;
+    uint32_t is_program_buffer = 0;
+    uint32_t stall = 0;
+    uint32_t page_size = 0;
+    uint32_t producer_cb_size = 0;
+    uint32_t consumer_cb_size = 0;
+    uint32_t producer_cb_num_pages = 0;
+    uint32_t consumer_cb_num_pages = 0;
+    uint32_t num_pages = 0;
+    uint32_t num_runtime_arg_pages = 0;
+    uint32_t num_cb_config_pages = 0;
+    uint32_t num_program_pages = 0;
+    uint32_t num_go_signal_pages = 0;
+    uint32_t data_size = 0;
+    uint32_t producer_consumer_transfer_num_pages = 0;
+    uint32_t sharded_buffer_num_cores = 0;
+    uint32_t restart = 0;
+    uint32_t new_issue_queue_size = 0;
+    uint32_t new_completion_queue_size = 0;
+};
+
 class DeviceCommand {
    public:
     DeviceCommand();
@@ -18,7 +43,7 @@ class DeviceCommand {
     //TODO: investigate other num_cores
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
-    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 22;
+    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = sizeof(CommandHeader) / sizeof(uint32_t);
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
@@ -26,32 +51,7 @@ class DeviceCommand {
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
     // Ensure any changes to this device command have asserts modified/extended
-    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 22);
     static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
-
-    // Command header
-    static constexpr uint32_t wrap_idx = 0;
-    static constexpr uint32_t finish_idx = 1;
-    static constexpr uint32_t num_workers_idx = 2;
-    static constexpr uint32_t num_buffer_transfers_idx = 3;
-    static constexpr uint32_t is_program_buffer_idx = 4;
-    static constexpr uint32_t stall_idx = 5;
-    static constexpr uint32_t page_size_idx = 6;
-    static constexpr uint32_t producer_cb_size_idx = 7;
-    static constexpr uint32_t consumer_cb_size_idx = 8;
-    static constexpr uint32_t producer_cb_num_pages_idx = 9;
-    static constexpr uint32_t consumer_cb_num_pages_idx = 10;
-    static constexpr uint32_t num_pages_idx = 11;
-    static constexpr uint32_t num_runtime_arg_pages_idx = 12;
-    static constexpr uint32_t num_cb_config_pages_idx = 13;
-    static constexpr uint32_t num_program_pages_idx = 14;
-    static constexpr uint32_t num_go_signal_pages_idx = 15;
-    static constexpr uint32_t data_size_idx = 16;
-    static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
-    static constexpr uint32_t sharded_buffer_num_cores_idx = 18;
-    static constexpr uint32_t restart_idx = 19;
-    static constexpr uint32_t new_issue_queue_size_idx = 20;
-    static constexpr uint32_t new_completion_queue_size_idx = 21;
 
     // Denotes which portion of the command queue needs to be wrapped
     enum class WrapRegion : uint8_t {
@@ -135,10 +135,9 @@ class DeviceCommand {
         const bool advance,
         const bool linked);
 
-    const std::array<uint32_t, NUM_ENTRIES_IN_DEVICE_COMMAND>& get_desc() const;
+    void* data() const;
 
    private:
-    std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND> desc;
     uint32_t buffer_transfer_idx;
     uint32_t program_transfer_idx;
     void add_buffer_transfer_instruction_preamble(
@@ -152,4 +151,11 @@ class DeviceCommand {
         const uint32_t dst_page_index
         );
     void add_buffer_transfer_instruction_postamble();
+
+    struct packet_ {
+        CommandHeader header;
+        std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND - DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER> data;
+    };
+
+    packet_ packet;
 };
