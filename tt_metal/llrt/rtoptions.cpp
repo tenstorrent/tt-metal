@@ -31,6 +31,9 @@ RunTimeOptions::RunTimeOptions() {
     ParseWatcherEnv();
     ParseDPrintEnv();
 
+    // Test mode has no env var, default is disabled
+    test_mode_enabled = false;
+
     profiler_enabled = false;
 #if defined(PROFILER)
     const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");

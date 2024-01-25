@@ -501,9 +501,14 @@ static void watcher_loop(int sleep_usecs) {
             try {
                 dump(logfile, false);
             } catch (std::runtime_error& e) {
-                watcher::watcher_killed_due_to_error = true;
-                watcher::enabled = false;
-                break;
+                // Depending on whether test mode is enabled, catch and stop server, or re-throw.
+                if (OptionsG.get_test_mode_enabled()) {
+                    watcher::watcher_killed_due_to_error = true;
+                    watcher::enabled = false;
+                    break;
+                } else {
+                    throw e;
+                }
             }
 
             fprintf(logfile, "\n");
