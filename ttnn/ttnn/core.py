@@ -64,13 +64,14 @@ class Tensor(ttl.ttnn.tensor.Tensor):
             device = self.device
         else:
             device = None
+        layout = self.layout
 
         tensor = self
         tensor = to_torch(tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
             tensor, slices
         )
-        tensor = from_torch(tensor, dtype=self.dtype, device=device)
+        tensor = from_torch(tensor, dtype=self.dtype, layout=layout, device=device)
         return tensor
 
     def is_contiguous(self: "Shape") -> bool:
@@ -254,6 +255,7 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
         ttl_input_tensor = tensor.value
         return Tensor(ttl_input_tensor.reshape(shape.value))
 
+    layout = input_tensor.layout
     ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
 
     if input_tensor.is_contiguous():
@@ -279,6 +281,8 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
         ttl_output_tensor = ttl.tensor.reshape(ttl_input_tensor, w, z, y, x)
         output_tensor = Tensor(ttl_output_tensor)
         output_tensor = ttnn_reshape(output_tensor, shape)
+        # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
+        # output_tensor = to_layout(output_tensor, layout)
         return output_tensor
     else:
 
@@ -296,6 +300,8 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
         tensor = to_torch(tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
         tensor = from_torch(tensor, dtype=input_tensor.dtype, device=device)
+        # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
+        # tensor = to_layout(tensor, layout)
         tensor = ttnn_reshape(tensor, shape)
 
         return tensor

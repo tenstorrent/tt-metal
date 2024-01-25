@@ -140,7 +140,10 @@ def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
     x = ttnn.permute(x, (0, 2, 1, 3))
 
     # batch_size, seq_length, num_heads, head_dim -> batch_size, seq_length, num_heads * head_dim
-    return ttnn.reshape(x, shape=(batch_size, seq_length, num_heads * head_size))
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, shape=(batch_size, seq_length, num_heads * head_size))
+    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    return x
 
 
 def compute_context_layer(attention_probs, value_layer):
