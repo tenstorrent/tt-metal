@@ -21,7 +21,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          fetch-tags: true
+          fetch-depth: 0
       - name: Get is-release-candidate
         id: get-is-release-candidate
         run: |
