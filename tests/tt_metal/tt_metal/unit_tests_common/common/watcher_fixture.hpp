@@ -27,16 +27,19 @@ protected:
     int  watcher_previous_interval;
     bool watcher_previous_dump_all;
     bool watcher_previous_append;
+    bool test_mode_previous;
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::llrt::OptionsG.get_watcher_enabled();
         watcher_previous_interval = tt::llrt::OptionsG.get_watcher_interval();
         watcher_previous_dump_all = tt::llrt::OptionsG.get_watcher_dump_all();
         watcher_previous_append = tt::llrt::OptionsG.get_watcher_append();
+        test_mode_previous = tt::llrt::OptionsG.get_test_mode_enabled();
         tt::llrt::OptionsG.set_watcher_enabled(true);
         tt::llrt::OptionsG.set_watcher_interval(interval_ms);
         tt::llrt::OptionsG.set_watcher_dump_all(false);
         tt::llrt::OptionsG.set_watcher_append(false);
+        tt::llrt::OptionsG.set_test_mode_enabled(true);
         tt::llrt::watcher_clear_log();
 
         // Parent class initializes devices and any necessary flags
@@ -55,6 +58,7 @@ protected:
         tt::llrt::OptionsG.set_watcher_interval(watcher_previous_interval);
         tt::llrt::OptionsG.set_watcher_dump_all(watcher_previous_dump_all);
         tt::llrt::OptionsG.set_watcher_append(watcher_previous_append);
+        tt::llrt::OptionsG.set_test_mode_enabled(test_mode_previous);
         tt::llrt::watcher_server_clear_error_flag();
     }
 

@@ -27,6 +27,7 @@ protected:
         tt::llrt::OptionsG.set_dprint_all_chips(true);
         // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
+        tt::llrt::OptionsG.set_test_mode_enabled(true);
 
         // Parent class initializes devices and any necessary flags
         CommonFixture::SetUp();
@@ -43,6 +44,7 @@ protected:
         tt::llrt::OptionsG.set_dprint_cores({});
         tt::llrt::OptionsG.set_dprint_all_cores(false);
         tt::llrt::OptionsG.set_dprint_file_name("");
+        tt::llrt::OptionsG.set_test_mode_enabled(false);
     }
 
     void RunTestOnDevice(

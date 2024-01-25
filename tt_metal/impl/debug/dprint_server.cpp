@@ -422,6 +422,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     to_string(wait_signal) + "\n";
                 stream << error_str << flush;
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
+                TT_THROW(error_str);
                 server_killed_due_to_hang_ = true;
                 return false;
             }
@@ -614,12 +615,25 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
                         if (!CheckInitMagicCleared(chip_id, core, hart_index))
                             continue;
 
-                        new_data_this_iter |= PeekOneHartNonBlocking(
-                            chip_id,
-                            core,
-                            hart_index,
-                            new_data_this_iter
-                        );
+                        try {
+                            new_data_this_iter |= PeekOneHartNonBlocking(
+                                chip_id,
+                                core,
+                                hart_index,
+                                new_data_this_iter
+                            );
+                        } catch (std::runtime_error& e) {
+                            // Depending on if test mode is enabled, catch and stop server, or
+                            // re-throw the exception.
+                            if (tt::llrt::OptionsG.get_test_mode_enabled()) {
+                                server_killed_due_to_hang_ = true;
+                                return; // Stop the print loop
+                            } else {
+                                // Re-throw for instant exit
+                                throw e;
+                            }
+
+                        }
 
                         // If this read detected a print hang, stop processing prints.
                         if (server_killed_due_to_hang_)
