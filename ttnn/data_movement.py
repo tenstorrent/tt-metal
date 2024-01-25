@@ -236,7 +236,7 @@ def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
     return torch.repeat_interleave(ttnn.to_torch(tensor), repeats, dim=dim)
 
 
-# @decorate_operation(torch_function=_torch_concat)
+@decorate_operation(torch_function=_torch_repeat_interleave)
 def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
     repeat_interleave(tensors: ttnn.Tensor, repeats : Union[ttnn.Tensor,int], dim: int = 0) -> ttnn.Tensor
@@ -260,13 +260,13 @@ def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim
     """
 
     if not isinstance(tensor, ttnn.Tensor):
-        raise RuntimeError("Expected tensor argument to be a ttnn.Tensor")
+        raise RuntimeError("ttnn: Expected tensor argument to be a ttnn.Tensor")
 
     if not ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE):
-        raise RuntimeError("Tensor must be on device!")
+        raise RuntimeError("ttnn: Tensor must be on device!")
 
     if not isinstance(repeats, int) and not isinstance(repeats, ttnn.Tensor):
-        raise RuntimeError("Expected repeat to either be an int or a ttnn.Tensor")
+        raise RuntimeError("ttnn: Expected repeat to either be an int or a ttnn.Tensor")
 
     # For now, don't require the repeat tensor to be on device.
     # if type(repeats) == type(tensor) and not ttnn.has_storage_type_of(repeats, ttl.tensor.StorageType.DEVICE):
@@ -276,7 +276,7 @@ def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim
     if dim >= rank_of_tensor:
         dimension_range = f"[{-rank_of_tensor}, {rank_of_tensor - 1}]"
         raise RuntimeError(
-            f"TTNN: Dimension out of range (expected to be in range of {dimension_range}, but got {dim})"
+            f"ttnn: Dimension out of range (expected to be in range of {dimension_range}, but got {dim})"
         )
 
     def custom_numel(tensor):
@@ -285,16 +285,39 @@ def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim
             total_elements *= dimension
         return total_elements
 
-    if isinstance(repeats, ttnn.Tensor) and (tensor.shape[dim] != custom_numel(repeats)):
-        raise RuntimeError("TTNN: repeats must have the same size as input along dim")
+    if isinstance(repeats, ttnn.Tensor):
+        if tensor.shape[dim] != custom_numel(repeats):
+            raise RuntimeError("ttnn: repeats must have the same size as input along dim")
+        elif len(repeats.shape) != 1:
+            raise RuntimeError("ttnn: repeats must be 0-dim or 1-dim tensor")
 
     dtype = tensor.dtype
     device = tensor.device
     layout = tensor.layout
+    rank = len(tensor.shape)
+    if dtype == ttnn.bfloat16 and rank == 4 and dim != 2 and dim != 3:
+        ttl_input_tensor = tensor.value
+        output_tensor = ttnn.Tensor(ttl.tensor.repeat_interleave(ttl_input_tensor, repeats, dim=dim))
+        *batch, _, _ = output_tensor.shape
+        *_, h, w = tensor.shape
+        *_, padded_h, padded_w = tensor.shape.padded()
+        if dim == 2:
+            *_, h, _ = output_tensor.shape
+            *_, padded_h, _ = output_tensor.shape.padded()
+        elif dim == 3:
+            *_, _, w = output_tensor.shape
+            *_, _, padded_w = output_tensor.shape.padded()
+        output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
+        return output_tensor
+    else:
 
-    output_tensor = _torch_repeat_interleave(tensor, repeats, dim=dim)
+        def torch_repeat_interleave(tensor, repeats, dim=dim):
+            return _torch_repeat_interleave(tensor, repeats, dim)
 
-    return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
+        output_tensor = ttl.tensor.decorate_external_operation(
+            torch_repeat_interleave, function_name="torch_repeat_interleave"
+        )(tensor, repeats, dim=dim)
+        return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
 
 
 __all__ = []

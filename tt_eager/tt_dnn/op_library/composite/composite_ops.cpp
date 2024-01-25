@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/optimizer/optimizer_ops.hpp"
@@ -1308,6 +1309,170 @@ Tensor repeat(const Tensor& input_a, const Shape& shape_b, const MemoryConfig& o
     return operation::decorate_as_composite(__func__, _repeat)(input_a, shape_b, output_mem_config);
 }
 
+
+// Argmax returns the index of maximum element in the tensor
+Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_mem_config) {
+
+    auto& input_shape = input_a.shape();
+    TT_FATAL(input_shape.rank() == 4,"supported for rank-4 tensors at this time");
+
+    uint32_t dim = input_shape.get_normalized_index(_dim);
+    int size = input_a.volume();
+
+    TT_FATAL((input_shape[0] == 1 && input_shape[1] == 1), "Unsupported shapes, supported shapes [1, 1, N, M]");
+    if (dim == (input_shape.rank() - 1))
+    {
+        Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::W);
+        Tensor max_tensor = zeros_like(input_a, output_mem_config);
+        max_tensor = bcast(max_tensor, max_val,  BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
+        max_val.deallocate();
+        Tensor cmp_results = eq(input_a, max_tensor, std::nullopt, output_mem_config);
+        max_tensor.deallocate();
+        Tensor max_indices =  mul(cmp_results ,tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor midx = full_like(max_indices, size);
+        Tensor result = where(eqz(max_indices), midx, max_indices, output_mem_config);
+        max_indices.deallocate();
+        result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::W);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result, output_mem_config);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
+        result.deallocate();
+        std::vector<int64_t> permute_dims = {0, 1, 3, 2};
+        Tensor transpose_res = permute(res_index,permute_dims,output_mem_config);
+        return transpose_res;
+    }
+    else if (dim == (input_shape.rank() - 2))
+    {
+        Tensor tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::H);
+        Tensor max_tensor = zeros_like(input_a, output_mem_config);
+        max_tensor = bcast(max_tensor, max_val,  BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        max_val.deallocate();
+        Tensor cmp_results = eq(input_a, max_tensor, std::nullopt, output_mem_config);
+        max_tensor.deallocate();
+        Tensor max_indices =  mul(cmp_results ,tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor midx = full_like(max_indices, size);
+        Tensor result = where(eqz(max_indices), midx, max_indices, output_mem_config);
+        max_indices.deallocate();
+        result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::H);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result, output_mem_config);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        return res_index;
+    }
+    else{
+        //TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum valu index for [1 x 1 x N x M]
+        // auto& input_shape = input_a.shape();
+        // int size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
+        Tensor tindex = tt::numpy::index_hw<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::HW);
+        Tensor max_tensor = zeros_like(input_a, output_mem_config);
+        max_tensor = bcast(max_tensor, max_val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        max_val.deallocate();
+        Tensor cmp_results = eq(input_a, max_tensor, std::nullopt, output_mem_config);
+        max_tensor.deallocate();
+        Tensor max_indices =  mul(cmp_results ,tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor result = full_like(max_indices, size);
+        result = where(eqz(max_indices), result, max_indices, output_mem_config);
+        max_indices.deallocate();
+        result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::HW);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result, output_mem_config);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        return res_index;
+    }
+
+}
+Tensor argmax(const Tensor& input_a, int64_t dim, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _argmax)(input_a, dim, output_mem_config);
+}
+
+
+// Argmax returns the index of maximum element in the tensor
+Tensor _argmin(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_mem_config) {
+
+    auto& input_shape = input_a.shape();
+    TT_FATAL(input_shape.rank() == 4,"supported for rank-4 tensors at this time");
+
+    uint32_t dim = input_shape.get_normalized_index(_dim);
+    int size = input_a.volume();
+
+    TT_FATAL((input_shape[0] == 1 && input_shape[1] == 1), "Unsupported shapes, supported shapes [1, 1, N, M]");
+
+    if (dim == (input_shape.rank() - 1))
+    {
+        Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor min_val = reduce(input_a, ReduceOpMath::MIN, ReduceOpDim::W);
+        Tensor min_tensor = zeros_like(input_a, output_mem_config);
+        min_tensor = bcast(min_tensor, min_val,  BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
+        min_val.deallocate();
+        Tensor cmp_results = eq(input_a, min_tensor, std::nullopt, output_mem_config);
+        min_tensor.deallocate();
+        Tensor min_indices =  mul(cmp_results ,tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor midx = full_like(min_indices, size);
+        Tensor result = where(eqz(min_indices), midx, min_indices);
+        min_indices.deallocate();
+        result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::W);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
+        result.deallocate();
+        std::vector<int64_t> permute_dims = {0, 1, 3, 2};
+        Tensor transpose_res = permute(res_index,permute_dims,output_mem_config);
+        return transpose_res;
+    }
+    else if (dim == (input_shape.rank() - 2))
+    {
+        Tensor tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor min_val = reduce(input_a, ReduceOpMath::MIN, ReduceOpDim::H);
+        Tensor min_tensor = zeros_like(input_a, output_mem_config);
+        min_tensor = bcast(min_tensor, min_val,  BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        min_val.deallocate();
+        Tensor cmp_results = eq(input_a, min_tensor, std::nullopt, output_mem_config);
+        min_tensor.deallocate();
+        Tensor min_indices =  mul(cmp_results ,tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor midx = full_like(min_indices, size);
+        Tensor result = where(eqz(min_indices), midx, min_indices);
+        min_indices.deallocate();
+        result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::H);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        return res_index;
+    }
+    else{
+        // TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum valu index for [1 x 1 x N x M]
+        // auto& input_shape = input_a.shape();
+        // int size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
+        Tensor tindex = tt::numpy::index_hw<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor min_val = reduce(input_a, ReduceOpMath::MIN, ReduceOpDim::HW);
+        Tensor min_tensor = zeros_like(input_a, output_mem_config);
+        min_tensor = bcast(min_tensor, min_val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        min_val.deallocate();
+        Tensor cmp_results = eq(input_a, min_tensor, std::nullopt, output_mem_config);
+        min_tensor.deallocate();
+        Tensor min_indices =  mul(cmp_results ,tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor result = full_like(min_indices, size);
+        result = where(eqz(min_indices), result, min_indices);
+        min_indices.deallocate();
+        result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::HW);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        return res_index;
+    }
+
+}
+Tensor argmin(const Tensor& input_a, int64_t dim,const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _argmin)(input_a, dim, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
