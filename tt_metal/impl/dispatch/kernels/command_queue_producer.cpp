@@ -29,8 +29,6 @@ void kernel_main() {
     while (true) {
 
         issue_queue_wait_front();
-
-        // Read in command
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
         noc_async_read(src_noc_addr, command_start_addr, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));
@@ -52,7 +50,13 @@ void kernel_main() {
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
         uint32_t restart = command_ptr[DeviceCommand::restart_idx];
 
-        if (restart) {
+        if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
+            // Basically popfront without the extra conditional
+            cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
+            cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
+            notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
+            continue;
+        } else if (restart) {
             // Restart read/write pointers
             issue_queue_size = command_ptr[DeviceCommand::new_issue_queue_size_idx];
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CQ_ISSUE_WRITE_PTR)[0] = issue_queue_start_addr >> 4;
@@ -61,16 +65,9 @@ void kernel_main() {
             wait_consumer_space_available(db_semaphore_addr);
             relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
             update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr);
-            db_buf_switch = false; // Restart the db buf switch as well
-            continue;
-        } else if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
-            // Basically popfront without the extra conditional
-            cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
-            cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
-            notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
+            db_buf_switch = false; // Resteart the db buf switch as well
             continue;
         }
-
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         wait_consumer_space_available(db_semaphore_addr);
         program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
