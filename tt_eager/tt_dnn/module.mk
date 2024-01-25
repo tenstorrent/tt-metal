@@ -89,6 +89,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_w/moreh_sum_w.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc/moreh_sum_nc.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_op.cpp \
+	tt_eager/tt_dnn/op_library/prod/prod_nc/prod_nc.cpp \
+	tt_eager/tt_dnn/op_library/prod/prod_nc_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/multi_core/layernorm_op_multi_core.cpp \
