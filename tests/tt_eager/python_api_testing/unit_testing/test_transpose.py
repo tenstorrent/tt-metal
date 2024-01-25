@@ -186,7 +186,6 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
     mem_config = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
     )
-    # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     transpose(
         input_shape,
         device,
@@ -195,7 +194,7 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         input_mem_config=mem_config,
         output_mem_config=mem_config,
         input_dtype=input_dtype,
-        expected_program_cache_size=2,
+        expected_program_cache_size=1,
     )
 
     # changing shape
@@ -222,7 +221,6 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
     )
 
-    # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     transpose(
         input_shape,
         device,
@@ -231,5 +229,5 @@ def test_transpose_wh_sharded_program_cache(device, use_program_cache):
         input_mem_config=mem_config,
         output_mem_config=mem_config,
         input_dtype=input_dtype,
-        expected_program_cache_size=3,
+        expected_program_cache_size=1,
     )

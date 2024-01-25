@@ -28,7 +28,7 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     if (this->dim == TransposeOpDim::WH) {
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            const auto& shard_spec = input_tensor.shard_spec().value();
+            const auto shard_spec = input_tensor.shard_spec().value();
             TT_FATAL(shard_spec.shape[1] == W);
             TT_FATAL(shard_spec.shape[0] % H == 0);
             TT_FATAL(this->output_mem_config.is_sharded());
@@ -163,7 +163,7 @@ const operation::Hash Transpose::compute_program_hash(
     auto output_mem_config = this->output_mem_config;
     auto dtype = input_tensor.dtype();
     return operation::hash_operation<Transpose>(
-        input_mem_config, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
+        input_mem_config.memory_layout, input_mem_config.buffer_type, output_mem_config.memory_layout, output_mem_config.buffer_type, dtype, this->dim, get_parallelization_strategy(input_tensors));
 }
 
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {

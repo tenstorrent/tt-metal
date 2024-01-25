@@ -228,10 +228,13 @@ const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>
         this->transpose_hw,
         this->output_mem_config,
         this->output_dtype,
-        input_tensors.at(0).memory_config(),
+        input_tensors.at(0).memory_config().memory_layout,
+        input_tensors.at(0).memory_config().buffer_type,
         input_tensors.at(0).dtype(),
-        input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype());
+        input_tensors.at(1).memory_config().memory_layout,
+        input_tensors.at(1).memory_config().buffer_type,
+        input_tensors.at(1).dtype()
+        );
 }
 
 
