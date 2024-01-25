@@ -1002,3 +1002,39 @@ def binary_bitwise_left_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_left_shift(input, other)
+
+
+@convert_tt_tensors_wrapper
+def torch_argmax(input: ttl_tensor.Tensor, dim: int = None, keepdim: bool = False) -> ttl_tensor.Tensor:
+    """
+    Returns the indices of the maximum values of a tensor along a dimension.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | dim        | Dimension along which to compute the argmax   | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | keepdim    | Whether to retain the dimensionality of input | bool        |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.argmax(input, dim=dim, keepdim=keepdim)
+
+
+@convert_tt_tensors_wrapper
+def torch_argmin(input: ttl_tensor.Tensor, dim: int, keepdim: bool) -> ttl_tensor.Tensor:
+    """
+    Returns the indices of the minimum values of a tensor along a dimension.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | dim        | Dimension along which to compute the argmin   | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | keepdim    | Whether to retain the dimensionality of input | bool        |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.argmin(input, dim=dim, keepdim=keepdim)
