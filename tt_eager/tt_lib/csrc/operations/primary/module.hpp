@@ -21,6 +21,7 @@
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
+#include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 
 namespace py = pybind11;
 
@@ -546,6 +547,25 @@ void py_module(py::module& m_primary) {
         py::kw_only(),
         py::arg("dim").noconvert(),
         "Performs cumsum backward operation. Returns an input_grad tensor.");
+
+    m_primary.def(
+        "moreh_arange",
+        &moreh_arange,
+        py::arg("start"),
+        py::arg("end"),
+        py::arg("step"),
+        py::arg("any").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs an arange operation. Returns an output tensor.");
+
+    m_primary.def(
+        "moreh_arange_inplace",
+        &moreh_arange_inplace,
+        py::arg("input_tensor").noconvert(),
+        py::arg("start"),
+        py::arg("end"),
+        py::arg("step"),
+        "Performs an arange operation. Returns an output tensor.");
 }
 
 }  // namespace
