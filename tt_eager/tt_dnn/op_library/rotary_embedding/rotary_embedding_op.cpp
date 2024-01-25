@@ -139,7 +139,7 @@ tt::stl::reflection::Attributes RotaryEmbedding::attributes() const {
 }
 
 const operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    return operation::hash_operation<RotaryEmbedding>(this->seq_len, this->output_mem_config, input_tensors);
+    return operation::hash_operation<RotaryEmbedding>(this->seq_len, this->output_mem_config.memory_layout, this->output_mem_config.buffer_type, input_tensors);
 }
 
 }  // namespace tt_metal
