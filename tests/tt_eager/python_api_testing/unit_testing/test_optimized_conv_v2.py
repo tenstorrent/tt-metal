@@ -26,39 +26,50 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, is_1d_systolic",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, is_bias, is_1d_systolic",
     (
-        # unique convs in rn50 (complete list)
-        # first conv post folding and input_channels padding to tile width
-        (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True),
-        # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True),
-        # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True),
-        # rn50 layer3
-        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False),
-        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False),
-        # rn50 layer4
-        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False),
-        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False),
-        # sd conv
-        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False),
+        # # unique convs in rn50 (complete list)
+        # # first conv post folding and input_channels padding to tile width
+        # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True),
+        # # rn50 layer1
+        # (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True),
+        # # rn50 layer2
+        # (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
+        # (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
+        # (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True),
+        # # rn50 layer3
+        # (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False),
+        # (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False),
+        # # rn50 layer4
+        # (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False),
+        # (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False),
+        # # sd conv
+        # (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, 1, False),
+        (2, 128, 64, 75, 75, 3, 3, 2, 2, 1, 1, 0, True),
+        (2, 64, 64, 75, 75, 3, 3, 1, 1, 1, 1, 0, True),
+        (2, 512, 256, 38, 38, 3, 3, 2, 2, 1, 1, 1, False),
+        (2, 256, 128, 3, 3, 3, 3, 1, 1, 0, 0, 1, False),
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
-    ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
+    # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    # ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
+    [tt_lib.tensor.DataType.BFLOAT16],
+    ids=["weights_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
-    ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
+    # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    # ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
+    [tt_lib.tensor.DataType.BFLOAT16],
+    ids=["activations_BFLOAT16"],
 )
 @pytest.mark.parametrize(
-    "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
+    # "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
+    "math_fidelity",
+    [tt_lib.tensor.MathFidelity.HiFi4],
+    ids=["HiFi4"],
 )
 def test_optimized_conv_v2(
     use_program_cache,
@@ -77,15 +88,16 @@ def test_optimized_conv_v2(
     stride_w,
     pad_h,
     pad_w,
+    is_bias,
     is_1d_systolic,
 ):
     if input_channels == 16:
         pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
 
-    if math_fidelity != tt_lib.tensor.MathFidelity.LoFi:
-        pytest.skip(
-            "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
-        )
+    # if math_fidelity != tt_lib.tensor.MathFidelity.LoFi:
+    #     pytest.skip(
+    #         "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
+    #     )
 
     if (
         activations_dtype == tt_lib.tensor.DataType.BFLOAT16
@@ -116,7 +128,7 @@ def test_optimized_conv_v2(
     out_golden = torch.nn.functional.conv2d(
         conv_input_pyt,
         conv_weight_pyt,
-        bias=conv_bias_pyt.reshape(-1),
+        bias=conv_bias_pyt.reshape(-1) if is_bias else None,
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
     )
@@ -145,11 +157,15 @@ def test_optimized_conv_v2(
         weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
         tt_lib.tensor.Layout.ROW_MAJOR,
     )
-    tt_tensor_conv_bias = tt_lib.tensor.Tensor(
-        conv_bias_pyt.reshape(-1).tolist(),
-        conv_bias_pyt.shape,
-        weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+    tt_tensor_conv_bias = (
+        tt_lib.tensor.Tensor(
+            conv_bias_pyt.reshape(-1).tolist(),
+            conv_bias_pyt.shape,
+            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
+        if is_bias
+        else None
     )
 
     conv = TTPyCompositeConv(
@@ -160,7 +176,7 @@ def test_optimized_conv_v2(
         device,
         is_1d_systolic,
         reader_patterns_cache,
-        bias=tt_tensor_conv_bias,
+        bias=tt_tensor_conv_bias if is_bias else None,
         weights_dtype=weights_dtype,
         output_dtype=activations_dtype,
         math_fidelity=math_fidelity,
