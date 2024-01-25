@@ -79,7 +79,6 @@ def cross_attention(
     query = ttnn.matmul(hidden_states, query_weight)
 
     query = head_to_batch_dim(query)
-
     encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
 
     key_weight = parameters.to_k.weight
