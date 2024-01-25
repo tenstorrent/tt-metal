@@ -22,6 +22,7 @@
 #include "tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
 #include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
+#include "tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 
 namespace py = pybind11;
 
@@ -566,6 +567,22 @@ void py_module(py::module& m_primary) {
         py::arg("end"),
         py::arg("step"),
         "Performs an arange operation. Returns an output tensor.");
+
+    m_primary.def(
+        "moreh_sgd",
+        &moreh_sgd,
+        py::arg("param_in").noconvert(),
+        py::arg("grad").noconvert(),
+        py::arg("momentum_buffer_in").noconvert() = std::nullopt,
+        py::arg("param_out").noconvert(),
+        py::arg("momentum_buffer_out").noconvert() = std::nullopt,
+        py::arg("lr").noconvert(),
+        py::arg("momentum").noconvert(),
+        py::arg("dampening").noconvert(),
+        py::arg("weight_decay").noconvert(),
+        py::arg("nesterov").noconvert(),
+        py::arg("momentum_initialized").noconvert(),
+        "Performs a SGD operation.");
 }
 
 }  // namespace
