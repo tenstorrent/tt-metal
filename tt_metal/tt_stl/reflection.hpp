@@ -199,16 +199,17 @@ Attributes get_attributes(const T& object) {
     if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
         constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
         tt::stl::reflection::Attributes attributes;
-        [&object, &attributes]<size_t... Ns>(std::index_sequence<Ns...>) {
-            (
-                [&object, &attributes] {
-                    const auto& attribute_name = std::get<Ns>(object.attribute_names);
-                    const auto& attribute = std::get<Ns>(object.attribute_values());
-                    attributes.push_back({attribute_name, attribute});
-                }(),
-                ...);
-        }(std::make_index_sequence<num_attributes>{});
-        return attributes;
+        const auto attribute_values = object.attribute_values();
+            [&object, &attributes, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&object, &attributes, &attribute_values] {
+                        const auto& attribute_name = std::get<Ns>(object.attribute_names);
+                        const auto& attribute = std::get<Ns>(attribute_values);
+                        attributes.push_back({attribute_name, attribute});
+                    }(),
+                    ...);
+            }(std::make_index_sequence<num_attributes>{});
+            return attributes;
     } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
         return object.attributes();
     } else {
@@ -248,10 +249,11 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
         os << "(";
 
         if constexpr (num_attributes > 0) {
-            [&os, &object]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+            const auto attribute_values = object.attribute_values();
+            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
                 (
-                    [&os, &object] {
-                        const auto& attribute = std::get<Ns>(object.attribute_values());
+                    [&os, &object, &attribute_values] {
+                        const auto& attribute = std::get<Ns>(attribute_values);
                         os << std::get<Ns>(object.attribute_names);
                         os << "=";
                         os << attribute;
@@ -260,7 +262,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
                     ...);
             }(std::make_index_sequence<num_attributes - 1>{});
 
-            const auto& attribute = std::get<num_attributes - 1>(object.attribute_values());
+            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
             os << std::get<num_attributes - 1>(object.attribute_names);
             os << "=";
             os << attribute;
