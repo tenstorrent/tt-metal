@@ -315,7 +315,7 @@ def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     [(2, np.array([8192, 32768, 131072, 524288, 2097152, 8388608]), np.array([33554432, 134217728, 536870912]))],
 )
 def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/H2D_DRAM_Bandwidth.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_H2D_DRAM_Bandwidth.csv"
     header = ["Transfer Size", "WriteToDeviceDRAMChannel", "WriteToBuffer", "EnqueueWriteBuffer"]
     data = []
     for test_point in test_vector_small:
@@ -339,7 +339,7 @@ def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
     [(2, np.array([8192, 32768, 131072, 524288, 2097152, 8388608]), np.array([33554432, 134217728, 536870912]))],
 )
 def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/D2H_DRAM_Bandwidth.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_D2H_DRAM_Bandwidth.csv"
     header = ["Transfer Size", "ReadFromDeviceDRAMChannel", "ReadFromBuffer", "EnqueueReadBuffer"]
     data = []
     for test_point in test_vector_small:
@@ -366,7 +366,7 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
     ],
 )
 def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/H2D_L1_Bandwidth.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_H2D_L1_Bandwidth.csv"
     header = ["Transfer Size", "WriteToDeviceL1", "WriteToBuffer", "EnqueueWriteBuffer"]
     data = []
     for test_point in test_vector:
@@ -390,7 +390,7 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/D2H_L1_Bandwidth.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_D2H_L1_Bandwidth.csv"
     header = ["Transfer Size", "ReadFromDeviceL1", "ReadFromBuffer", "EnqueueReadBuffer"]
     data = []
     for test_point in test_vector:
@@ -414,7 +414,7 @@ def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
     ],
 )
 def test_noc(arch, r, c, nt, test_vector):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/NoC_Read_Performance.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_NoC_Read_Performance.csv"
     header = [
         "Requests",
         "Local L1 (min)",
@@ -451,7 +451,7 @@ def test_noc(arch, r, c, nt, test_vector):
     ],
 )
 def test_matmul_dram(arch, freq, r, c, test_vector):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/Matmul_DRAM.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_DRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
     data = []
     for vec in test_vector:
@@ -478,7 +478,7 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
     ],
 )
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
-    file_name = PROFILER_LOGS_DIR / "moreh_old/Matmul_SRAM.csv"
+    file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_SRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
     data = []
     for vec in test_vector_global:
