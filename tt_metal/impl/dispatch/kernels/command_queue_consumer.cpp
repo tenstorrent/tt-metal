@@ -53,16 +53,16 @@ void kernel_main() {
         uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
         uint32_t restart = command_ptr[DeviceCommand::restart_idx];
 
-        if (restart) {
+        if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
+            cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
+            cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
+            notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
+            noc_async_write_barrier(); // Barrier for now
+        } else if (restart) {
             completion_queue_size = command_ptr[DeviceCommand::new_completion_queue_size_idx];
             setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
             db_buf_switch = false;
             noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
-            notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
-            noc_async_write_barrier(); // Barrier for now
-        } else if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
-            cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
-            cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
             notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
             noc_async_write_barrier(); // Barrier for now
         } else if (is_program) {
