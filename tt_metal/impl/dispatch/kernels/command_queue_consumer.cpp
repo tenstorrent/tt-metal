@@ -50,6 +50,7 @@ void kernel_main() {
         uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
         uint32_t num_pages = header->num_pages;
         uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+        bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t wrap = header->wrap;
         uint32_t restart = header->restart;
@@ -71,7 +72,7 @@ void kernel_main() {
             wait_for_program_completion(num_workers);
         } else {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
-            write_buffers<host_completion_queue_write_ptr_addr>(command_ptr, completion_queue_start_addr, num_buffer_transfers,  sharded_buffer_num_cores, consumer_cb_size, consumer_cb_num_pages, producer_noc_encoding, producer_consumer_transfer_num_pages, db_buf_switch);
+            write_buffers<host_completion_queue_write_ptr_addr>(command_ptr, completion_queue_start_addr, num_buffer_transfers,  is_sharded, sharded_buffer_num_cores, consumer_cb_size, consumer_cb_num_pages, producer_noc_encoding, producer_consumer_transfer_num_pages, db_buf_switch);
         }
 
         if (finish) {

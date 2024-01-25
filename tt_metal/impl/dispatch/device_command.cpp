@@ -12,8 +12,6 @@ DeviceCommand::DeviceCommand() {
     this->buffer_transfer_idx = 0;
     this->program_transfer_idx = this->buffer_transfer_idx + DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS *
                                                                       DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
-    // Not sure why this the default, but not changing behaviour
-    this->set_sharded_buffer_num_cores(1);
 }
 
 void DeviceCommand::set_restart() { this->packet.header.restart = 1; }
@@ -45,6 +43,11 @@ void DeviceCommand::set_consumer_cb_num_pages(const uint32_t cb_num_pages) { thi
 void DeviceCommand::set_num_pages(uint32_t num_pages) { this->packet.header.num_pages = num_pages; }
 
 void DeviceCommand::set_sharded_buffer_num_cores(uint32_t num_cores) { this->packet.header.sharded_buffer_num_cores = num_cores; }
+
+void DeviceCommand::set_buffer_type(const DeviceCommand::BufferType buffer_type) {
+    this->packet.header.buffer_type = (uint32_t)buffer_type;
+}
+
 
 void DeviceCommand::set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages) {
     switch (transfer_type) {

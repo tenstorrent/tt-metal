@@ -45,8 +45,6 @@ class TestUpdateCache:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(num_users // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            if num_cores == 1:
-                pytest.skip("Issue #4706: Can't write 1 core sharded tensors directly to device")
             shard_grid = ttl.tensor.CoreRangeSet(
                 ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
