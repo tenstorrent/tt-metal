@@ -4,7 +4,10 @@
 
 from typing import Tuple, Union, Dict
 
+import tt_lib as ttl
+
 import ttnn.core as ttnn
+from ttnn.decorators import decorate_operation
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     TTPyMaxPool,
@@ -81,3 +84,21 @@ class MaxPool2D:
 
     def copy_output_from_device(self, output: ttnn.Tensor):
         return ttnn.Tensor(self.max_pool.copy_output_from_device(output.value))
+
+
+def _torch_average_pool2d(input_tensor: ttnn.Tensor):
+    import torch
+
+    output_size = (1, 1)
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    return torch.nn.AdaptiveAvgPool2d(output_size)(input_tensor)
+
+
+@decorate_operation(torch_function=_torch_average_pool2d)
+def average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    output = ttl.tensor.average_pool_2d(input_tensor.value)
+
+    return ttnn.Tensor(output)
