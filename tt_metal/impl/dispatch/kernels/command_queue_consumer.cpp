@@ -40,18 +40,19 @@ void kernel_main() {
         uint32_t program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
 
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
-        uint32_t finish = command_ptr[DeviceCommand::finish_idx];       // Whether to notify the host that we have finished
-        uint32_t num_workers = command_ptr[DeviceCommand::num_workers_idx];  // If num_workers > 0, it means we are launching a program
-        uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];   // How many WriteBuffer commands we are running
-        uint32_t is_program = command_ptr[DeviceCommand::is_program_buffer_idx];
-        uint32_t page_size = command_ptr[DeviceCommand::page_size_idx];
-        uint32_t consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
-        uint32_t consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
-        uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
-        uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
-        uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
-        uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
-        uint32_t restart = command_ptr[DeviceCommand::restart_idx];
+        volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
+        uint32_t finish = header->finish;
+        uint32_t num_workers = header->num_workers;
+        uint32_t num_buffer_transfers = header->num_buffer_transfers;
+        uint32_t is_program = header->is_program_buffer;
+        uint32_t page_size = header->page_size;
+        uint32_t consumer_cb_size = header->consumer_cb_size;
+        uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
+        uint32_t num_pages = header->num_pages;
+        uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+        uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
+        uint32_t wrap = header->wrap;
+        uint32_t restart = header->restart;
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
             cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
@@ -59,7 +60,7 @@ void kernel_main() {
             notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
             noc_async_write_barrier(); // Barrier for now
         } else if (restart) {
-            completion_queue_size = command_ptr[DeviceCommand::new_completion_queue_size_idx];
+            completion_queue_size = header->new_completion_queue_size;
             setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
             db_buf_switch = false;
             noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);

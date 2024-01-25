@@ -331,7 +331,7 @@ void EnqueueRestartCommand::process() {
     const DeviceCommand cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_channel);
-    this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
     this->manager.issue_queue_push_back(cmd_size, false, this->command_queue_channel);
 }
 
@@ -448,7 +448,7 @@ void EnqueueReadBufferCommand::process() {
     const DeviceCommand cmd = this->assemble_device_command(this->read_buffer_addr);
 
     this->manager.issue_queue_reserve_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, this->command_queue_id);
-    this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
     this->manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
 }
 
@@ -578,7 +578,7 @@ void EnqueueWriteBufferCommand::process() {
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
 
-    this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
     uint32_t unpadded_src_offset = this->dst_page_index * this->buffer.page_size();
 
     if (this->buffer.page_size() % 32 != 0 and this->buffer.page_size() != this->buffer.size()) {
@@ -594,8 +594,6 @@ void EnqueueWriteBufferCommand::process() {
     }
 
     this->manager.issue_queue_push_back(cmd_size, LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
-
-    auto cmd_desc = cmd.get_desc();
 }
 
 EnqueueProgramCommand::EnqueueProgramCommand(
@@ -733,7 +731,7 @@ void EnqueueProgramCommand::process() {
     uint32_t data_size_in_bytes = cmd.get_data_size();
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
-    this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
     bool tracing = this->trace.has_value();
     vector<uint32_t> trace_host_data;
@@ -789,7 +787,7 @@ void FinishCommand::process() {
     const DeviceCommand cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
-    this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
     this->manager.issue_queue_push_back(cmd_size, false, this->command_queue_id);
 }
 
@@ -814,7 +812,7 @@ void EnqueueWrapCommand::process() {
 
     const DeviceCommand cmd = this->assemble_device_command(0);
     this->manager.issue_queue_reserve_back(wrap_packet_size_bytes, this->command_queue_id);
-    this->manager.cq_write(cmd.get_desc().data(), wrap_packet_size_bytes, write_ptr);
+    this->manager.cq_write(cmd.data(), wrap_packet_size_bytes, write_ptr);
     if (this->wrap_region == DeviceCommand::WrapRegion::COMPLETION) {
         // Wrap the read pointers for completion queue because device will start writing data at head of completion queue and there are no more reads to be done at current completion queue write pointer
         // If we don't wrap the read then the subsequent read buffer command may attempt to read past the total command queue size
@@ -1140,7 +1138,7 @@ void Trace::create_replay() {
     for (auto& [device_command, data, command_type, num_data_bytes]: this->history) {
         uint32_t issue_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
         device_command.update_buffer_transfer_src(0, issue_write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
-        manager.cq_write(device_command.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_write_ptr);
+        manager.cq_write(device_command.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_write_ptr);
         manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, lazy_push, command_queue_id);
 
         uint32_t host_data_size = align(data.size() * sizeof(uint32_t), 16);

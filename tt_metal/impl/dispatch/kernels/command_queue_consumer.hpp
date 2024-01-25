@@ -273,7 +273,7 @@ void write_and_launch_program(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
 
-    volatile tt_l1_ptr uint32_t* command_ptr_fixed = command_ptr;
+    volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
     command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(program_transfer_start_addr);
     for (uint32_t transfer_type_idx = 0; transfer_type_idx < (uint32_t) DeviceCommand::TransferType::NUM_TRANSFER_TYPES; transfer_type_idx++) {
         uint32_t num_pages_in_transfer;
@@ -282,16 +282,16 @@ void write_and_launch_program(
             DeviceCommand::TransferType transfer_type;
             case (uint32_t) DeviceCommand::TransferType::RUNTIME_ARGS:
                 multicast = false;
-                num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_runtime_arg_pages_idx];
+                num_pages_in_transfer = header->num_runtime_arg_pages;
                 break;
             case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
-                num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_cb_config_pages_idx];
+                num_pages_in_transfer = header->num_cb_config_pages;
                 break;
             case (uint32_t) DeviceCommand::TransferType::PROGRAM_PAGES:
-                num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_program_pages_idx];
+                num_pages_in_transfer = header->num_program_pages;
                 break;
             case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS:
-                num_pages_in_transfer = command_ptr_fixed[DeviceCommand::num_go_signal_pages_idx];
+                num_pages_in_transfer = header->num_go_signal_pages;
                 break;
         }
 

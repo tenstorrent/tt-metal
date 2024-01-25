@@ -42,17 +42,18 @@ void kernel_main() {
 
         // Producer information
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
-        uint32_t data_size = command_ptr[DeviceCommand::data_size_idx];
-        uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];
-        uint32_t page_size = command_ptr[DeviceCommand::page_size_idx];
-        uint32_t producer_cb_size = command_ptr[DeviceCommand::producer_cb_size_idx];
-        uint32_t consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
-        uint32_t producer_cb_num_pages = command_ptr[DeviceCommand::producer_cb_num_pages_idx];
-        uint32_t consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
-        uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
-        uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
-        uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
-        uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
+        volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
+        uint32_t data_size = header->data_size;
+        uint32_t num_buffer_transfers = header->num_buffer_transfers;
+        uint32_t page_size = header->page_size;
+        uint32_t producer_cb_size = header->producer_cb_size;
+        uint32_t consumer_cb_size = header->consumer_cb_size;
+        uint32_t producer_cb_num_pages = header->producer_cb_num_pages;
+        uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
+        uint32_t num_pages = header->num_pages;
+        uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+        uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
+        uint32_t wrap = header->wrap;
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
