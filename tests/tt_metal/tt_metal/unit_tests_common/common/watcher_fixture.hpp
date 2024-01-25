@@ -23,9 +23,16 @@ public:
     }
 
 protected:
+    bool watcher_previous_enabled;
+    int  watcher_previous_interval;
+    bool watcher_previous_dump_all;
+    bool watcher_previous_append;
     void SetUp() override {
-
-        // Enable watcher for this test
+        // Enable watcher for this test, save the previous state so we can restore it later.
+        watcher_previous_enabled = tt::llrt::OptionsG.get_watcher_enabled();
+        watcher_previous_interval = tt::llrt::OptionsG.get_watcher_interval();
+        watcher_previous_dump_all = tt::llrt::OptionsG.get_watcher_dump_all();
+        watcher_previous_append = tt::llrt::OptionsG.get_watcher_append();
         tt::llrt::OptionsG.set_watcher_enabled(true);
         tt::llrt::OptionsG.set_watcher_interval(interval_ms);
         tt::llrt::OptionsG.set_watcher_dump_all(false);
@@ -43,11 +50,11 @@ protected:
         // Remove the watcher output file after the test is finished.
         std::remove(log_file_name.c_str());
 
-        // Reset watcher settings
-        tt::llrt::OptionsG.set_watcher_enabled(false);
-        tt::llrt::OptionsG.set_watcher_interval(0);
-        tt::llrt::OptionsG.set_watcher_dump_all(false);
-        tt::llrt::OptionsG.set_watcher_append(false);
+        // Reset watcher settings to their previous values
+        tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
+        tt::llrt::OptionsG.set_watcher_interval(watcher_previous_interval);
+        tt::llrt::OptionsG.set_watcher_dump_all(watcher_previous_dump_all);
+        tt::llrt::OptionsG.set_watcher_append(watcher_previous_append);
         tt::llrt::watcher_server_clear_error_flag();
     }
 

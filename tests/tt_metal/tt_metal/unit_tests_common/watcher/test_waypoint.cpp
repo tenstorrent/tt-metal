@@ -31,7 +31,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 
     // Run a kernel that posts waypoints and waits on certain gating values to be written before
     // posting the next waypoint.
-    CreateKernel(
+    auto brisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange{
@@ -40,7 +40,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         },
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
     );
-    CreateKernel(
+    auto ncrisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange{
@@ -49,7 +49,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         },
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
     );
-    CreateKernel(
+    auto trisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange{
@@ -58,6 +58,43 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         },
         ComputeConfig{}
     );
+
+    // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
+    // and an L1 buffer to use for the syncing.
+    uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    uint32_t delay_cycles = clk_mhz * 1000000; // 1 second
+    tt_metal::InterleavedBufferConfig l1_config {
+        .device = device,
+        .size = sizeof(uint32_t),
+        .page_size = sizeof(uint32_t),
+        .buffer_type = tt_metal::BufferType::L1
+    };
+    Buffer l1_buffer = CreateBuffer(l1_config);
+
+    // Write runtime args
+    for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
+        for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
+            const std::vector<uint32_t> args = { delay_cycles, l1_buffer.address() };
+            SetRuntimeArgs(
+                program,
+                brisc_kid,
+                CoreCoord{x, y},
+                args
+            );
+            SetRuntimeArgs(
+                program,
+                ncrisc_kid,
+                CoreCoord{x, y},
+                args
+            );
+            SetRuntimeArgs(
+                program,
+                trisc_kid,
+                CoreCoord{x, y},
+                args
+            );
+        }
+    }
 
     // Run the program in a new thread, we'll have to update gate values in this thread.
     fixture->RunProgram(device, program);
