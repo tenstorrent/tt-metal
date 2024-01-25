@@ -20,10 +20,10 @@ void kernel_main() {
     constexpr uint32_t completion_queue_start_addr = get_compile_time_arg_val(1);
     constexpr uint32_t completion_queue_size = get_compile_time_arg_val(2);
     constexpr uint32_t host_finish_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t cmd_base_address = get_compile_time_arg_val(4);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(5);
 
     volatile uint32_t* db_semaphore_addr = reinterpret_cast<volatile uint32_t*>(SEMAPHORE_BASE);
-
-    static constexpr uint32_t command_start_addr = L1_UNRESERVED_BASE; // Space between L1_UNRESERVED_BASE -> data_start is for commands
 
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
     uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
@@ -35,7 +35,7 @@ void kernel_main() {
         db_acquire(db_semaphore_addr, consumer_noc_encoding);
 
         // For each instruction, we need to jump to the relevant part of the device command
-        uint32_t command_start_addr = get_command_slot_addr(db_buf_switch);
+        uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, consumer_data_buffer_size>(db_buf_switch);
         uint32_t buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(uint32_t));
         uint32_t program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
 

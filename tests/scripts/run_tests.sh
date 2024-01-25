@@ -177,6 +177,14 @@ run_microbenchmarks_pipeline_tests() {
     pytest -svv tests/tt_metal/microbenchmarks
 }
 
+run_ttnn_sweeps_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/run_ttnn_sweeps.sh
+}
+
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -203,6 +211,8 @@ run_pipeline_tests() {
         run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
+        run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

@@ -29,12 +29,10 @@ constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-// 4 semaphores per core aligned to 16B
+// 4 uint32_t semaphores per core aligned to 16B
 constexpr static std::uint32_t SEMAPHORE_BASE = CIRCULAR_BUFFER_CONFIG_BASE + CIRCULAR_BUFFER_CONFIG_SIZE;
 constexpr static std::uint32_t NUM_SEMAPHORES = 4;
-constexpr static std::uint32_t UINT32_WORDS_PER_SEMAPHORE = 1;
-constexpr static std::uint32_t ALIGNED_SIZE_PER_SEMAPHORE = (((UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t)) + L1_ALIGNMENT - 1) / L1_ALIGNMENT) * L1_ALIGNMENT;
-constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * ALIGNED_SIZE_PER_SEMAPHORE;
+constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * L1_ALIGNMENT;
 
 // Debug printer buffers - A total of 5*PRINT_BUFFER_SIZE starting at PRINT_BUFFER_NC address
 constexpr static std::uint32_t PRINT_BUFFER_SIZE = 204; // per thread

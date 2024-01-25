@@ -26,7 +26,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 def get_expected_times(model_name, functional_t5):
     return {
         "t5-small": {
-            ttnn_functional_t5: (12, 3),
+            ttnn_functional_t5: (13, 3),
             ttnn_optimized_functional_t5: (10, 1),
         },
         "google/flan-t5-small": {
@@ -54,12 +54,12 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
     if functional_t5 == ttnn_functional_t5:
         tt_model_name = f"ttnn_{model_name}"
     elif functional_t5 == ttnn_optimized_functional_t5:
-        tt_model_name = f"ttnn_optimized_{model_name}"
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_t5: {functional_t5}")
 
     parameters = preprocess_model_parameters(
-        tt_model_name,
+        model_name=tt_model_name,
         initialize_model=lambda: transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval(),
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,

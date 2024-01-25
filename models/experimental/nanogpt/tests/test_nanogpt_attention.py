@@ -4,12 +4,15 @@
 
 import torch
 import pytest
+import tt_lib
+import os
+from pathlib import Path
 
 from transformers import GPT2LMHeadModel
 
-
 from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_attention as nanogpt_attention
+from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
 
 from models.utility_functions import (
     tt_to_torch_tensor,
@@ -20,15 +23,16 @@ from models.utility_functions import (
 
 
 @pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16,),
+)
+@pytest.mark.parametrize(
     "pcc",
     ((0.99,),),
 )
-
-def test_nanogpt_attn(device, pcc, reset_seeds):
-
+def test_nanogpt_attn(device, pcc, dtype, reset_seeds):
     # Prepare input
     model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
-    sd = model_hf.state_dict()
     config = model_hf.config
     model_hf.eval()
     block = 0
@@ -38,8 +42,17 @@ def test_nanogpt_attn(device, pcc, reset_seeds):
     pt_attn = model_hf.transformer.h[block].attn
     pt_out = pt_attn.forward(test_in)
 
+    model_version = "gpt2"
+    tt_cache_path = get_tt_cache_path(model_version)
+
+    if (
+        tt_cache_path == (str(Path(f"models/experimental/nanogpt/datasets/{model_version}")) + "/")
+        and len(os.listdir(f"models/experimental/nanogpt/datasets/{model_version}")) < 320
+    ):
+        store_weights(model_version=model_version, file_name=tt_cache_path, dtype=dtype, base_address=base_address)
+
     tt_test_in = torch_to_tt_tensor_rm(test_in, device)
-    tt_attn = nanogpt_attention.TtCausalSelfAttention(config, sd, base_address, device)
+    tt_attn = nanogpt_attention.TtCausalSelfAttention(config, base_address, device, tt_cache_path, dtype)
 
     tt_out = tt_attn.forward(tt_test_in)
 

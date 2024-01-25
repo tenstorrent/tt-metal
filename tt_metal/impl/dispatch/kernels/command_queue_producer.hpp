@@ -16,6 +16,16 @@ inline __attribute__((always_inline)) volatile uint32_t* get_cq_issue_write_ptr(
     return reinterpret_cast<volatile uint32_t*>(CQ_ISSUE_WRITE_PTR);
 }
 
+// Only the read interface is set up on the device... the write interface
+// belongs to host
+FORCE_INLINE
+void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const uint32_t issue_region_size) {
+    cq_read_interface.issue_fifo_rd_ptr = issue_region_rd_ptr >> 4;
+    cq_read_interface.issue_fifo_size = issue_region_size >> 4;
+    cq_read_interface.issue_fifo_limit = (issue_region_rd_ptr + issue_region_size) >> 4;
+    cq_read_interface.issue_fifo_rd_toggle = 0;
+}
+
 FORCE_INLINE
 void issue_queue_wait_front() {
     DEBUG_STATUS('N', 'Q', 'W');
@@ -35,7 +45,7 @@ FORCE_INLINE
 void notify_host_of_issue_queue_read_pointer() {
     // These are the PCIE core coordinates
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | host_issue_queue_read_ptr_addr;
-    uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);;
+    uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);
     volatile tt_l1_ptr uint32_t* issue_rd_ptr_addr = get_cq_issue_read_ptr();
     issue_rd_ptr_addr[0] = issue_rd_ptr_and_toggle;
     noc_async_write(CQ_ISSUE_READ_PTR, pcie_address, 4);
@@ -57,6 +67,51 @@ void issue_queue_pop_front(uint32_t cmd_size_B) {
     }
 
     notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
+}
+
+FORCE_INLINE
+void program_local_cb(uint32_t data_section_addr, uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
+    uint32_t cb_id = 0;
+    uint32_t fifo_addr = data_section_addr >> 4;
+    uint32_t fifo_limit = fifo_addr + (cb_size >> 4);
+    cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
+    cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
+    cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
+    cb_interface[cb_id].fifo_size = cb_size >> 4;
+    cb_interface[cb_id].tiles_acked = 0;
+    cb_interface[cb_id].tiles_received = 0;
+    cb_interface[cb_id].fifo_num_pages = num_pages;
+    cb_interface[cb_id].fifo_page_size = page_size >> 4;
+}
+
+template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
+FORCE_INLINE
+void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
+    /*
+        This API programs the double-buffered CB space of the consumer. This API should be called
+        before notifying the consumer that data is available.
+    */
+
+    uint32_t acked_addr = get_db_cb_ack_addr(db_buf_switch);
+    uint32_t recv_addr = get_db_cb_recv_addr(db_buf_switch);
+    uint32_t num_pages_addr = get_db_cb_num_pages_addr(db_buf_switch);
+    uint32_t page_size_addr = get_db_cb_page_size_addr(db_buf_switch);
+    uint32_t total_size_addr = get_db_cb_total_size_addr(db_buf_switch);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(acked_addr)[0] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_addr)[0] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_pages_addr)[0] = num_pages;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_size_addr)[0] = page_size >> 4;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(total_size_addr)[0] = cb_size >> 4;
+
+    uint32_t rd_ptr_addr = get_db_cb_rd_ptr_addr(db_buf_switch);
+    uint32_t wr_ptr_addr = get_db_cb_wr_ptr_addr(db_buf_switch);
+    uint32_t cb_start_addr = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
+    reinterpret_cast<volatile uint32_t*>(rd_ptr_addr)[0] = cb_start_addr >> 4;
+    reinterpret_cast<volatile uint32_t*>(wr_ptr_addr)[0] = cb_start_addr >> 4;
+
+    uint32_t cb_base = get_db_cb_l1_base(db_buf_switch);
+    noc_async_write(cb_base, consumer_noc_encoding | cb_base, 7 * 16);
+    noc_async_write_barrier();  // barrier for now
 }
 
 FORCE_INLINE
@@ -116,17 +171,19 @@ void multicore_cb_push_back(uint64_t consumer_noc_encoding, uint32_t consumer_fi
     noc_semaphore_set_remote(uint32_t(CQ_CONSUMER_CB_RECV_PTR), consumer_noc_encoding | pages_recv_addr);
 }
 
+template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
 FORCE_INLINE
 void relay_command(bool db_buf_switch, uint64_t consumer_noc_encoding) {
     /*
         Relays the current command to the consumer.
     */
 
-    uint64_t consumer_command_slot_addr = consumer_noc_encoding | get_command_slot_addr(db_buf_switch);
+    uint64_t consumer_command_slot_addr = consumer_noc_encoding | get_command_slot_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
     noc_async_write(L1_UNRESERVED_BASE, consumer_command_slot_addr, DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
     noc_async_write_barrier();
 }
 
+template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
 void produce(
     volatile tt_l1_ptr uint32_t* command_ptr, uint32_t num_srcs, uint32_t sharded_buffer_num_cores, uint32_t page_size, uint32_t producer_cb_size, uint32_t producer_cb_num_pages,
     uint32_t consumer_cb_size, uint32_t consumer_cb_num_pages, uint64_t consumer_noc_encoding, uint32_t producer_consumer_transfer_num_pages, bool db_buf_switch) {
@@ -137,8 +194,9 @@ void produce(
         the consumer. It continues like this in a loop, context switching between pulling in data and
         writing to the consumer.
     */
+
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
-    uint32_t l1_consumer_fifo_limit = get_db_buf_addr(db_buf_switch) + consumer_cb_size;
+    uint32_t l1_consumer_fifo_limit = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size;
 
     bool sharded = sharded_buffer_num_cores > 1;
 

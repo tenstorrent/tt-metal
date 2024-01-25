@@ -72,7 +72,7 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
 
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
-        query_states = (hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias) * scaling
+        query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
         query_states = ttnn.reshape(query_states, shape=(bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
@@ -301,8 +301,7 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
         )
     )
     input_embeds = input_embeds.permute(0, 2, 1)
-    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16)
-    input_embeds = ttnn.to_device(input_embeds, device)
+    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16, device=device)
 
     return input_embeds
 
@@ -318,10 +317,8 @@ def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, 
     positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
     decoder_hidden_states = inputs_embeds + positions
 
-    decoder_hidden_states = ttnn.from_torch(decoder_hidden_states, dtype=ttnn.bfloat16)
-    decoder_hidden_states = ttnn.to_device(decoder_hidden_states, device)
-    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    attention_mask = ttnn.to_device(attention_mask, device)
+    decoder_hidden_states = ttnn.from_torch(decoder_hidden_states, dtype=ttnn.bfloat16, device=device)
+    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, device=device)
 
     return decoder_hidden_states, attention_mask
 

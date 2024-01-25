@@ -15,14 +15,11 @@ import time
 import ttnn
 
 
-def get_expected_times(use_optimized_version):
-    if use_optimized_version:
-        expected_compile_time = 30.0
-        expected_inference_time = 7.0
-    else:
-        expected_compile_time = 30.0
-        expected_inference_time = 7.0
-    return expected_compile_time, expected_inference_time
+def get_expected_times(functional_whisper):
+    return {
+        ttnn_functional_whisper: (30.0, 7.0),
+        ttnn_optimized_functional_whisper: (30.0, 7.0),
+    }[functional_whisper]
 
 
 @skip_for_wormhole_b0()
@@ -31,37 +28,36 @@ def get_expected_times(use_optimized_version):
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [500])
-@pytest.mark.parametrize("use_optimized_version", [True, False])
-def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, use_optimized_version):
+@pytest.mark.parametrize("functional_whisper", [ttnn_functional_whisper, ttnn_optimized_functional_whisper])
+def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, functional_whisper):
     config = WhisperConfig.from_pretrained(model_name)
 
     # Run TT Model
-    tt_model_name = "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name.replace("/", "_")
+    if functional_whisper == ttnn_functional_whisper:
+        tt_model_name = f"ttnn_{model_name}"
+    elif functional_whisper == ttnn_optimized_functional_whisper:
+        tt_model_name = f"ttnn_{model_name}_optimized"
+    else:
+        raise ValueError(f"Unknown functional_t5: {functional_whisper}")
 
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
-    dtype_to_use = torch.bfloat16
-    input_features = inputs.input_features.type(dtype_to_use)
+    input_features = inputs.input_features
     decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
     attention_mask = None
 
-    if use_optimized_version:
-        ttnn_model = ttnn_optimized_functional_whisper
-    else:
-        ttnn_model = ttnn_functional_whisper
-
     parameters = preprocess_model_parameters(
-        tt_model_name,
-        initialize_model=lambda: WhisperModel.from_pretrained(model_name).to(dtype_to_use).eval(),
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        model_name=tt_model_name,
+        initialize_model=lambda: WhisperModel.from_pretrained(model_name).eval(),
+        convert_to_ttnn=functional_whisper.convert_to_ttnn,
+        custom_preprocessor=functional_whisper.custom_preprocessor,
         device=device,
     )
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = functional_whisper.preprocess_inputs(
         config=config,
         input_features=input_features,
         input_ids=decoder_input_ids,
@@ -73,7 +69,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
     durations = []
     for _ in range(2):
         start = time.time()
-        tt_output = ttnn_model.whisper(
+        tt_output = functional_whisper.whisper(
             config,
             input_embeds,
             decoder_hidden_states,
@@ -89,7 +85,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
 
     inference_and_compile_time, inference_time, *_ = durations
 
-    expected_compile_time, expected_inference_time = get_expected_times(use_optimized_version)
+    expected_compile_time, expected_inference_time = get_expected_times(functional_whisper)
     prep_perf_report(
         model_name=tt_model_name,
         batch_size=batch_size,

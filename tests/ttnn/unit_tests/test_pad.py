@@ -27,14 +27,7 @@ def test_pad(device, h, w, padding, torch_padding, value):
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
 
-    assert output_tensor.shape == ttnn.Shape(
-        (h, w), (h + padding[0][0] + padding[0][1], w + padding[1][0] + padding[1][1])
-    )
-
-    if padding == ((0, 1), (0, 2)):
-        assert str(output_tensor.shape) == f"ttnn.Shape([{h} + 1, {w} + 2])"
-    elif padding == ((1, 1), (4, 2)):
-        assert str(output_tensor.shape) == f"ttnn.Shape([1 + {h} + 1, 4 + {w} + 2])"
+    assert output_tensor.shape == ttnn.Shape((h + padding[0][0] + padding[0][1], w + padding[1][0] + padding[1][1]))
 
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -61,13 +54,8 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.pad(output_tensor, padding=padding, value=value)
 
     assert output_tensor.shape == ttnn.Shape(
-        (h, w), (h + (padding[0][0] + padding[0][1]) * 2, w + (padding[1][0] + padding[1][1]) * 2)
+        (h + (padding[0][0] + padding[0][1]) * 2, w + (padding[1][0] + padding[1][1]) * 2)
     )
-
-    if padding == ((0, 1), (0, 2)):
-        assert str(output_tensor.shape) == f"ttnn.Shape([{h} + 2, {w} + 4])"
-    elif padding == ((1, 1), (4, 2)):
-        assert str(output_tensor.shape) == f"ttnn.Shape([2 + {h} + 2, 8 + {w} + 4])"
 
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import torch.nn as nn
 import tt_lib
 import math
@@ -16,7 +15,7 @@ from models.utility_functions import (
 
 
 class TtCausalSelfAttention(nn.Module):
-    def __init__(self, config, state_dict, base_address, device):
+    def __init__(self, config, base_address, device, tt_cache_path, dtype):
         super().__init__()
         assert config.n_embd % config.n_head == 0
 
@@ -25,28 +24,34 @@ class TtCausalSelfAttention(nn.Module):
 
         self.device = device
         # Get the weights
-        self.tt_weight_c_attn = state_dict[f"{base_address}.c_attn.weight"]
-        self.tt_weight_c_proj = state_dict[f"{base_address}.c_proj.weight"]
+        self.tt_weight_c_attn = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + ".c_attn.weight" + str(dtype) + ".bin"
+        )
 
-        # Push weights to Ttp device
-        self.tt_weight_c_attn = torch_to_tt_tensor_rm(self.tt_weight_c_attn, self.device)
-
-        self.tt_weight_c_proj = torch_to_tt_tensor_rm(self.tt_weight_c_proj, self.device)
+        self.tt_weight_c_proj = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin"
+        )
 
         self.tt_weight_c_attn = tt_lib.tensor.transpose(self.tt_weight_c_attn, -2, -1)
         self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj, -2, -1)
 
         # Load biases
-        self.tt_bias_c_attn = torch_to_tt_tensor_rm(state_dict[f"{base_address}.c_attn.bias"], self.device)
+        self.tt_bias_c_attn = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + ".c_attn.bias" + str(dtype) + ".bin"
+        )
 
-        self.tt_bias_c_proj = torch_to_tt_tensor_rm(state_dict[f"{base_address}.c_proj.bias"], self.device)
+        self.tt_bias_c_proj = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin"
+        )
 
         self.n_head = self.config.n_head
         self.n_embd = self.config.n_embd
 
+        temp_bias = tt_lib.tensor.tril(tt_lib.tensor.ones([1, 1, self.block_size, self.block_size]))
+        temp_bias = tt_to_torch_tensor(temp_bias)
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones(self.block_size, self.block_size)).view(1, 1, self.block_size, self.block_size),
+            temp_bias,
         )
 
         self.c_attn = Linear(
@@ -82,16 +87,16 @@ class TtCausalSelfAttention(nn.Module):
         q, k, v = pt_x1.split(self.n_embd, dim=2)
 
         k = torch_to_tt_tensor_rm(k, self.device)
-        k = fallback_ops.reshape(k, B, T, self.n_head, C // self.n_head)
+        k = tt_lib.tensor.reshape(k, B, T, self.n_head, C // self.n_head)
         k = tt_lib.tensor.transpose(k, 1, 2)
 
         q = torch_to_tt_tensor_rm(q, self.device)
-        q = fallback_ops.reshape(q, B, T, self.n_head, C // self.n_head)
+        q = tt_lib.tensor.reshape(q, B, T, self.n_head, C // self.n_head)
         q = tt_lib.tensor.transpose(q, 1, 2)
 
         v = torch_to_tt_tensor_rm(v, self.device)
 
-        v = fallback_ops.reshape(v, B, T, self.n_head, C // self.n_head)
+        v = tt_lib.tensor.reshape(v, B, T, self.n_head, C // self.n_head)
         v = tt_lib.tensor.transpose(v, 1, 2)
 
         # manual implementation of attention
@@ -107,12 +112,14 @@ class TtCausalSelfAttention(nn.Module):
 
         tt_att = torch_to_tt_tensor_rm(att, self.device, put_on_device=False)
 
-        tt_att = fallback_ops.softmax(tt_att, dim=-1)
+        tt_att = tt_lib.tensor.softmax(
+            tt_att
+        )  # Using tt_lib.tensor.softmax reduces pcc from 0.99 to 0.98 for whole model
 
         tt_y = tt_lib.tensor.bmm(tt_att, v)
 
         tt_y = tt_lib.tensor.transpose(tt_y, 1, -2)
-        tt_y = fallback_ops.reshape(tt_y, 1, B, T, C)
+        tt_y = tt_lib.tensor.reshape(tt_y, 1, B, T, C)
 
         # output projection
         x2 = self.c_proj(tt_y)

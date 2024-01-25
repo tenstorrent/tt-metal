@@ -112,3 +112,6 @@ class Conv2D:
 
     def copy_output_from_device(self, output: ttnn.Tensor):
         return ttnn.Tensor(self.conv.copy_output_from_device(output.value))
+
+
+__all__ = []

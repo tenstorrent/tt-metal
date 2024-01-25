@@ -164,11 +164,13 @@ bool operator!=(const Shape&, const Shape&);
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+    std::optional<ShardSpec> shard_spec = std::nullopt;
     bool is_sharded() const;
 
-    static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type");
+    static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type", "shard_spec");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->memory_layout), std::cref(this->buffer_type));
+        return std::make_tuple(
+            std::cref(this->memory_layout), std::cref(this->buffer_type), std::cref(this->shard_spec));
     }
 };
 
@@ -192,11 +194,18 @@ struct DeviceStorage {
     DeviceBuffer buffer;
 
     const MemoryConfig memory_config() const {
-        const auto& buffer = this->buffer;
+        if (this->buffer.get() == nullptr) {
+            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
+        }
+
+        std::optional<ShardSpec> shard_spec = std::nullopt;
+        if (is_sharded(this->buffer->buffer_layout())) {
+            shard_spec = this->buffer->shard_spec().tensor_shard_spec;
+        }
         return MemoryConfig{
-            .memory_layout = buffer->buffer_layout(),
-            .buffer_type = buffer->buffer_type(),
-        };
+            .memory_layout = this->buffer->buffer_layout(),
+            .buffer_type = this->buffer->buffer_type(),
+            .shard_spec = shard_spec};
     }
 
     static constexpr auto attribute_names = std::make_tuple("memory_config");

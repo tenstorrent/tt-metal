@@ -5,8 +5,8 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import torch_random
-from models.utility_functions import skip_for_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import torch_random, skip_for_wormhole_b0
 
 
 def test_base_case(device):
@@ -19,7 +19,7 @@ def test_base_case(device):
     embeddings = ttnn.embedding(indices, embedding_matrix)
     assert tuple(expected_embeddings.shape) == tuple(embeddings.shape)
     embeddings = ttnn.to_torch(ttnn.from_device(embeddings))
-    torch.allclose(expected_embeddings, embeddings, atol=1e-2)
+    assert_with_pcc(expected_embeddings, embeddings)
 
 
 @skip_for_wormhole_b0()
@@ -50,11 +50,9 @@ def test_embedding(
     weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
 
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch.allclose(torch_output_tensor, output_tensor, atol=1e-2)
+    assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @skip_for_wormhole_b0()
@@ -85,8 +83,6 @@ def test_bloom_embedding(
     weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
 
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch.allclose(torch_output_tensor, output_tensor, atol=1e-2)
+    assert_with_pcc(torch_output_tensor, output_tensor)

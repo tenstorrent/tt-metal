@@ -7,6 +7,7 @@ is that the long term benefits will help us maintain our objectives. Please foll
 
 1. Submit a request for a Single Operation as an `Issue <https://github.com/tenstorrent-metal/tt-metal/issues>`_ and select `For external users - Propose a feature`
     * Provide a clear description of its intended purpose. (`Example <https://github.com/tenstorrent-metal/tt-metal/issues/4730>`_)
+    * Add the label ttnn to the issue
     * Add a python reference implementation that is fully functional.  This reference implementation will be called the `fallback` implementation.
 2. Create a branch that defines the API and references the issue in step 1.
     * When creating the branch, please follow the pattern of 'TTNN-<Issue Number>-<brief description>'.  For example, if the issue is 4730, the branch name would be `TTNN-4730-concat-operation`

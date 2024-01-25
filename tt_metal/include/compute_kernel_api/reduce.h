@@ -24,8 +24,8 @@ template<bool at_start>
 ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 {
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_init<>(icb, icb_scaler) ));
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb, icb_scaler) ));
+    UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(icb, icb_scaler) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<SYNC>() ));
@@ -38,7 +38,7 @@ ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t 
 
 ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
 
-    UNPACK(( llk_unpack_AB_init<>(icb, icb_scaler) ));
+    UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(icb, icb_scaler) ));
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false>(ocb) ));
 }
@@ -48,7 +48,7 @@ template<bool at_start>
 ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16)
 {
     // FIXME: API Update needed in compute kernel?
-    UNPACK(( llk_unpack_AB_init<>(0, 1) ));
+    UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(0, 1) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 

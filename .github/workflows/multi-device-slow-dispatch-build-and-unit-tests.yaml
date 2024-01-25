@@ -34,8 +34,6 @@ jobs:
           echo "continue-running=${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 5 * * *' && matrix.runner-info.nightly || !matrix.runner-info.nightly }}" >> "$GITHUB_OUTPUT"
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Set up dyanmic env vars for build
         if: ${{ steps.get-continue-running.outputs.continue-running == 'true' }}
         run: |

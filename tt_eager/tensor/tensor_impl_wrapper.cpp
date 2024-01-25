@@ -82,18 +82,6 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
 }
 
 
-
-Tensor to_device_wrapper_sharded(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, Device *, const MemoryConfig &, const ShardSpec &)>> to_device_map = {
-        {DataType::BFLOAT16, &to_device_sharded<bfloat16>},
-        {DataType::FLOAT32, &to_device_sharded<float>},
-        {DataType::UINT32, &to_device_sharded<uint32_t>},
-        {DataType::BFLOAT8_B, &to_device_sharded<uint32_t>},
-        {DataType::UINT16, &to_device_sharded<uint16_t>},
-    };
-    return to_device_map.at(tensor.dtype())(tensor, target_device, mem_config, shard_spec);
-}
-
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
     const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, Layout)>> to_layout_map = {
         {DataType::BFLOAT16, &to_layout<bfloat16>},
