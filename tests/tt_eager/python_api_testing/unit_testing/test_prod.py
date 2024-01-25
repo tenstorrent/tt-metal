@@ -53,11 +53,20 @@ def get_tensors(input_shape, output_shape, device):
         [
             1,
         ],
+        [
+            2,
+        ],
+        [
+            3,
+        ],
     ),
-    ids=["0", "1"],
+    ids=["0", "1", "2", "3"],
 )
 def test_moreh_prod_dims(input_shape, dims, device):
     output_shape = input_shape.copy()
+
+    if dims[0] in [2, 3]:
+        pytest.skip(f"Dim {dims[0]} not supported at this time.")
 
     for dim in dims:
         output_shape[dim] = 1

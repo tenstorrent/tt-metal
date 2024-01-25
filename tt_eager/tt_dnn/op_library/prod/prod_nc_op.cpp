@@ -22,6 +22,7 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     const auto& output = inputs.at(1);
 
     auto input_shape = input.shape();
+    TT_ASSERT((input_shape.rank()), "rank should be 4");
     const auto& output_shape = output.shape();
     auto input_shape_wo_padding = input.shape().without_padding();
     const auto& output_shape_wo_padding = output.shape().without_padding();
@@ -32,8 +33,8 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     }
 
     for (int i = 0; i < input_shape.rank(); ++i) {
-        TT_ASSERT(input_shape[i] == output_shape[i]);
-        TT_ASSERT(input_shape_wo_padding[i] == output_shape_wo_padding[i]);
+        TT_FATAL(input_shape[i] == output_shape[i]);
+        TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i]);
     }
 }
 
@@ -49,11 +50,15 @@ std::vector<Shape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs
 
 operation::ProgramWithCallbacks Prod::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
-    TT_ASSERT((dim >= 0 && dim <= 3), "dim should be 0 - 3");
     auto& input = inputs.at(0);
     auto& output = inputs.at(1);
 
-    return prod_nc(input, output, dim);
+
+    if (dim == 0 || dim == 1) {
+        return prod_nc(input, output, dim);
+    } else {
+        return prod_hw(input, output);
+    }
 }
 
 inline Shape compute_output_shape(const Shape& input_shape, const int64_t& dim) {
@@ -61,7 +66,9 @@ inline Shape compute_output_shape(const Shape& input_shape, const int64_t& dim) 
     auto padding = output_shape.padding();
     switch (dim) {
         case 0:
-        case 1: output_shape[dim] = 1;
+        case 1:
+        case 2:
+        case 3: output_shape[dim] = 1;
         break;
     }
 

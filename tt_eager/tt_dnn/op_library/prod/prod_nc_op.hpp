@@ -34,6 +34,8 @@ struct Prod {
 
 operation::ProgramWithCallbacks prod_nc(const Tensor &input, const Tensor &output, int64_t dim);
 
+operation::ProgramWithCallbacks prod_hw(const Tensor &input, const Tensor &output);
+
 Tensor prod_(
     const Tensor &input,
     std::optional<std::reference_wrapper<const Tensor>> output,
