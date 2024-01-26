@@ -7,6 +7,8 @@ from typing import Tuple
 import tt_lib as ttl
 
 from ttnn.types import (
+    has_storage_type_of,
+    DEVICE_STORAGE_TYPE,
     MemoryConfig,
     ShardStrategy,
     ShardOrientation,
@@ -14,6 +16,17 @@ from ttnn.types import (
     TensorMemoryLayout,
     BufferType,
 )
+
+
+def is_sharded(tensor) -> bool:
+    return tensor.value.is_sharded()
+
+
+def get_memory_config(tensor) -> ttl.tensor.MemoryConfig:
+    if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+        return tensor.value.memory_config()
+    else:
+        raise RuntimeError("Tensor is not on device!")
 
 
 def has_padding(tensor):

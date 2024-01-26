@@ -59,16 +59,6 @@ class Tensor(ttl.ttnn.tensor.Tensor):
         else:
             return False
 
-    def is_sharded(self) -> bool:
-        return self.value.is_sharded()
-
-    @property
-    def memory_config(self) -> ttl.tensor.MemoryConfig:
-        if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
-            return self.value.memory_config()
-        else:
-            raise RuntimeError("Tensor is not on device!")
-
 
 class ShardStrategy(Enum):
     HEIGHT = 1
