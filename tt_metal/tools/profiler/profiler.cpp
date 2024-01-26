@@ -38,18 +38,46 @@ void DeviceProfiler::readRiscProfilerResults(
 
     vector<std::uint32_t> control_buffer;
 
-    control_buffer = tt::llrt::read_hex_vec_from_core(
-        device_id,
-        worker_core,
-        PROFILER_L1_BUFFER_CONTROL,
-        PROFILER_L1_CONTROL_BUFFER_SIZE);
+    auto ethCores = soc_d.get_physical_ethernet_cores() ;
 
-    if (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0)
+    std::vector<uint32_t> riscEndIndices;
+
+    if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end())
+    {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device_id,
+            worker_core,
+            PROFILER_L1_BUFFER_CONTROL,
+            PROFILER_L1_CONTROL_BUFFER_SIZE);
+
+        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_BR);
+        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_NC);
+        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T0);
+        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T1);
+        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T2);
+    }
+    else
+    {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device_id,
+            worker_core,
+            eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL,
+            PROFILER_L1_CONTROL_BUFFER_SIZE);
+
+        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
+    }
+
+    //std::cout << ": " << worker_core.x << "," << worker_core.y  << "," << coreFlatID << "  ,  " << control_buffer[kernel_profiler::NOC_X] << "," << control_buffer[kernel_profiler::NOC_Y] << "," << control_buffer[kernel_profiler::FLAT_ID] << std::endl;
+
+    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_ER] == 0))
+    {
         return;
+    }
 
-    for (int riscNum = 0; riscNum < PROFILER_RISC_COUNT; riscNum++) {
-
-        uint32_t bufferEndIndex = control_buffer[riscNum];
+    int riscNum = 0;
+    for (auto riscEndIndex : riscEndIndices) {
+        uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (bufferEndIndex > 0)
         {
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
@@ -135,6 +163,7 @@ void DeviceProfiler::readRiscProfilerResults(
                 }
             }
         }
+        riscNum ++;
     }
 
     std::vector<uint32_t> zero_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
@@ -310,6 +339,7 @@ void DeviceProfiler::dumpResults (
             device_id,
             profile_buffer,
             worker_core);
+
     }
 
     for (const auto &worker_core : worker_cores) {

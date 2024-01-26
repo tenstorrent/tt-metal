@@ -35,6 +35,9 @@ namespace kernel_profiler{
         FW_RESET_H,
         FW_RESET_L,
         DRAM_PROFILER_ADDRESS,
+        NOC_X,
+        NOC_Y,
+        FLAT_ID,
         CONTROL_BUFFER_SIZE
     };
 

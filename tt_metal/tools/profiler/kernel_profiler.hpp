@@ -36,8 +36,6 @@ namespace kernel_profiler{
     uint32_t profilerBuffer = eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_ER;
     uint16_t runCounter = 0;
-    uint8_t my_x[NUM_NOCS] __attribute__((used));
-    uint8_t my_y[NUM_NOCS] __attribute__((used));
 #elif COMPILE_FOR_TRISC == 0
     uint32_t profilerBuffer = PROFILER_L1_BUFFER_T0;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T0;
@@ -233,8 +231,13 @@ namespace kernel_profiler{
         {
             mark_time(PADDING_MARKER);
         }
+#if defined(COMPILE_FOR_ERISC)
+        volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
+        profiler_control_buffer[kernel_profiler::deviceBufferEndIndex] = wIndex;
+#else
         volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
         profiler_control_buffer[kernel_profiler::deviceBufferEndIndex] = wIndex;
+#endif
 #endif //PROFILE_KERNEL
     }
     inline __attribute__((always_inline)) void send_profiler_data_to_dram()
@@ -244,49 +247,48 @@ namespace kernel_profiler{
 
         uint32_t noc_x = my_x[0];
         uint32_t noc_y = my_y[0];
-
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
+
+        profiler_control_buffer[NOC_X] = noc_x;
+        profiler_control_buffer[NOC_Y] = noc_y;
+        profiler_control_buffer[FLAT_ID] = core_flat_id;
+
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
 
         uint32_t pageSize =
-            eth_l1_mem::address_map::PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * eth_l1_mem::address_map::PROFILER_RISC_COUNT * profiler_core_count_per_dram;
+            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * profiler_core_count_per_dram;
 
         finish();
         int hostIndex = HOST_BUFFER_END_INDEX_ER;
         int deviceIndex = DEVICE_BUFFER_END_INDEX_ER;
-        //for (hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR, deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR;
-                //(hostIndex <= kernel_profiler::HOST_BUFFER_END_INDEX_T2) && (deviceIndex <= kernel_profiler::DEVICE_BUFFER_END_INDEX_T2);
-                //hostIndex++, deviceIndex++)
-        //{
-            uint32_t currEndIndex =
-                profiler_control_buffer[deviceIndex] +
-                profiler_control_buffer[hostIndex];
+        uint32_t currEndIndex =
+            profiler_control_buffer[deviceIndex] +
+            profiler_control_buffer[hostIndex];
 
-            uint32_t dram_offset =
-                (core_flat_id % profiler_core_count_per_dram) * eth_l1_mem::address_map::PROFILER_RISC_COUNT * eth_l1_mem::address_map::PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                profiler_control_buffer[hostIndex] * sizeof(uint32_t);
+        uint32_t dram_offset =
+            (core_flat_id % profiler_core_count_per_dram) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+            profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
-            const InterleavedAddrGen<true> s = {
-                .bank_base_address = dram_profiler_address,
-                .page_size = pageSize
-            };
+        const InterleavedAddrGen<true> s = {
+            .bank_base_address = dram_profiler_address,
+            .page_size = pageSize
+        };
 
-            if ( currEndIndex < eth_l1_mem::address_map::PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
-            {
-                uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+        if ( currEndIndex < PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
+        {
+            uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-                noc_async_write(
-                        eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
-                        dram_bank_dst_noc_addr,
-                        profiler_control_buffer[deviceIndex] * sizeof(uint32_t));
+            noc_async_write(
+                    eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
+                    dram_bank_dst_noc_addr,
+                    profiler_control_buffer[deviceIndex] * sizeof(uint32_t));
 
-                profiler_control_buffer[hostIndex] = currEndIndex;
-            }
-            else
-            {
-                profiler_control_buffer[hostIndex] = eth_l1_mem::address_map::PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC+1;
-            }
-        //}
+            profiler_control_buffer[hostIndex] = currEndIndex;
+        }
+        else
+        {
+            profiler_control_buffer[hostIndex] = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC+1;
+        }
         noc_async_write_barrier();
         runCounter ++;
 #endif
@@ -297,8 +299,12 @@ namespace kernel_profiler{
         uint32_t noc_id = noc_local_node_id() & 0xFFF;
         uint32_t noc_x = noc_id & NOC_ID_MASK;
         uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
-
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
+
+        profiler_control_buffer[NOC_X] = noc_x;
+        profiler_control_buffer[NOC_Y] = noc_y;
+        profiler_control_buffer[FLAT_ID] = core_flat_id;
+
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
 
         uint32_t pageSize =

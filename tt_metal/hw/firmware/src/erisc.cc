@@ -83,9 +83,9 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();
-    noc_init();
     kernel_profiler::init_profiler(0,0,0);
     kernel_profiler::mark_fw_start();
+    noc_init();
 
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);

@@ -13,6 +13,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
 
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
+    //CoreCoord end_core = {1, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores{.start=start_core, .end=end_core};
     auto eth_cores =  device->get_active_ethernet_cores();
@@ -54,7 +55,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, int run_count, int
     {
         auto eth_reader_kernel = tt_metal::CreateKernel(
             program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
-            *eth_cores.begin(),
+            (CoreCoord){0,1},
             tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
     }
 

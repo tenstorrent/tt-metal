@@ -49,14 +49,27 @@ void InitDeviceProfiler(Device *device){
     std::vector<uint32_t> control_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();
 
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+    auto ethCores = soc_d.get_physical_ethernet_cores() ;
+
     for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
     {
-        CoreCoord curr_core = {core.first.x, core.first.y};
-        tt::llrt::write_hex_vec_to_core(
-                device_id,
-                curr_core,
-                control_buffer,
-                PROFILER_L1_BUFFER_CONTROL);
+        if (std::find(ethCores.begin(), ethCores.end(), core.first) == ethCores.end())
+        {
+            tt::llrt::write_hex_vec_to_core(
+                    device_id,
+                    core.first,
+                    control_buffer,
+                    PROFILER_L1_BUFFER_CONTROL);
+        }
+        else
+        {
+            tt::llrt::write_hex_vec_to_core(
+                    device_id,
+                    core.first,
+                    control_buffer,
+                    eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
+        }
     }
 
     std::vector<uint32_t> inputs_DRAM(tt_metal_device_profiler.output_dram_buffer.size()/sizeof(uint32_t), 0);
