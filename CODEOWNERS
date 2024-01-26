@@ -96,8 +96,7 @@ tt_eager/tt_dnn/op_library/backward/ @muthutt
 
 # eager - python api
 # **/tt_lib/
-**/tt_lib/csrc/tt_lib_bindings* @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
-**/tt_lib/csrc/operations/primary/ @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
+**/tt_lib/csrc/ @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
 **/tt_lib/fallback_ops @tt-aho @arakhmati
 
 # TTNN
