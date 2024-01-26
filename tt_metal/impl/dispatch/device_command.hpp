@@ -27,6 +27,7 @@ struct CommandHeader {
     uint32_t num_go_signal_pages = 0;
     uint32_t data_size = 0;
     uint32_t producer_consumer_transfer_num_pages = 0;
+    uint32_t buffer_type = 0;
     uint32_t sharded_buffer_num_cores = 0;
     uint32_t restart = 0;
     uint32_t new_issue_queue_size = 0;
@@ -87,6 +88,14 @@ class DeviceCommand {
     void set_consumer_cb_num_pages(const uint32_t cb_num_pages);
 
     void set_num_pages(const uint32_t num_pages);
+
+    // Denotes the type of buffer
+    enum class BufferType : uint8_t {
+        INTERLEAVED = 0,
+        SHARDED = 1
+    };
+
+    void set_buffer_type(BufferType buff_type);
 
     void set_sharded_buffer_num_cores(uint32_t num_cores);
 
