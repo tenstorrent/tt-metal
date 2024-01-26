@@ -36,19 +36,21 @@ void kernel_main() {
 
         // Producer information
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
-        uint32_t data_size = command_ptr[DeviceCommand::data_size_idx];
-        uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];
-        uint32_t stall = command_ptr[DeviceCommand::stall_idx];
-        uint32_t page_size = command_ptr[DeviceCommand::page_size_idx];
-        uint32_t producer_cb_size = command_ptr[DeviceCommand::producer_cb_size_idx];
-        uint32_t consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
-        uint32_t producer_cb_num_pages = command_ptr[DeviceCommand::producer_cb_num_pages_idx];
-        uint32_t consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
-        uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
-        uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
-        uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
-        uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
-        uint32_t restart = command_ptr[DeviceCommand::restart_idx];
+        volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
+
+        uint32_t data_size = header->data_size;
+        uint32_t num_buffer_transfers = header->num_buffer_transfers;
+        uint32_t stall = header->stall;
+        uint32_t page_size = header->page_size;
+        uint32_t producer_cb_size = header->producer_cb_size;
+        uint32_t consumer_cb_size = header->consumer_cb_size;
+        uint32_t producer_cb_num_pages = header->producer_cb_num_pages;
+        uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
+        uint32_t num_pages = header->num_pages;
+        uint32_t wrap = header->wrap;
+        uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+        uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
+        uint32_t restart = header->restart;
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
@@ -58,7 +60,7 @@ void kernel_main() {
             continue;
         } else if (restart) {
             // Restart read/write pointers
-            issue_queue_size = command_ptr[DeviceCommand::new_issue_queue_size_idx];
+            issue_queue_size = header->new_issue_queue_size;
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CQ_ISSUE_WRITE_PTR)[0] = issue_queue_start_addr >> 4;
             setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
             notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
