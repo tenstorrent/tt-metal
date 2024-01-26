@@ -155,7 +155,7 @@ class BUDAEagerBuild(build_ext):
 # Include tt_metal_C for kernels and src/ and tools
 # And any kernels inside `tt_eager/tt_dnn. We must keep all ops kernels inside
 # tt_dnn
-packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts", "tt_lib.tt_eager.tt_dnn", "ttnn"]
+packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts", "tt_lib.tt_eager.tt_dnn"]
 
 # Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -172,7 +172,6 @@ setup(
         "tt_lib.models": "models",
         "tt_lib.scripts": "scripts",
         "tt_lib.tt_eager.tt_dnn": "tt_eager/tt_dnn",
-        "ttnn": "ttnn",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",

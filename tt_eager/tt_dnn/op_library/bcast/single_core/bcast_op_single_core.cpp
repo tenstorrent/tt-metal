@@ -66,6 +66,8 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 		.set_page_size(output_cb_index, single_tile_size);
 	auto cb_output = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
+    uint32_t bnc1 = (bN*bC == 1);
+
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
@@ -76,12 +78,20 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         (std::uint32_t) dst_is_dram
     };
 
+    std::map<string, string> reader_defines;
+	std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
+
+    if(bcast_dim == BcastOpDim::HW && bnc1) {
+		reader_defines["BCAST_SCALAR"] = "1";
+		bcast_compute_defines["BCAST_SCALAR"] = "1";
+	}
+
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::SINGLE_CORE);
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         reader_name,
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines});
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -90,15 +100,14 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
-    std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
+
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
         compute_name,
         core,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
+        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines}
     );
 
-    uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
     tt_metal::SetRuntimeArgs(
         program,
         binary_reader_kernel_id,
@@ -168,7 +177,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         uint32_t num_tensor_tiles = NC*Ht*Wt;
         uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
 
-        uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
+        uint32_t bnc1 = (bN*bC == 1);
 
         CoreCoord core = {0, 0};
 

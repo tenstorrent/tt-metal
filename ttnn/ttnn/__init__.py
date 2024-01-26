@@ -2,7 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ttnn.tensor import (
+import pathlib
+
+MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
+
+from ttnn.core import (
     TILE_SIZE,
     Device,
     DataType,
@@ -39,22 +43,18 @@ from ttnn.tensor import (
     has_storage_type_of,
 )
 
-from ttnn.core import (
-    MODEL_CACHE_PATH,
-    # initialization
-    open,
-    close,
-    # program_cache,
+from ttnn.device import open, close
+
+from ttnn.program_cache import (
     enable_program_cache,
-    # math operations
+)
+
+from ttnn.operations.matmul import (
     matmul,
     linear,
-    add,
-    sub,
-    subtract,
-    mul,
-    multiply,
-    # data operations
+)
+
+from ttnn.operations.others import (
     embedding,
     pad_to_tile,
     unpad_from_tile,
@@ -64,7 +64,7 @@ from ttnn.core import (
     mean,
 )
 
-from ttnn.data_movement import (
+from ttnn.operations.data_movement import (
     concat,
     pad,
     permute,
@@ -72,7 +72,7 @@ from ttnn.data_movement import (
     repeat_interleave,
 )
 
-from ttnn.unary import (
+from ttnn.operations.unary import (
     exp,
     tanh,
     gelu,
@@ -82,18 +82,21 @@ from ttnn.unary import (
     log,
 )
 
-from ttnn.binary import (
+from ttnn.operations.binary import (
     pow,
+    add,
+    sub,
+    subtract,
+    mul,
+    multiply,
 )
 
-from ttnn.normalization import (
+from ttnn.operations.normalization import (
     layer_norm,
     rms_norm,
     group_norm,
 )
 
-import ttnn.decorators
-import ttnn.transformer
-import ttnn.model_preprocessing
-from ttnn.conv import Conv2D
-from ttnn.max_pool import MaxPool2D
+from ttnn.operations import transformer
+from ttnn.operations.conv import Conv2D
+from ttnn.operations.max_pool import MaxPool2D

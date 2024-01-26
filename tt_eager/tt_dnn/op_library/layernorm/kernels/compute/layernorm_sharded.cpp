@@ -36,12 +36,6 @@ void MAIN {
 
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(0) : 0;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_intermed0);
-
-    // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
-    const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
-    const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
-
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
@@ -66,6 +60,12 @@ void MAIN {
     constexpr uint32_t cb_fusion = cb_xmm; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
 
+    binary_op_init_common(cb_in0, cb_in0, cb_x);
+
+    // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
+    const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
+    const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
+
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
     int index = 0;
@@ -80,8 +80,7 @@ void MAIN {
 
     // pre-add x + y
     #ifdef FUSE_PRE_ADD
-    unpack_reconfig_data_format(tt::CB::c_in0, tt::CB::c_in0);
-    pack_reconfig_data_format(tt::CB::c_intermed0);
+    unpack_reconfig_data_format_srcb(cb_in0, cb_in1);
     add_tiles_init();
     cb_reserve_back(cb_in, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -103,8 +102,10 @@ void MAIN {
         index_h_offset += block_w;
     }
     cb_push_back(cb_in, num_tiles_per_block);
-    unpack_reconfig_data_format(tt::CB::c_intermed0, tt::CB::c_intermed0);
+    unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
     cb_wait_front(cb_in, num_tiles_per_block);
+    #else
+    unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
     #endif
 
     // E[x],
@@ -125,6 +126,8 @@ void MAIN {
     }
     reduce_revert_delta();
     cb_push_back(cb_ex_partial, block_h);
+
+    unpack_reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
@@ -151,6 +154,7 @@ void MAIN {
 
     // x - E[x]
     index_h_offset = 0;
+    unpack_reconfig_data_format_srca(cb_ex_external, cb_in);
     sub_bcast_cols_init_short();
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -177,6 +181,7 @@ void MAIN {
     cb_wait_front(cb_xmm, num_tiles_per_block);
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
+    unpack_reconfig_data_format_srca(cb_in, cb_xmm);
     mul_tiles_init();
     index_h_offset = 0;
     cb_reserve_back(cb_xmm2, num_tiles_per_block);

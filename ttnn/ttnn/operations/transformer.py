@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import tt_lib as ttl
 
-import ttnn.tensor as ttnn
+import ttnn.core as ttnn
 from ttnn.decorators import decorate_operation
 
 

@@ -4,36 +4,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
-
-FORCE_INLINE void generate_bcast_scaler() {
-    constexpr uint32_t cb_in_2 = 2;
-    union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(4);
-    cb_reserve_back(cb_in_2, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
-    for (int j = 0; j < 1024; j++)
-        ptr[j] = uint16_t(0);
-
-    for (int k = 0; k < 4; k++)
-    for (int j = 0; j < 16; j++)
-        ptr[k*256 + j] = uint16_t(u.u>>16);
-    cb_push_back(cb_in_2, 1);
-}
-
-FORCE_INLINE void generate_epsilon() {
-    constexpr uint32_t eps_cb_id = 3;
-    union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(5);
-    cb_reserve_back(eps_cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(eps_cb_id));
-    for (int j = 0; j < 1024; j++)
-        ptr[j] = uint16_t(0);
-
-    for (int k = 0; k < 4; k+=2)
-    for (int j = 0; j < 16; j++)
-        ptr[k*256 + j*16] = uint16_t(u.u>>16);
-    cb_push_back(eps_cb_id, 1);
-}
-
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "tt_eager/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -96,8 +68,14 @@ void kernel_main() {
 
 
     // Generate constant tiles for layernorm compute
-    generate_bcast_scaler();
-    generate_epsilon();
+    {
+        constexpr uint32_t cb_in_2 = 2;
+        uint32_t scaler = get_arg_val<uint32_t>(4);
+        generate_reduce_scaler(cb_in_2, scaler);
+    }
+    constexpr uint32_t eps_cb_id = 3;
+    const uint32_t eps = get_arg_val<uint32_t>(5);
+    generate_bcast_col_scalar(eps_cb_id, eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;

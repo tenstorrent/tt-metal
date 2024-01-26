@@ -302,11 +302,8 @@ def run_sharded_nlp_create_qkv_heads_test(
     device,
 ):
     torch.manual_seed(1234)
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = seq_len * batch // 32
-    if num_cores == 1:
-        pytest.skip("Issue #4706: Can't write 1 core sharded tensors directly to device")
     shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
 
     if read_from_input_tensor_kv:
@@ -332,8 +329,14 @@ def run_sharded_nlp_create_qkv_heads_test(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config, in0_shard_spec)
-        in1_t = ttl.tensor.Tensor(B, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config, in1_shard_spec)
+        in0_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+        )
+        in1_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, in1_shard_spec
+        )
+        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+        in1_t = ttl.tensor.Tensor(B, dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
     else:
         in0_shape = [seq_len, 1, batch, (num_q_heads + 2 * num_kv_heads) * head_dim]
         A = torch.randn(in0_shape)
@@ -346,15 +349,22 @@ def run_sharded_nlp_create_qkv_heads_test(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config, in0_shard_spec)
+        in0_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+        )
+        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
 
+    out_shard_spec = in0_shard_spec
+    out_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, out_shard_spec
+    )
     q, k, v = ttl.tensor.nlp_create_qkv_heads(
         in0_t,
         in1_t if read_from_input_tensor_kv else None,
         num_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
         transpose_k_heads=False,
-        output_mem_config=mem_config,
+        output_mem_config=out_mem_config,
     )
 
     assert list(q.shape()) == [seq_len, num_q_heads, batch, head_dim]

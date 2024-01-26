@@ -202,7 +202,7 @@ void relay_command(bool db_buf_switch, uint64_t consumer_noc_encoding) {
 
 template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
 void produce(
-    volatile tt_l1_ptr uint32_t* command_ptr, uint32_t num_srcs, uint32_t sharded_buffer_num_cores, uint32_t page_size, uint32_t producer_cb_size, uint32_t producer_cb_num_pages,
+    volatile tt_l1_ptr uint32_t* command_ptr, uint32_t num_srcs, bool sharded, uint32_t sharded_buffer_num_cores, uint32_t page_size, uint32_t producer_cb_size, uint32_t producer_cb_num_pages,
     uint32_t consumer_cb_size, uint32_t consumer_cb_num_pages, uint64_t consumer_noc_encoding, uint32_t producer_consumer_transfer_num_pages, bool db_buf_switch) {
     /*
         This API prefetches data from host memory and writes data to the consumer core. On the consumer,
@@ -215,7 +215,6 @@ void produce(
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
     uint32_t l1_consumer_fifo_limit = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size;
 
-    bool sharded = sharded_buffer_num_cores > 1;
 
     for (uint32_t i = 0; i < num_srcs; i++) {
         const uint32_t bank_base_address = command_ptr[0];

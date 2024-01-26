@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         } else if (src1_sharded) {
             shard_spec = b.shard_spec().value();
             block_sharded = b.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-        } if (out_sharded) {
+        } else if (out_sharded) {
             shard_spec = output.shard_spec().value();
             block_sharded = output.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
         }

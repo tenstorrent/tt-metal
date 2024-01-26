@@ -156,7 +156,6 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     }
 
     TileSliceHostDev<0>* ts = reinterpret_cast<TileSliceHostDev<0>*>(ptr);
-    stream << "TILE: (" << endl << std::flush;
     if (ts->w0_ == 0xFFFF) {
         stream << "BAD TILE POINTER" << std::flush;
         stream << " count=" << ts->count_ << std::flush;
@@ -164,8 +163,6 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
         uint32_t i = 0;
         bool count_exceeded = false;
         for (int h = ts->h0_; h < ts->h1_; h += ts->hs_) {
-            if (ts->w0_ < ts->w1_)
-                stream << "  ";
             for (int w = ts->w0_; w < ts->w1_; w += ts->ws_) {
                 // If the number of data specified by the SliceRange exceeds the number that was
                 // saved in the print buffer (set by the MAX_COUNT template parameter in the
@@ -192,7 +189,6 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
                 stream << endl;
         }
     }
-    stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
 } // PrintTileSlice
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
