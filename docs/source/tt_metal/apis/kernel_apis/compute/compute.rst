@@ -4,7 +4,6 @@ Compute APIs
 .. toctree::
 
   copy_tile
-  pack_tile
   move_copy_tile
 
   acquire_dst
@@ -74,7 +73,6 @@ Compute APIs
   binary_op_init_funcs
 
   tilize
-  unpack
   untilize
 
 .. only:: not html
