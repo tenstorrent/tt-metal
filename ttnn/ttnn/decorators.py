@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import contextmanager
+import inspect
 from functools import wraps
+
 from loguru import logger
 
 
@@ -52,14 +55,35 @@ def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     return torch_output
 
 
-def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
+PEARSON_CORRELATION_COEFFICIENT = 0.9999
+
+
+@contextmanager
+def override_pearson_correlation_coefficient(value):
+    global PEARSON_CORRELATION_COEFFICIENT
+    old_value = PEARSON_CORRELATION_COEFFICIENT
+    PEARSON_CORRELATION_COEFFICIENT = value
+    yield
+    PEARSON_CORRELATION_COEFFICIENT = old_value
+
+
+def register_operation(*, name, torch_function=None, validate_input_tensors=None):
     def operation_decorator(function):
-        function_name = name or function.__name__
+        if validate_input_tensors is None:
+            logger.warning(f"{name}: Validation for input tensors is not implemented!")
+
+        def validate_decorator(function):
+            def call_wrapper(*function_args, **function_kwargs):
+                if validate_input_tensors is not None:
+                    validate_input_tensors(name, *function_args, **function_kwargs)
+                return function(*function_args, **function_kwargs)
+
+            return call_wrapper
 
         def debug_decorator(function):
             def call_wrapper(*function_args, **function_kwargs):
                 if torch_function is not None:
-                    logger.info(f"{function_name} : Comparing against PyTorch")
+                    logger.info(f"{name} : Comparing against PyTorch")
 
                 if torch_function is not None:
                     torch_output = torch_function(*function_args, **function_kwargs)
@@ -69,12 +93,12 @@ def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
                 output = function(*function_args, **function_kwargs)
 
                 if torch_output is not None:
-                    matches, last_message = compare(torch_output, output, pcc)
+                    matches, last_message = compare(torch_output, output, pcc=PEARSON_CORRELATION_COEFFICIENT)
                     if not matches:
                         import ttnn
 
                         if USE_TORCH_OUTPUT_IF_MISMATCHES:
-                            logger.warning(f"{function_name}: Comparing against PyTorch failed, using PyTorch output")
+                            logger.warning(f"{name}: Comparing against PyTorch failed, using PyTorch output")
                             if not isinstance(output, ttnn.Tensor):
                                 raise TypeError(f"Expected ttnn.Tensor, got {type(output)}")
                             output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
@@ -83,7 +107,7 @@ def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
                             output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
                             output = ttnn.to_torch(output)
                             raise RuntimeError(
-                                f"{function_name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
+                                f"{name}: Comparing against PyTorch failed with: {last_message} compared: {torch_output} vs {output}"
                             )
 
                 return output
@@ -93,6 +117,7 @@ def decorate_operation(*, torch_function=None, pcc=0.99, name=None):
         @wraps(function)
         def call_wrapper(*function_args, **function_kwargs):
             decorated_function = function
+            decorated_function = validate_decorator(decorated_function)
             if ENABLE_DEBUG_DECORATOR:
                 decorated_function = debug_decorator(decorated_function)
             return decorated_function(*function_args, **function_kwargs)
