@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple, Union, Dict
+from typing import Tuple, Union, Dict, Optional
 
 import ttnn.core as ttnn
 
@@ -30,7 +30,7 @@ class Conv2D:
         batch_size: int,
         input_height: int,
         input_width: int,
-        reader_patterns_cache: Dict,
+        reader_patterns_cache: Optional[Dict],
         weight: ttnn.Tensor,
         bias: ttnn.Tensor = None,
         math_fidelity: ttnn.MathFidelity = None,
@@ -38,6 +38,8 @@ class Conv2D:
         activation: str = None,
         conv_blocking_and_parallelization_config_override: Dict = None,
         reallocate_halo_output: bool = False,
+        using_parameters_cache: bool = False,
+        move_weights_to_device: bool = True,
     ):
         assert (
             padding_mode == "zeros"
@@ -102,6 +104,8 @@ class Conv2D:
             weights_dtype=weights_dtype,
             math_fidelity=math_fidelity,
             move_utwh_output=reallocate_halo_output,
+            using_parameters_cache=using_parameters_cache,
+            move_weights_to_device=move_weights_to_device,
         )
 
     def __call__(self, activation: ttnn.Tensor):
