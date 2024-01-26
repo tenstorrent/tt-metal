@@ -319,8 +319,8 @@ def test_bert_linear_batch7(
             while out_block_w % out_subblock_w != 0:
                 out_subblock_w = out_block_w // 2
 
-    # out_subblock_h = 1
-    # out_subblock_w = 1
+    out_subblock_h = 1
+    out_subblock_w = 1
 
     logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
     logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
