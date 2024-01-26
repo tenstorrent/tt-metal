@@ -40,7 +40,7 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
+operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
     auto shape = input.shape();

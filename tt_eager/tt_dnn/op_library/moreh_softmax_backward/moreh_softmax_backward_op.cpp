@@ -19,7 +19,7 @@ namespace operations {
 namespace primary {
 
 void MorehSoftmaxBackward::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
+    TT_ASSERT(input_tensors.size() == 3, "Must have 3 input tensors");
     TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
     auto& output_tensor = input_tensors.at(0);
     auto& output_grad_tensor = input_tensors.at(1);
@@ -34,21 +34,18 @@ void MorehSoftmaxBackward::validate(const std::vector<Tensor>& input_tensors) co
 }
 
 std::vector<Shape> MorehSoftmaxBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto& output_tensor = input_tensors.at(0);
-    return {output_tensor.shape()};
+    return {};
 }
 
 std::vector<Tensor> MorehSoftmaxBackward::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    return {};
 }
 
 operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     auto& output = input_tensors.at(0);
     auto& output_grad = input_tensors.at(1);
-    auto& input_grad = output_tensors.at(0);
+    auto& input_grad = input_tensors.at(2);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
@@ -130,45 +127,45 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
 Tensor moreh_softmax_backward(
     const Tensor& output_tensor,
     const Tensor& output_grad_tensor,
+    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
-    const MemoryConfig& output_mem_config) {
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
-    return operation::run(
+    operation::run(
                MorehSoftmaxBackward{
                    .dim = dim,
-                   .output_mem_config = output_mem_config,
                    .core_range = all_cores,
                    .op = MorehSoftmaxBackwardOp::SOFTMAX,
                    .strategy = strategy},
-               {output_tensor, output_grad_tensor},
-               {})
-        .at(0);
+               {output_tensor, output_grad_tensor, input_grad_tensor},
+               {});
+
+    return input_grad_tensor;
 }
 
 Tensor moreh_softmin_backward(
     const Tensor& output_tensor,
     const Tensor& output_grad_tensor,
+    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
-    const MemoryConfig& output_mem_config) {
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
-    return operation::run(
+    operation::run(
                MorehSoftmaxBackward{
                    .dim = dim,
-                   .output_mem_config = output_mem_config,
                    .core_range = all_cores,
                    .op = MorehSoftmaxBackwardOp::SOFTMIN,
                    .strategy = strategy},
-               {output_tensor, output_grad_tensor},
-               {})
-        .at(0);
+               {output_tensor, output_grad_tensor, input_grad_tensor},
+               {});
+
+    return input_grad_tensor;
 }
 
 }  // namespace primary

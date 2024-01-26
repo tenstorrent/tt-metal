@@ -487,36 +487,36 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_softmax",
         &moreh_softmax,
-        py::arg("input_tensors").noconvert(),
+        py::arg("input_tensor").noconvert(),
+        py::arg("output_tensor").noconvert(),
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax operation. Returns an output tensor.");
     m_primary.def(
         "moreh_softmax_backward",
         &moreh_softmax_backward,
         py::arg("output_tensor").noconvert(),
         py::arg("output_grad_tensor").noconvert(),
+        py::arg("input_grad_tensor").noconvert(),
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax backward operation. Returns an input grad tensor.");
     m_primary.def(
         "moreh_softmin",
         &moreh_softmin,
-        py::arg("input_tensors").noconvert(),
+        py::arg("input_tensor").noconvert(),
+        py::arg("output_tensor").noconvert(),
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmin operation. Returns an output tensor.");
     m_primary.def(
         "moreh_softmin_backward",
         &moreh_softmin_backward,
         py::arg("output_tensor").noconvert(),
         py::arg("output_grad_tensor").noconvert(),
+        py::arg("input_grad_tensor").noconvert(),
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmin backward operation. Returns an input grad tensor.");
     m_primary.def(
         "moreh_sum",
