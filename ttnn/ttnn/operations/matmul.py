@@ -211,39 +211,42 @@ def matmul(
         batch_size = math.prod(batch_shape_a)
         is_batched = math.prod(batch_shape_b) > 1
 
+        input_tensor_a_memory_config = ttnn.get_memory_config(input_tensor_a)
+        input_tensor_b_memory_config = ttnn.get_memory_config(input_tensor_b)
+
         if is_batched:
-            if (not input_tensor_a.is_sharded()) and (not input_tensor_b.is_sharded()):
+            if (not ttnn.is_sharded(input_tensor_a)) and (not ttnn.is_sharded(input_tensor_b)):
                 per_core_M = int(math.ceil((m_size / ttnn.TILE_SIZE)))
                 per_core_N = int(math.ceil((n_size / ttnn.TILE_SIZE)))
                 in0_block_w = 1  # TODO(arakhmati): Can it be more than 1 without running out of memory?
-            elif input_tensor_a.is_sharded():
-                if input_tensor_a.memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            elif ttnn.is_sharded(input_tensor_a):
+                if input_tensor_a_memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
                     raise TypeError("Cannot be width sharded")
-                shard_shape = input_tensor_a.memory_config.shard_spec.shape
+                shard_shape = input_tensor_a_memory_config.shard_spec.shape
                 N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
                 per_core_M = shard_shape[0] // ttnn.TILE_SIZE
                 per_core_N = N
                 in0_block_w = shard_shape[1] // ttnn.TILE_SIZE
-            elif input_tensor_b.is_sharded():
-                if input_tensor_b.memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            elif ttnn.is_sharded(input_tensor_b):
+                if input_tensor_b_memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
                     raise TypeError("Cannot be width sharded")
-                shard_shape = input_tensor_b.memory_config.shard_spec.shape
+                shard_shape = input_tensor_b_memory_config.shard_spec.shape
                 per_core_M = int(math.ceil((m_size / ttnn.TILE_SIZE)))
                 per_core_N = shard_shape[1] // ttnn.TILE_SIZE
                 in0_block_w = 1
         else:
-            if not input_tensor_a.is_sharded():
+            if not ttnn.is_sharded(input_tensor_a):
                 per_core_M = int(math.ceil(((batch_size * m_size) / ttnn.TILE_SIZE) / core_grid[0]))
                 per_core_N = int(math.ceil(n_size / ttnn.TILE_SIZE / core_grid[1]))
                 in0_block_w = 4  # TODO(arakhmati): What is a good starting point?
                 while (k_size // ttnn.TILE_SIZE) % in0_block_w != 0:
                     in0_block_w -= 1
             else:
-                if not input_tensor_a.memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+                if not input_tensor_a_memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
                     raise TypeError("Must be block sharded")
                 K = input_tensor_a.shape[-1] // ttnn.TILE_SIZE
                 N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
-                shard_shape = input_tensor_a.memory_config.shard_spec.shape
+                shard_shape = input_tensor_a_memory_config.shard_spec.shape
                 per_core_M = shard_shape[0] // ttnn.TILE_SIZE
                 per_core_N = (N * shard_shape[1]) // (K * ttnn.TILE_SIZE)
                 in0_block_w = 1

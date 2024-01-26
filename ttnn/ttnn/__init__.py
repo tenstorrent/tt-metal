@@ -34,6 +34,8 @@ from ttnn.types import (
 
 from ttnn.core import (
     has_padding,
+    is_sharded,
+    get_memory_config,
     create_sharded_memory_config,
 )
 

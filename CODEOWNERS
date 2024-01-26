@@ -38,7 +38,7 @@ tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
 tt_metal/host_api.hpp @abhullar-tt @TT-billteng @davorchap
 tt_metal/impl/device/ @TT-billteng
-tt_metal/impl/buffers/ @TT-billteng
+tt_metal/impl/buffers/ @TT-billteng @tarafdarTT
 tt_metal/impl/program/ @TT-billteng
 # tt_metal/impl/ @abhullar-tt @TT-billteng
 # tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
@@ -46,7 +46,7 @@ tt_metal/impl/program/ @TT-billteng
 # metal - dispatch
 tt_metal/impl/dispatch/ @DrJessop @davorchap
 tt_metal/impl/dispatch/**/module.mk @DrJessop @davorchap @tt-rkim
-tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap
+tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap @tarafdarTT
 docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
 docs/source/tt_metal/apis/host_apis/ @TT-billteng
 
@@ -60,7 +60,7 @@ tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
 # tt_metal/hw/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
 tt_metal/include/compute_kernel_api.h @davorchap @muthutt @mywoodstock
-tt_metal/include/dataflow_kernel_api.h @davorchap @DrJessop @mywoodstock
+tt_metal/include/dataflow_kernel_api.h @davorchap @DrJessop @mywoodstock @tarafdarTT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @DrJessop @mywoodstock
 
 # metal - profiler
