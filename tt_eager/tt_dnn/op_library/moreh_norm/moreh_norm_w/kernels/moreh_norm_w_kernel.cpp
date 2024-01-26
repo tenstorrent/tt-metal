@@ -15,17 +15,17 @@ void MAIN {
     const auto recip_p = get_arg_val<uint32_t>(i++);
     const bool recip_p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    std::uint8_t input_id{0};
+    std::uint8_t input_id{tt::CB::c_in0};
     const auto cb_x = input_id++;                // input
     const auto cb_one = input_id++;              // one
     const auto cb_decimal = input_id++;          // decimal
     const auto cb_recip_p_decimal = input_id++;  // recip_p_decimal
     const auto cb_mask_w = input_id++;           // mask_w
 
-    std::uint8_t output_id{16};
+    std::uint8_t output_id{tt::CB::c_out0};
     const auto cb_y = output_id++;  // output
 
-    std::uint8_t intermed_id{24};
+    std::uint8_t intermed_id{tt::CB::c_intermed0};
     const auto cb_tmp0 = intermed_id++;
     const auto cb_tmp1 = intermed_id++;
     const auto cb_tmp2 = intermed_id++;

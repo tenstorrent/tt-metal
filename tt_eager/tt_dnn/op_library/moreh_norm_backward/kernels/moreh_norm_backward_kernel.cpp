@@ -19,16 +19,16 @@ void MAIN {
     const auto p_minus_one = get_arg_val<uint32_t>(i++);
     const bool p_minus_one_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    std::uint8_t input_id{0};
+    std::uint8_t input_id{tt::CB::c_in0};
     const auto cb_x = input_id++;        // input(==x)
     const auto cb_y = input_id++;        // output(==y)
     const auto cb_dy = input_id++;       // output_grad(==dy)
     const auto cb_decimal = input_id++;  // decimal
 
-    std::uint8_t output_id{16};
+    std::uint8_t output_id{tt::CB::c_out0};
     const auto cb_dx = output_id++;  // input_grad(==dx)
 
-    std::uint8_t intermed_id{24};
+    std::uint8_t intermed_id{tt::CB::c_intermed0};
     const auto cb_tmp0 = intermed_id++;
     const auto cb_tmp1 = intermed_id++;
     const auto cb_tmp2 = intermed_id++;
