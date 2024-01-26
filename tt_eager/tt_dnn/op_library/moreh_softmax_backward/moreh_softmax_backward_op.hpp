@@ -32,31 +32,31 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor);
 operation::ProgramWithCallbacks moreh_softmax_backward_w_small(
     const Tensor &output,
     const Tensor &output_grad,
-    Tensor &input_grad,
+    const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op);
 operation::ProgramWithCallbacks moreh_softmax_backward_w_large(
     const Tensor &output,
     const Tensor &output_grad,
-    Tensor &input_grad,
+    const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op);
 operation::ProgramWithCallbacks moreh_softmax_backward_h_small(
     const Tensor &output,
     const Tensor &output_grad,
-    Tensor &input_grad,
+    const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op);
 operation::ProgramWithCallbacks moreh_softmax_backward_h_large(
     const Tensor &output,
     const Tensor &output_grad,
-    Tensor &input_grad,
+    const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op);
 operation::ProgramWithCallbacks moreh_softmax_backward_c_large(
     const Tensor &output,
     const Tensor &output_grad,
-    Tensor &input_grad,
+    const Tensor &input_grad,
     uint32_t dim,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op);
@@ -75,9 +75,9 @@ struct MorehSoftmaxBackward {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     MorehSoftmaxBackwardOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor> &input_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config");
+    static constexpr auto attribute_names = std::make_tuple("dim");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config));
+        return std::make_tuple(std::cref(this->dim));
     }
 };
 
@@ -85,15 +85,16 @@ struct MorehSoftmaxBackward {
 Tensor moreh_softmax_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
+    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
+
 Tensor moreh_softmin_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
+    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
 
 }  // namespace primary
 }  // namespace operations
