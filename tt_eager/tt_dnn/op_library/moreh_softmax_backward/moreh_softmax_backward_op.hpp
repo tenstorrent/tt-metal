@@ -24,7 +24,11 @@ enum class MorehSoftmaxBackwardOpParallelizationStrategy {
     LARGE_C = 5
 };
 
-enum class MorehSoftmaxBackwardOp { SOFTMAX = 0, SOFTMIN = 1 };
+enum class MorehSoftmaxBackwardOp {
+    SOFTMAX = 0,
+    SOFTMIN = 1,
+    LOGSOFTMAX = 2,
+};
 
 bool is_moreh_softmax_backward_w_small_available(const Tensor &tensor);
 bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor);
@@ -63,7 +67,6 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(
 
 struct MorehSoftmaxBackward {
     const uint32_t dim;
-    const MemoryConfig output_mem_config;
     const CoreRange core_range;  // unused for now
     const MorehSoftmaxBackwardOp op;
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy;
@@ -90,6 +93,13 @@ Tensor moreh_softmax_backward(
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
 
 Tensor moreh_softmin_backward(
+    const Tensor &output_tensor,
+    const Tensor &output_grad_tensor,
+    const Tensor &input_grad_tensor,
+    uint32_t dim,
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
+
+Tensor moreh_logsoftmax_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
     const Tensor &input_grad_tensor,

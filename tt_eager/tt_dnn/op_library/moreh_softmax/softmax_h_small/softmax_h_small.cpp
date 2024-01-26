@@ -90,8 +90,12 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const
         program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) compute_defines["SOFTMAX"] = "1";
     else compute_defines["SOFTMIN"] = "1";
+
+    if (op == MorehSoftmaxOp::LOGSOFTMAX) {
+        compute_defines["LOG"] = "1";
+    }
 
     // create compute kernel
     CreateComputeKernel(

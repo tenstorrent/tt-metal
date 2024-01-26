@@ -189,6 +189,34 @@ ALWI void copy_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     cb_push_back(ocb, onetile);
 }
 
+ALWI void mask_tile_to_cb(uint32_t icb, uint32_t maskcb, uint32_t ocb, uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+    constexpr int dst_mask = 1;
+
+    cb_reserve_back(ocb, onetile);
+    cb_wait_front(icb, itile + 1);
+    cb_wait_front(maskcb, mtile + 1);
+
+    copy_tile_init();
+    copy_tile(icb, itile, dst0);
+
+    copy_tile_init();
+    copy_tile(maskcb, mtile, dst_mask);
+
+    mask_tile_init();
+    mask_tile(dst0, dst_mask);
+
+    pack_tile(dst0, ocb);
+
+    if (pop)
+        cb_pop_front(icb, pop);
+    if (popm)
+        cb_pop_front(maskcb, popm);
+
+    cb_push_back(ocb, onetile);
+}
+
 ALWI void exp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t dst = 0, uint32_t pop = 1) {
     constexpr uint32_t onetile = 1;
 
@@ -331,21 +359,28 @@ ALWI void recip_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint3
     cb_push_back(ocb, onetile);
 }
 
-ALWI void add_tiles_to_cb(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+ALWI void add_tiles_to_cb(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t ocb,
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
     cb_reserve_back(ocb, onetile);
-    cb_wait_front(icb0, onetile);
-    cb_wait_front(icb1, onetile);
+    cb_wait_front(icb0, itile0 + 1);
+    cb_wait_front(icb1, itile1 + 1);
 
     add_tiles_init();
-    add_tiles(icb0, icb1, 0, 0, dst0);
+    add_tiles(icb0, icb1, itile0, itile1, dst0);
 
     pack_tile(dst0, ocb);
 
-    cb_pop_front(icb0, onetile);
-    cb_pop_front(icb1, onetile);
+    if (pop0) cb_pop_front(icb0, pop0);
+    if (pop1) cb_pop_front(icb1, pop1);
 
     cb_push_back(ocb, onetile);
 }
@@ -354,8 +389,8 @@ ALWI void sub_tiles_to_cb(
     uint32_t icb0,
     uint32_t icb1,
     uint32_t ocb,
-    uint32_t itile0 = 1,
-    uint32_t itile1 = 1,
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;

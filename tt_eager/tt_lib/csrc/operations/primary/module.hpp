@@ -518,6 +518,26 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
         "Performs a softmin backward operation. Returns an input grad tensor.");
+
+    m_primary.def(
+        "moreh_logsoftmax",
+        &moreh_logsoftmax,
+        py::arg("input_tensor").noconvert(),
+        py::arg("output_tensor").noconvert(),
+        py::arg("dim").noconvert(),
+        py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
+        "Performs a logsoftmax operation. Returns an output tensor.");
+
+    m_primary.def(
+        "moreh_logsoftmax_backward",
+        &moreh_logsoftmax_backward,
+        py::arg("output_tensor").noconvert(),
+        py::arg("output_grad_tensor").noconvert(),
+        py::arg("input_grad_tensor").noconvert(),
+        py::arg("dim").noconvert(),
+        py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+        "Performs a logsoftmax backward operation. Returns an input grad tensor.");
+
     m_primary.def(
         "moreh_sum",
         &moreh_sum,

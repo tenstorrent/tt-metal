@@ -9,6 +9,7 @@
 
 #include <vector>
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
@@ -78,7 +79,11 @@ void MAIN {
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
             ACQ();
-            mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, w, 0, /*pop0=*/0, /*pop1=*/0);
+            #ifdef LOG
+                mul_tiles_bcast_cols_log_to_cb(cb_exps, cb_recipsumexps, cb_out0, w, 0, /*pop0=*/0, /*pop1=*/0);
+            #else
+                mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, w, 0, /*pop0=*/0, /*pop1=*/0);
+            #endif
             REL();
         }
 
