@@ -267,7 +267,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     // act block info
     uint32_t act_block_w_datums = act_matrix_width / num_blocks_act_w;
     uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
-    TT_ASSERT((act_block_w_datums == conv_act_size_c * weight_size_w) || ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
+    TT_ASSERT((act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH)) || ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
@@ -615,6 +615,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         }
         // 1D conv
         else {
+            assert(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
             reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
             if (split_reader) {
                 writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
@@ -646,8 +647,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
-
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    uint32_t act_block_w_extra_align_bytes = (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
     reader_compile_time_args = {(uint32_t)
         (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t) stride_h,
@@ -661,7 +662,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         (uint32_t) act_block_h_datums,
         (uint32_t) act_block_num_tiles / conv_act_c_blocks,
         (uint32_t) weight_size_w,
-        (uint32_t) conv_act_size_w + (2 * pad_w)};
+        (uint32_t) conv_act_size_w + (2 * pad_w),
+        (uint32_t) act_block_w_extra_align_bytes, // only used for 1d systolic variant
+        };
 
     // define for bias
     std::map<string, string> writer_defines;
@@ -707,6 +710,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             (uint32_t) conv_act_c_read_bytes,
             (uint32_t) weight_size_w * conv_act_c_read_bytes, // coalesced_read_bytes
             (uint32_t) (conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes, // window_outer_offset
+            (uint32_t) act_block_w_extra_align_bytes, // only used for 1d systolic variant
         };
         writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }

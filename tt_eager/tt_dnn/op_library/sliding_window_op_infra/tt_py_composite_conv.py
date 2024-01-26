@@ -202,7 +202,7 @@ def determine_per_core_block_config(
         act_block_h_ntiles_override if act_block_h_ntiles_override > 0 else per_core_out_matrix_height_ntiles
     )
     act_block_w_ntiles = (int)(
-        ((input_channels * sliding_window_op_params.window_w) if is_1d_systolic else input_channels) / 32
+        (_nearest_32(input_channels * sliding_window_op_params.window_w) if is_1d_systolic else input_channels) / 32
     )
     if is_1d_systolic:
         act_c_num_blocks = 1
@@ -217,6 +217,12 @@ def determine_per_core_block_config(
     out_subblock_h_ntiles, out_subblock_w_ntiles = determine_largest_subblock_size(
         act_block_h_ntiles, weight_block_w_ntiles
     )
+    if input_channels == 16 and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
+        assert is_1d_systolic
+        # TODO: fix this temporary hack for shallow conv
+        assert act_block_h_ntiles % 2 == 0
+        out_subblock_h_ntiles = act_block_h_ntiles // 2
+        assert out_subblock_h_ntiles * out_subblock_w_ntiles <= 8
 
     if "act_block_w" in config_override:
         act_block_w_override = config_override["act_block_w"]
@@ -595,12 +601,20 @@ class TTPyCompositeConv(TTPyOp):
             assert weight.shape() == weights_shape
             weight_untiled = weight.pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
             # for conv op, pad the weights to block shape
-            weight_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(
-                weight_untiled,
-                weight_block_h_ntiles,
-                weight_block_w_ntiles,
-                output_dtype=weights_dtype,
-            )
+            if self.is_1d_systolic:
+                weight_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+                    weight_untiled,
+                    weight_block_h_ntiles,
+                    weight_block_w_ntiles,
+                    output_dtype=weights_dtype,
+                )
+            else:
+                weight_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(
+                    weight_untiled,
+                    weight_block_h_ntiles,
+                    weight_block_w_ntiles,
+                    output_dtype=weights_dtype,
+                )
             weight_on_device = weight_tiled_.to(device) if move_weights_to_device else weight_tiled_
             bias_on_device = None
             self.weight = weight_on_device
