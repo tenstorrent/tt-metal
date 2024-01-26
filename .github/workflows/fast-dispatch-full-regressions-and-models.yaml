@@ -7,13 +7,14 @@ on:
     - cron: "0 1,6 * * *"
 
 jobs:
-  build-and-test-frequent-fast-dispatch:
+  frequent-fast-dispatch:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         arch: [grayskull, wormhole_b0]
+        frequent-type: [models, api]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
@@ -33,4 +34,4 @@ jobs:
         run: make build
       - name: Run frequent reg tests scripts
         timeout-minutes: 165
-        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent --dispatch-mode fast
+        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode fast
