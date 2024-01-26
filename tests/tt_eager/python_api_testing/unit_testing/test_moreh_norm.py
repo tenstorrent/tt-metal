@@ -71,7 +71,11 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
     if do_backward:
         npu_dy = to_npu(cpu_dy.bfloat16(), device)
 
-    npu_y = ttl.operations.primary.moreh_norm(npu_x, p=p, dim=dim)
+    npu_y = None
+    if do_backward:
+        npu_y = to_npu(torch.norm(cpu_x, p=p, dim=dim, keepdim=True).bfloat16(), device)
+    else:
+        npu_y = ttl.operations.primary.moreh_norm(npu_x, p=p, dim=dim)
 
     npu_dx = None
     if do_backward:
