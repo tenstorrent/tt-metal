@@ -98,6 +98,10 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
     else compute_defines["SOFTMIN"] = "1";
 
+    if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
+        compute_defines["LOG"] = 1;
+    }
+
     // create compute kernel
     CreateComputeKernel(
         program,

@@ -7,6 +7,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/mask.h"
@@ -71,7 +72,11 @@ void MAIN {
 
             // multiply recip
             ACQ();
-            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            #ifdef LOG
+                mul_tiles_log_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            #else
+                mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            #endif
             REL();
         }
 

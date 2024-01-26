@@ -82,8 +82,12 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, const
     }
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) compute_defines["SOFTMAX"] = "1";
     else compute_defines["SOFTMIN"] = "1";
+
+    if (op == MorehSoftmaxOp::LOGSOFTMAX) {
+        compute_defines["LOG"] = "1";
+    }
 
     // create compute kernel
     CreateComputeKernel(

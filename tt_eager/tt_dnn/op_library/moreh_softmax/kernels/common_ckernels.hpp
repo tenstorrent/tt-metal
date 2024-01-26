@@ -41,6 +41,37 @@ ALWI void mul_tiles_to_cb(
     cb_push_back(ocb, onetile);
 }
 
+ALWI void mul_tiles_log_to_cb(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t ocb,
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+
+    cb_reserve_back(ocb, onetile);
+    cb_wait_front(icb0, itile0 + 1);
+    cb_wait_front(icb1, itile1 + 1);
+
+    mul_tiles_init();
+    mul_tiles(icb0, icb1, itile0, itile1, dst0);
+
+    log_tile_init();
+    log_tile(dst0);
+
+    pack_tile(dst0, ocb);
+
+    if (pop0)
+        cb_pop_front(icb0, pop0);
+    if (pop1)
+        cb_pop_front(icb1, pop1);
+
+    cb_push_back(ocb, onetile);
+}
+
 ALWI void mul_tiles_and_mask_tile_to_cb(
     uint32_t icb0,
     uint32_t icb1,
@@ -111,6 +142,38 @@ ALWI void mul_tiles_bcast_rows_to_cb(
     cb_push_back(ocb, onetile);
 }
 
+ALWI void mul_tiles_bcast_rows_log_to_cb(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t ocb,
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+
+    cb_reserve_back(ocb, onetile);
+
+    cb_wait_front(icb0, itile0 + 1);
+    cb_wait_front(icb1, itile1 + 1);
+
+    mul_bcast_rows_init_short();
+    mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
+
+    log_tile_init();
+    log_tile(dst0);
+
+    pack_tile(dst0, ocb);
+
+    if (pop0)
+        cb_pop_front(icb0, pop0);
+    if (pop1)
+        cb_pop_front(icb1, pop1);
+
+    cb_push_back(ocb, onetile);
+}
+
 ALWI void mul_tiles_bcast_cols_to_cb(
     uint32_t icb0,
     uint32_t icb1,
@@ -129,6 +192,38 @@ ALWI void mul_tiles_bcast_cols_to_cb(
 
     mul_bcast_cols_init_short();
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
+
+    pack_tile(dst0, ocb);
+
+    if (pop0)
+        cb_pop_front(icb0, pop0);
+    if (pop1)
+        cb_pop_front(icb1, pop1);
+
+    cb_push_back(ocb, onetile);
+}
+
+ALWI void mul_tiles_bcast_cols_log_to_cb(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t ocb,
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+
+    cb_reserve_back(ocb, onetile);
+
+    cb_wait_front(icb0, itile0 + 1);
+    cb_wait_front(icb1, itile1 + 1);
+
+    mul_bcast_cols_init_short();
+    mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
+
+    log_tile_init();
+    log_tile(dst0);
 
     pack_tile(dst0, ocb);
 
