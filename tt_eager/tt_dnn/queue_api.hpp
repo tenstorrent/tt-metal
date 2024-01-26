@@ -1,40 +1,46 @@
-namespace tt::tt_metal {
+#include <optional>
+#include <vector>
+#include "tt_eager/tensor/tensor.hpp"
 
-//Definition will be moved to metal-level when it's ready
+namespace tt::tt_metal {
+class CommandQueue;
+using Queue = CommandQueue;
+
+//Dummy placeholder, definition will be moved to metal-level when it's ready
 struct Event {
    uint32_t id;
 };
 
 
 // Future APIs to be added later
-// void EnqueueAllocateDeviceBuffer(CommandQueue&, DeviceBuffer&); // Part 2
-// void EnqueueAllocateHostBuffer(CommandQueue&, HostBuffer&); // Part 2
+// void EnqueueAllocateDeviceBuffer(Queue&, DeviceBuffer&); // Part 2
+// void EnqueueAllocateHostBuffer(Queue&, HostBuffer&); // Part 2
 
 
-// void EnqueueDeallocate(CommandQueue&, Tensor&); // Part 2
-// void EnqueueReallocate(CommandQueue&, Tensor&); // TBD at a later time
+// void EnqueueDeallocate(Queue&, Tensor&); // Part 2
+// void EnqueueReallocate(Queue&, Tensor&); // TBD at a later time
 
 
-void EnqueueHostToDeviceTransfer(CommandQueue&, Tensor& dst, void* src, size_t transfer_size);
+void EnqueueHostToDeviceTransfer(Queue&, Tensor& dst, void* src, size_t transfer_size);
 
-void EnqueueDeviceToHostTransfer(CommandQueue&, Tensor& src, void* dst, size_t transfer_size, size_t src_offset = 0);
+void EnqueueDeviceToHostTransfer(Queue&, Tensor& src, void* dst, size_t transfer_size, size_t src_offset = 0);
 
 
-void QueueRecordEvent(CommandQueue&, Event&);
-void QueueWaitForEvent(CommandQueue&, Event&);
+void QueueRecordEvent(Queue&, Event&);
+void QueueWaitForEvent(Queue&, Event&);
 void EventSynchronize(Event&);
-void QueueSynchronize(CommandQueue&);
+void QueueSynchronize(Queue&);
 
 
-void EnqueueOperation(CommandQueue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
-void EnqueueOperation(CommandQueue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
+void EnqueueOperation(Queue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
+void EnqueueOperation(Queue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
 
 }
 
 // Example
 // auto Sqrt =
 //    tt::tt_metal::EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}};
-// void sqrt(CommandQueue& queue, Tensor& input, Tensor& output) { EnqueueOperation(queue, Sqrt, {input, output}); }
+// void sqrt(Queue& queue, Tensor& input, Tensor& output) { EnqueueOperation(queue, Sqrt, {input, output}); }
 // void sqrt(Tensor& input, Tensor& output) { EnqueueOperation(GetDefaultQueue(), Sqrt, {input, output}); }
 
 // void example() {
