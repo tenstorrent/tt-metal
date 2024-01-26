@@ -28,6 +28,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_eltwise_binary \
 		 tests/tt_metal/test_eltwise_unary \
 		 tests/tt_metal/test_eltwise_unary_dropout \
+		 tests/tt_metal/test_uint_data_type_cb \
 		 tests/tt_metal/test_matmul_single_tile_bfp8b \
 		 tests/tt_metal/test_matmul_single_tile \
 		 tests/tt_metal/test_matmul_single_tile_output_in_l1 \
