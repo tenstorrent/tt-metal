@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_eager/queue/queue.hpp"
 #include "tt_eager/tt_dnn/op_library/operation.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
