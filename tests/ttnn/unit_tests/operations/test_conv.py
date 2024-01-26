@@ -218,7 +218,7 @@ def test_resnet50_conv(
         # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit
         # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None), # doesnt fit at all.. for all data types
         # sd convs with HxW=64x64 with batch size = 1
-        # (2, 32, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None), # not supported
+        (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
         (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  #
@@ -229,6 +229,7 @@ def test_resnet50_conv(
         (1, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
         (1, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         # sd convs with HxW=64x64 with batch size=2
+        (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
         (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),

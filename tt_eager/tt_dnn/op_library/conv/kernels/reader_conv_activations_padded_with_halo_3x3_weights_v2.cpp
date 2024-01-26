@@ -50,6 +50,7 @@ void kernel_main() {
     constexpr uint32_t act_block_num_tiles                 = get_compile_time_arg_val(9);
     constexpr uint32_t weight_size_w_compile_time_arg      = get_compile_time_arg_val(10);
     constexpr uint32_t conv_act_size_w_padded              = get_compile_time_arg_val(11);
+    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(12);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
@@ -215,11 +216,11 @@ void kernel_main() {
 
                     act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
                     noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                    l1_write_addr_act += coalesced_read_bytes;
+                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
                     act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
                     noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                    l1_write_addr_act += coalesced_read_bytes;
+                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
                     reader_idx++;
                 }
