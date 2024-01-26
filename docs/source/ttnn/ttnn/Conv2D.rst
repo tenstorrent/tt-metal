@@ -4,4 +4,4 @@ ttnn.Conv2D
 ###############
 
 .. autoclass:: ttnn.Conv2D
-   :members:
+   .. method:: copy_input_on_device, copy_output_from_device
