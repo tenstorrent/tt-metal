@@ -10,7 +10,6 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "risc_attribs.h"
-#include "llk_op_info_api.h"
 
 #define SYNC SyncHalf
 
@@ -456,28 +455,6 @@ ALWI void power_tile(uint32_t idst,uint32_t param0) {
 ALWI void power_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_power_init<APPROX>() ));
 }
-
-ALWI void get_next_op_info(tt::op_info_t& op_info)
-{
-    MATH(( llk_get_next_op_info(op_info) ));
-    PACK(( llk_get_next_op_info(op_info) ));
-    UNPACK(( llk_get_next_op_info(op_info) ));
-}
-
-/**
- * Deprecated
- */
-ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
-{
-    MATH(( llk_math_pack_sync_init<SyncHalf>() ));
-    PACK(( llk_pack_init() ));
-    PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
-    UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,0) ));
-}
-
 
 //exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
 /**

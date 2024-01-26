@@ -50,7 +50,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_multi_core_kernel \
 		 tests/tt_metal/test_unpack_tilize \
 		 tests/tt_metal/test_unpack_untilize \
-		 tests/tt_metal/test_graph_interpreter \
 		 tests/tt_metal/test_interleaved_layouts \
 		 tests/tt_metal/test_interleaved_l1_buffer \
 		 tests/tt_metal/test_bcast \

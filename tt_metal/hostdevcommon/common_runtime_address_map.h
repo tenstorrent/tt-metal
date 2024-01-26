@@ -80,10 +80,6 @@ constexpr static std::uint32_t TRISC1_BP_LNUM = TRISC1_BP_LNUM_MACRO;
 constexpr static std::uint32_t TRISC2_BP_LNUM = TRISC2_BP_LNUM_MACRO;
 constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
 
-// Space allocated for op info, used in graph interpreter
-constexpr static std::uint32_t OP_INFO_BASE_ADDR = 109628;
-constexpr static std::uint32_t OP_INFO_SIZE      = 280; // So far, holds up to 10 ops
-
 // Dispatch message address
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;

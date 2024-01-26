@@ -189,20 +189,6 @@ void write_circular_buffer_config_vector_to_core(chip_id_t chip, const CoreCoord
     write_hex_vec_to_core(chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
 }
 
-void write_graph_interpreter_op_info_to_core(chip_id_t chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
-    vector<uint32_t> op_info_vec = {
-        op_info.op_code,
-        op_info.cb_in0_id,
-        op_info.cb_in1_id,
-        op_info.cb_out_id,
-        op_info.pop0,
-        op_info.pop1,
-        op_info.unary};
-    uint32_t offset = op_info_vec.size() * sizeof(uint32_t) * op_idx;
-
-    write_hex_vec_to_core(chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
-}
-
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;

@@ -230,13 +230,6 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx)
-        {
-            auto worker_core = device->worker_core_from_logical_core(core);
-            llrt::write_graph_interpreter_op_info_to_core(device->id(), worker_core, op_info, op_idx);
-            return true;
-        }
-
         inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
         {
             auto worker_core = device->worker_core_from_logical_core(logical_core);

@@ -94,10 +94,6 @@ void set_config_for_circular_buffer(
 void write_circular_buffer_config_vector_to_core(
     chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
 
-void write_graph_interpreter_op_info_to_core(
-    chip_id_t chip, const CoreCoord &core, op_info_t op_info, int op_idx);
-
-
 void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
 bool test_load_write_read_risc_binary(
