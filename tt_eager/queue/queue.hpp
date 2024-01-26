@@ -21,14 +21,6 @@ struct Event {
 };
 
 
-// Future APIs to be added later
-// void EnqueueAllocateDeviceBuffer(Queue&, DeviceBuffer&); // Part 2
-// void EnqueueAllocateHostBuffer(Queue&, HostBuffer&); // Part 2
-
-
-// void EnqueueDeallocate(Queue&, Tensor&); // Part 2
-// void EnqueueReallocate(Queue&, Tensor&); // TBD at a later time
-
 
 void EnqueueHostToDeviceTransfer(Queue&, Tensor& dst, void* src, size_t transfer_size);
 
@@ -45,6 +37,15 @@ void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Ten
 void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
 
 }
+
+// Future APIs to be added later
+// void EnqueueAllocateDeviceBuffer(Queue&, DeviceBuffer&); // Part 2
+// void EnqueueAllocateHostBuffer(Queue&, HostBuffer&); // Part 2
+
+
+// void EnqueueDeallocate(Queue&, Tensor&); // Part 2
+// void EnqueueReallocate(Queue&, Tensor&); // TBD
+// void EnqueueAllocateHostMemory(Queue& , owned_buffer::Buffer& ); // TBD
 
 // Example
 // auto Sqrt =
@@ -94,7 +95,7 @@ void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Ten
 
 
 //    owned_buffer::Buffer host_output_buffer;
-//  //  EnqueueAllocateHostMemory(data_queue, host_output_buffer); // ???
+//    EnqueueAllocateHostMemory(data_queue, host_output_buffer); // ???
 //    Tensor host_output_tensor = Tensor{OwnedStorage{host_buffer, ...}, ...};
 
 
