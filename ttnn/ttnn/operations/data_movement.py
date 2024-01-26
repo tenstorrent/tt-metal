@@ -7,7 +7,7 @@ from typing import Tuple, Union, List
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 
 
 def _torch_pad(input_tensor: ttnn.Tensor, padding, value):
@@ -25,7 +25,7 @@ def _torch_pad(input_tensor: ttnn.Tensor, padding, value):
     return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
 
 
-@decorate_operation(torch_function=_torch_pad)
+@register_operation(torch_function=_torch_pad, name="ttnn.pad")
 def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float]) -> ttnn.Tensor:
     r"""
 
@@ -64,7 +64,7 @@ def _torch_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     return torch.permute(input_tensor, order).contiguous().clone()
 
 
-@decorate_operation(torch_function=_torch_permute)
+@register_operation(torch_function=_torch_permute, name="ttnn.permute")
 def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
     r"""
     permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
@@ -134,7 +134,7 @@ def _torch_concat(tensors, dim=0, **_):
     return torch.concat(torch_tensors, dim)
 
 
-# @decorate_operation(torch_function=_torch_concat)
+@register_operation(torch_function=_torch_concat, name="ttnn.concat")
 def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor:
     r"""
     concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor
@@ -203,7 +203,7 @@ def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):
     return torch.split(input_tensor, split_size, dim=dim)
 
 
-@decorate_operation(torch_function=_torch_split)
+@register_operation(torch_function=_torch_split, name="ttnn.split")
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     r"""
     split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> Tuple[ttnn.Tensor, ...]
@@ -236,7 +236,7 @@ def _torch_repeat_interleave(tensor, repeats, dim=0, **_):
     return torch.repeat_interleave(ttnn.to_torch(tensor), repeats, dim=dim)
 
 
-@decorate_operation(torch_function=_torch_repeat_interleave)
+@register_operation(torch_function=_torch_repeat_interleave, name="ttnn.repeat_interleave")
 def repeat_interleave(tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
     repeat_interleave(tensors: ttnn.Tensor, repeats : Union[ttnn.Tensor,int], dim: int = 0) -> ttnn.Tensor

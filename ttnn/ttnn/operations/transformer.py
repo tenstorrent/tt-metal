@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 
 
 def _torch_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
@@ -42,7 +42,10 @@ def _fallback_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *
     return _torch_split_query_key_value_and_split_heads(input_tensor, num_heads=num_heads)
 
 
-@decorate_operation(torch_function=_fallback_split_query_key_value_and_split_heads)
+@register_operation(
+    torch_function=_fallback_split_query_key_value_and_split_heads,
+    name="ttnn.transformer.split_query_key_value_and_split_heads",
+)
 def split_query_key_value_and_split_heads(
     input_tensor: ttnn.Tensor,
     kv_input_tensor: Optional[ttnn.Tensor] = None,
@@ -240,7 +243,7 @@ def _fallback_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, at
     return _torch_attention_softmax(input_tensor, head_size=head_size, attention_mask=attention_mask)
 
 
-@decorate_operation(torch_function=_fallback_attention_softmax)
+@register_operation(torch_function=_fallback_attention_softmax, name="ttnn.transformer.attention_softmax")
 def attention_softmax(
     input_tensor: ttnn.Tensor,
     *,
@@ -282,7 +285,7 @@ def attention_softmax(
         return ttnn.Tensor(ttl_output_tensor)
 
 
-@decorate_operation(torch_function=_torch_attention_softmax)
+@register_operation(torch_function=_torch_attention_softmax, name="ttnn.transformer.attention_softmax_")
 def attention_softmax_(
     input_tensor: ttnn.Tensor,
     *,
@@ -337,7 +340,7 @@ def _fallback_concatenate_heads(input_tensor: ttnn.Tensor, **_):
     return _torch_concatenate_heads(input_tensor)
 
 
-@decorate_operation(torch_function=_fallback_concatenate_heads)
+@register_operation(torch_function=_fallback_concatenate_heads, name="ttnn.transformer.concatenate_heads")
 def concatenate_heads(
     input_tensor: ttnn.Tensor,
     *,

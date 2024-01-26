@@ -8,7 +8,7 @@ from typing import Tuple, Union
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 
 
 def _torch_pad_to_tile(padded_tensor: ttnn.Tensor):
@@ -22,7 +22,7 @@ def _torch_pad_to_tile(padded_tensor: ttnn.Tensor):
     return output_tensor
 
 
-@decorate_operation(torch_function=_torch_pad_to_tile)
+@register_operation(torch_function=_torch_pad_to_tile, name="ttnn.pad_to_tile")
 def pad_to_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""
     pad(input_tensor: ttnn.Tensor) -> ttnn.Tensor
@@ -107,7 +107,7 @@ def _torch_unpad_from_tile(padded_tensor: ttnn.Tensor):
     return output_tensor
 
 
-@decorate_operation(torch_function=_torch_unpad_from_tile)
+@register_operation(torch_function=_torch_unpad_from_tile, name="ttnn.unpad_from_tile")
 def unpad_from_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""
     unpad(input_tensor: ttnn.Tensor) -> ttnn.Tensor
@@ -171,7 +171,7 @@ def _torch_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
     return output_tensor
 
 
-@decorate_operation(torch_function=_torch_embedding)
+@register_operation(torch_function=_torch_embedding, name="ttnn.embedding")
 def embedding(
     input_tensor: ttnn.Tensor,
     weight: ttnn.Tensor,
@@ -236,7 +236,7 @@ def _torch_softmax(input_tensor: ttnn.Tensor, dim: int, **_):
     return torch.softmax(input_tensor, dim)
 
 
-@decorate_operation(torch_function=_torch_softmax)
+@register_operation(torch_function=_torch_softmax, name="ttnn.softmax")
 def softmax(
     input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
 ) -> ttnn.Tensor:
@@ -297,7 +297,7 @@ def _torch_mean(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
 
 
-@decorate_operation(torch_function=_torch_mean)
+@register_operation(torch_function=_torch_mean, name="ttnn.mean")
 def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor:
     input_shape = tuple(input_tensor.shape)
     rank = len(input_shape)

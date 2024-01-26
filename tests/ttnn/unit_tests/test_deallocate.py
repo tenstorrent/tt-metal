@@ -18,7 +18,7 @@ def test_deallocate(device, h, w):
 
     with pytest.raises(RuntimeError) as exception:
         ttnn.deallocate(input_tensor)
-    assert "Cannot deallocate tensor with borrowed storage!" in str(exception.value)
+    assert "ttnn.deallocate: Tensor must be on device!" in str(exception.value)
 
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = input_tensor + input_tensor

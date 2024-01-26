@@ -42,7 +42,7 @@ def _torch_layer_norm(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-@ttnn.decorate_operation(torch_function=_torch_layer_norm)
+@ttnn.register_operation(torch_function=_torch_layer_norm, name="ttnn.layer_norm")
 def layer_norm(
     input_tensor: ttnn.Tensor,
     *,
@@ -139,7 +139,7 @@ def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, w
     return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
 
 
-@ttnn.decorate_operation(torch_function=_torch_group_norm)
+@ttnn.register_operation(torch_function=_torch_group_norm, name="ttnn.group_norm")
 def group_norm(
     input_tensor: ttnn.Tensor,
     *,

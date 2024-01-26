@@ -8,13 +8,14 @@ from typing import Optional, Union, Tuple
 
 import tt_lib as ttl
 
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 from enum import Enum
 
 Device = ttl.device.Device
 
 
 DataType = ttl.tensor.DataType
+uint16 = DataType.UINT16
 uint32 = DataType.UINT32
 float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16
@@ -39,15 +40,19 @@ TILE_SIZE = 32
 Shape = ttl.ttnn.tensor.Shape
 
 
+class Cpu:
+    ...
+
+
 class Tensor(ttl.ttnn.tensor.Tensor):
     @property
     def device(self: "Tensor") -> DataType:
         if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
             return self.value.device()
         else:
-            raise RuntimeError("Tensor is not on device!")
+            return Cpu()
 
-    @decorate_operation()
+    @register_operation(name="ttnn.Tensor.__getitem__")
     def __getitem__(self: "Tensor", slices) -> "Tensor":
         if self.layout != ROW_MAJOR_LAYOUT:
             raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
@@ -99,7 +104,37 @@ class ShardOrientation(Enum):
 DEFAULT_SHARD_ORIENTATION = ShardOrientation.ROW_MAJOR
 
 
-@decorate_operation()
+def validate_input_tensor(
+    operation_name,
+    tensor: Tensor,
+    *,
+    ranks: Tuple[int, ...],
+    dtypes: Tuple[DataType, ...],
+    layouts: Tuple[Layout, ...],
+    can_be_on_device: bool,
+    can_be_on_cpu: bool,
+):
+    if len(tensor.shape) not in ranks:
+        raise RuntimeError(f"{operation_name}: Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
+
+    if tensor.dtype not in dtypes:
+        raise RuntimeError(f"{operation_name}: Tensor must be of type {dtypes}, but got {tensor.dtype}")
+
+    if tensor.layout not in layouts:
+        raise RuntimeError(f"{operation_name}: Tensor must be of layout {layouts}, but got {tensor.layout}")
+
+    if can_be_on_device and can_be_on_cpu:
+        pass
+    elif can_be_on_device:
+        if not has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError(f"{operation_name}: Tensor must be on device!")
+    elif can_be_on_cpu:
+        if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError(f"{operation_name}: Tensor must be on host!")
+    else:
+        raise RuntimeError(f"{operation_name}: Tensor must be on host or device!")
+
+
 def create_sharded_memory_config(
     grid: Tuple[int, int],
     shard_shape: Tuple[int, int],
@@ -162,7 +197,21 @@ def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], *
     return torch.reshape(input_tensor, shape).contiguous().clone()
 
 
-@decorate_operation(torch_function=_torch_reshape)
+def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@register_operation(
+    name="ttnn.reshape", torch_function=_torch_reshape, validate_input_tensors=_reshape_validate_input_tensors
+)
 def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
     r"""
     reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
@@ -266,7 +315,7 @@ def unsqueeze_to_4D(tensor):
     return reshape(tensor, shape=Shape(shape, full_shape))
 
 
-@decorate_operation()
+@register_operation(name="ttnn.from_torch")
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[DataType] = None,
@@ -312,7 +361,7 @@ def from_torch(
     return tensor
 
 
-@decorate_operation()
+@register_operation(name="ttnn.to_torch")
 def to_torch(tensor: Tensor) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor) -> torch.Tensor
@@ -349,7 +398,19 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(ttl_tensor)
 
 
-@decorate_operation()
+def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        tensor,
+        ranks=(1, 2, 3, 4, 5),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@register_operation(name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors)
 def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG):
     """
     to_device(tensor: ttnn.Tensor, device: tt_lib.device.Device, dtype: Optional[DataType] = None) -> ttnn.Tensor
@@ -382,7 +443,19 @@ def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFI
     )
 
 
-@decorate_operation()
+def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        tensor,
+        ranks=(1, 2, 3, 4, 5),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@register_operation(name="ttnn.from_device", validate_input_tensors=_from_device_validate_input_tensors)
 def from_device(tensor):
     """
     from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
@@ -408,7 +481,19 @@ def from_device(tensor):
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)
 
 
-@decorate_operation()
+def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@register_operation(name="ttnn.deallocate", validate_input_tensors=_deallocate_validate_input_tensors)
 def deallocate(tensor: Tensor) -> None:
     """
     deallocate(tensor: ttnn.Tensor) -> None
@@ -432,7 +517,7 @@ def deallocate(tensor: Tensor) -> None:
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
 
 
-@decorate_operation()
+@register_operation(name="ttnn.to_memory_config")
 def to_memory_config(tensor, memory_config: MemoryConfig):
     """
     to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig) -> ttnn.Tensor
@@ -509,7 +594,6 @@ def to_memory_config(tensor, memory_config: MemoryConfig):
         else:
 
             def impl(ttl_tensor, interleaved_memory_config):
-                compute_grid_size = tensor.device.compute_with_storage_grid_size()
                 return ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config)
 
             ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
@@ -518,7 +602,19 @@ def to_memory_config(tensor, memory_config: MemoryConfig):
     return Tensor(ttl_tensor)
 
 
-@decorate_operation()
+def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4, 5),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32, float32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
 def to_layout(tensor, layout: Layout):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
@@ -666,7 +762,7 @@ def _torch_identity(input_tensor):
     return input_tensor.clone()
 
 
-@decorate_operation(torch_function=_torch_identity)
+@register_operation(name="ttnn.reallocate", torch_function=_torch_identity)
 def reallocate(input_tensor: Tensor) -> Tensor:
     def impl(input_tensor):
         ttl_input_tensor = input_tensor.value
@@ -676,7 +772,7 @@ def reallocate(input_tensor: Tensor) -> Tensor:
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.reallocate")(input_tensor)
 
 
-@decorate_operation()
+@register_operation(name="ttnn.load_tensor")
 def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     def impl(file_name):
         return Tensor(ttl.tensor.load_tensor(str(file_name)))
@@ -684,7 +780,7 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
 
 
-@decorate_operation()
+@register_operation(name="ttnn.dump_tensor")
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: Tensor) -> None:
     def impl(file_name, tensor):
         ttl_tensor = tensor.value
