@@ -16,7 +16,7 @@
 
 namespace NAMESPACE {
 
-FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles) {
+FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles, uint32_t out_subblock_w, uint32_t out_subblock_h, uint32_t in0_block_w) {
     // Reconfigure input
     copy_tile_matmul_partials_init_short_with_dt(mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
@@ -28,7 +28,7 @@ FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, 
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+    mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 void MAIN {
@@ -100,7 +100,7 @@ void MAIN {
                             tile_regs_acquire();
                         #else
                             if (last_out) {
-                                reload_from_cb_to_dst(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_num_tiles);
+                                reload_from_cb_to_dst(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_num_tiles, out_subblock_w, out_subblock_h, in0_block_w);
                             } else {
                                 // just acquire
                                 tile_regs_acquire();
@@ -108,7 +108,7 @@ void MAIN {
                         #endif
                     #else
                         if (enable_reload) {
-                            reload_from_cb_to_dst(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_num_tiles);
+                            reload_from_cb_to_dst(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_num_tiles, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             // just acquire
                             tile_regs_acquire();
@@ -266,7 +266,7 @@ void MAIN {
         }
         if constexpr(batch > 1) {
             // reconfigure init for matmul
-            mm_init_short();
+            mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
             // reconfigure unpacker df for src B
             unpack_reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
         }

@@ -244,13 +244,13 @@ ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set    | False    |
  */
-ALWI void mm_block_init_short(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, const std::uint32_t transpose=0) {
+ALWI void mm_block_init_short(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, const std::uint32_t transpose=0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
+
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id, transpose)  ));
-    UNPACK(( llk_unpack_AB_matmul_init(0, 1, transpose)  ));
     #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, 0)  ));
-    UNPACK(( llk_unpack_AB_matmul_init(0, 1) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)  ));
     #endif
 }
 
