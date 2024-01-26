@@ -57,9 +57,13 @@ constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
 static bool enabled = false;
 static std::mutex watch_mutex;
 static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
+static string logfile_path = "";
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
 static std::vector<string> kernel_names;
+
+// Flag to signal whether the watcher server has been killed due to a thrown exception.
+static bool watcher_killed_due_to_error = false;
 
 WatcherDevice::WatcherDevice(int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()> storage_only_cores) : device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical), storage_only_cores_(storage_only_cores) {
 }
@@ -75,7 +79,7 @@ static FILE * create_file(const string& log_path) {
 
     FILE *f;
 
-    const char *fmode = getenv("TT_METAL_WATCHER_APPEND") ? "a" : "w";
+    const char *fmode = OptionsG.get_watcher_append()? "a" : "w";
     string fname = log_path + "watcher.log";
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
@@ -412,6 +416,7 @@ static void validate_kernel_ids(FILE *f,
 static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDevice *wdev, CoreCoord core, bool dump_all) {
 
     string pad(11 - core.str().length(), ' ');
+    fprintf(f, "Device %i, ", wdev->device_id_);
     fprintf(f, "Core %s:%s  ", core.str().c_str(), pad.c_str());
 
     std::vector<uint32_t> data;
@@ -493,7 +498,18 @@ static void watcher_loop(int sleep_usecs) {
                 fprintf(logfile, "No active devices\n");
             }
 
-            dump(logfile, false);
+            try {
+                dump(logfile, false);
+            } catch (std::runtime_error& e) {
+                // Depending on whether test mode is enabled, catch and stop server, or re-throw.
+                if (OptionsG.get_test_mode_enabled()) {
+                    watcher::watcher_killed_due_to_error = true;
+                    watcher::enabled = false;
+                    break;
+                } else {
+                    throw e;
+                }
+            }
 
             fprintf(logfile, "\n");
         }
@@ -563,7 +579,7 @@ static void watcher_sanitize_host_noc(const char* what,
     } else {
         // Bad COORD
         print_stack_trace();
-        TT_THROW("Host watcher: bad {} NOC coord {}", core.str());
+        TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     }
 }
 
@@ -610,7 +626,9 @@ void watcher_attach(void *dev,
 
     if (!watcher::enabled && OptionsG.get_watcher_enabled()) {
 
+        watcher::logfile_path = log_path;
         watcher::logfile = watcher::create_file(log_path);
+        watcher::watcher_killed_due_to_error = false;
 
         int sleep_usecs = OptionsG.get_watcher_interval() * 1000;
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
@@ -662,6 +680,18 @@ int watcher_register_kernel(const string& name) {
     watcher::kernel_names.push_back(name);
 
     return watcher::kernel_names.size() - 1;
+}
+
+bool watcher_server_killed_due_to_error() {
+    return watcher::watcher_killed_due_to_error;
+}
+
+void watcher_server_clear_error_flag() {
+    watcher::watcher_killed_due_to_error = false;
+}
+
+void watcher_clear_log() {
+    watcher::logfile = watcher::create_file(watcher::logfile_path);
 }
 
 } // namespace llrt

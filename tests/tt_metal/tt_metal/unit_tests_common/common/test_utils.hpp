@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <deque>
 #include "tt_metal/host_api.hpp"
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
@@ -20,9 +21,52 @@ inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base
     }
 }
 
+// Helper function to dump a file
+inline void DumpFile(string file_name) {
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
+        tt::log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
+        return;
+    }
+
+    tt::log_info(tt::LogTest, "File \'{}\' contains:", file_name);
+    string line;
+    while (getline(log_file, line))
+        tt::log_info(tt::LogTest, "{}", line);
+}
+
+// Compare two strings with a (single-character) wildcard
+inline bool StringCompareWithWildcard(const string& s1, const string& s2, char wildcard) {
+    if (s1.size() != s2.size())
+        return false;
+
+    for (int idx = 0; idx < s1.size(); idx++) {
+        if (s1[idx] != s2[idx] && s1[idx] != wildcard && s2[idx] != wildcard)
+            return false;
+    }
+
+    return true;
+}
+
+// Check if s1 is in s2, with wildcard character support
+inline bool StringContainsWithWildcard(const string& s1, const string& s2, char wildcard) {
+    int substr_len = s1.size();
+    int superstr_len = s2.size();
+    if (substr_len > superstr_len)
+        return false;
+
+    for (int idx = 0; idx <= superstr_len - substr_len; idx++) {
+        string substr = s2.substr(idx, substr_len);
+        if (StringCompareWithWildcard(s1, substr, wildcard))
+            return true;
+    }
+
+    return false;
+}
+
 // Check whether the given file contains a list of strings. Doesn't check for
 // strings between lines in the file.
-inline bool FileContainsAllStrings(string file_name, vector<string> &must_contain) {
+inline bool FileContainsAllStrings(string file_name, const vector<string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -36,7 +80,7 @@ inline bool FileContainsAllStrings(string file_name, vector<string> &must_contai
             // Check for all target strings in the current line
             vector<string> found_on_current_line;
             for (const string &s : must_contain_set) {
-                if (line.find(s) != string::npos)
+                if (StringContainsWithWildcard(s, line, '*'))
                     found_on_current_line.push_back(s);
             }
 
@@ -49,6 +93,7 @@ inline bool FileContainsAllStrings(string file_name, vector<string> &must_contai
                 return true;
         }
     }
+    log_file.close();
 
     // If the log file doesn't exist, is empty, or doesn't contain all strings, return false.
     string missing_strings = "";
@@ -59,20 +104,49 @@ inline bool FileContainsAllStrings(string file_name, vector<string> &must_contai
         "Test Error: Expected file {} to contain the following strings: {}",
         file_name,
         missing_strings);
+    DumpFile(file_name);
     return false;
 }
 
-// Compare two strings with a (single-character) wildcard
-inline bool StringCompareWithWildcard(string& s1, string& s2, char wildcard) {
-    if (s1.size() != s2.size())
+// Check whether the given file contains a list of strings (in order). Doesn't check for strings
+// between lines in a file.
+inline bool FileContainsAllStringsInOrder(string file_name, const vector<string> &must_contain) {
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
 
-    for (int idx = 0; idx < s1.size(); idx++) {
-        if (s1[idx] != s2[idx] && s1[idx] != wildcard && s2[idx] != wildcard)
-            return false;
-    }
+    // Construct a queue of required strings, we'll remove each one when it's found.
+    std::deque<string> must_contain_queue(must_contain.begin(), must_contain.end());
 
-    return true;
+    if (log_file.is_open()) {
+        string line;
+        while (getline(log_file, line)) {
+            // Check for all target strings in the current line
+            while (
+                !must_contain_queue.empty() &&
+                StringContainsWithWildcard(must_contain_queue.front(), line, '*')
+            ) {
+                must_contain_queue.pop_front();
+            }
+
+            // If all strings have been found, return true
+            if (must_contain_queue.empty())
+                return true;
+        }
+    }
+    log_file.close();
+
+    // If the log file doesn't exist, is empty, or doesn't contain all strings, return false.
+    string missing_strings = "";
+    for (const string &s : must_contain_queue)
+        missing_strings += s + ",";
+    tt::log_info(
+        tt::LogTest,
+        "Test Error: Expected file {} to contain the following strings: {}",
+        file_name,
+        missing_strings);
+    DumpFile(file_name);
+    return false;
 }
 
 // Checkes whether a given file matches a golden string.

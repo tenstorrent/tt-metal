@@ -26,6 +26,7 @@ class RunTimeOptions {
     bool watcher_enabled;
     int watcher_interval_ms;
     bool watcher_dump_all;
+    bool watcher_append;
 
     std::vector<CoreCoord> dprint_cores;
     bool dprint_all_cores;
@@ -33,6 +34,8 @@ class RunTimeOptions {
     bool dprint_all_chips;
     uint32_t dprint_riscv_mask;
     std::string dprint_file_name;
+
+    bool test_mode_enabled;
 
     bool profiler_enabled;
 
@@ -45,9 +48,16 @@ public:
 
     inline bool get_build_map_enabled() { return build_map_enabled; }
 
-    inline bool get_watcher_enabled() { return watcher_enabled; }
-    inline int get_watcher_interval() { return watcher_interval_ms; }
-    inline int get_watcher_dump_all() { return watcher_dump_all; }
+    // Info from watcher environment variables, setters included so that user
+    // can override with a SW call.
+    inline bool get_watcher_enabled()                 { return watcher_enabled; }
+    inline void set_watcher_enabled(bool enabled)     { watcher_enabled = enabled; }
+    inline int get_watcher_interval()                 { return watcher_interval_ms; }
+    inline void set_watcher_interval(int interval_ms) { watcher_interval_ms = interval_ms; }
+    inline int get_watcher_dump_all()                 { return watcher_dump_all; }
+    inline void set_watcher_dump_all(bool dump_all)   { watcher_dump_all = dump_all; }
+    inline int get_watcher_append()                   { return watcher_append; }
+    inline void set_watcher_append(bool append)       { watcher_append = append; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -93,6 +103,14 @@ public:
         dprint_file_name = file_name;
     }
 
+    // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
+    // whether to catch exceptions (test mode = true) coming from debug servers or to throw them
+    // (test mode = false). We need to catch for gtesting, since an unhandled exception will kill
+    // the gtest (and can't catch an exception from the server thread in main thread), but by
+    // default we should throw so that the user can see the exception as soon as it happens.
+    bool get_test_mode_enabled() { return test_mode_enabled; }
+    inline void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
+
     inline bool get_profiler_enabled() { return profiler_enabled; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
@@ -105,6 +123,9 @@ private:
     void ParseDPrintChipIds(const char* env_var);
     void ParseDPrintRiscvMask(const char* env_var);
     void ParseDPrintFileName(const char* env_var);
+
+    // Helper function to parse watcher-specific environment variables.
+    void ParseWatcherEnv();
 };
 
 
