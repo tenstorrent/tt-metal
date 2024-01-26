@@ -9,11 +9,13 @@ include tt_eager/tensor/module.mk
 include tt_eager/dtx/module.mk
 include tt_eager/tt_dnn/module.mk
 include tt_eager/tt_lib/module.mk
+include tt_eager/queue/module.mk
 
 TT_LIBS_TO_BUILD = tt_eager/tensor \
                    tt_eager/dtx \
                    tt_eager/tt_dnn \
                    tt_eager/tt_lib \
+				   tt_eager/queue \
 
 
 ifdef TT_METAL_ENV_IS_DEV
