@@ -143,20 +143,19 @@ ALWI void mm_init_short(const std::uint32_t transpose=0) {
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
  * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                             | False    |
+ * | ct_dim         | the number of columns of the output matrix in tiles           | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
+ * | rt_dim         | the number of rows of the output matrix in tiles              | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
+ * | kt_dim         | the inner dim of the input matrices in tiles                  | uint32_t | 1 to 2^32-1                                         | False    |
  */
-ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16) {
+ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
     UNPACK(( llk_setup_operands() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id) ));
-    #else
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id) ));
-    #endif
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id) ));
     #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
     #endif
     MATH(( llk_math_pack_sync_init<SYNC>()  ));
 
@@ -198,11 +197,11 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
 ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul(c_in0, c_in1, itile0, itile1, ct_dim, rt_dim, kt_dim) ));
+
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
     #else
-    UNPACK(( llk_unpack_AB_matmul(c_in0, c_in1, itile0, itile1, ct_dim, rt_dim, kt_dim) ));
     MATH(( llk_math_matmul<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
     #endif
 }
@@ -218,16 +217,18 @@ ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
  * | cbid           | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                             | False    |
+ * | ct_dim         | The coloumn dimension for the output block.                   | uint32_t | Must be equal to block B column dimension           | True     |
+ * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | True     |
+ * | kt_dim         | The inner dimension.                                          | uint32_t | Must be equal to block A column dimension           | True     |
  */
-ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t cbid=2) {
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
+ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t cbid=2, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
     UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, in1_cb_id) ));
+
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id) ));
     #else
-    UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, 1) ));
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(cbid, 1) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
     #endif
 }
 
@@ -248,7 +249,7 @@ ALWI void mm_block_init_short(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, co
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id, transpose)  ));
     UNPACK(( llk_unpack_AB_matmul_init(0, 1, transpose)  ));
     #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0, 1, 0)  ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, 0)  ));
     UNPACK(( llk_unpack_AB_matmul_init(0, 1) ));
     #endif
 }
