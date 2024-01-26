@@ -32,6 +32,12 @@ namespace kernel_profiler{
 #elif defined(COMPILE_FOR_NCRISC)
     uint32_t profilerBuffer = PROFILER_L1_BUFFER_NC;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_NC;
+#elif defined(COMPILE_FOR_ERISC)
+    uint32_t profilerBuffer = eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER;
+    uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_ER;
+    uint16_t runCounter = 0;
+    uint8_t my_x[NUM_NOCS] __attribute__((used));
+    uint8_t my_y[NUM_NOCS] __attribute__((used));
 #elif COMPILE_FOR_TRISC == 0
     uint32_t profilerBuffer = PROFILER_L1_BUFFER_T0;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T0;
@@ -50,12 +56,44 @@ namespace kernel_profiler{
         profiler_control_buffer[deviceBufferEndIndex] = 0;
         wIndex = CUSTOM_MARKERS;
 
+#if defined(COMPILE_FOR_ERISC)
+        volatile tt_l1_ptr uint32_t *eriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER);
+
+        uint32_t noc_x = my_x[0];
+        uint32_t noc_y = my_y[0];
+
+        uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
+
+        for (int i = ID_HH; i < FW_START; i ++)
+        {
+            eriscBuffer[i] = 0;
+        }
+
+        for (int i = FW_START; i < CUSTOM_MARKERS; i ++)
+        {
+        //TODO(MO): Clean up magic numbers
+            eriscBuffer[i] = 0x80000000;
+        }
+
+        //TODO(MO): Clean up magic numbers
+        eriscBuffer [ID_LL] = runCounter;
+
+        eriscBuffer [ID_LH] = ((core_flat_id & 0xFF) << 3) | 0;
+#endif //ERISC_INIT
+
 #if defined(COMPILE_FOR_BRISC)
         volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR);
         volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_NC);
         volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T0);
         volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T1);
         volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T2);
+
+        const uint32_t NOC_ID_MASK = (1 << NOC_ADDR_NODE_ID_BITS) - 1;
+        uint32_t noc_id = noc_local_node_id() & 0xFFF;
+        uint32_t noc_x = noc_id & NOC_ID_MASK;
+        uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
+
+        uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
 
         for (int i = ID_HH; i < FW_START; i ++)
         {
@@ -75,13 +113,6 @@ namespace kernel_profiler{
             trisc1Buffer[i] = 0x80000000;
             trisc2Buffer[i] = 0x80000000;
         }
-
-        const uint32_t NOC_ID_MASK = (1 << NOC_ADDR_NODE_ID_BITS) - 1;
-        uint32_t noc_id = noc_local_node_id() & 0xFFF;
-        uint32_t noc_x = noc_id & NOC_ID_MASK;
-        uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
-
-        uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
 
         //TODO(MO): Clean up magic numbers
         briscBuffer [ID_LL] = runCounter;
@@ -127,7 +158,7 @@ namespace kernel_profiler{
     inline __attribute__((always_inline)) void mark_time_guaranteed_event(uint32_t index)
     {
 #if defined(PROFILE_KERNEL)
-#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
         uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
         uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 #else
@@ -208,6 +239,57 @@ namespace kernel_profiler{
     }
     inline __attribute__((always_inline)) void send_profiler_data_to_dram()
     {
+#if defined(PROFILE_KERNEL) && defined(COMPILE_FOR_ERISC)
+        volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
+
+        uint32_t noc_x = my_x[0];
+        uint32_t noc_y = my_y[0];
+
+        uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
+        uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
+
+        uint32_t pageSize =
+            eth_l1_mem::address_map::PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * eth_l1_mem::address_map::PROFILER_RISC_COUNT * profiler_core_count_per_dram;
+
+        finish();
+        int hostIndex = HOST_BUFFER_END_INDEX_ER;
+        int deviceIndex = DEVICE_BUFFER_END_INDEX_ER;
+        //for (hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR, deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR;
+                //(hostIndex <= kernel_profiler::HOST_BUFFER_END_INDEX_T2) && (deviceIndex <= kernel_profiler::DEVICE_BUFFER_END_INDEX_T2);
+                //hostIndex++, deviceIndex++)
+        //{
+            uint32_t currEndIndex =
+                profiler_control_buffer[deviceIndex] +
+                profiler_control_buffer[hostIndex];
+
+            uint32_t dram_offset =
+                (core_flat_id % profiler_core_count_per_dram) * eth_l1_mem::address_map::PROFILER_RISC_COUNT * eth_l1_mem::address_map::PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                profiler_control_buffer[hostIndex] * sizeof(uint32_t);
+
+            const InterleavedAddrGen<true> s = {
+                .bank_base_address = dram_profiler_address,
+                .page_size = pageSize
+            };
+
+            if ( currEndIndex < eth_l1_mem::address_map::PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
+            {
+                uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+
+                noc_async_write(
+                        eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
+                        dram_bank_dst_noc_addr,
+                        profiler_control_buffer[deviceIndex] * sizeof(uint32_t));
+
+                profiler_control_buffer[hostIndex] = currEndIndex;
+            }
+            else
+            {
+                profiler_control_buffer[hostIndex] = eth_l1_mem::address_map::PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC+1;
+            }
+        //}
+        noc_async_write_barrier();
+        runCounter ++;
+#endif
 #if defined(PROFILE_KERNEL) && defined(COMPILE_FOR_BRISC)
         volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
 

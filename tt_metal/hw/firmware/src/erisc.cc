@@ -80,12 +80,12 @@ void __attribute__((section("code_l1"))) router_init() {
 }
 
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
-    //kernel_profiler::init_profiler();
-    //kernel_profiler::mark_time(CC_MAIN_START);
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();
     noc_init();
+    kernel_profiler::init_profiler(0,0,0);
+    kernel_profiler::mark_fw_start();
 
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
@@ -156,5 +156,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         }
     }
     internal_::disable_erisc_app();
-    kernel_profiler::mark_time(CC_MAIN_END);
+    kernel_profiler::mark_fw_end();
+    kernel_profiler::send_profiler_data_to_dram();
 }
