@@ -8,7 +8,6 @@ import shutil
 from typing import Optional, Union, Callable
 
 from loguru import logger
-import numpy as np
 import torch
 
 import ttnn
@@ -102,6 +101,8 @@ def default_preprocessor(model, name) -> ParameterDict:
         parameters[f"weight"] = preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
         if model.bias is not None:
             parameters[f"bias"] = preprocess_linear_bias(model.bias, dtype=ttnn.bfloat16)
+    elif isinstance(model, torch.nn.Conv2d):
+        raise RuntimeError("Parameters of Conv2d must be preprocessed using a custom preprocessor")
     elif isinstance(model, torch.nn.LayerNorm):
         parameters[f"weight"] = preprocess_layernorm_parameter(model.weight, dtype=ttnn.bfloat16)
         parameters[f"bias"] = preprocess_layernorm_parameter(model.bias, dtype=ttnn.bfloat16)
@@ -135,20 +136,23 @@ def _preprocess_model_parameters(
         if custom_preprocessor_parameters:
             return make_parameter_dict(custom_preprocessor_parameters)
 
+    named_children = list(model.named_children())
+
     if convert_to_ttnn(model, name):
         default_preprocessor_parameters = default_preprocessor(model, name)
         if default_preprocessor_parameters:
             return make_parameter_dict(default_preprocessor_parameters)
+        if not named_children and len(list(model.named_parameters())) > 0:
+            raise RuntimeError(
+                f"Parameters {type(model)} are were not converted to ttnn.Tensors even though the user requested to do that!"
+            )
 
-    named_children = list(model.named_children())
     if not named_children:
         if isinstance(model, torch.nn.Linear):
             parameters = {"weight": model.weight.T.contiguous()}
             if model.bias is not None:
                 parameters["bias"] = model.bias
             return make_parameter_dict(parameters)
-        elif isinstance(model, torch.nn.Conv2d):
-            raise RuntimeError("Transpose conv weights?")
         return make_parameter_dict(dict(model.named_parameters()))
 
     parameters = {}
