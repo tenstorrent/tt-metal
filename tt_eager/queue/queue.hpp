@@ -4,6 +4,11 @@
 
 namespace tt::tt_metal {
 class CommandQueue;
+
+namespace operation{
+   class DeviceOperation;
+}
+
 using Queue = CommandQueue;
 
 //Dummy placeholder, definition will be moved to metal-level when it's ready
@@ -32,8 +37,8 @@ void EventSynchronize(Event&);
 void QueueSynchronize(Queue&);
 
 
-void EnqueueOperation(Queue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
-void EnqueueOperation(Queue&, DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
+void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
+void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
 
 }
 
