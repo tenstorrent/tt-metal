@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 
 
 def _shape_is_broadcastable(input_shape_a, input_shape_b):
@@ -47,7 +47,7 @@ def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_)
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@decorate_operation(torch_function=_torch_matmul)
+@register_operation(torch_function=_torch_matmul, name="ttnn.matmul")
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -373,7 +373,7 @@ def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, b
 ttnn.Tensor.__matmul__ = matmul
 
 
-@decorate_operation(torch_function=_torch_linear)
+@register_operation(torch_function=_torch_linear, name="ttnn.linear")
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,

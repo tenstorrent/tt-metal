@@ -7,7 +7,7 @@ import sys
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 
 
 THIS_MODULE = sys.modules[__name__]
@@ -32,7 +32,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor)
 
-    @decorate_operation(torch_function=_torch_unary, name=name)
+    @register_operation(torch_function=_torch_unary, name=f"ttnn.{name}")
     def unary_function(
         input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     ) -> ttnn.Tensor:

@@ -10,7 +10,7 @@ import sys
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+from ttnn.decorators import register_operation
 
 
 THIS_MODULE = sys.modules[__name__]
@@ -27,7 +27,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor, parameter)
 
-    @decorate_operation(torch_function=_torch_unary, name=name)
+    @register_operation(torch_function=_torch_unary, name=f"ttnn.{name}")
     def binary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     ) -> ttnn.Tensor:
@@ -106,7 +106,7 @@ def _torch_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a + input_tensor_b
 
 
-@decorate_operation(torch_function=_torch_add)
+@register_operation(torch_function=_torch_add, name="ttnn.add")
 def add(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -254,7 +254,7 @@ def _torch_sub(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a - input_tensor_b
 
 
-@decorate_operation(torch_function=_torch_sub)
+@register_operation(torch_function=_torch_sub, name="ttnn.sub")
 def sub(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -393,7 +393,7 @@ def _torch_mul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     return input_tensor_a * input_tensor_b
 
 
-@decorate_operation(torch_function=_torch_mul)
+@register_operation(torch_function=_torch_mul, name="ttnn.mul")
 def mul(
     input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
 ) -> ttnn.Tensor:
