@@ -186,15 +186,4 @@ constexpr std::uint32_t NUM_MAX_PARAM_BUFFERS_PER_CORE = HlkOperand::param7 - Hl
 constexpr std::uint32_t NUM_MAX_OUT_BUFFERS_PER_CORE = HlkOperand::out7 - HlkOperand::out0 + 1;
 constexpr std::uint32_t NUM_MAX_INTERMED_BUFFERS_PER_CORE = HlkOperand::intermed7 - HlkOperand::intermed0 + 1;
 
-// API for getting op_info for graph_interpreter kernel
-struct op_info_t {
-    uint32_t op_code; // this maps to either an eltwise unary or binary op
-    uint32_t cb_in0_id; // Id of operand0
-    uint32_t cb_in1_id; // Id of operand1, unused for eltwise unary op
-    uint32_t cb_out_id; // Id of output
-    uint32_t pop0; // Whether to pop operand0
-    uint32_t pop1; // Whether to pop operand1, unused for eltwise unary op
-    uint32_t unary; // Whether or not this is a unary op
-};
-
 } //  namespace tt
