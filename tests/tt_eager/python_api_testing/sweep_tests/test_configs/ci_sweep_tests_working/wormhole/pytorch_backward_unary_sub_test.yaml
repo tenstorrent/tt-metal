@@ -1,9 +1,9 @@
 ---
 test-list:
-  - eltwise-tan-bw:
+  - sub-unary-bw:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [6, 12, 256, 256]
+        end-shape: [12, 24, 512, 512]
         interval: [1, 1, 32, 32]
         num-shapes: 2
         num-samples: 64
@@ -12,24 +12,24 @@ test-list:
         function: gen_rand
         dtype: bfloat16
         args:
-          low: -1.4
-          high: 1.4
+          low: -10
+          high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_scalar_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_tan_bw_sweep.csv
+      output-file: sub_unary_bw_sweep.csv
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
-  - eltwise-tan-bw:
+  - sub-unary-bw:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [6, 12, 256, 256]
+        end-shape: [12, 24, 512, 512]
         interval: [1, 1, 1, 2]
         num-shapes: 2
         num-samples: 64
@@ -38,17 +38,17 @@ test-list:
         function: gen_rand
         dtype: bfloat16
         args:
-          low: -1.4
-          high: 1.4
+          low: -10
+          high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_scalar_args
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_tan_bw_sweep.csv
+      output-file: sub_unary_bw_sweep.csv
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"

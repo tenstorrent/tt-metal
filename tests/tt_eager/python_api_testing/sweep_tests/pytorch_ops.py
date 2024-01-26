@@ -96,6 +96,26 @@ def where(x, y, z, *args, **kwargs):
     return torch.where(x > 0, y, z)
 
 
+def where_bw(x, y, z, w, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data_1 = z
+    other_data_2 = w
+
+    in_data.requires_grad = True
+    other_data_1.requires_grad = True
+    other_data_2.requires_grad = True
+
+    in_data.retain_grad()
+    other_data_1.retain_grad()
+    other_data_2.retain_grad()
+
+    pyt_y = torch.where(in_data > 0, other_data_1, other_data_2)
+    pyt_y.backward(gradient=grad_data)
+
+    return [other_data_1.grad, other_data_2.grad]
+
+
 def arange(x, *args, start, end, step=1, **kwargs):
     return torch.arange(start, end, step)
 
@@ -208,6 +228,19 @@ def sinh(x, *args, **kwargs):
 def power(x, *args, exponent, **kwargs):
     result = x**exponent
     return result
+
+
+def power_bw(x, y, *args, exponent, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = in_data**exponent
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
 
 
 def bert_large_fused_qkv_matmul(x, y, z, *args, **kwargs):
@@ -556,9 +589,9 @@ def tan_bw(x, y, *args, **kwargs):
     in_data = y
 
     in_data.requires_grad = True
-    in_data.retain_grad()
 
     pyt_y = torch.tan(in_data)
+    in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
@@ -629,6 +662,19 @@ def sub_unary(x, *args, scalar, **kwargs):
     return result
 
 
+def sub_unary_bw(x, y, *args, scalar, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = torch.sub(in_data, scalar)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def add_unary(x, *args, scalar, **kwargs):
     result = torch.add(x, scalar)
     return result
@@ -693,6 +739,23 @@ def fill_rm(x, *args, **kwargs):
     y[:, :, 0:hOnes, 0:wOnes] = val_hi
 
     return y
+
+
+def fill_bw(x, *args, **kwargs):
+    grad_data = x.detach().clone()
+
+    put_y = torch.zeros_like(grad_data)
+    grad_sum = grad_data.sum()
+    put_y.fill_(grad_sum)
+
+    return put_y
+
+
+def fill_zero_bw(x, *args, **kwargs):
+    in_data = x
+    put_y = torch.zeros_like(in_data)
+
+    return put_y
 
 
 def fill_ones_rm(x, *args, **kwargs):
@@ -1223,6 +1286,37 @@ def embeddings(x, y, *args, **kwargs):
         y_ref.reshape((num_embeddings, embedding_dim)),
     ).reshape((batch_size, 1, num_rows, embedding_dim))
     return z
+
+
+def pt_embedding_bw(x, y, z, *args, **kwargs):
+    y_shape = y.shape
+    z_shape = z.shape
+
+    batch_size = y_shape[0]
+    no_of_embeddings = y_shape[3]
+    embedding_dim = z_shape[3]
+
+    z_ref = z.detach().clone()
+
+    input_tensor = torch.reshape(torch.arange(0, batch_size * no_of_embeddings), shape=y_shape)
+
+    grad_data = x
+    other_data = z_ref
+
+    grad_data.requires_grad = True
+    other_data.requires_grad = True
+
+    grad_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.nn.functional.embedding(
+        input_tensor.reshape((batch_size, no_of_embeddings)),
+        other_data.reshape((batch_size * no_of_embeddings, embedding_dim)),
+    ).reshape((1, 1, batch_size * no_of_embeddings, embedding_dim))
+
+    pyt_y.backward(gradient=grad_data)
+
+    return other_data.grad
 
 
 def ttnn_embeddings(x, y, *args, **kwargs):

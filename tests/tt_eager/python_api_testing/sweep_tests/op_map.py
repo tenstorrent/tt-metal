@@ -110,6 +110,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.fill_ones_rm,
         "pytorch_op": pytorch_ops.fill_ones_rm,
     },
+    "fill-bw": {
+        "tt_lib_op": tt_lib_ops.fill_bw,
+        "pytorch_op": pytorch_ops.fill_bw,
+    },
+    "fill-zero-bw": {
+        "tt_lib_op": tt_lib_ops.fill_zero_bw,
+        "pytorch_op": pytorch_ops.fill_zero_bw,
+    },
     "eltwise-full": {
         "tt_lib_op": tt_lib_ops.full,
         "pytorch_op": pytorch_ops.full,
@@ -137,6 +145,10 @@ op_map = {
     "eltwise-sub_unary": {
         "tt_lib_op": tt_lib_ops.eltwise_sub_unary,
         "pytorch_op": pytorch_ops.sub_unary,
+    },
+    "sub-unary-bw": {
+        "tt_lib_op": tt_lib_ops.sub_unary_bw,
+        "pytorch_op": pytorch_ops.sub_unary_bw,
     },
     "eltwise-add_unary": {
         "tt_lib_op": tt_lib_ops.eltwise_add_unary,
@@ -406,6 +418,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_pow,
         "pytorch_op": pytorch_ops.power,
     },
+    "unary-pow-bw": {
+        "tt_lib_op": tt_lib_ops.unary_pow_bw,
+        "pytorch_op": pytorch_ops.power_bw,
+    },
     "bert-large-fused-qkv-matmul": {
         "tt_lib_op": tt_lib_ops.bert_large_fused_qkv_matmul,
         "pytorch_op": pytorch_ops.bert_large_fused_qkv_matmul,
@@ -579,10 +595,6 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sub,
         "pytorch_op": pytorch_ops.sub,
     },
-    "eltwise-sub-bw": {
-        "tt_lib_op": tt_lib_ops.eltwise_sub_bw,
-        "pytorch_op": pytorch_ops.sub_bw,
-    },
     "eltwise-mul": {
         "tt_lib_op": tt_lib_ops.eltwise_mul,
         "pytorch_op": pytorch_ops.mul,
@@ -679,6 +691,10 @@ op_map = {
     "eltwise-where": {
         "tt_lib_op": tt_lib_ops.where,
         "pytorch_op": pytorch_ops.where,
+    },
+    "where-bw": {
+        "tt_lib_op": tt_lib_ops.where_bw,
+        "pytorch_op": pytorch_ops.where_bw,
     },
     # Matmul
     "matmul": {
@@ -942,6 +958,10 @@ op_map = {
     "embeddings": {
         "tt_lib_op": tt_lib_ops.embeddings,
         "pytorch_op": pytorch_ops.embeddings,
+    },
+    "embeddings-bw": {
+        "tt_lib_op": tt_lib_ops.tt_embedding_bw,
+        "pytorch_op": pytorch_ops.pt_embedding_bw,
     },
     "rmsnorm-noweights": {
         "tt_lib_op": tt_lib_ops.rmsnorm_noweights,

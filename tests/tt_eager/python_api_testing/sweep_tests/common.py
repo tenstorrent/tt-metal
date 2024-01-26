@@ -364,6 +364,30 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             ):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "embeddings-bw":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert len(start_shape) == 4
+            assert len(end_shape) == 4
+
+            def _gen_embeddings_shapes(shape):
+                batch_size = shape[0]
+                # num_rows = shape[3]
+                num_embeddings = shape[2]
+                embedding_dim = shape[3]
+                no_of_embeddings = shape[1] * shape[2]
+
+                input_rows_shape = [batch_size, 1, 1, no_of_embeddings]
+                weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
+                grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
+
+                return [grad_shape, input_rows_shape, weights_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_embeddings_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "rmsnorm":
             assert len(start_shape) == 4
             assert len(end_shape) == 4
