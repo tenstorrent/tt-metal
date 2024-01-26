@@ -314,7 +314,12 @@ class TTPyCompositeConv(TTPyOp):
         output_dtype=None,
         math_fidelity=None,
         move_utwh_output=False,
+        using_parameters_cache=False,
+        move_weights_to_device=True,
     ):
+        if reader_patterns_cache is None:
+            reader_patterns_cache = {}
+
         if len(reader_patterns_cache) == 0:
             reader_patterns_cache["conv"] = {}
             reader_patterns_cache["halo"] = {}
@@ -442,6 +447,8 @@ class TTPyCompositeConv(TTPyOp):
             conv_reader_indices,
             bias=bias,
             weights_dtype=weights_dtype,
+            using_parameters_cache=using_parameters_cache,
+            move_weights_to_device=move_weights_to_device,
         )
 
         # create untilize with halo op
@@ -565,53 +572,61 @@ class TTPyCompositeConv(TTPyOp):
         output_dtype,
         math_fidelity,
         conv_reader_indices,
-        weights_dtype=None,
-        bias=None,
+        weights_dtype,
+        bias,
+        using_parameters_cache,
+        move_weights_to_device=False,
     ):
         assert len(conv_params) == 10
         K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
 
         assert dilation == 1 and groups == 1
 
-        weights_shape = [K, C, R, S]
-        weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
-        if weights_dtype is None:
-            weights_dtype = weight.dtype()
-        weights_untiled_dtype = (
-            weights_dtype if weights_dtype != ttl.tensor.DataType.BFLOAT8_B else ttl.tensor.DataType.FLOAT32
-        )
-        assert weight.layout() == ttl.tensor.Layout.ROW_MAJOR
-        assert weight.dtype() == weights_untiled_dtype
-        assert weight.shape() == weights_shape
-        weight_untiled = weight.pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
-        # for conv op, pad the weights to block shape
-        weight_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(
-            weight_untiled,
-            weight_block_h_ntiles,
-            weight_block_w_ntiles,
-            output_dtype=weights_dtype,
-        )
-        weight_on_device = weight_tiled_.to(device)
-        bias_on_device = None
-        if bias is not None:
-            bias_shape = [1, 1, 1, K]
-            assert bias.layout() == ttl.tensor.Layout.ROW_MAJOR
-            assert bias.dtype() == weights_untiled_dtype
-            assert bias.shape() == bias_shape
+        if not using_parameters_cache:
+            weights_shape = [K, C, R, S]
+            weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
+            if weights_dtype is None:
+                weights_dtype = weight.dtype()
+            weights_untiled_dtype = (
+                weights_dtype if weights_dtype != ttl.tensor.DataType.BFLOAT8_B else ttl.tensor.DataType.FLOAT32
+            )
+            assert weight.layout() == ttl.tensor.Layout.ROW_MAJOR
+            assert weight.dtype() == weights_untiled_dtype
+            assert weight.shape() == weights_shape
+            weight_untiled = weight.pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
+            # for conv op, pad the weights to block shape
+            weight_tiled_ = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(
+                weight_untiled,
+                weight_block_h_ntiles,
+                weight_block_w_ntiles,
+                output_dtype=weights_dtype,
+            )
+            weight_on_device = weight_tiled_.to(device) if move_weights_to_device else weight_tiled_
+            bias_on_device = None
+            self.weight = weight_on_device
+            if bias is not None:
+                bias_shape = [1, 1, 1, K]
+                assert bias.layout() == ttl.tensor.Layout.ROW_MAJOR
+                assert bias.dtype() == weights_untiled_dtype
+                assert bias.shape() == bias_shape
 
-            assert K % (weight_block_w_ntiles * 32) == 0
-            bias_channels_padded_shape = [1, 1, 32, _nearest_32(K)]
-            bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
-            # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
-            bias_untiled = bias_untiled.to_torch()
-            bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
-            bias_on_device = bias_.to(device)
+                assert K % (weight_block_w_ntiles * 32) == 0
+                bias_channels_padded_shape = [1, 1, 32, _nearest_32(K)]
+                bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
+                # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
+                bias_untiled = bias_untiled.to_torch()
+                bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
+                bias_on_device = bias_.to(device) if move_weights_to_device else bias_
+                self.bias = bias_on_device
+        else:
+            self.weight = weight
+            self.bias = bias
 
         def conv_(activation):
             return ttl.tensor.optimized_conv(
                 activation,
-                weight_on_device,
-                bias_on_device,
+                self.weight,
+                self.bias,
                 conv_reader_indices,
                 [R, S, U, V, P_H, P_W],
                 K,
