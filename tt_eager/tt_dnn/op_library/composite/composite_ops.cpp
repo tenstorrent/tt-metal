@@ -163,14 +163,13 @@ Tensor _lgamma(const Tensor& x, const MemoryConfig& output_mem_config) {
         }
         result = sub(result, t, std::nullopt, output_mem_config);
         {
-            Tensor t_zero  = zeros_like(x, output_mem_config);
             {
                 Tensor t_one   = ones_like(x, output_mem_config);
-                result = where(eq(x, t_one, std::nullopt, output_mem_config), t_zero, result, output_mem_config);
+                result = where(eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result, output_mem_config);
             }
             {
                 Tensor t_two = mk_filled_tensor_like(x, 2.0f, output_mem_config);
-                result = where(eq(x, t_two, std::nullopt, output_mem_config), t_zero, result, output_mem_config);
+                result = where(eq(x, t_two, std::nullopt, output_mem_config), 0.0f, result, output_mem_config);
             }
         }
     }
@@ -493,8 +492,7 @@ Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
         t_result    = add(nan_res, t_result, std::nullopt, output_mem_config);
     }
     // input == 1, output is 0
-    Tensor t_zero  = zeros_like(input_a, output_mem_config);
-    Tensor result  = where(eq(input_a, t_one, std::nullopt, output_mem_config), t_zero, t_result, output_mem_config);
+    Tensor result  = where(eq(input_a, t_one, std::nullopt, output_mem_config), 0.0f, t_result, output_mem_config);
     return result;
 }
 Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config)
@@ -508,29 +506,18 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     {
         Tensor nr_term(input_a);
         {
-        Tensor pos_x = add_unary(input_a, 1.0f, output_mem_config);
-        Tensor neg_x = sub_unary(input_a, 1.0f, output_mem_config);
-        nr_term  = log(mul(pos_x,recip(neg(neg_x, output_mem_config), output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+            Tensor pos_x = add_unary(input_a, 1.0f, output_mem_config);
+            Tensor neg_x = sub_unary(input_a, 1.0f, output_mem_config);
+            nr_term  = log(mul(pos_x,recip(neg(neg_x, output_mem_config), output_mem_config), std::nullopt, output_mem_config), output_mem_config);
         }
         comp_result = mul_unary(nr_term, 0.5f, output_mem_config);
      }
     // Input is -1 > value > 1, output is nan
     // Input is -1 < value < 1, output is atanh(input)
-
-#define ATANH_IMPL \
+    float  t_nan  = std::nanf("");
     Tensor abs_temp = sub_unary(abs(input_a, output_mem_config), 1.0f, output_mem_config); \
     Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config); \
     return result;
-
-    if (is_arch_whb0(input_a.device()->arch())) {
-      Tensor  t_nan  = full_like(comp_result, std::nanf(""), output_mem_config);
-      ATANH_IMPL
-    } else {
-      Tensor  t_nan = mul_unary(comp_result, std::nanf(""), output_mem_config);
-      ATANH_IMPL
-    }
-
-#undef ATANH_IMPL
 }
 Tensor atanh(const Tensor &input_a, const MemoryConfig& output_mem_config)
 {
@@ -816,7 +803,7 @@ Tensor _logit(const Tensor& input_a,  float eps, const MemoryConfig& output_mem_
     }
     Tensor final_result(input_a);
     {
-        Tensor t_nan = mul_unary(t_one, std::nanf(""), output_mem_config);
+        float t_nan = std::nanf("");
         Tensor eps_gt_one = gt(t_eps, t_one, std::nullopt, output_mem_config);
         Tensor eps_eq_one = eq(t_eps, t_one, std::nullopt, output_mem_config);
         final_result = where(eps_eq_one, t_inf, where(eps_gt_one, t_nan, partial_output, output_mem_config), output_mem_config);
@@ -1077,10 +1064,31 @@ Tensor _where(const Tensor& predicate, const Tensor& value_true, const Tensor& v
     Tensor t1 = mul(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
     return add(t2, t1, std::nullopt, output_mem_config);
 }
+Tensor _where_v1(const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config) {
+    Tensor t2 = mul_unary(gtz(predicate, output_mem_config), value_true, output_mem_config);
+    Tensor t1 = mul(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+    return add(t2, t1, std::nullopt, output_mem_config);
+}
+Tensor _where_v2(const Tensor& predicate, const Tensor& value_true, float value_false, const MemoryConfig& output_mem_config) {
+    Tensor t2 = mul(gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+    Tensor t1 = mul_unary(lez(predicate, output_mem_config), value_false, output_mem_config);
+    return add(t2, t1, std::nullopt, output_mem_config);
+}
+
 Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _where)(predicate, value_true, value_false, output_mem_config);
 }
+Tensor where(const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _where_v1)(predicate, value_true, value_false, output_mem_config);
+}
+Tensor where(const Tensor& predicate, const Tensor& value_true, const float value_false, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _where_v2)(predicate, value_true, value_false, output_mem_config);
+}
+
+
 
 //on-device tensor creation 0s like @reference_tensor
 Tensor zeros_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
@@ -1268,7 +1276,7 @@ Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outp
                                        exponent_trunc, output_mem_config );
     Tensor pow_frac = exp( pow_trunc_log, output_mem_config );
     pow_trunc_log.deallocate();
-    Tensor  t_nan  = full_like(input_a, std::nanf(""), output_mem_config);
+    float  t_nan  = std::nanf("");
     Tensor result =  mul( power(input_a, exponent_floor, output_mem_config),
 		pow_frac, {}, output_mem_config );
     // To handle negative inputs:
