@@ -430,6 +430,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     to_string(wait_signal) + "\n";
                 stream << error_str << flush;
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
+                raise_wait_lock_.unlock();
                 TT_THROW(error_str);
                 server_killed_due_to_hang_ = true;
             }
