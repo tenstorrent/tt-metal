@@ -129,7 +129,7 @@ std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& input, const Memo
     std::vector<Tensor> grad_tensor;
     Tensor sqrt_result = sqrt(input, output_mem_config);
     Tensor result = mul(grad, recip(mul_unary(sqrt_result, 2.0, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_nan  = full_like(input, std::nanf(""), output_mem_config);
+    float t_nan  = std::nanf("");
     result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -228,10 +228,9 @@ std::vector<Tensor> addcdiv_bw(const Tensor& grad, const Tensor& input, const Te
 
 std::vector<Tensor> _where_bw(const Tensor& grad, const Tensor& condition, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = zeros_like(grad, output_mem_config);
-    Tensor grad_a = where(condition, grad, t_zero, output_mem_config);
+    Tensor grad_a = where(condition, grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = where(condition, t_zero, grad, output_mem_config);
+    Tensor grad_b = where(condition, 0.0f, grad, output_mem_config);
     grad_tensor.emplace_back(grad_b);
 
     return grad_tensor;
@@ -436,9 +435,9 @@ std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const Mem
     std::vector<Tensor> grad_tensor;
     Tensor rsqrt_result = power(rsqrt(input, true, output_mem_config), 3, output_mem_config);
     Tensor result = mul_unary(mul(grad, rsqrt_result, std::nullopt, output_mem_config) , -0.5, output_mem_config);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
     result = where(eqz(input, output_mem_config), t_inf, result, output_mem_config);
-    Tensor t_nan  = full_like(input, std::nanf(""), output_mem_config);
+    float t_nan  = std::nanf("");
     result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;

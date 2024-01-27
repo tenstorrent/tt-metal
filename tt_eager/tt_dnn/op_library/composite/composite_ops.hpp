@@ -181,6 +181,8 @@ Tensor hardswish(const Tensor& a, float scale = 1.0f/6.0f, float shift = 0.5f, c
 
 //where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor where(const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor where(const Tensor& predicate, const Tensor& value_true, const float value_false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s like @reference_tensor
 Tensor zeros_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
