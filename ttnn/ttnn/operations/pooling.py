@@ -7,7 +7,6 @@ from typing import Tuple, Union, Dict
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     TTPyMaxPool,
@@ -97,7 +96,7 @@ def _torch_average_pool2d(input_tensor: ttnn.Tensor):
     return torch.nn.AdaptiveAvgPool2d(output_size)(input_tensor)
 
 
-@decorate_operation(torch_function=_torch_average_pool2d)
+@ttnn.register_operation(torch_function=_torch_average_pool2d, name="ttnn.average_pool2d")
 def average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     output = ttl.tensor.average_pool_2d(input_tensor.value)
 
