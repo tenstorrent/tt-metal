@@ -109,14 +109,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
         order = adjusted_order_for_4D_tensor
 
-    def has_padding(tensor):
-        if len(tensor.shape) > 1:
-            *_, h, w = tensor.shape
-            *_, h_padded, w_padded = tensor.shape.padded()
-            return h != h_padded or w != w_padded
-        return False
-
-    if has_padding(input_tensor):
+    if ttnn.has_padding(input_tensor):
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
     ttl_input_tensor = input_tensor.value
@@ -152,7 +145,11 @@ def _torch_concat(tensors, dim=0, **_):
 
 
 @register_operation(torch_function=_torch_concat, name="ttnn.concat")
-def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor:
+def concat(
+    tensors: Union[ttnn.Tensor, List[ttnn.Tensor]],
+    dim: int = 0,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     r"""
     concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor
 
@@ -193,6 +190,7 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
     dtype = tensors[0].dtype
     device = tensors[0].device
     layout = tensors[0].layout
+    rank = len(tensors[0].shape)
 
     first_tensor = tensors[0]
     first_tensor_shape = first_tensor.shape
@@ -205,9 +203,32 @@ def concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn
                 "All dimensions must be the same size except for the dimension along which the contenation is taking place."
             )
 
-    output_tensor = _torch_concat(tensors, dim=dim)
+    all_tensors_are_tile_layout_without_padding = not any(
+        tensor.layout != ttnn.TILE_LAYOUT or ttnn.has_padding(tensor) for tensor in tensors
+    )
 
-    return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
+    if rank < 4 and all_tensors_are_tile_layout_without_padding:
+        any_tensor_has_padding = any(ttnn.has_padding(tensor) for tensor in tensors)
+
+        def convert_to_ttl_tensor(tensor):
+            if any_tensor_has_padding:
+                tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+            return ttnn.unsqueeze_to_4D(tensor).value
+
+        ttl_tensors = [convert_to_ttl_tensor(tensor) for tensor in tensors]
+        dim = dim + 4 - rank
+        output_tensor = ttnn.Tensor(ttl.tensor.concat(ttl_tensors, dim=dim, output_mem_config=memory_config))
+        output_tensor = ttnn.to_layout(output_tensor, layout)
+        rank_should_be_updated = len(output_tensor.shape) > rank
+        while rank_should_be_updated:
+            prior_rank = len(output_tensor.shape)
+            output_tensor = ttnn.squeeze(output_tensor)
+            rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
+        return output_tensor
+    else:
+        output_tensor = _torch_concat(tensors, dim=dim)
+
+        return ttnn.from_torch(output_tensor, dtype=dtype, device=device, layout=layout)
 
 
 def _torch_split(input_tensor: ttnn.Tensor, split_size, dim):

@@ -321,6 +321,26 @@ def unsqueeze_to_4D(tensor):
     return reshape(tensor, shape=Shape(shape, full_shape))
 
 
+def squeeze(tensor):
+    if len(tensor.shape) == 1:
+        return tensor
+    if len(tensor.shape) > 4:
+        raise RuntimeError("Tensor cannot have more than 4 dimensions!")
+    if tensor.shape[0] != 1:
+        return tensor
+    _, *shape = tensor.shape
+    _, *full_shape = tensor.shape.padded()
+    return reshape(tensor, shape=Shape(shape, full_shape))
+
+
+def has_padding(tensor):
+    if len(tensor.shape) > 1:
+        *_, h, w = tensor.shape
+        *_, h_padded, w_padded = tensor.shape.padded()
+        return h != h_padded or w != w_padded
+    return False
+
+
 @register_operation(name="ttnn.from_torch")
 def from_torch(
     tensor: "torch.Tensor",
