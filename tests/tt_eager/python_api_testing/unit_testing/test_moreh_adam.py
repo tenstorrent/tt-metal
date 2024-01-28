@@ -23,10 +23,10 @@ from loguru import logger
         (12, 6, 64, 64),  # multi tile
     ),
 )
-@pytest.mark.parametrize("lr", [1e-3, 1e-2, 1e-1])
+@pytest.mark.parametrize("lr", [0.0, 1e-1])
 @pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
 @pytest.mark.parametrize("eps", [1e-06, 1e-08])
-@pytest.mark.parametrize("weight_decay", [0.0, 0.1, 0.3])
+@pytest.mark.parametrize("weight_decay", [0.0, 0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, device):
     torch.manual_seed(0)

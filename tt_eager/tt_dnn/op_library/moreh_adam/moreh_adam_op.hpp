@@ -38,6 +38,11 @@ struct MorehAdam {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("inplace", "lr", "beta1", "beta2", "eps", "weight_decay", "step", "amsgrad", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::ref(this->inplace),std::ref(this->lr), std::ref(this->beta1), std::ref(this->beta2), std::ref(this->eps), std::ref(this->weight_decay), std::ref(this->step),std::ref(this->amsgrad), std::ref(this->output_mem_config));
+    }
 };
 
 operation::ProgramWithCallbacks moreh_adam_(
