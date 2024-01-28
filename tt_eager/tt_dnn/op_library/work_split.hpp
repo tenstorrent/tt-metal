@@ -181,6 +181,20 @@ inline std::set<CoreRange> num_cores_to_corerange_set(const uint32_t target_num_
 	return num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise);
 }
 
+inline std::tuple<CoreRangeSet, uint32_t> shard_split_work_to_cores(const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise = false) {
+	uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
+	auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
+
+    uint32_t units_per_core = units_to_divide / target_num_cores;
+    if(not(units_to_divide % target_num_cores == 0)) {
+        units_per_core++;
+        target_num_cores = div_up(units_to_divide, units_per_core);
+
+    }
+    CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
+    return {all_cores, units_per_core};
+}
+
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores
 // This function returns the number of cores, the CoreRangeSet of all cores, and then the CoreRangeSet that does
 // the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided
@@ -190,12 +204,14 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
     ZoneScoped;
 	uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
 	auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
-	CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
 
 	std::set<CoreRange> core_group_1_set;
 	std::set<CoreRange> core_group_2_set;
 	uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
 	uint32_t units_per_core_group_2 = 0;
+
+    CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
+
     // Evenly divided units to all target cores
 	if (units_to_divide % target_num_cores == 0) {
 		core_group_1_set = all_cores.ranges();

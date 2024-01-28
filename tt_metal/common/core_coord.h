@@ -475,7 +475,7 @@ inline std::vector<CoreCoord> grid_to_cores_with_noop(const uint32_t bbox_x, con
 
 
 
-inline std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false){
+inline std::vector<CoreCoord> corerangeset_to_cores(const CoreRangeSet crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false){
 
   uint32_t num_total_cores = 0;
   std::vector <CoreCoord> all_cores;

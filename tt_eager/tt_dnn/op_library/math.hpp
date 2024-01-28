@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/common/assert.hpp"
+
 namespace tt {
 
 namespace tt_metal {

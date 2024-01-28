@@ -118,7 +118,7 @@ Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferTy
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if(is_sharded(buffer_layout)){
         auto row_major = shard_parameters.value().orientation() == ShardOrientation::ROW_MAJOR;
-        all_cores_ = corerange_to_cores(shard_parameters.value().grid(), this->num_cores(), row_major);
+        all_cores_ = corerangeset_to_cores(shard_parameters.value().grid(), this->num_cores(), row_major);
         TT_ASSERT(this->num_cores() == all_cores_.size());
         uint32_t core_id = 0;
         for(auto core: all_cores_){
