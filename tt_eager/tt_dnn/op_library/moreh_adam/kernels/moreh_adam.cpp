@@ -251,7 +251,7 @@ void MAIN {
         copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
         copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
         max_tile_init();
-        max_tile(dst0);
+        max_tile(dst0, dst1);
         pack_tile(dst0, tmp_cb_max_exp_avg_sq);
         cb_push_back(tmp_cb_max_exp_avg_sq, onetile);
         REL();
