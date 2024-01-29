@@ -12,7 +12,7 @@ namespace llrt {
 void watcher_init(int device_id,
                   std::function<CoreCoord ()>get_grid_size,
                   std::function<CoreCoord (CoreCoord)>worker_from_logical,
-                  const std::function<const std::set<CoreCoord>& ()> &ethernet_cores,
+                  const std::function<const std::unordered_set<CoreCoord> ()> &ethernet_cores,
                   const std::function<CoreCoord (CoreCoord)> &ethernet_from_logical
                   );
 void watcher_attach(
@@ -21,7 +21,7 @@ void watcher_attach(
     const std::function<CoreCoord ()>& get_grid_size,
     const std::function<CoreCoord (CoreCoord)>& worker_from_logical,
     const std::function<const std::set<CoreCoord> &()>& storage_only_cores,
-    const std::function<const std::set<CoreCoord>& ()> &ethernet_cores,
+    const std::function<const std::unordered_set<CoreCoord> ()> &ethernet_cores,
     const std::function<CoreCoord (CoreCoord)> &ethernet_from_logical,
     const string& log_path
 );
