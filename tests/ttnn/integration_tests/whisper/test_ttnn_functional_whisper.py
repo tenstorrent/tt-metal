@@ -32,14 +32,16 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
         embed_dim=config.d_model, num_heads=config.encoder_attention_heads, dropout=config.attention_dropout
     ).eval()
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
-    ttnn_hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
+    ttnn_hidden_states = ttnn.from_torch(
+        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
     if use_key_value_states:
         torch_key_value_states = torch_random(
             (batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32
         )
-        ttnn_key_value_states = ttnn.from_torch(torch_key_value_states, dtype=ttnn.bfloat16)
-        ttnn_key_value_states = ttnn.to_device(ttnn_key_value_states, device)
+        ttnn_key_value_states = ttnn.from_torch(
+            torch_key_value_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
     else:
         torch_key_value_states = None
         ttnn_key_value_states = None
@@ -53,7 +55,7 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
 
     torch_attention_mask = None
 
-    torch_attn_output = torch_functional_whisper.whisper_attention(
+    torch_output = torch_functional_whisper.whisper_attention(
         config,
         torch_hidden_states,
         torch_attention_mask,
@@ -69,7 +71,7 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
         prefix="encoder_attn" if use_key_value_states else "",
     )
     attention_mask = None
-    tt_attn_output = ttnn_model.whisper_attention(
+    output = ttnn_model.whisper_attention(
         config,
         ttnn_hidden_states,
         attention_mask,
@@ -77,9 +79,9 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
         parameters=ttnn_parameters,
     )
 
-    tt_attn_output = ttnn.from_device(tt_attn_output)
-    tt_attn_output = ttnn.to_torch(tt_attn_output)
-    assert_with_pcc(torch_attn_output, tt_attn_output, 0.98)
+    output = ttnn.from_device(output)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output, 0.98)
 
 
 @skip_for_wormhole_b0()
@@ -101,7 +103,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
-    torch_attn_output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
+    torch_output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -109,13 +111,13 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
     )
-    ttnn_hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
-    tt_attn_output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
-    tt_attn_output = ttnn.from_device(tt_attn_output)
-    tt_attn_output = ttnn.to_torch(tt_attn_output)
+    ttnn_hidden_states = ttnn.from_torch(
+        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output, pcc=0.99)
+    assert_with_pcc(torch_output, output, pcc=0.99)
 
 
 @skip_for_wormhole_b0()
@@ -149,13 +151,14 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         parameters=parameters,
     )
 
-    torch_attn_output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
+    torch_output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
+        prefix="encoder",
     )
 
     ttnn_inputs_embeds = ttnn_model.preprocess_encoder_inputs(
@@ -164,11 +167,11 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         device=device,
     )
 
-    tt_attn_output = ttnn_model.encoder(config, ttnn_inputs_embeds, parameters=ttnn_parameters)
-    tt_attn_output = ttnn.from_device(tt_attn_output)
-    tt_attn_output = ttnn.to_torch(tt_attn_output)
+    output = ttnn_model.encoder(config, ttnn_inputs_embeds, parameters=ttnn_parameters)
+    output = ttnn.from_device(output)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output, 0.97)
+    assert_with_pcc(torch_output, output, 0.97)
 
 
 @skip_for_wormhole_b0()
@@ -198,7 +201,7 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
 
-    torch_attn_output = torch_functional_whisper.decoder_layer(
+    torch_output = torch_functional_whisper.decoder_layer(
         config, torch_hidden_states, attention_mask, torch_encoder_hidden_states, parameters=parameters
     )
 
@@ -208,27 +211,26 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
     )
-    ttnn_hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
+    ttnn_hidden_states = ttnn.from_torch(
+        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
-    ttnn_attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    ttnn_attention_mask = ttnn.to_device(ttnn_attention_mask, device)
+    ttnn_attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
-
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
     # if ttnn_model == ttnn_optimized_functional_whisper:
     #     ttnn_hidden_states = ttnn.to_layout(ttnn_hidden_states, ttnn.TILE_LAYOUT)
     #     ttnn_attention_mask = ttnn.to_layout(ttnn_attention_mask, ttnn.TILE_LAYOUT)
     #     ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
 
-    tt_attn_output = ttnn_model.decoder_layer(
+    output = ttnn_model.decoder_layer(
         config, ttnn_hidden_states, ttnn_attention_mask, ttnn_encoder_hidden_states, parameters=ttnn_parameters
     )
-    tt_attn_output = ttnn.from_device(tt_attn_output)
-    tt_attn_output = ttnn.to_torch(tt_attn_output)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output, 0.97)
+    assert_with_pcc(torch_output, output, 0.97)
 
 
 @skip_for_wormhole_b0()
@@ -265,7 +267,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
         decoder_input_ids, attention_mask, parameters=parameters
     )
 
-    torch_attn_output = torch_functional_whisper.decoder(
+    torch_output = torch_functional_whisper.decoder(
         config,
         hidden_states=decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
@@ -283,24 +285,24 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     ttnn_decoder_input_ids = ttnn.from_torch(decoder_input_ids, dtype=ttnn.bfloat16)
     ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, device)
 
-    ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     (decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_decoder_inputs(
         config, decoder_input_ids, attention_mask, parameters=ttnn_parameters, device=device
     )
 
-    tt_attn_output = ttnn_model.decoder(
+    output = ttnn_model.decoder(
         config,
         hidden_states=decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=ttnn_encoder_hidden_states,
         parameters=ttnn_parameters,
     )
-    tt_attn_output = ttnn.from_device(tt_attn_output)
-    tt_attn_output = ttnn.to_torch(tt_attn_output)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_attn_output, tt_attn_output, pcc=0.99)
+    assert_with_pcc(torch_output, output, pcc=0.99)
 
 
 @skip_for_wormhole_b0()

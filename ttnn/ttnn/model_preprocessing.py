@@ -144,7 +144,7 @@ def _preprocess_model_parameters(
             return make_parameter_dict(default_preprocessor_parameters)
         if not named_children and len(list(model.named_parameters())) > 0:
             raise RuntimeError(
-                f"Parameters {type(model)} are were not converted to ttnn.Tensors even though the user requested to do that!"
+                f"Parameters {type(model)} were not converted to ttnn.Tensors even though the user requested to do that!"
             )
 
     if not named_children:

@@ -114,7 +114,23 @@ def validate_input_tensor(
     layouts: Tuple[Layout, ...],
     can_be_on_device: bool,
     can_be_on_cpu: bool,
+    can_be_a_scalar: bool = False,
 ):
+    ranks = set(ranks)
+    dtypes = set(dtypes)
+    layouts = set(layouts)
+
+    if can_be_a_scalar:
+        if isinstance(tensor, (int, float)):
+            return
+        elif not isinstance(tensor, Tensor):
+            raise RuntimeError(
+                f"{operation_name}: Tensor must be of type int, float or ttnn.Tensor, but got {type(tensor)}"
+            )
+    else:
+        if not isinstance(tensor, Tensor):
+            raise RuntimeError(f"{operation_name}: Tensor must be of type ttnn.Tensor, but got {type(tensor)}")
+
     if len(tensor.shape) not in ranks:
         raise RuntimeError(f"{operation_name}: Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
 
@@ -211,7 +227,7 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 
 
 @register_operation(
-    name="ttnn.reshape", torch_function=_torch_reshape, validate_input_tensors=_reshape_validate_input_tensors
+    name="ttnn.reshape", validate_input_tensors=_reshape_validate_input_tensors, torch_function=_torch_reshape
 )
 def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
     r"""
@@ -388,14 +404,15 @@ def from_torch(
 
 
 @register_operation(name="ttnn.to_torch")
-def to_torch(tensor: Tensor) -> "torch.Tensor":
+def to_torch(tensor: Tensor, *, torch_rank: Optional[int] = None) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor) -> torch.Tensor
 
     Converts the `ttnn.Tensor` :attr:`tensor` into a `torch.Tensor`.
 
     Args:
-        * :attr:`tensor`: the ttnn.Tensor
+        * :attr:`tensor`: ttnn.Tensor to be converted to torch.Tensor
+        * :attr:`torch_rank`: desired rank of the torch.Tensor. Will use torch.squeeze operation to remove dimensions until the desired rank is reached. If not possible, the operation will error out.
 
     Example::
         >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
@@ -416,7 +433,16 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
         if ttl_tensor.layout() != ROW_MAJOR_LAYOUT:
             raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
-        return ttl_tensor.to_torch()
+        output = ttl_tensor.to_torch()
+
+        if torch_rank is None:
+            return output
+
+        while len(output.shape) != torch_rank:
+            if output.shape[0] != 1:
+                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+            output = output.squeeze()
+        return output
 
     ttl_tensor = tensor.value
     tensor = Tensor(ttl_tensor.reshape(tensor.shape.padded().value))
@@ -731,11 +757,18 @@ def to_layout(tensor, layout: Layout):
             else:
                 input_tensor = from_device(input_tensor)
                 input_tensor = unsqueeze_to_4D(input_tensor)
-                input_tensor = Tensor(input_tensor.value.to(layout))
-                ttl_input_tensor = input_tensor.value
 
-                output_tensor_end = [dim - 1 for dim in input_tensor.shape]
-                output_tensor = Tensor(ttl_input_tensor.unpad([0, 0, 0, 0], output_tensor_end))
+                def impl(input_tensor):
+                    input_tensor = Tensor(input_tensor.value.to(layout))
+                    ttl_input_tensor = input_tensor.value
+
+                    output_tensor_end = [dim - 1 for dim in input_tensor.shape]
+                    output_tensor = Tensor(ttl_input_tensor.unpad([0, 0, 0, 0], output_tensor_end))
+                    return output_tensor
+
+                output_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(
+                    input_tensor
+                )
         else:
             input_tensor = unsqueeze_to_4D(input_tensor)
             input_tensor = Tensor(input_tensor.value.to(layout))
@@ -759,20 +792,21 @@ def to_layout(tensor, layout: Layout):
         tensor = unsqueeze_to_4D(tensor)
         *batch_sizes, _, _ = tensor.shape
 
-        ttl_input_tensor = tensor.value
         if is_on_device:
             tensor = Tensor(
                 ttl.tensor.tilize_with_val_padding(
-                    ttl_input_tensor,
+                    tensor.value,
                     batch_sizes + [padded_height, padded_width],
                     [0, 0, 0, 0],
                     0,
                 )
             )
         else:
-            tensor = Tensor(
-                ttl_input_tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout)
-            )
+
+            def impl(tensor):
+                return Tensor(tensor.value.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0).to(layout))
+
+            tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_layout")(tensor)
 
         tensor = reshape(
             tensor,
