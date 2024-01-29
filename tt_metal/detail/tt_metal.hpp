@@ -525,12 +525,19 @@ namespace tt::tt_metal{
             tt::Cluster::instance().l1_barrier(device->id());
         }
 
+        // TODO (abhullar): Refactor this with #2593 to allow each target fast dispatch (FD) device to program their associated FD cores regardless of whether they are on the target device or not.
+        // Currently we have to program FD cores for the remote device when initializing the MMIO device because completion queue cores are on MMIO device
+        //  and we don't have handle on MMIO device when initializing the remote device
         inline void CompileCommandQueuePrograms(Device *device, vector<unique_ptr<Program, ProgramDeleter>>& command_queue_programs) {
             ZoneScoped;
 
-            if (device->is_mmio_capable()) {
-                unique_ptr<Program, ProgramDeleter> command_queue_program_ptr(new Program);
+            unique_ptr<Program, ProgramDeleter> command_queue_program_ptr(new Program);
 
+            // Currently we only double buffer commands in tensix cores
+            const uint32_t num_tensix_command_slots = 2;
+            const uint32_t num_eth_command_slots = 1;
+
+            if (device->is_mmio_capable()) {
                 for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device->id())) {
                     // TODO (abhullar): allow for multiple cqs on remote device, atm device initialization asserts one cq for the remote device
                     uint8_t num_hw_cqs = device_id == device->id() ? device->num_hw_cqs() : 1;
@@ -581,7 +588,7 @@ namespace tt::tt_metal{
                         uint32_t consumer_cmd_base_addr = get_command_start_l1_address(device_id != device->id()); // device is MMIO capable but current device_id being set up is remote
                         uint32_t consumer_data_buff_size = get_consumer_data_buffer_size(device_id != device->id()); // device is MMIO capable but current device_id being set up is remote
                         std::vector<uint32_t> producer_compile_args = {
-                            host_issue_queue_read_ptr_addr, issue_queue_start_addr, command0_l1_addr, data_section_l1_addr, consumer_cmd_base_addr, consumer_data_buff_size};
+                            host_issue_queue_read_ptr_addr, issue_queue_start_addr, command0_l1_addr, data_section_l1_addr, get_producer_data_buffer_size(false), consumer_cmd_base_addr, consumer_data_buff_size};
 
                         uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
                         uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -602,7 +609,7 @@ namespace tt::tt_metal{
                                 .defines = producer_defines});
 
 
-                        uint32_t num_command_slots = (device_id == device->id()) ? 2 : 1;
+                        uint32_t num_command_slots = (device_id == device->id()) ? num_tensix_command_slots : num_eth_command_slots;
                         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_logical_core, num_command_slots);
 
                         // Currently remote device dispatch completion queue interface has not been brought up
@@ -622,14 +629,76 @@ namespace tt::tt_metal{
                         }
                     }
                 }
-
-                CompileProgram(device, *command_queue_program_ptr);
-                command_queue_programs.push_back(std::move(command_queue_program_ptr));
-
             } else {
-                // TODO: Load dispatch kernels on dispatch cores of the remote chip
-                //  https://github.com/tenstorrent-metal/tt-metal/issues/3953 and https://github.com/tenstorrent-metal/tt-metal/issues/3954
+                TT_ASSERT(device->num_hw_cqs() == 1, "Currently can only support one command queue for remote device");
+
+                uint8_t num_hw_cqs = device->num_hw_cqs();
+                const uint8_t cq_id = 0;
+                chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+                uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+                uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+
+                tt_cxy_pair remote_processor_location = dispatch_core_manager::get(num_hw_cqs).remote_processor_core(device->id(), channel, cq_id);
+                tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(device->id(), channel, cq_id);
+                tt_cxy_pair remote_signaller_location = dispatch_core_manager::get(num_hw_cqs).remote_signaller_core(device->id(), channel, cq_id);
+                CoreCoord remote_processor_logical_core(remote_processor_location.x, remote_processor_location.y);
+                CoreCoord dispatch_logical_core(dispatch_location.x, dispatch_location.y);
+                CoreCoord remote_signaller_logical_core(remote_signaller_location.x, remote_signaller_location.y);
+                CoreCoord remote_processor_physical_core = get_physical_core_coordinate(remote_processor_location, CoreType::WORKER);
+                CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, CoreType::WORKER);
+                CoreCoord remote_signaller_physical_core = get_physical_core_coordinate(remote_signaller_location, CoreType::WORKER);
+
+                CoreCoord logical_eth_router_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+                    remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
+                CoreCoord physical_eth_router_dst = device->ethernet_core_from_logical_core(logical_eth_router_dst);
+                // TODO (abhullar / aliu): there is no API to configure ethernet semaphores used for FD so manually write initial semaphore value
+                uint32_t dst_router_sem_value = num_eth_command_slots;
+                tt::Cluster::instance().write_core(&dst_router_sem_value, sizeof(uint32_t), tt_cxy_pair(device->id(), physical_eth_router_dst), eth_l1_mem::address_map::SEMAPHORE_BASE);
+                tt::Cluster::instance().configure_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
+
+                uint32_t cmd_start_tensix = get_command_start_l1_address(false);
+                uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
+                uint32_t producer_data_buffer_size_tensix = get_producer_data_buffer_size(false);
+                uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size(false);
+
+                uint32_t producer_cmd_start_eth = get_command_start_l1_address(true);
+                uint32_t producer_data_buffer_size_eth = get_producer_data_buffer_size(true);
+
+                std::vector<uint32_t> processor_compile_args = {
+                    cmd_start_tensix,
+                    data_section_addr_tensix,
+                    producer_data_buffer_size_tensix,
+                    cmd_start_tensix, // TODO debug core is on tensix: producer_cmd_start_eth
+                    producer_data_buffer_size_tensix, // TODO debug core is on tensix: producer_data_buffer_size_eth
+                    cmd_start_tensix,
+                    consumer_data_buffer_size_tensix,
+                };
+
+                std::map<string, string> processor_defines = {
+                    {"DISPATCH_KERNEL", "1"},
+                    {"PRODUCER_NOC_X", std::to_string(physical_eth_router_dst.x)},
+                    {"PRODUCER_NOC_Y", std::to_string(physical_eth_router_dst.y)},
+                    {"DISPATCHER_NOC_X", std::to_string(dispatch_physical_core.x)},
+                    {"DISPATCHER_NOC_Y", std::to_string(dispatch_physical_core.y)},
+                };
+
+                tt::tt_metal::CreateKernel(
+                    *command_queue_program_ptr,
+                    "tt_metal/impl/dispatch/kernels/remote_command_processor.cpp",
+                    remote_processor_logical_core,
+                    tt::tt_metal::DataMovementConfig {
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = processor_compile_args,
+                        .defines = processor_defines});
+
+                // first semaphore is between ethernet router and the processor core to signal whether processor can receive commands
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_logical_core, 0);
+                // second semaphore is between processor and dispatcher to detect whether dispatcher can accept commands
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_logical_core, num_tensix_command_slots);
             }
+            CompileProgram(device, *command_queue_program_ptr);
+            command_queue_programs.push_back(std::move(command_queue_program_ptr));
         }
     }
 }

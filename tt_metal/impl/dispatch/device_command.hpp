@@ -20,7 +20,7 @@ class DeviceCommand {
     //TODO: investigate other num_cores
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
-    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
+    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 23;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
@@ -28,7 +28,7 @@ class DeviceCommand {
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
     // Ensure any changes to this device command have asserts modified/extended
-    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 20);
+    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 23);
     static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
 
     // Command header
@@ -51,6 +51,10 @@ class DeviceCommand {
     static constexpr uint32_t data_size_idx = 16;
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
     static constexpr uint32_t sharded_buffer_num_cores_idx = 18;
+    static constexpr uint32_t router_cb_size_idx = 19;
+    static constexpr uint32_t router_cb_num_pages_idx = 20;
+    static constexpr uint32_t producer_router_transfer_num_pages_idx = 21;
+    static constexpr uint32_t consumer_router_transfer_num_pages_idx = 22;
 
     // Denotes which portion of the command queue needs to be wrapped
     enum class WrapRegion : uint8_t {
@@ -75,9 +79,13 @@ class DeviceCommand {
 
     void set_consumer_cb_size(const uint32_t cb_size);
 
+    void set_router_cb_size(const uint32_t cb_size);
+
     void set_producer_cb_num_pages(const uint32_t cb_num_pages);
 
     void set_consumer_cb_num_pages(const uint32_t cb_num_pages);
+
+    void set_router_cb_num_pages(const uint32_t cb_num_pages);
 
     void set_num_pages(const uint32_t num_pages);
 
@@ -89,10 +97,14 @@ class DeviceCommand {
 
     void set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages);
 
+    void set_producer_router_transfer_num_pages(const uint32_t producer_router_transfer_num_pages);
+
+    void set_consumer_router_transfer_num_pages(const uint32_t consumer_router_transfer_num_pages);
+
     uint32_t get_data_size() const;
 
     void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
-    
+
     void add_buffer_transfer_interleaved_instruction(
         const uint32_t src,
         const uint32_t dst,

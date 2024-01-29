@@ -34,9 +34,13 @@ void DeviceCommand::set_producer_cb_size(const uint32_t cb_size) { this->desc[th
 
 void DeviceCommand::set_consumer_cb_size(const uint32_t cb_size) { this->desc[this->consumer_cb_size_idx] = cb_size; }
 
+void DeviceCommand::set_router_cb_size(const uint32_t cb_size) { this->desc[this->router_cb_size_idx] = cb_size; }
+
 void DeviceCommand::set_producer_cb_num_pages(const uint32_t cb_num_pages) { this->desc[this->producer_cb_num_pages_idx] = cb_num_pages; }
 
 void DeviceCommand::set_consumer_cb_num_pages(const uint32_t cb_num_pages) { this->desc[this->consumer_cb_num_pages_idx] = cb_num_pages; }
+
+void DeviceCommand::set_router_cb_num_pages(const uint32_t cb_num_pages) { this->desc[this->router_cb_num_pages_idx] = cb_num_pages; }
 
 void DeviceCommand::set_num_pages(uint32_t num_pages) { this->desc[this->num_pages_idx] = num_pages; }
 
@@ -67,6 +71,14 @@ uint32_t DeviceCommand::get_data_size() const { return this->desc[this->data_siz
 
 void DeviceCommand::set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages) {
     this->desc[this->producer_consumer_transfer_num_pages_idx] = producer_consumer_transfer_num_pages;
+}
+
+void DeviceCommand::set_producer_router_transfer_num_pages(const uint32_t producer_router_transfer_num_pages) {
+    this->desc[this->producer_router_transfer_num_pages_idx] = producer_router_transfer_num_pages;
+}
+
+void DeviceCommand::set_consumer_router_transfer_num_pages(const uint32_t consumer_router_transfer_num_pages) {
+    this->desc[this->consumer_router_transfer_num_pages_idx] = consumer_router_transfer_num_pages;
 }
 
 void DeviceCommand::update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src) {

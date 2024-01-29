@@ -9,8 +9,9 @@ void kernel_main() {
     constexpr uint32_t issue_queue_start_addr = get_compile_time_arg_val(1);
     constexpr uint32_t command_start_addr = get_compile_time_arg_val(2);
     constexpr uint32_t data_section_addr = get_compile_time_arg_val(3);
-    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(5);
+    constexpr uint32_t data_buffer_size = get_compile_time_arg_val(4);
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
 
     // Only the issue queue size is a runtime argument
     uint32_t issue_queue_size = get_arg_val<uint32_t>(0);
@@ -68,7 +69,7 @@ void kernel_main() {
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         while (db_semaphore_addr[0] == 0)
             ;  // Check that there is space in the consumer
-        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
             db_cb_config,
             remote_db_cb_config,
             db_buf_switch,
@@ -76,7 +77,7 @@ void kernel_main() {
             consumer_cb_num_pages,
             page_size,
             consumer_cb_size);
-        relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
+        relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         if (stall) {
             while (*db_semaphore_addr != 2)
                 ;

@@ -270,21 +270,19 @@ void Device::initialize_command_queue() {
     this->manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     detail::CompileCommandQueuePrograms(this, this->command_queue_programs);
-    // TODO (abhullar): remove this condition with https://github.com/tenstorrent-metal/tt-metal/issues/3953
-    if (this->is_mmio_capable()) {
-        TT_ASSERT(this->command_queue_programs.size() == 1);
-        detail::CommandQueueInit(this);
-        Program& command_queue_program = *this->command_queue_programs[0];
+    TT_ASSERT(this->command_queue_programs.size() == 1);
+    detail::CommandQueueInit(this);
+    Program& command_queue_program = *this->command_queue_programs[0];
 
-        for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
-                for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-                    launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core)->launch_msg;
-                    tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(logical_dispatch_core), &msg);
-                }
+    for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+        for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
+            for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
+                launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core)->launch_msg;
+                tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(logical_dispatch_core), &msg);
             }
         }
     }
+
 }
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
