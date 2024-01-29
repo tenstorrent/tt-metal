@@ -42,38 +42,41 @@ void kernel_main() {
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
-    #if CAUSAL_MASK
-    uint32_t fused_head = get_compile_time_arg_val(4);
-    for (uint32_t f = 0; f<fused_head; f++) {
-        mask_id = mask_start_tile_id;
-        for (uint32_t h = 0; h<block_wt; h++) {
-            cb_reserve_back(cb_attn, block_wt);
-            uint32_t l1_write_addr = get_write_ptr(cb_attn);
-            for (uint32_t w = 0; w<block_wt; w++) {
-                noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
-                l1_write_addr += mask_tile_bytes;
-                ++mask_id;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_attn, block_wt);
+    #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
+        uint32_t fused_head = get_compile_time_arg_val(4);
+        for (uint32_t f = 0; f<fused_head; f++) {
+            mask_id = mask_start_tile_id;
 
-            if (f == 0 && h == 0) {
-                generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+            for (uint32_t h = 0; h<block_wt; h++) {
+                cb_reserve_back(cb_attn, block_wt);
+                uint32_t l1_write_addr = get_write_ptr(cb_attn);
+                for (uint32_t w = 0; w<block_wt; w++) {
+                    noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
+                    l1_write_addr += mask_tile_bytes;
+                    ++mask_id;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_attn, block_wt);
+
+                if (f == 0 && h == 0) {
+                    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+                }
             }
         }
-    }
+    #elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
+        generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
     #else
-    cb_reserve_back(cb_attn, block_wt);
-    uint32_t l1_write_addr = get_write_ptr(cb_attn);
-    for (uint32_t w = 0; w<block_wt; w++) {
-        noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
-        l1_write_addr += mask_tile_bytes;
-        ++mask_id;
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_attn, block_wt);
+        cb_reserve_back(cb_attn, block_wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_attn);
+        for (uint32_t w = 0; w<block_wt; w++) {
+            noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
+            l1_write_addr += mask_tile_bytes;
+            ++mask_id;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_attn, block_wt);
 
-    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+        generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
     #endif
 
     #else
