@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "dram_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
@@ -21,13 +21,10 @@ struct DRAMConfig{
     std::string kernel_file;
     uint32_t dram_buffer_size;
     uint32_t l1_buffer_addr;
-    std::vector<uint32_t> src_vec;
     tt_metal::DataMovementConfig data_movement_cfg;
 };
 
-bool dram_test_single_core (tt_metal::Device *device, DRAMConfig &cfg){
-    CommandQueue& cq = detail::GetCommandQueue(device);
-
+bool dram_test_single_core (CommonFixture* fixture, tt_metal::Device *device, const DRAMConfig &cfg, std::vector<uint32_t> src_vec){
     // Create a program
     tt_metal::Program program = CreateProgram();
 
@@ -53,8 +50,9 @@ bool dram_test_single_core (tt_metal::Device *device, DRAMConfig &cfg){
         cfg.core_range,
         cfg.data_movement_cfg
     );
-    log_info(tt::LogVerif, "writing to buffer");
-    EnqueueWriteBuffer(cq, input_dram_buffer, cfg.src_vec, false);
+    // log_info(tt::LogVerif, "Writing to buffer");
+    // EnqueueWriteBuffer(cq, input_dram_buffer, cfg.src_vec, false);
+    fixture->WriteBuffer(device, input_dram_buffer, src_vec);
 
     tt_metal::SetRuntimeArgs(
             program,
@@ -68,37 +66,47 @@ bool dram_test_single_core (tt_metal::Device *device, DRAMConfig &cfg){
             (std::uint32_t)output_dram_noc_xy.x,
             (std::uint32_t)output_dram_noc_xy.y,
             cfg.dram_buffer_size});
-    log_info(tt::LogVerif, "Lauching program");
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    // log_info(tt::LogVerif, "Lauching program");
+    fixture->RunProgram(device, program);
+    // EnqueueProgram(cq, program, false);
+    // Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    log_info(tt::LogVerif, "Reading buffer");
-    EnqueueReadBuffer(cq, output_dram_buffer, result_vec, true);
-
-    return result_vec == cfg.src_vec;
+    // log_info(tt::LogVerif, "Reading buffer");
+    // EnqueueReadBuffer(cq, output_dram_buffer, result_vec, true);
+    fixture->ReadBuffer(device, output_dram_buffer, result_vec);
+    return result_vec == src_vec;
 }
 }
 
-TEST_F(CommandQueueFixture, DRAMLoopBackSingleCore){
+TEST_F(CommonFixture, DRAMLoopBackSingleCore){
     uint32_t buffer_size = 2 * 1024 * 50;
-
+    std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
+        buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}},
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = 400 * 1024,
-        .src_vec = create_random_vector_of_bfloat16(
-            buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count()),
         .data_movement_cfg = {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
-    log_info(tt::LogVerif, "Starting dram tests");
-
-    // for (unsigned int id=0; id < devices_.size(); id++){
-        dram_test_config.kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
-        ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_test_single_core(device_, dram_test_config));
-        // log_info(tt::LogVerif, "Starting second dram test");
-        // dram_test_config.kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_db.cpp";
-        // ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_test_single_core(device_, dram_test_config));
-    // }
+    for (unsigned int id=0; id < devices_.size(); id++){
+        ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_test_single_core(this, devices_.at(id), dram_test_config, src_vec));
+    }
 }
+
+// TEST_F(CommonFixture, DRAMLoopBackSingleCoreDB){
+//     uint32_t buffer_size = 2 * 1024 * 256;
+//     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
+//         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+//     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
+//         .core_range = {{0, 0}, {0, 0}},
+//         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_db.cpp",
+//         .dram_buffer_size = buffer_size,
+//         .l1_buffer_addr = 400 * 1024,
+//         .data_movement_cfg = {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+//     };
+//     for (unsigned int id=0; id < devices_.size(); id++){
+//         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_test_single_core(this, devices_.at(id), dram_test_config, src_vec));
+//     }
+// }
