@@ -34,8 +34,6 @@ def test_softmax(device, ttnn_enable_debug_decorator, batch_size, h, w, dim, inp
     input_tensor = ttnn.to_device(input_tensor, device)
     with override_pearson_correlation_coefficient(0.99):
         output_tensor = ttnn.softmax(input_tensor, dim=dim)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
@@ -57,8 +55,6 @@ def test_exp(device, ttnn_enable_debug_decorator, batch_size, h, w, input_layout
 
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.exp(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)

@@ -75,13 +75,14 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         )
 
         start = time.time()
-        tt_output = functional_bert.bert_for_question_answering(
-            config,
-            *ttnn_bert_inputs,
-            parameters=parameters,
-            name="roberta",
-        )
-        tt_output = ttnn.from_device(tt_output)
+        with ttnn.disable_validate_decorator():
+            tt_output = functional_bert.bert_for_question_answering(
+                config,
+                *ttnn_bert_inputs,
+                parameters=parameters,
+                name="roberta",
+            )
+            tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()

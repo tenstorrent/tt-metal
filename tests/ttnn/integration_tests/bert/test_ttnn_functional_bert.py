@@ -36,18 +36,14 @@ def test_bert_attention(device, model_name, batch_size, sequence_size):
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states)
-    hidden_states = ttnn.to_device(hidden_states, device)
-    attention_mask = ttnn.from_torch(torch_attention_mask)
-    attention_mask = ttnn.to_device(attention_mask, device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn_functional_bert.bert_attention(
         config,
         hidden_states,
         attention_mask=attention_mask,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.9999)
@@ -73,15 +69,11 @@ def test_bert_intermediate(device, model_name, batch_size, sequence_size, torch_
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
-    hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-    hidden_states = ttnn.to_device(hidden_states, device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn_functional_bert.bert_intermediate(
         hidden_states,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9997)
@@ -108,18 +100,14 @@ def test_bert_output(device, model_name, batch_size, sequence_size):
         device=device,
     )
 
-    intermediate = ttnn.from_torch(torch_intermediate, dtype=ttnn.bfloat16)
-    intermediate = ttnn.to_device(intermediate, device)
-    residual = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat16)
-    residual = ttnn.to_device(residual, device)
+    intermediate = ttnn.from_torch(torch_intermediate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    residual = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn_functional_bert.bert_output(
         config,
         intermediate,
         residual,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99919)
@@ -156,15 +144,12 @@ def test_bert_feedforward(device, model_name, batch_size, sequence_size):
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states)
-    hidden_states = ttnn.to_device(hidden_states, device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn_functional_bert.bert_feedforward(
         config,
         hidden_states,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.99979)
@@ -190,18 +175,14 @@ def test_bert_layer(device, model_name, batch_size, sequence_size):
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states)
-    hidden_states = ttnn.to_device(hidden_states, device)
-    attention_mask = ttnn.from_torch(torch_attention_mask)
-    attention_mask = ttnn.to_device(attention_mask, device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn_functional_bert.bert_layer(
         config,
         hidden_states,
         attention_mask=attention_mask,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.99964)
@@ -227,11 +208,9 @@ def test_bert_encoder(device, model_name, batch_size, sequence_size):
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states, ttnn.bfloat16)
-    hidden_states = ttnn.to_device(hidden_states, device)
+    hidden_states = ttnn.from_torch(torch_hidden_states, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     if torch_attention_mask is not None:
-        attention_mask = ttnn.from_torch(torch_attention_mask)
-        attention_mask = ttnn.to_device(attention_mask, device)
+        attention_mask = ttnn.from_torch(torch_attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     else:
         attention_mask = None
     output = ttnn_functional_bert.bert_encoder(
@@ -240,8 +219,6 @@ def test_bert_encoder(device, model_name, batch_size, sequence_size):
         attention_mask=attention_mask,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output.to(torch.float32), 0.99939)
@@ -283,8 +260,6 @@ def test_bert(device, model_name, batch_size, sequence_size):
         *ttnn_bert_inputs,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.9999)
@@ -327,8 +302,6 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
         *ttnn_bert_inputs,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
     start_logits = output[..., 0]
     end_logits = output[..., 1]

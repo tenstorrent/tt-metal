@@ -42,17 +42,17 @@ def compare(torch_outputs, outputs, pcc):
     return matches, last_message
 
 
+ENABLE_VALIDATE_DECORATOR = True
 ENABLE_DEBUG_DECORATOR = False
 USE_TORCH_OUTPUT_IF_MISMATCHES = False
 
 
-def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
-    import ttnn
-
-    torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
-    if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
-        torch_output = ttnn.to_device(torch_output, output.device)
-    return torch_output
+@contextmanager
+def disable_validate_decorator():
+    global ENABLE_VALIDATE_DECORATOR
+    ENABLE_VALIDATE_DECORATOR = False
+    yield
+    ENABLE_VALIDATE_DECORATOR = True
 
 
 PEARSON_CORRELATION_COEFFICIENT = 0.9999
@@ -65,6 +65,15 @@ def override_pearson_correlation_coefficient(value):
     PEARSON_CORRELATION_COEFFICIENT = value
     yield
     PEARSON_CORRELATION_COEFFICIENT = old_value
+
+
+def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
+    import ttnn
+
+    torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
+    if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
+        torch_output = ttnn.to_device(torch_output, output.device)
+    return torch_output
 
 
 def register_operation(*, name, torch_function=None, validate_input_tensors=None):
@@ -117,7 +126,8 @@ def register_operation(*, name, torch_function=None, validate_input_tensors=None
         @wraps(function)
         def call_wrapper(*function_args, **function_kwargs):
             decorated_function = function
-            decorated_function = validate_decorator(decorated_function)
+            if ENABLE_VALIDATE_DECORATOR:
+                decorated_function = validate_decorator(decorated_function)
             if ENABLE_DEBUG_DECORATOR:
                 decorated_function = debug_decorator(decorated_function)
             return decorated_function(*function_args, **function_kwargs)

@@ -121,19 +121,16 @@ def run_conv(
 @pytest.mark.parametrize(
     "batch_size",
     [8, 16, 20],
-    ids=["batch_size_8", "batch_size_16", "batch_size_20"],
 )
 @pytest.mark.parametrize(
     "weights_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
-    ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
-    ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
 )
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi], ids=["HiFi4", "LoFi"])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi])
 def test_resnet50_conv(
     use_program_cache,
     device,
@@ -243,14 +240,12 @@ def test_resnet50_conv(
 @pytest.mark.parametrize(
     "weights_dtype",
     [ttnn.bfloat8_b],
-    ids=["weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat8_b],
-    ids=["activations_BFLOAT8_B"],
 )
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi], ids=["HiFi4", "LoFi"])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi])
 def test_sd_conv(
     use_program_cache,
     device,

@@ -208,20 +208,23 @@ def preprocess_inputs(
 ):
     import torch
 
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32)
-    input_ids = ttnn.to_device(input_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    token_type_ids = ttnn.from_torch(token_type_ids, dtype=ttnn.uint32)
-    token_type_ids = ttnn.to_device(token_type_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    token_type_ids = ttnn.from_torch(
+        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     if attention_mask is not None:
         attention_mask = torch.zeros(input_ids.shape, dtype=torch.bfloat16)
         attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
 
         attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 31))
-        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-        attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
-        attention_mask = ttnn.to_device(attention_mask, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attention_mask = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     return input_ids, token_type_ids, attention_mask
 
