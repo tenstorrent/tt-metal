@@ -51,7 +51,7 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
     grid_size = (12, 8)
     batch = grid_size[0]
     num_cores_r = grid_size[1]
-    input_shape = (batch, 1, num_cores_r * fuse_head * 384, 384)
+    input_shape = (batch, num_cores_r, fuse_head * 384, 384)
     M = input_shape[2]
     K = input_shape[3] * batch
 
@@ -87,7 +87,7 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
     in1_t_shard = ttl.tensor.interleaved_to_sharded(
         in1_t,
         grid_size,
-        [M // grid_size[1], K // grid_size[0]],
+        [fuse_head * 384, 384],
         ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
@@ -113,15 +113,207 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
     if casual_mask == False:
         attention_mask = attention_mask.reshape(batch, 1, 1, 384)
     else:
-        attention_mask = attention_mask.repeat(1, 1, 16, 1)
+        attention_mask = attention_mask.repeat(1, 1, fuse_head, 1)
 
-    for i in range(batch):
-        golden_output_tensor = input_tensor[i] * scale + attention_mask[i]
-        golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
+    golden_output_tensor = input_tensor * scale + attention_mask
+    golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-        allclose, output = comp_pcc(
-            tt_output_tensor[i],
-            golden_output_tensor,
+    allclose, output = comp_pcc(
+        tt_output_tensor,
+        golden_output_tensor,
+    )
+    logger.info(output)
+    assert allclose, f"FAILED: {output}"
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "casual_mask",
+    [True, False],
+    ids=["causal", "no-causal"],
+)
+@pytest.mark.parametrize(
+    "cb_dtype",
+    (ttl.tensor.DataType.BFLOAT16,),
+    ids=["BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "in0_mem_config",
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    ids=[
+        "in0_DRAM",
+    ],
+)
+@pytest.mark.parametrize(
+    "in_dtype",
+    (ttl.tensor.DataType.BFLOAT8_B,),
+    ids=["BFLOAT8_B"],
+)
+def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
+    torch.manual_seed(0)
+    sm_op = ttl.operations.primary.transformers.scale_mask_softmax_in_place
+
+    fuse_head = 2
+
+    grid_size = (8, 7)
+    batch = grid_size[1]
+    num_cores_r = grid_size[0]
+    input_shape = (batch, num_cores_r, fuse_head * 384, 384)
+
+    hidden_dim = 1024
+    num_heads = 16
+    # scale = 1.0
+    scale = 1 / math.sqrt(hidden_dim // num_heads)
+
+    if casual_mask == False:
+        # attention_mask = torch.zeros(batch, 1, 1, 384)
+        attention_mask = torch.rand(batch, 1, 1, 384)
+        attention_mask = (attention_mask > 0.5).float()
+        attention_mask = attention_mask.reshape(batch, 1, -1, 32)
+        attention_mask_t = ttl.tensor.Tensor(
+            attention_mask,
+            ttl.tensor.DataType.BFLOAT16,
+        ).to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
+    else:
+        # attention_mask = torch.zeros(batch, 1, 384, 384)
+        attention_mask = torch.rand(batch, 1, 384, 384)
+        attention_mask = (attention_mask > 0.5).float()
+        attention_mask32 = tilize_to_list(pad_weight(attention_mask))
+        attention_mask_t = ttl.tensor.Tensor(
+            attention_mask32,
+            [batch, 1, 384, 384],
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.TILE,
+            device,
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         )
-        logger.info(output)
-        assert allclose, f"FAILED: {output}"
+
+    input_tensor = torch.randn(input_shape).bfloat16().float()
+    in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+    in1_t_shard = ttl.tensor.interleaved_to_sharded(
+        in1_t,
+        grid_size,
+        [fuse_head * 384, 384],
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    )
+
+    program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=6,
+        block_h=12 * fuse_head,
+        block_w=12,
+        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        im_data_format=cb_dtype,
+    )
+
+    tt_output_sharded = sm_op(
+        in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=casual_mask
+    )
+
+    tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
+    tt_output_tensor = tt_output.cpu().to_torch().float()
+    tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
+    tt_output_tensor = untilize(tt_output_tensor)
+
+    if casual_mask == False:
+        attention_mask = attention_mask.reshape(batch, 1, 1, 384)
+    else:
+        attention_mask = attention_mask.repeat(1, 1, fuse_head, 1)
+
+    golden_output_tensor = input_tensor * scale + attention_mask
+    golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
+
+    allclose, output = comp_pcc(
+        tt_output_tensor,
+        golden_output_tensor,
+    )
+    logger.info(output)
+    assert allclose, f"FAILED: {output}"
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "shard_orient",
+    [ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.ShardOrientation.ROW_MAJOR],
+    ids=["CM", "RM"],
+)
+@pytest.mark.parametrize(
+    "cb_dtype",
+    (ttl.tensor.DataType.BFLOAT16,),
+    ids=["BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "in0_mem_config",
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    ids=[
+        "in0_DRAM",
+    ],
+)
+@pytest.mark.parametrize(
+    "in_dtype",
+    (ttl.tensor.DataType.BFLOAT8_B,),
+    ids=["BFLOAT8_B"],
+)
+def test_softmax_with_sharded_mask(device, in_dtype, cb_dtype, in0_mem_config, shard_orient):
+    torch.manual_seed(0)
+    sm_op = ttl.operations.primary.transformers.scale_mask_softmax_in_place
+
+    grid_size = (8, 4)
+    input_shape = (1, 32, 32, 1024)
+    M = input_shape[2]
+    K = input_shape[3]
+
+    scale = 1.0 / 8.0
+
+    attention_mask = torch.rand(1, 32, 32, 1024)
+    attention_mask = (attention_mask > 0.5).float()
+    attention_mask = torch.where(attention_mask == 1, torch.tensor(0.0), torch.tensor(-float("inf")))
+    attention_mask_t = torch2tt_tensor(
+        attention_mask, device, tt_memory_config=in0_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+    attention_mask_t_shard = ttl.tensor.interleaved_to_sharded(
+        attention_mask_t,
+        grid_size,
+        [M, K],
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        shard_orient,
+    )
+
+    input_tensor = torch.randn(input_shape).bfloat16().float()
+    in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+    in1_t_shard = ttl.tensor.interleaved_to_sharded(
+        in1_t,
+        grid_size,
+        [M, K],
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        shard_orient,
+    )
+
+    program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=8,
+        block_h=1,
+        block_w=32,
+        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        im_data_format=cb_dtype,
+    )
+
+    tt_output_sharded = sm_op(
+        in1_t_shard, scale, attention_mask_t_shard, program_config=program_config, is_causal_mask=True
+    )
+
+    tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
+    tt_output_tensor = tt_output.cpu().to_torch().float()
+    tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
+    tt_output_tensor = untilize(tt_output_tensor)
+
+    golden_output_tensor = input_tensor * scale + attention_mask
+    golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
+
+    allclose, output = comp_pcc(
+        tt_output_tensor,
+        golden_output_tensor,
+    )
+    logger.info(output)
+    assert allclose, f"FAILED: {output}"
