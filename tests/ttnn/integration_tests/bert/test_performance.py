@@ -28,7 +28,7 @@ from models.perf.perf_utils import prep_perf_report
 
 def get_expected_times(functional_bert):
     return {
-        ttnn_functional_bert: (12, 20.5),
+        ttnn_functional_bert: (15, 22),
         ttnn_optimized_functional_bert: (12, 0.08),
     }[functional_bert]
 

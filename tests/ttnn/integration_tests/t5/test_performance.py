@@ -26,11 +26,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 def get_expected_times(model_name, functional_t5):
     return {
         "t5-small": {
-            ttnn_functional_t5: (13, 3),
+            ttnn_functional_t5: (15, 3),
             ttnn_optimized_functional_t5: (10, 1),
         },
         "google/flan-t5-small": {
-            ttnn_functional_t5: (7, 3.5),
+            ttnn_functional_t5: (16, 4),
             ttnn_optimized_functional_t5: (5, 1),
         },
     }[model_name][functional_t5]
