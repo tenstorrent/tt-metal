@@ -20,6 +20,11 @@ std::vector<string> ordered_waypoints = {
     "Device *, Core (x=*,y=*):    BBBB,BBBB,BBBB,BBBB,BBBB",
     "Device *, Core (x=*,y=*):    CCCC,CCCC,CCCC,CCCC,CCCC"
 };
+std::vector<string> ordered_waypoints_eth = {
+    "Device *, Core (x=*,y=*):    AAAA",
+    "Device *, Core (x=*,y=*):    BBBB",
+    "Device *, Core (x=*,y=*):    CCCC"
+};
 
 static void RunTest(WatcherFixture* fixture, Device* device) {
     // Set up program
@@ -47,6 +52,25 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         CoreRange(xy_start, xy_end),
         ComputeConfig{});
 
+    // Also run on ethernet cores if they're present
+    bool has_eth_cores = !device->get_active_ethernet_cores().empty();
+    KernelHandle erisc_kid = 0;
+    if (has_eth_cores) {
+        std::set<CoreRange> eth_core_ranges;
+        for (const auto& core : device->get_active_ethernet_cores()) {
+            eth_core_ranges.insert(CoreRange{.start=core, .end=core});
+        }
+        erisc_kid = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+            CoreRangeSet(eth_core_ranges),
+            tt_metal::experimental::EthernetConfig{
+                .eth_mode = tt_metal::Eth::RECEIVER,
+                .noc = tt_metal::NOC::NOC_0
+            }
+        );
+    }
+
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
     uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
@@ -60,9 +84,9 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     auto l1_buffer = CreateBuffer(l1_config);
 
     // Write runtime args
+    const std::vector<uint32_t> args = { delay_cycles, l1_buffer->address() };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            const std::vector<uint32_t> args = { delay_cycles, l1_buffer->address() };
             SetRuntimeArgs(
                 program,
                 brisc_kid,
@@ -83,28 +107,43 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             );
         }
     }
+    for (const auto& core : device->get_active_ethernet_cores()) {
+        SetRuntimeArgs(
+            program,
+            erisc_kid,
+            core,
+            args
+        );
+    }
 
     // Run the program in a new thread, we'll have to update gate values in this thread.
     fixture->RunProgram(device, program);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
+    auto check_core = [&](const CoreCoord &phys_core, bool is_eth_core) {
+        auto expected_waypoints = (is_eth_core)? ordered_waypoints_eth : ordered_waypoints;
+        // Need to update the expected strings based on each core.
+        for (int idx = 0; idx < expected_waypoints.size(); idx++) {
+            expected_waypoints[idx][7] = '0' + device->id();
+            expected_waypoints[idx][18] = '0' + phys_core.x;
+            expected_waypoints[idx][22] = '0' + phys_core.y;
+        }
+        EXPECT_TRUE(
+            FileContainsAllStringsInOrder(
+                fixture->log_file_name,
+                expected_waypoints
+            )
+        );
+    };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            CoreCoord core = {x, y};
-            CoreCoord phys_core = device->worker_core_from_logical_core(core);
-            // Need to update the expected strings based on each core.
-            for (int idx = 0; idx < ordered_waypoints.size(); idx++) {
-                ordered_waypoints[idx][7] = '0' + device->id();
-                ordered_waypoints[idx][18] = '0' + phys_core.x;
-                ordered_waypoints[idx][22] = '0' + phys_core.y;
-            }
-            EXPECT_TRUE(
-                FileContainsAllStringsInOrder(
-                    fixture->log_file_name,
-                    ordered_waypoints
-                )
-            );
+            CoreCoord phys_core = device->worker_core_from_logical_core({x, y});
+            check_core(phys_core, false);
         }
+    }
+    for (const auto& core : device->get_active_ethernet_cores()) {
+        CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
+        check_core(phys_core, true);
     }
 }
 

@@ -47,7 +47,7 @@ class WatcherDevice {
     std::function<CoreCoord ()>get_grid_size_;
     std::function<CoreCoord (CoreCoord)>worker_from_logical_;
     std::function<const std::set<CoreCoord> &()> storage_only_cores_;
-    std::function<const std::set<CoreCoord> &()> ethernet_cores_;
+    std::function<const std::unordered_set<CoreCoord> ()> ethernet_cores_;
     std::function<CoreCoord (CoreCoord)>ethernet_from_logical_;
 
     WatcherDevice(
@@ -55,7 +55,7 @@ class WatcherDevice {
         std::function<CoreCoord ()>get_grid_size,
         std::function<CoreCoord (CoreCoord)>worker_from_logical,
         std::function<const std::set<CoreCoord> &()>storage_only_cores,
-        std::function<const std::set<CoreCoord> &()>ethernet_cores,
+        std::function<const std::unordered_set<CoreCoord> ()>ethernet_cores,
         std::function<CoreCoord (CoreCoord)>ethernet_from_logical
     );
 };
@@ -80,7 +80,7 @@ WatcherDevice::WatcherDevice(
     std::function<CoreCoord ()>get_grid_size,
     std::function<CoreCoord (CoreCoord)>worker_from_logical,
     std::function<const std::set<CoreCoord> &()> storage_only_cores,
-    std::function<const std::set<CoreCoord> &()>ethernet_cores,
+    std::function<const std::unordered_set<CoreCoord> ()>ethernet_cores,
     std::function<CoreCoord (CoreCoord)>ethernet_from_logical
 ):
     device_id_(device_id),
@@ -454,9 +454,7 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
 
     // Validate these first since they are used in diagnostic messages below.
-    // TODO(dma): Update launch message for ethernet cores
-    if (!is_eth_core)
-        validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
+    validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
 
     if (watcher::enabled) {
         // Dump state only gathered if device is compiled w/ watcher
@@ -641,7 +639,7 @@ static void watcher_sanitize_host_noc(const char* what,
 void watcher_init(int device_id,
                   std::function<CoreCoord ()>get_grid_size,
                   std::function<CoreCoord (CoreCoord)>worker_from_logical,
-                  const std::function<const std::set<CoreCoord>& ()> &ethernet_cores,
+                  const std::function<const std::unordered_set<CoreCoord> ()> &ethernet_cores,
                   const std::function<CoreCoord (CoreCoord)> &ethernet_from_logical
                   ) {
 
@@ -696,7 +694,7 @@ void watcher_attach(void *dev,
                     const std::function<CoreCoord ()>& get_grid_size,
                     const std::function<CoreCoord (CoreCoord)>& worker_from_logical,
                     const std::function<const std::set<CoreCoord> &()>& storage_only_cores,
-                    const std::function<const std::set<CoreCoord> &()>& ethernet_cores,
+                    const std::function<const std::unordered_set<CoreCoord> ()>& ethernet_cores,
                     const std::function<CoreCoord (CoreCoord)> &ethernet_from_logical,
                     const string& log_path) {
 

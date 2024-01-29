@@ -89,12 +89,14 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    DEBUG_STATUS('I');
     ncrisc_noc_full_sync();
     while (routing_info->routing_enabled != 1) {
         internal_::risc_context_switch();
     }
 
     router_init();
+    DEBUG_STATUS('R', 'I');
 
     volatile tt_l1_ptr uint32_t *eth_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
@@ -114,6 +116,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         if (erisc_info->launch_user_kernel == 1) {
             kernel_profiler::init_profiler();
             kernel_profiler::mark_time(CC_MAIN_START);
+            DEBUG_STATUS('K');
             kernel_init();
             kernel_profiler::mark_time(CC_MAIN_END);
         }
