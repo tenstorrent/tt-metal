@@ -17,8 +17,7 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_function(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)

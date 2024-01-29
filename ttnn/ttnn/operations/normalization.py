@@ -42,7 +42,23 @@ def _torch_layer_norm(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-@ttnn.register_operation(torch_function=_torch_layer_norm, name="ttnn.layer_norm")
+def _layer_norm_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.layer_norm",
+    validate_input_tensors=_layer_norm_validate_input_tensors,
+    torch_function=_torch_layer_norm,
+)
 def layer_norm(
     input_tensor: ttnn.Tensor,
     *,
@@ -58,9 +74,6 @@ def layer_norm(
     Compute layer_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-        raise RuntimeError("layer_norm only supports device storage type")
 
     original_shape = input_tensor.shape
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
@@ -139,7 +152,23 @@ def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, w
     return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
 
 
-@ttnn.register_operation(torch_function=_torch_group_norm, name="ttnn.group_norm")
+def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.group_norm",
+    validate_input_tensors=_group_norm_validate_input_tensors,
+    torch_function=_torch_group_norm,
+)
 def group_norm(
     input_tensor: ttnn.Tensor,
     *,
@@ -154,10 +183,6 @@ def group_norm(
     Compute group_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-        raise RuntimeError("group_norm expects input tensor to be on device!")
-
     output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
     return ttnn.from_torch(output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device)
 
