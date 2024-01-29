@@ -93,20 +93,27 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     key_states = ttnn.reshape(key_states, shape=proj_shape)
     value_states = ttnn.reshape(value_states, shape=proj_shape)
 
+    query_states = ttnn.to_layout(query_states, layout=ttnn.TILE_LAYOUT)
+    key_states = ttnn.to_layout(key_states, layout=ttnn.TILE_LAYOUT)
+    value_states = ttnn.to_layout(value_states, layout=ttnn.TILE_LAYOUT)
+
     attn_weights = query_states @ ttnn.permute(key_states, (0, 2, 1))
     if attention_mask is not None:
         bsz, _, tgt_len, src_len = attention_mask.shape
+        attn_weights = ttnn.to_layout(attn_weights, layout=ttnn.ROW_MAJOR_LAYOUT)
         attn_weights = ttnn.reshape(attn_weights, shape=(bsz, config.encoder_attention_heads, tgt_len, src_len))
         attn_weights = ttnn.to_layout(attn_weights, layout=ttnn.TILE_LAYOUT)
         attn_weights = attn_weights + attention_mask
         attn_weights = ttnn.to_layout(attn_weights, layout=ttnn.ROW_MAJOR_LAYOUT)
         attn_weights = ttnn.reshape(attn_weights, shape=(bsz * config.encoder_attention_heads, tgt_len, src_len))
+        attn_weights = ttnn.to_layout(attn_weights, layout=ttnn.TILE_LAYOUT)
 
     # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
     attn_weights = ttnn.softmax(attn_weights, dim=-1)
 
     attn_probs = dropout(attn_weights, p=0, training=False)
     attn_output = attn_probs @ value_states
+    attn_output = ttnn.to_layout(attn_output, layout=ttnn.ROW_MAJOR_LAYOUT)
     attn_output = ttnn.reshape(attn_output, shape=(bsz, config.encoder_attention_heads, tgt_len, head_size))
     attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
     attn_output = ttnn.reshape(attn_output, shape=(bsz, tgt_len, config.d_model))

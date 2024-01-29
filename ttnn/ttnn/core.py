@@ -115,7 +115,11 @@ def validate_input_tensor(
     can_be_on_device: bool,
     can_be_on_cpu: bool,
     can_be_a_scalar: bool = False,
+    is_optional: bool = False,
 ):
+    if is_optional and tensor is None:
+        return
+
     ranks = set(ranks)
     dtypes = set(dtypes)
     layouts = set(layouts)
@@ -315,7 +319,7 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
         tensor = Tensor(tensor.value.to(ROW_MAJOR_LAYOUT))
         tensor = to_torch(tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-        tensor = from_torch(tensor, dtype=input_tensor.dtype, device=device)
+        tensor = from_torch(tensor, dtype=input_tensor.dtype, layout=layout, device=device)
         # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
         # tensor = to_layout(tensor, layout)
         tensor = ttnn_reshape(tensor, shape)

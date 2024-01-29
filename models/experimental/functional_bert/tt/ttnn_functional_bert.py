@@ -20,17 +20,23 @@ def bert_attention(
 
     query = hidden_states @ parameters.self.query.weight
     query = query + parameters.self.query.bias
+    query = ttnn.to_layout(query, layout=ttnn.ROW_MAJOR_LAYOUT)
     query = ttnn.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+    query = ttnn.to_layout(query, layout=ttnn.TILE_LAYOUT)
     query = ttnn.permute(query, (0, 2, 1, 3))
 
     key = hidden_states @ parameters.self.key.weight
     key = key + parameters.self.key.bias
+    key = ttnn.to_layout(key, layout=ttnn.ROW_MAJOR_LAYOUT)
     key = ttnn.reshape(key, (batch_size, sequence_size, num_heads, head_size))
+    key = ttnn.to_layout(key, layout=ttnn.TILE_LAYOUT)
     key = ttnn.permute(key, (0, 2, 3, 1))
 
     value = hidden_states @ parameters.self.value.weight
     value = value + parameters.self.value.bias
+    value = ttnn.to_layout(value, layout=ttnn.ROW_MAJOR_LAYOUT)
     value = ttnn.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+    value = ttnn.to_layout(value, layout=ttnn.TILE_LAYOUT)
     value = ttnn.permute(value, (0, 2, 1, 3))
 
     attention_scores = query @ key
