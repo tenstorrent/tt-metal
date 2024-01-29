@@ -142,6 +142,7 @@ bool operator==(const Shape& shape_a, const Shape& shape_b) {
             return false;
         }
     }
+    // TODO:(arakhmati): should the padding be ignored?
     return true;  // Ignore the padding when comparing shapes
 }
 

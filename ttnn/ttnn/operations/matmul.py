@@ -35,6 +35,27 @@ def _shape_is_broadcastable(input_shape_a, input_shape_b):
     return all(x == y or (x == 1 and y != 1) or (x != 1 and y == 1) for x, y in zip(batch_shape_a, batch_shape_b))
 
 
+def _matmul_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
 def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_tensor_a = ttnn.from_device(input_tensor_a)
     input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
@@ -47,7 +68,9 @@ def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_)
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@register_operation(torch_function=_torch_matmul, name="ttnn.matmul")
+@register_operation(
+    name="ttnn.matmul", validate_input_tensors=_matmul_validate_input_tensors, torch_function=_torch_matmul
+)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -339,6 +362,40 @@ def matmul(
     return output_tensor
 
 
+ttnn.Tensor.__matmul__ = matmul
+
+
+def _linear_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, bias=None, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        bias,
+        ranks=(2,),  # bias should be 2D because it must be in ttnn.TILE_LAYOUT
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+
+
 def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias=None, activation=None, **_):
     import torch
 
@@ -370,10 +427,9 @@ def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, b
     return output_tensor
 
 
-ttnn.Tensor.__matmul__ = matmul
-
-
-@register_operation(torch_function=_torch_linear, name="ttnn.linear")
+@register_operation(
+    name="ttnn.linear", validate_input_tensors=_linear_validate_input_tensors, torch_function=_torch_linear
+)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
