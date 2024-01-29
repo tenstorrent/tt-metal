@@ -19,7 +19,7 @@ __all__ = []
 
 
 def register_ttl_binary_function(name, ttl_binary_function, doc):
-    def _torch_unary(input_tensor: ttnn.Tensor, parameter, **_):
+    def _torch_binary(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
         name_to_torch_function = {"pow": torch.pow}
@@ -27,19 +27,27 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor, parameter)
 
-    @register_operation(torch_function=_torch_unary, name=f"ttnn.{name}")
+    def _binary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+        ttnn.validate_input_tensor(
+            operation_name,
+            input_tensor,
+            ranks=(2, 3, 4),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+            layouts=(ttnn.TILE_LAYOUT,),
+            can_be_on_device=True,
+            can_be_on_cpu=False,
+        )
+
+    @ttnn.register_operation(
+        name=f"ttnn.{name}",
+        validate_input_tensors=_binary_validate_input_tensors,
+        torch_function=_torch_binary,
+    )
     def binary_function(
         input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-
-        if not isinstance(input_tensor, ttnn.Tensor):
-            raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-            raise RuntimeError("input_tensor must be on device!")
         ttl_input_tensor = input_tensor.value
 
         ttl_output_tensor = ttl_binary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)

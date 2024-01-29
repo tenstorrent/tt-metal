@@ -52,6 +52,21 @@ class Tensor(ttl.ttnn.tensor.Tensor):
         else:
             return Cpu()
 
+    def _getitem_validate_input_tensors(operation_name, input_tensor, padding, *args, **kwargs):
+        validate_input_tensor(
+            operation_name,
+            input_tensor,
+            ranks=(1, 2, 3, 4, 5, 6, 7, 8),
+            dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+            layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+            can_be_on_device=True,
+            can_be_on_cpu=True,
+        )
+
+    @register_operation(
+        name="ttnn.pad",
+        validate_input_tensors=_getitem_validate_input_tensors,
+    )
     @register_operation(name="ttnn.Tensor.__getitem__")
     def __getitem__(self: "Tensor", slices) -> "Tensor":
         if self.layout != ROW_MAJOR_LAYOUT:
@@ -361,7 +376,23 @@ def has_padding(tensor):
     return False
 
 
-@register_operation(name="ttnn.from_torch")
+def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
+    import torch
+
+    ranks = (1, 2, 3, 4, 5, 6, 7, 8)
+    if len(tensor.shape) not in ranks:
+        raise RuntimeError(f"{operation_name}: Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
+    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64)
+    if tensor.dtype not in dtypes:
+        raise RuntimeError(f"{operation_name}: Tensor must be of type {dtypes}, but got {tensor.dtype}")
+    # if not tensor.is_contiguous():
+    #     raise RuntimeError(f"{operation_name}: Tensor must be contiguous")
+
+
+@register_operation(
+    name="ttnn.from_torch",
+    validate_input_tensors=_from_torch_validate_input_tensors,
+)
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[DataType] = None,
@@ -407,7 +438,22 @@ def from_torch(
     return tensor
 
 
-@register_operation(name="ttnn.to_torch")
+def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@register_operation(
+    name="ttnn.to_torch",
+    validate_input_tensors=_to_torch_validate_input_tensors,
+)
 def to_torch(tensor: Tensor, *, torch_rank: Optional[int] = None) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor) -> torch.Tensor
@@ -573,7 +619,22 @@ def deallocate(tensor: Tensor) -> None:
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
 
 
-@register_operation(name="ttnn.to_memory_config")
+def _to_memory_config_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@register_operation(
+    name="ttnn.to_memory_config",
+    validate_input_tensors=_to_memory_config_validate_input_tensors,
+)
 def to_memory_config(tensor, memory_config: MemoryConfig):
     """
     to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig) -> ttnn.Tensor
@@ -826,7 +887,23 @@ def _torch_identity(input_tensor):
     return input_tensor.clone()
 
 
-@register_operation(name="ttnn.reallocate", torch_function=_torch_identity)
+def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@register_operation(
+    name="ttnn.reallocate",
+    validate_input_tensors=_reallocate_validate_input_tensors,
+    torch_function=_torch_identity,
+)
 def reallocate(input_tensor: Tensor) -> Tensor:
     def impl(input_tensor):
         ttl_input_tensor = input_tensor.value
@@ -836,7 +913,17 @@ def reallocate(input_tensor: Tensor) -> Tensor:
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.reallocate")(input_tensor)
 
 
-@register_operation(name="ttnn.load_tensor")
+def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwargs):
+    if not isinstance(file_name, str) and not isinstance(file_name, pathlib.Path):
+        raise RuntimeError(
+            f"Unable to dump the tensor to the type {type(file_name)}.  The file_name must either be a str or pathlib.Path."
+        )
+
+
+@register_operation(
+    name="ttnn.load_tensor",
+    validate_input_tensors=_load_tensor_validate_input_tensors,
+)
 def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     def impl(file_name):
         return Tensor(ttl.tensor.load_tensor(str(file_name)))
@@ -844,7 +931,26 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
 
 
-@register_operation(name="ttnn.dump_tensor")
+def _dump_tensor_validate_input_tensors(operation_name, file_name, tensor, *args, **kwargs):
+    if not isinstance(file_name, str) and not isinstance(file_name, pathlib.Path):
+        raise RuntimeError(
+            f"Unable to dump the tensor to the type {type(file_name)}.  The file_name must either be a str or pathlib.Path."
+        )
+    validate_input_tensor(
+        operation_name,
+        tensor,
+        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@register_operation(
+    name="ttnn.dump_tensor",
+    validate_input_tensors=_dump_tensor_validate_input_tensors,
+)
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: Tensor) -> None:
     def impl(file_name, tensor):
         ttl_tensor = tensor.value

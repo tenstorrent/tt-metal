@@ -22,6 +22,23 @@ def _torch_pad_to_tile(padded_tensor: ttnn.Tensor):
     return output_tensor
 
 
+def _pad_to_tile_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.pad_to_tile",
+    validate_input_tensors=_pad_to_tile_validate_input_tensors,
+    torch_function=_torch_pad_to_tile,
+)
 @register_operation(torch_function=_torch_pad_to_tile, name="ttnn.pad_to_tile")
 def pad_to_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""
@@ -107,7 +124,23 @@ def _torch_unpad_from_tile(padded_tensor: ttnn.Tensor):
     return output_tensor
 
 
-@register_operation(torch_function=_torch_unpad_from_tile, name="ttnn.unpad_from_tile")
+def _unpad_from_tile_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.unpad_from_tile",
+    validate_input_tensors=_unpad_from_tile_validate_input_tensors,
+    torch_function=_torch_unpad_from_tile,
+)
 def unpad_from_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""
     unpad(input_tensor: ttnn.Tensor) -> ttnn.Tensor
@@ -171,6 +204,23 @@ def _torch_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
     return output_tensor
 
 
+def _embedding_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.embedding",
+    validate_input_tensors=_embedding_validate_input_tensors,
+    torch_function=_torch_embedding,
+)
 @register_operation(torch_function=_torch_embedding, name="ttnn.embedding")
 def embedding(
     input_tensor: ttnn.Tensor,
@@ -236,7 +286,23 @@ def _torch_softmax(input_tensor: ttnn.Tensor, dim: int, **_):
     return torch.softmax(input_tensor, dim)
 
 
-@register_operation(torch_function=_torch_softmax, name="ttnn.softmax")
+def _softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.softmax",
+    validate_input_tensors=_softmax_validate_input_tensors,
+    torch_function=_torch_softmax,
+)
 def softmax(
     input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
 ) -> ttnn.Tensor:
@@ -297,7 +363,23 @@ def _torch_mean(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
     return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
 
 
-@register_operation(torch_function=_torch_mean, name="ttnn.mean")
+def _mean_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.mean",
+    validate_input_tensors=_mean_validate_input_tensors,
+    torch_function=_torch_mean,
+)
 def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor:
     input_shape = tuple(input_tensor.shape)
     rank = len(input_shape)

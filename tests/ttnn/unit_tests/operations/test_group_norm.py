@@ -22,8 +22,7 @@ def test_group_norm(device, h, w, num_groups):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.group_norm(input_tensor, num_groups=num_groups)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -46,13 +45,9 @@ def test_group_norm_with_weight_and_bias(device, h, w, num_groups):
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    weight = ttnn.from_torch(torch_weight)
-    bias = ttnn.from_torch(torch_bias)
-
-    input_tensor = ttnn.to_device(input_tensor, device)
-    weight = ttnn.to_device(weight, device)
-    bias = ttnn.to_device(bias, device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.group_norm(input_tensor, num_groups=num_groups, weight=weight, bias=bias)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -79,17 +74,9 @@ def test_group_norm_with_tile_layout(device, h, w, num_groups):
         torch_bias,
     )
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
-
-    weight = ttnn.from_torch(torch_weight)
-    weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
-    weight = ttnn.to_device(weight, device)
-
-    bias = ttnn.from_torch(torch_bias)
-    bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
-    bias = ttnn.to_device(bias, device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.group_norm(
         input_tensor,

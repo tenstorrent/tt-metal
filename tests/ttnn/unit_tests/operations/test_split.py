@@ -23,8 +23,7 @@ def test_split(device, h, w, split_size, dim):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensors = torch.split(torch_input_tensor, split_size, dim=dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensors = ttnn.split(input_tensor, split_size=split_size, dim=dim)
 
     for torch_output_tensor, output_tensor in zip(torch_output_tensors, output_tensors):
