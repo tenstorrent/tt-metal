@@ -595,6 +595,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sub,
         "pytorch_op": pytorch_ops.sub,
     },
+    "eltwise-sub-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_sub_bw,
+        "pytorch_op": pytorch_ops.sub_bw,
+    },
     "eltwise-mul": {
         "tt_lib_op": tt_lib_ops.eltwise_mul,
         "pytorch_op": pytorch_ops.mul,
