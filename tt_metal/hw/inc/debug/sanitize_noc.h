@@ -47,7 +47,7 @@ extern uint8_t noc_index;
 #define DEBUG_VALID_PCIE_ADDR(a, l) (((a) >= NOC_PCIE_ADDR_BASE) && ((a) + (l) <= NOC_PCIE_ADDR_END) && ((a) + (l) > (a)))
 #define DEBUG_VALID_DRAM_ADDR(a, l) (((a) >= NOC_DRAM_ADDR_BASE) && ((a) + (l) <= NOC_DRAM_ADDR_END) && ((a) + (l) > (a)))
 
-#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) < MEM_ETH_BASE + MEM_ETH_SIZE))
+#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
 
 inline uint32_t debug_sanitize_get_which_riscv()
 {
