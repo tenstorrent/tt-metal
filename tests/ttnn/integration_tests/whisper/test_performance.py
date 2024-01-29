@@ -57,27 +57,27 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         device=device,
     )
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = functional_whisper.preprocess_inputs(
-        config=config,
-        input_features=input_features,
-        input_ids=decoder_input_ids,
-        attention_mask=attention_mask,
-        parameters=parameters,
-        device=device,
-    )
-
     durations = []
     for _ in range(2):
-        start = time.time()
-        tt_output = functional_whisper.whisper(
-            config,
-            input_embeds,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
+        (input_embeds, decoder_hidden_states, decoder_attention_mask) = functional_whisper.preprocess_inputs(
+            config=config,
+            input_features=input_features,
+            input_ids=decoder_input_ids,
+            attention_mask=attention_mask,
             parameters=parameters,
+            device=device,
         )
-        tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-        tt_output = ttnn.from_device(tt_output)
+
+        start = time.time()
+        with ttnn.disable_validate_decorator():
+            tt_output = functional_whisper.whisper(
+                config,
+                input_embeds,
+                decoder_hidden_states,
+                decoder_attention_mask=decoder_attention_mask,
+                parameters=parameters,
+            )
+            tt_output = ttnn.to_device(tt_output, device)
         end = time.time()
 
         duration = end - start

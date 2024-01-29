@@ -14,7 +14,7 @@ from models.utility_functions import skip_for_wormhole_b0
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("w", [64])
 def test_layer_norm(device, h, w):
     torch.manual_seed(0)
 
@@ -33,7 +33,7 @@ def test_layer_norm(device, h, w):
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("w", [64])
 def test_layer_norm_with_weight_and_bias(device, h, w):
     torch.manual_seed(0)
 
@@ -63,7 +63,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("w", [64])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
     torch.manual_seed(0)
 

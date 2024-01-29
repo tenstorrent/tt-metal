@@ -146,12 +146,12 @@ def _torch_concat(tensors, dim=0, **_):
 
 @register_operation(torch_function=_torch_concat, name="ttnn.concat")
 def concat(
-    tensors: Union[ttnn.Tensor, List[ttnn.Tensor]],
+    tensors: List[ttnn.Tensor],
     dim: int = 0,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
-    concat(tensors: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int = 0) -> ttnn.Tensor
+    concat(tensors: List[ttnn.Tensor], dim: int = 0) -> ttnn.Tensor
 
     Concats :attr:`tensors` in the given :attr:`dim`.
 
@@ -163,8 +163,8 @@ def concat(
 
         >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
 
-        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
+        >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
+        >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
         >>> output = ttnn.concat(tensor1, tensor2, dim=4)
         >>> print(output.shape)
         [1, 1, 32, 64]

@@ -33,8 +33,6 @@ def test_t5_layer_norm(device, model_name, batch_size, sequence_size):
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = functional_t5.t5_layer_norm(config, hidden_states, weight=parameters.weight)
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output)
@@ -59,8 +57,6 @@ def test_t5_dense_act_dense(device, model_name, batch_size, sequence_size):
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = functional_t5.t5_dense_act_dense(config, hidden_states, parameters)
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9993)
@@ -85,8 +81,6 @@ def test_t5_dense_gated_act_dense(device, model_name, batch_size, sequence_size)
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = functional_t5.t5_dense_gated_act_dense(config, hidden_states, parameters)
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9991)
@@ -111,8 +105,6 @@ def test_t5_layer_ff(device, model_name, batch_size, sequence_size):
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = functional_t5.t5_layer_ff(config, hidden_states, parameters)
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.99906)
@@ -139,8 +131,6 @@ def test_t5_attention(device, model_name, batch_size, sequence_size):
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = functional_t5.t5_attention(config, hidden_states, parameters=parameters)
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9989)
@@ -169,8 +159,6 @@ def test_t5_layer_self_attention(device, model_name, batch_size, sequence_size):
         hidden_states,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9965)
@@ -207,8 +195,6 @@ def test_t5_layer_cross_attention(device, model_name, batch_size, sequence_size)
         key_value_states,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9965)
@@ -237,8 +223,6 @@ def test_t5_block_encoder(device, model_name, batch_size, sequence_size):
         hidden_states,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.99291)
@@ -275,8 +259,6 @@ def test_t5_block_decoder(device, model_name, batch_size, sequence_size):
         encoder_hidden_states=encoder_hidden_states,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.99279)
@@ -309,8 +291,6 @@ def test_t5_stack_encoder(device, model_name, batch_size, sequence_size):
         shared_embedding_weight=shared_embedding.weight,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9942)
@@ -350,8 +330,6 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
         shared_embedding_weight=shared_embedding.weight,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9968)
@@ -386,8 +364,6 @@ def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_
         decoder_input_ids,
         parameters=parameters,
     )
-    output = ttnn.from_device(output)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9977)

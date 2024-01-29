@@ -225,7 +225,7 @@ def t5_stack(
 ):
     input_shape = tuple(input_ids.shape)
 
-    hidden_states = ttnn.embedding(input_ids, shared_embedding_weight)
+    hidden_states = ttnn.embedding(input_ids, shared_embedding_weight, layout=ttnn.TILE_LAYOUT)
 
     attention_mask = create_attention_mask(
         input_shape, config.num_heads, input_ids.device, is_decoder=encoder_hidden_states is not None

@@ -14,7 +14,7 @@ import ttnn
 def test_deallocate(device, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
 
     with pytest.raises(RuntimeError) as exception:
         ttnn.deallocate(input_tensor)

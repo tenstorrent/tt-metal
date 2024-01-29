@@ -103,3 +103,5 @@ from ttnn.operations.pooling import (
     MaxPool2D,
     average_pool2d,
 )
+
+from ttnn.decorators import disable_validate_decorator

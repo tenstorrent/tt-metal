@@ -141,6 +141,8 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
         )
         padded_key_value_tgt_len = padded_tgt_len
         key_value_tgt_len = tgt_len
+
+    query_states = ttnn.to_layout(query_states, ttnn.TILE_LAYOUT)
     query_states *= scaling
 
     proj_shape = ttnn.Shape(
@@ -396,9 +398,7 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
         )
     )
     input_embeds = input_embeds.permute(0, 2, 1)
-    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16)
-    input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
-    input_embeds = ttnn.to_device(input_embeds, device)
+    input_embeds = ttnn.from_torch(input_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     return input_embeds
 
@@ -414,13 +414,10 @@ def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, 
     positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
     decoder_hidden_states = inputs_embeds + positions
 
-    decoder_hidden_states = ttnn.from_torch(decoder_hidden_states, dtype=ttnn.bfloat16)
-    decoder_hidden_states = ttnn.to_layout(decoder_hidden_states, ttnn.TILE_LAYOUT)
-    decoder_hidden_states = ttnn.to_device(decoder_hidden_states, device)
-
-    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
-    attention_mask = ttnn.to_device(attention_mask, device)
+    decoder_hidden_states = ttnn.from_torch(
+        decoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     return decoder_hidden_states, attention_mask
 

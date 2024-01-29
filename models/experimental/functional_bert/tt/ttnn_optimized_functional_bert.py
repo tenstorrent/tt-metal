@@ -240,25 +240,28 @@ def preprocess_inputs(
 
     batch_size, _ = input_ids.shape
 
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32)
-    input_ids = ttnn.to_device(input_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    token_type_ids = ttnn.from_torch(token_type_ids, dtype=ttnn.uint32)
-    token_type_ids = ttnn.to_device(token_type_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    token_type_ids = ttnn.from_torch(
+        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     if attention_mask is not None:
         attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 31, 0, 0, 0, batch_size - 1))
-        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-        attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
-        attention_mask = ttnn.to_device(attention_mask, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 0, 0, 0, 0, batch_size - 1))
+        attention_mask = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     return input_ids, token_type_ids, attention_mask
 
 
 def custom_preprocessor(torch_model, name):
     import torch
-    import transformers
     from ttnn.model_preprocessing import (
         preprocess_linear_bias,
         preprocess_linear_weight,
