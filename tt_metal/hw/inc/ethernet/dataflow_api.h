@@ -110,13 +110,17 @@ void send_fd_packets() {
 }
 
 FORCE_INLINE
-void receive_fd_packets() {
+void wait_for_fd_packet() {
     // There may not be a valid cmd here, since DST router is always polling
     // This should only happen on cluster close
     while (routing_info->fd_buffer_msgs_sent != 1 && routing_info->routing_enabled) {
         // TODO: add timer to restrict this
         risc_context_switch();
     }
+}
+
+FORCE_INLINE
+void ack_fd_packet() {
     routing_info->fd_buffer_msgs_sent = 0;
     eth_send_packet(
         0,

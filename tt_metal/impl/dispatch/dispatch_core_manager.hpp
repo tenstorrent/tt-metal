@@ -108,14 +108,39 @@ class dispatch_core_manager {
         return assignment.command_dispatcher.value();
     }
 
-    const std::optional<tt_cxy_pair> &remote_processor_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        TT_THROW("Do not currently support programming remote processor dispatch core. See https://github.com/tenstorrent-metal/tt-metal/issues/3953");
-        return this->dispatch_core_assignments[device_id][channel][cq_id].remote_processor;
+    /// @brief Gets the location of the kernel that receives fast dispatch packets from an ethernet router core and transfers them to the `command_dispatcher_core`
+    ///         This core is only programmed when targeting fast dispatch on the remote chip and its location is on the same chip that runs the fast dispatch commands
+    /// @param device_id ID of the remote device that will run fast dispatch commands
+    /// @param channel assigned to the command queue where commands targeting the device are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the remote processor core
+    const tt_cxy_pair &remote_processor_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        TT_ASSERT(tt::Cluster::instance().get_associated_mmio_device(device_id) != device_id, "Remote processor core should only be used on remote devices running fast dispatch, not for MMIO device {}", device_id);
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.remote_processor.has_value()) {
+            return assignment.remote_processor.value();
+        }
+        CoreCoord remote_processor_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.remote_processor = tt_cxy_pair(device_id, remote_processor_coord.x, remote_processor_coord.y);
+        return assignment.remote_processor.value();
     }
 
-    const std::optional<tt_cxy_pair> &remote_signaller_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        TT_THROW("Do not currently support programming remote signaller dispatch core. See https://github.com/tenstorrent-metal/tt-metal/issues/3954");
-        return this->dispatch_core_assignments[device_id][channel][cq_id].remote_signaller;
+    /// @brief Gets the location of the kernel that receives control/data from `command_dispatcher_core` to transfer to ethernet router,
+    ///         which then relays towards `completion_queue_writer_core` on the MMIO device
+    ///         This core is only programmed when targeting fast dispatch on the remote chip and its location is on the same chip that runs the fast dispatch commands
+    /// @param device_id ID of the remote device that will run fast dispatch commands
+    /// @param channel assigned to the command queue where commands targeting the device are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the remote signaller core
+    const tt_cxy_pair &remote_signaller_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        TT_ASSERT(tt::Cluster::instance().get_associated_mmio_device(device_id) != device_id, "Remote signaller core should only be used on remote devices running fast dispatch, not for MMIO device {}", device_id);
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.remote_signaller.has_value()) {
+            return assignment.remote_signaller.value();
+        }
+        CoreCoord remote_signaller_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.remote_signaller = tt_cxy_pair(device_id, remote_signaller_coord.x, remote_signaller_coord.y);
+        return assignment.remote_signaller.value();
     }
 
    private:

@@ -11,8 +11,9 @@ void kernel_main() {
     uint32_t issue_queue_size = get_compile_time_arg_val(2);  // not constexpr since can change
     constexpr uint32_t command_start_addr = get_compile_time_arg_val(3);
     constexpr uint32_t data_section_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
-    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
+    constexpr uint32_t data_buffer_size = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(6);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(7);
 
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
@@ -44,11 +45,11 @@ void kernel_main() {
         uint32_t num_buffer_transfers = header->num_buffer_transfers;
         uint32_t page_size = header->page_size;
         uint32_t producer_cb_size = header->producer_cb_size;
-        uint32_t consumer_cb_size = header->consumer_cb_size;
+        uint32_t consumer_cb_size = header->router_cb_size;
         uint32_t producer_cb_num_pages = header->producer_cb_num_pages;
-        uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
+        uint32_t consumer_cb_num_pages = header->router_cb_num_pages;
         uint32_t num_pages = header->num_pages;
-        uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+        uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t wrap = header->wrap;
 
@@ -57,7 +58,6 @@ void kernel_main() {
             get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
-            // TODO: do we need this?
             // Basically popfront without the extra conditional
             cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
             cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
@@ -67,7 +67,7 @@ void kernel_main() {
 
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         wait_consumer_space_available(db_semaphore_addr);
-        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
             db_cb_config,
             eth_db_cb_config,
             db_buf_switch,
@@ -75,7 +75,7 @@ void kernel_main() {
             consumer_cb_num_pages,
             page_size,
             consumer_cb_size);
-        relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(
             db_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
         // Decrement the semaphore value
         noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | uint32_t(db_semaphore_addr), -1);  // Two's complement addition

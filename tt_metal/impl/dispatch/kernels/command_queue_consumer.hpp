@@ -35,35 +35,6 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
 }
 
 FORCE_INLINE
-void multicore_cb_wait_front(db_cb_config_t* db_cb_config, int32_t num_pages) {
-    DEBUG_STATUS('C', 'R', 'B', 'W');
-
-    uint16_t pages_received;
-    do {
-        pages_received = uint16_t(db_cb_config->recv - db_cb_config->ack);
-    } while (pages_received < num_pages);
-    DEBUG_STATUS('C', 'R', 'B', 'D');
-}
-
-void multicore_cb_pop_front(
-    db_cb_config_t* db_cb_config,
-    const db_cb_config_t* remote_db_cb_config,
-    uint64_t producer_noc_encoding,
-    uint32_t consumer_fifo_limit_16B,
-    uint32_t num_to_write,
-    uint32_t page_size_16B) {
-    db_cb_config->ack += num_to_write;
-    db_cb_config->rd_ptr += page_size_16B * num_to_write;
-
-    if (db_cb_config->rd_ptr >= consumer_fifo_limit_16B) {
-        db_cb_config->rd_ptr -= db_cb_config->total_size;
-    }
-
-    uint32_t pages_ack_addr = (uint32_t)(&(remote_db_cb_config->ack));
-    noc_semaphore_set_remote((uint32_t)(&(db_cb_config->ack)), producer_noc_encoding | pages_ack_addr);
-}
-
-FORCE_INLINE
 uint32_t get_read_ptr(db_cb_config_t* db_cb_config) { return (db_cb_config->rd_ptr) << 4; }
 
 inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_write_ptr() {

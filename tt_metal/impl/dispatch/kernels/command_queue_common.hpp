@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
@@ -19,17 +21,17 @@ struct db_cb_config_t {
 };
 static constexpr uint32_t l1_db_cb_addr_offset = sizeof(db_cb_config_t);
 
-template <uint32_t cmd_base_address, uint32_t consumer_data_buffer_size>
+template <uint32_t cmd_base_address, uint32_t data_buffer_size>
 FORCE_INLINE uint32_t get_command_slot_addr(bool db_buf_switch) {
     static constexpr uint32_t command0_start = cmd_base_address;
-    static constexpr uint32_t command1_start = command0_start + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + consumer_data_buffer_size;
+    static constexpr uint32_t command1_start = command0_start + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_buffer_size;
     return (not db_buf_switch) ? command0_start : command1_start;
 }
 
-template <uint32_t cmd_base_address, uint32_t consumer_data_buffer_size>
+template <uint32_t cmd_base_address, uint32_t data_buffer_size>
 FORCE_INLINE uint32_t get_db_buf_addr(bool db_buf_switch) {
     static constexpr uint32_t buf0_start = cmd_base_address + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-    static constexpr uint32_t buf1_start = buf0_start + consumer_data_buffer_size + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    static constexpr uint32_t buf1_start = buf0_start + data_buffer_size + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     return (not db_buf_switch) ? buf0_start : buf1_start;
 }
 
@@ -52,4 +54,51 @@ tt_l1_ptr const db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool
     // TODO: remove multiply here
     const db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
     return db_cb_config;
+}
+
+FORCE_INLINE
+void multicore_cb_push_back(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
+    uint64_t consumer_noc_encoding,
+    uint32_t consumer_fifo_16b_limit,
+    uint32_t num_to_write) {
+    db_cb_config->recv += num_to_write;
+    db_cb_config->wr_ptr += db_cb_config->page_size * num_to_write;
+
+    if (db_cb_config->wr_ptr >= consumer_fifo_16b_limit) {
+        db_cb_config->wr_ptr -= db_cb_config->total_size;
+    }
+
+    uint32_t remote_pages_recv_addr = (uint32_t)(&(remote_db_cb_config->recv));
+    noc_semaphore_set_remote((uint32_t)(&(db_cb_config->recv)), consumer_noc_encoding | remote_pages_recv_addr);
+}
+
+FORCE_INLINE
+void multicore_cb_wait_front(db_cb_config_t* db_cb_config, int32_t num_pages) {
+    DEBUG_STATUS('C', 'R', 'B', 'W');
+
+    uint16_t pages_received;
+    do {
+        pages_received = uint16_t(db_cb_config->recv - db_cb_config->ack);
+    } while (pages_received < num_pages);
+    DEBUG_STATUS('C', 'R', 'B', 'D');
+}
+
+void multicore_cb_pop_front(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
+    uint64_t producer_noc_encoding,
+    uint32_t consumer_fifo_limit_16B,
+    uint32_t num_to_write,
+    uint32_t page_size_16B) {
+    db_cb_config->ack += num_to_write;
+    db_cb_config->rd_ptr += page_size_16B * num_to_write;
+
+    if (db_cb_config->rd_ptr >= consumer_fifo_limit_16B) {
+        db_cb_config->rd_ptr -= db_cb_config->total_size;
+    }
+
+    uint32_t pages_ack_addr = (uint32_t)(&(remote_db_cb_config->ack));
+    noc_semaphore_set_remote((uint32_t)(&(db_cb_config->ack)), producer_noc_encoding | pages_ack_addr);
 }

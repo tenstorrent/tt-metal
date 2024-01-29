@@ -10,8 +10,9 @@ void kernel_main() {
     uint32_t issue_queue_size = get_compile_time_arg_val(2); // not constexpr since can change
     constexpr uint32_t command_start_addr = get_compile_time_arg_val(3);
     constexpr uint32_t data_section_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
-    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
+    constexpr uint32_t data_buffer_size = get_compile_time_arg_val(5);
+    constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(6);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(7);
 
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
@@ -68,14 +69,14 @@ void kernel_main() {
             setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
             notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
             wait_consumer_space_available(db_semaphore_addr);
-            relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
+            relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
             update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr);
             db_buf_switch = false; // Resteart the db buf switch as well
             continue;
         }
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         wait_consumer_space_available(db_semaphore_addr);
-        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        program_consumer_cb<consumer_cmd_base_addr, consumer_data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
             db_cb_config,
             remote_db_cb_config,
             db_buf_switch,
@@ -83,7 +84,7 @@ void kernel_main() {
             consumer_cb_num_pages,
             page_size,
             consumer_cb_size);
-        relay_command<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
+        relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         if (stall) {
             wait_consumer_idle(db_semaphore_addr);
         }

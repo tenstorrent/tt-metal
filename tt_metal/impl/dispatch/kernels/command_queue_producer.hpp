@@ -104,7 +104,7 @@ void program_local_cb(uint32_t data_section_addr, uint32_t num_pages, uint32_t p
     cb_interface[cb_id].fifo_page_size = page_size >> 4;
 }
 
-template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
+template <uint32_t producer_cmd_base_addr, uint32_t producer_data_buffer_size, uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
 FORCE_INLINE
 void program_consumer_cb(
     db_cb_config_t* db_cb_config,
@@ -118,15 +118,16 @@ void program_consumer_cb(
         This API programs the double-buffered CB space of the consumer. This API should be called
         before notifying the consumer that data is available.
     */
-    uint32_t cb_start_addr = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
+    uint32_t cb_start_rd_addr = get_db_buf_addr<producer_cmd_base_addr, producer_data_buffer_size>(db_buf_switch);
+    uint32_t cb_start_wr_addr = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
 
     db_cb_config->ack = 0;
     db_cb_config->recv = 0;
     db_cb_config->num_pages = num_pages;
     db_cb_config->page_size = page_size >> 4;
     db_cb_config->total_size = cb_size >> 4;
-    db_cb_config->rd_ptr = cb_start_addr >> 4;
-    db_cb_config->wr_ptr = cb_start_addr >> 4;
+    db_cb_config->rd_ptr = cb_start_rd_addr >> 4;
+    db_cb_config->wr_ptr = cb_start_wr_addr >> 4;
 
     noc_async_write(
         (uint32_t)(db_cb_config), consumer_noc_encoding | (uint32_t)(remote_db_cb_config), sizeof(db_cb_config_t));
@@ -167,33 +168,14 @@ bool cb_consumer_space_available(db_cb_config_t* db_cb_config, int32_t num_pages
     return free_space_pages >= num_pages;
 }
 
-
-FORCE_INLINE
-void multicore_cb_push_back(
-    db_cb_config_t* db_cb_config,
-    const db_cb_config_t* remote_db_cb_config,
-    uint64_t consumer_noc_encoding,
-    uint32_t consumer_fifo_16b_limit,
-    uint32_t num_to_write) {
-    db_cb_config->recv += num_to_write;
-    db_cb_config->wr_ptr += db_cb_config->page_size * num_to_write;
-
-    if (db_cb_config->wr_ptr >= consumer_fifo_16b_limit) {
-        db_cb_config->wr_ptr -= db_cb_config->total_size;
-    }
-
-    uint32_t remote_pages_recv_addr = (uint32_t)(&(remote_db_cb_config->recv));
-    noc_semaphore_set_remote((uint32_t)(&(db_cb_config->recv)), consumer_noc_encoding | remote_pages_recv_addr);
-}
-
-template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
+template <uint32_t cmd_base_addr, uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
 FORCE_INLINE void relay_command(bool db_buf_switch, uint64_t consumer_noc_encoding) {
     /*
         Relays the current command to the consumer.
     */
 
     uint64_t consumer_command_slot_addr = consumer_noc_encoding | get_command_slot_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
-    noc_async_write(L1_UNRESERVED_BASE, consumer_command_slot_addr, DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+    noc_async_write(cmd_base_addr, consumer_command_slot_addr, DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
     noc_async_write_barrier();
 }
 
@@ -372,6 +354,66 @@ void produce_for_eth_src_router(
                 num_writes_completed += num_to_write;
                 num_to_write = min(num_pages - num_writes_completed, producer_consumer_transfer_num_pages);
             }
+        }
+        command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
+    }
+}
+
+void transfer(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_producer_db_cb_config,
+    const db_cb_config_t* remote_consumer_db_cb_config,
+    volatile tt_l1_ptr uint32_t* command_ptr,
+    uint32_t num_srcs,
+    uint32_t page_size,
+    uint32_t producer_cb_size,
+    uint32_t l1_producer_fifo_limit_16B,
+    uint64_t producer_noc_encoding,
+    uint32_t consumer_cb_size,
+    uint32_t l1_consumer_fifo_limit_16B,
+    uint64_t consumer_noc_encoding,
+    uint32_t producer_consumer_transfer_num_pages) {
+    /*
+        This API sends data from circular buffer in its L1 and writes data to the consumer core. On the consumer,
+        we partition the data space into 2 via double-buffering. There are two command slots, and two
+        data slots. Callees to transfer receive data into their local buffer and then check whether they can write to
+        the consumer. It continues like this in a loop, context switching between waiting to receive data and
+        writing to the consumer.
+    */
+
+    command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
+
+    for (uint32_t i = 0; i < num_srcs; i++) {
+        const uint32_t num_pages = command_ptr[2];
+        const uint32_t page_size = command_ptr[3];
+
+        uint32_t num_to_transfer = min(num_pages, producer_consumer_transfer_num_pages); // This must be a bigger number for perf.
+        uint32_t num_transfers_completed = 0;
+
+        while (num_transfers_completed != num_pages) {
+            // Wait for data to be received in local CB
+            multicore_cb_wait_front(db_cb_config, num_to_transfer);
+            uint32_t src_addr = (db_cb_config->rd_ptr) << 4;
+            // Transfer data to consumer CB
+            uint32_t dst_addr = (db_cb_config->wr_ptr << 4);
+            uint64_t dst_noc_addr = consumer_noc_encoding | dst_addr;
+            noc_async_write(src_addr, dst_noc_addr, page_size * num_to_transfer);
+            multicore_cb_push_back(
+                db_cb_config,
+                remote_consumer_db_cb_config,
+                consumer_noc_encoding,
+                l1_consumer_fifo_limit_16B,
+                num_to_transfer);
+            noc_async_write_barrier();
+            multicore_cb_pop_front(
+                db_cb_config,
+                remote_producer_db_cb_config,
+                producer_noc_encoding,
+                l1_producer_fifo_limit_16B,
+                num_to_transfer,
+                db_cb_config->page_size);
+            num_transfers_completed += num_to_transfer;
+            num_to_transfer = min(num_pages - num_transfers_completed, producer_consumer_transfer_num_pages);
         }
         command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
     }
