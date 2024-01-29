@@ -65,26 +65,32 @@ void MAIN {
 
         // fused attn
         cb_wait_front(cb_scale_mask, block_w);
-        cb_wait_front(cb_fused_attn, block_w);
-        index_subblock_w_offset = 0;
-        #ifdef CAUSAL_MASK
-        add_tiles_init();
-        #else
-        add_bcast_rows_init_short();
+
+        #ifndef SHARDED_CAUSAL_MASK
+            cb_wait_front(cb_fused_attn, block_w);
         #endif
+
+        index_subblock_w_offset = 0;
+
+        #ifdef CAUSAL_MASK
+            add_tiles_init();
+        #else
+            add_bcast_rows_init_short();
+        #endif
+
         exp_tile_init(EXP_APPROX);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             ACQ();
             #ifdef CAUSAL_MASK
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
-            }
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset;
+                    add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
+                }
             #else
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
-            }
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset;
+                    add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
+                }
             #endif
             cb_reserve_back(cb_exps, subblock_w);
             for (uint32_t w = 0; w < subblock_w; w++) {
@@ -96,8 +102,9 @@ void MAIN {
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_scale_mask, block_w);
+
         #ifdef CAUSAL_MASK
-        cb_pop_front(cb_fused_attn, block_w);
+            cb_pop_front(cb_fused_attn, block_w);
         #endif
 
         #else
@@ -129,9 +136,7 @@ void MAIN {
         // sum(exp(x))
         ACQ();
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-        if constexpr (block_w == 1) {  // has to add wait cb back for the one tile input
-            cb_wait_front(cb_exps, block_w);
-        }
+        cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);
         for (uint32_t w = 0; w < block_w; w++) {
