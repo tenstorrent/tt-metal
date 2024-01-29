@@ -474,17 +474,6 @@ def linear(
     padded_output_shape_list.append(input_shape_b.padded()[-1])
     output_shape = ttnn.Shape(output_shape_list, padded_output_shape_list)
 
-    if not isinstance(input_tensor_a, ttnn.Tensor):
-        raise RuntimeError("Expected first argument to be a ttnn.Tensor")
-    if not isinstance(input_tensor_b, ttnn.Tensor):
-        raise RuntimeError("Expected second argument to be a ttnn.Tensor")
-
-    if input_tensor_a.value.storage_type() != ttl.tensor.StorageType.DEVICE:
-        raise RuntimeError("input_tensor_a must be on device!")
-
-    if input_tensor_b.value.storage_type() != ttl.tensor.StorageType.DEVICE:
-        raise RuntimeError("input_tensor_b must be on device!")
-
     # The idea is to make the shapes "possibly" broadcastable.
     if len(input_tensor_a.shape) > 4:
         raise RuntimeError("There is currently no support for ranks greater than 4.")

@@ -32,7 +32,22 @@ def register_ttl_unary_function(name, ttl_unary_function):
         input_tensor = ttnn.to_torch(input_tensor)
         return torch_function(input_tensor)
 
-    @register_operation(torch_function=_torch_unary, name=f"ttnn.{name}")
+    def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+        ttnn.validate_input_tensor(
+            operation_name,
+            input_tensor,
+            ranks=(2, 3, 4),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+            layouts=(ttnn.TILE_LAYOUT,),
+            can_be_on_device=True,
+            can_be_on_cpu=False,
+        )
+
+    @ttnn.register_operation(
+        name=f"ttnn.{name}",
+        validate_input_tensors=_unary_validate_input_tensors,
+        torch_function=_torch_unary,
+    )
     def unary_function(
         input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     ) -> ttnn.Tensor:

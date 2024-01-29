@@ -243,7 +243,27 @@ def _fallback_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, at
     return _torch_attention_softmax(input_tensor, head_size=head_size, attention_mask=attention_mask)
 
 
-@register_operation(torch_function=_fallback_attention_softmax, name="ttnn.transformer.attention_softmax")
+def _attention_softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    b, s, *_ = input_tensor.shape
+    b, s_padded, *_ = input_tensor.shape.padded()
+    if s != s_padded:
+        raise RuntimeError("There can be no padding on the second dimension.")
+
+
+@ttnn.register_operation(
+    name="ttnn.transformer.attention_softmax",
+    validate_input_tensors=_attention_softmax_validate_input_tensors,
+    torch_function=_fallback_attention_softmax,
+)
 def attention_softmax(
     input_tensor: ttnn.Tensor,
     *,
@@ -262,12 +282,6 @@ def attention_softmax(
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
-    if len(input_tensor.shape) != 4:
-        raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
-
-    if input_tensor.layout != ttnn.TILE_LAYOUT:
-        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
-
     if head_size is not None:
         scaler = 1 / (head_size**0.5)
     else:
@@ -285,7 +299,11 @@ def attention_softmax(
         return ttnn.Tensor(ttl_output_tensor)
 
 
-@register_operation(torch_function=_torch_attention_softmax, name="ttnn.transformer.attention_softmax_")
+@ttnn.register_operation(
+    name="ttnn.transformer.attention_softmax_",
+    validate_input_tensors=_attention_softmax_validate_input_tensors,
+    torch_function=_torch_attention_softmax,
+)
 def attention_softmax_(
     input_tensor: ttnn.Tensor,
     *,
@@ -340,7 +358,23 @@ def _fallback_concatenate_heads(input_tensor: ttnn.Tensor, **_):
     return _torch_concatenate_heads(input_tensor)
 
 
-@register_operation(torch_function=_fallback_concatenate_heads, name="ttnn.transformer.concatenate_heads")
+def _concatenate_heads_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.transformer.concatenate_heads",
+    validate_input_tensors=_concatenate_heads_validate_input_tensors,
+    torch_function=_fallback_concatenate_heads,
+)
 def concatenate_heads(
     input_tensor: ttnn.Tensor,
     *,
@@ -356,12 +390,6 @@ def concatenate_heads(
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
-    if len(input_tensor.shape) != 4:
-        raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
-
-    if input_tensor.layout != ttnn.TILE_LAYOUT:
-        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
-
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
 
     ttl_input_tensor = input_tensor.value
