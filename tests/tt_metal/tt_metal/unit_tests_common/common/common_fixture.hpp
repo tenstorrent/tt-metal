@@ -7,12 +7,13 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+// #include "tests/tt_metal/tt_metal/unit_tests_common/matmul/matmul_utils.hpp"
 
 // A dispatch-agnostic test fixture
 class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Device* device, Program& program) {
+    void RunProgram(tt::tt_metal::Device* device, Program& program) {
         if (this->slow_dispatch_) {
             // Slow dispatch uses LaunchProgram
             tt::log_info(tt::LogTest, "Running program in slow dispatch mode.");
@@ -25,7 +26,7 @@ public:
             Finish(cq);
         }
     }
-    void WriteBuffer(Device* device, tt::tt_metal::Buffer &in_buffer, std::vector<uint32_t> &src_vec){
+    void WriteBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &in_buffer, std::vector<uint32_t> &src_vec){
         if (this->slow_dispatch_) {
             tt::log_info(tt::LogTest, "Writing to buffer in slow dispatch mode");
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
@@ -36,7 +37,7 @@ public:
             Finish(cq);
         }
     }
-    void ReadBuffer(Device* device, tt::tt_metal::Buffer &out_buffer, std::vector<uint32_t> &dst_vec){
+    void ReadBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &out_buffer, std::vector<uint32_t> &dst_vec){
         if (this->slow_dispatch_) {
             tt::log_info(tt::LogTest, "Reading from buffer in slow dispatch mode");
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
@@ -46,6 +47,17 @@ public:
             EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
             Finish(cq);
         }
+    }
+
+    template <typename T>
+    bool MoveTilesToDRAM(tt::tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, T buffer){
+        if (this->slow_dispatch_) {
+            tt::log_info(tt::LogTest, "Moves tiles to DRAM in slow dispatch mode");
+
+        } else {
+            tt::log_info(tt::LogTest, "Moves tiles to DRAM in fast dispatch mode");
+        }
+        return move_tiles_to_dram(device, tensor, tiles_r, tiles_c, buffer);
     }
 
 protected:
