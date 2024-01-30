@@ -61,6 +61,30 @@ inline std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total
     return result;
 }
 
+inline void print_faces(std::vector<bfloat16> data, string name) {
+    std::cout<<name<<": "<<std::endl;
+    int index = 0;
+
+    int tile_index = 0;
+    int face_index = 0;
+    for(int i = 0; i < data.size(); i++) {
+        if(i % 256 == 0 ){
+            std::cout<<"Tile "<<tile_index / 4<<std::endl;
+            std::cout<<"Face = "<<face_index<<std::endl;
+            face_index++;
+            tile_index++;
+            if(face_index == 4) {
+                face_index = 0;
+            }
+        }
+        std::cout<<data.at(i).to_float()<<", ";
+        if( (i+1) % 16 == 0) {
+            std::cout<<std::endl;
+        }
+    }
+    std::cout<<std::endl;
+}
+
 inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512; // 32*32 packed into u32
