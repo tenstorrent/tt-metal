@@ -57,7 +57,6 @@ struct GroupNormShardedMultiCoreProgramConfig {
 struct GroupNorm {
     float eps;
     uint32_t num_groups;
-    uint32_t batch;
     MemoryConfig output_mem_config;
     tt::operations::primary::GroupNormShardedMultiCoreProgramConfig program_config;
 
@@ -72,8 +71,8 @@ struct GroupNorm {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-inline Tensor groupnorm(const Tensor &a, const uint32_t num_groups, uint32_t batch, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const GroupNormShardedMultiCoreProgramConfig& program_config = GroupNormShardedMultiCoreProgramConfig{}) {
-    return operation::run(GroupNorm{.eps=eps, .num_groups=num_groups, .batch=batch, .output_mem_config=output_mem_config, .program_config=program_config}, {a}, {gamma, beta}).at(0);
+inline Tensor groupnorm(const Tensor &a, const uint32_t num_groups, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const GroupNormShardedMultiCoreProgramConfig& program_config = GroupNormShardedMultiCoreProgramConfig{}) {
+    return operation::run(GroupNorm{.eps=eps, .num_groups=num_groups, .output_mem_config=output_mem_config, .program_config=program_config}, {a}, {gamma, beta}).at(0);
 }
 
 
