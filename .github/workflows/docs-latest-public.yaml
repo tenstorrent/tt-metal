@@ -12,6 +12,10 @@ permissions:
   id-token: write
 
 concurrency:
+  # Note that people may spam the post-commit pipeline on their branch, and
+  # we have this docs pipeline in the post-commit pipeline, then people
+  # would have to wait until the previous one fully completes. That may be
+  # ok because each post-commit pipeline definitely takes more than 30 min
   group: "pages-${{ github.ref }}"
   cancel-in-progress: false
 
