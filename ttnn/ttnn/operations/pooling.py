@@ -106,10 +106,6 @@ def _average_pool2d_validate_input_tensors(operation_name, input_tensor, *args, 
         can_be_on_device=True,
         can_be_on_cpu=False,
     )
-    b, s, *_ = input_tensor.shape
-    b, s_padded, *_ = input_tensor.shape.padded()
-    if s != s_padded:
-        raise RuntimeError("There can be no padding on the second dimension.")
 
 
 @ttnn.register_operation(
@@ -118,6 +114,8 @@ def _average_pool2d_validate_input_tensors(operation_name, input_tensor, *args, 
     torch_function=_torch_average_pool2d,
 )
 def average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """
+    average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor
+    """
     output = ttl.tensor.average_pool_2d(input_tensor.value)
-
     return ttnn.Tensor(output)
