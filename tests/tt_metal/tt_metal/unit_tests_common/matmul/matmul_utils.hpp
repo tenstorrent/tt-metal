@@ -11,6 +11,8 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
 
 using namespace tt;
 
@@ -126,13 +128,13 @@ inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> t
     return pass;
 }
 
-inline bool move_tiles_to_dram(CommandQueue &cq, Buffer &buffer, std::vector<uint32_t> tensor, int tiles_r, int tiles_c) {
+inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, Buffer &buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
     int tile_id = 0;
-
+    CommandQueue& cq = tt_metal::detail::GetCommandQueue(device);
     vector<uint32_t> tiles;
     for (int i = 0; i < tiles_r; i++) {
         for (int j = 0; j < tiles_c; j++) {
