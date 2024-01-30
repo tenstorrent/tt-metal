@@ -41,10 +41,10 @@ class DeviceCommand {
     DeviceCommand();
 
     enum class TransferType : uint8_t {
-        RUNTIME_ARGS,
-        CB_CONFIGS,
         PROGRAM_MULTICAST_PAGES,
         PROGRAM_UNICAST_PAGES,
+        RUNTIME_ARGS,
+        CB_CONFIGS,
         GO_SIGNALS_MULTICAST,
         GO_SIGNALS_UNICAST,
         NUM_TRANSFER_TYPES

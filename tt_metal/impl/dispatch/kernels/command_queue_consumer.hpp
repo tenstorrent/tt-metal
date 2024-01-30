@@ -280,19 +280,19 @@ void write_and_launch_program(
         bool multicast = true;
         switch (transfer_type_idx) {
             DeviceCommand::TransferType transfer_type;
-            case (uint32_t) DeviceCommand::TransferType::RUNTIME_ARGS:
-                multicast = false;
-                num_pages_in_transfer = header->num_runtime_arg_pages;
-                break;
-            case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
-                num_pages_in_transfer = header->num_cb_config_pages;
-                break;
             case (uint32_t) DeviceCommand::TransferType::PROGRAM_MULTICAST_PAGES:
                 num_pages_in_transfer = header->num_program_multicast_pages;
                 break;
             case (uint32_t) DeviceCommand::TransferType::PROGRAM_UNICAST_PAGES:
                 multicast = false;
                 num_pages_in_transfer = header->num_program_unicast_pages;
+                break;
+            case (uint32_t) DeviceCommand::TransferType::RUNTIME_ARGS:
+                multicast = false;
+                num_pages_in_transfer = header->num_runtime_arg_pages;
+                break;
+            case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
+                num_pages_in_transfer = header->num_cb_config_pages;
                 break;
             case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS_MULTICAST:
                 num_pages_in_transfer = header->num_go_signal_multicast_pages;

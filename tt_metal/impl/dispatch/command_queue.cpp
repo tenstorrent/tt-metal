@@ -68,7 +68,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
     uint32_t num_transfers_within_page = 0;
 
-    uint32_t src = 0;
     vector<uint32_t> program_pages;
     uint32_t program_page_idx = 0;
     uint32_t program_new_page_tracker = 0;
@@ -124,6 +123,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         return dst_noc_multicast_info;
     };
 
+    uint32_t src = 0;
     auto update_program_pages_with_new_page = [&program_pages, &src, &program_new_page_tracker]() {
         program_pages.resize(program_pages.size() + align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t), 0);
         src = 0;
@@ -236,7 +236,58 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
             }
         };
 
-    // Step 1: Get transfer info for runtime args (soon to just be host data). We
+    // Split kernel groups by multicast/unicast, program multicast transfers first then unicast
+    std::vector<KernelGroup> kernel_group_multicast;
+    std::vector<KernelGroup> kernel_group_unicast;
+    for (const KernelGroup& kernel_group : program.get_kernel_groups()) {
+        if (kernel_group.get_core_type() == CoreType::WORKER) {
+            kernel_group_multicast.emplace_back(kernel_group);
+        } else if (kernel_group.get_core_type() == CoreType::ETH) {
+            kernel_group_unicast.emplace_back(kernel_group);
+        } else {
+            TT_ASSERT(false, "Constructing command for unsupported core type");
+        }
+    }
+
+    // Enqueue program binaries and go siggals in this order:
+    // - Multicast Program Binaries
+    // - Unicast Program Binaries
+    // Step 1 (Multicast): Determine the transfer information for each program binary
+    for (const KernelGroup& kernel_group : kernel_group_multicast) {
+        src = update_program_page_for_kernel_group(src, kernel_group, PageTransferType::MULTICAST);
+    }
+    // Step 2 (Multicast): Continue constructing pages for semaphore configs, only multicast/worker cores supported
+    for (const Semaphore& semaphore : program.semaphores()) {
+        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
+
+        src = update_program_page_transfers(
+            src,
+            L1_ALIGNMENT,
+            semaphore.address(),
+            program_page_transfers.at(PageTransferType::MULTICAST),
+            num_transfers_in_program_pages.at(PageTransferType::MULTICAST),
+            dst_noc_multicast_info);
+    }
+
+    if (num_transfers_within_page) {
+        num_transfers_in_program_pages.at(PageTransferType::MULTICAST).push_back(num_transfers_within_page);
+        num_transfers_within_page = 0;
+    }
+    update_program_pages_with_new_page();  // sets src to 0
+
+    // Step 1b (Unicast)
+    // skipping step 2 since no semaphore support
+    for (const KernelGroup& kernel_group : kernel_group_unicast) {
+        src = update_program_page_for_kernel_group(src, kernel_group, PageTransferType::UNICAST);
+    }
+    if (num_transfers_within_page) {
+        num_transfers_in_program_pages.at(PageTransferType::UNICAST).push_back(num_transfers_within_page);
+        num_transfers_within_page = 0;
+    }
+    update_program_pages_with_new_page();  // sets src to 0
+
+    // Step 3: Get transfer info for runtime args (soon to just be host data). We
     // want to send host data first because of the higher latency to pull
     // in host data.
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
@@ -267,8 +318,8 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         num_transfers_within_page = 0;
     }
 
+    // Step 4: Continue constructing pages for circular buffer configs
     src = 0;  // Resetting since in a new page
-    // Step 2: Continue constructing pages for circular buffer configs
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         // No CB support for ethernet cores
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
@@ -291,67 +342,9 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         num_transfers_within_page = 0;
     }
 
-    // Split kernel groups by multicast/unicast, program multicast transfers first then unicast
-    std::vector<KernelGroup> kernel_group_multicast;
-    std::vector<KernelGroup> kernel_group_unicast;
-    for (const KernelGroup& kernel_group : program.get_kernel_groups()) {
-        if (kernel_group.get_core_type() == CoreType::WORKER) {
-            kernel_group_multicast.emplace_back(kernel_group);
-        } else if (kernel_group.get_core_type() == CoreType::ETH) {
-            kernel_group_unicast.emplace_back(kernel_group);
-        } else {
-            TT_ASSERT(false, "Constructing command for unsupported core type");
-        }
-    }
-    // Enqueue program binaries and go siggals in this order:
-    // - Multicast Program Binaries
-    // - Unicast Program Binaries
-    // - Multicast Go Signals
-    // - Unicast Go Signals
-    // This probably has better perf than sending binaries and go signals together:
-    // - Multicast Program Binaries
-    // - Multicast Go Signals
-    // - Unicast Program Binaries
-    // - Unicast Go Signals
-    // Step 3a (Multicast): Determine the transfer information for each program binary
-    src = 0;  // Restart src since multicast program binaries begins in a new page
-    for (const KernelGroup& kernel_group : kernel_group_multicast) {
-        src = update_program_page_for_kernel_group(src, kernel_group, PageTransferType::MULTICAST);
-    }
-    // Step 4 (Multicast): Continue constructing pages for semaphore configs, only multicast/worker cores supported
-    for (const Semaphore& semaphore : program.semaphores()) {
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
-
-        src = update_program_page_transfers(
-            src,
-            L1_ALIGNMENT,
-            semaphore.address(),
-            program_page_transfers.at(PageTransferType::MULTICAST),
-            num_transfers_in_program_pages.at(PageTransferType::MULTICAST),
-            dst_noc_multicast_info);
-    }
-
-    if (num_transfers_within_page) {
-        num_transfers_in_program_pages.at(PageTransferType::MULTICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
-    // Step 3b (Unicast)
-    // skipping step 4 since no semaphore support
-    update_program_pages_with_new_page();  // sets src to 0 since unicast program binaries begins in new page
-    for (const KernelGroup& kernel_group : kernel_group_unicast) {
-        src = update_program_page_for_kernel_group(src, kernel_group, PageTransferType::UNICAST);
-    }
-    if (num_transfers_within_page) {
-        num_transfers_in_program_pages.at(PageTransferType::UNICAST).push_back(num_transfers_within_page);
-        num_transfers_within_page = 0;
-    }
-
     // Step 5a (Multicast): Continue constructing pages for GO signals, multicast first then unicast
-    update_program_pages_with_new_page();  // sets src to 0 since multicast signals begins in new page
+    src = 0;  // Resetting since in a new page, data is from host
     for (KernelGroup& kernel_group : kernel_group_multicast) {
-        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
             extract_dst_noc_multicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
         src = update_program_page_transfers(
@@ -368,7 +361,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     }
 
     // Step 5b (Unicast)
-    update_program_pages_with_new_page();  // sets src to 0 since unicast signals begins in new page
+    src = 0;  // Resetting since in a new page, data is from host
     for (const KernelGroup& kernel_group : kernel_group_unicast) {
         if (kernel_group.get_core_type() == CoreType::ETH) {
             const Kernel* kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
@@ -392,9 +385,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         num_transfers_within_page = 0;
     }
 
-    // Allocate some more space for GO signal
-    update_program_pages_with_new_page();  // sets src to 0, but not needed
-
     // Create a vector of all program binaries/cbs/semaphores
     align_program_page_idx_to_new_page();
     for (const KernelGroup& kernel_group : kernel_group_multicast) {
@@ -409,35 +399,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     align_program_page_idx_to_new_page();
     for (const KernelGroup& kernel_group : kernel_group_unicast) {
         populate_program_binaries_pages(kernel_group);
-    }
-
-    // Since GO signal begin in a new page, I need to advance my idx
-    align_program_page_idx_to_new_page();
-    // uint32_t dispatch_core_word = ((uint32_t)dispatch_core.y << 16) | dispatch_core.x;
-    for (KernelGroup& kernel_group : kernel_group_multicast) {
-        // TODO(agrebenisan): Hanging when we extend the launch msg. Needs to be investigated. For now,
-        // only supporting enqueue program for cq 0 on a device.
-        // kernel_group.launch_msg.dispatch_core_x = dispatch_core.x;
-        // kernel_group.launch_msg.dispatch_core_y = dispatch_core.y;
-        static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-        uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
-        for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
-            program_pages[program_page_idx + i] = launch_message_data[i];
-        }
-        program_page_idx += sizeof(launch_msg_t) / sizeof(uint32_t);
-    }
-
-    align_program_page_idx_to_new_page();
-    for (KernelGroup& kernel_group : kernel_group_unicast) {
-        if (kernel_group.get_core_type() == CoreType::ETH) {
-            const Kernel* kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
-            for (const auto& logical_eth_core : kernel->logical_cores()) {
-                program_pages[program_page_idx] = 1;
-                program_page_idx += 4;  // 16 byte L1 alignment
-            }
-        } else {
-            TT_ASSERT(false, "All non-ethernet core go signals should be muticasted");
-        }
     }
 
     TT_ASSERT(
@@ -761,7 +722,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     Buffer& buffer,
     ProgramMap& program_to_dev_map,
     SystemMemoryManager& manager,
-    const Program& program,
+    Program& program,
     bool stall,
     std::optional<std::reference_wrapper<Trace>> trace
     ) :
@@ -806,9 +767,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
         this->program_to_dev_map.num_transfers_in_go_signal_pages.at(PageTransferType::MULTICAST).size();
     uint32_t num_go_signal_unicast_pages =
         this->program_to_dev_map.num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST).size();
-    uint32_t num_host_data_pages = num_runtime_arg_pages + num_cb_config_pages;
-    uint32_t num_cached_pages = num_program_multicast_binary_pages + num_go_signal_multicast_pages +
-                                num_program_unicast_binary_pages + num_go_signal_unicast_pages;
+    uint32_t num_host_data_pages = num_runtime_arg_pages + num_cb_config_pages + num_go_signal_multicast_pages + num_go_signal_unicast_pages;
+    uint32_t num_cached_pages = num_program_multicast_binary_pages + num_program_unicast_binary_pages;
     uint32_t total_num_pages = num_host_data_pages + num_cached_pages;
 
     command.set_page_size(DeviceCommand::PROGRAM_PAGE_SIZE);
@@ -825,28 +785,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
         num_host_data_pages);
 
     const uint32_t page_index_offset = 0;
-    if (num_host_data_pages) {
-        command.add_buffer_transfer_interleaved_instruction(
-            host_data_src,
-            dummy_dst_addr,
-            num_host_data_pages,
-            DeviceCommand::PROGRAM_PAGE_SIZE,
-            uint32_t(BufferType::SYSTEM_MEMORY),
-            dummy_buffer_type, page_index_offset, page_index_offset);
-
-        if (num_runtime_arg_pages) {
-            populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_runtime_arg_pages.at(PageTransferType::MULTICAST),
-                this->program_to_dev_map.runtime_arg_page_transfers.at(PageTransferType::MULTICAST));
-        }
-
-        if (num_cb_config_pages) {
-            populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_cb_config_pages.at(PageTransferType::MULTICAST),
-                this->program_to_dev_map.cb_config_page_transfers.at(PageTransferType::MULTICAST));
-        }
-    }
-
     if (num_cached_pages) {
         command.add_buffer_transfer_interleaved_instruction(
             this->buffer.address(),
@@ -867,17 +805,37 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
                 this->program_to_dev_map.num_transfers_in_program_pages.at(PageTransferType::UNICAST),
                 this->program_to_dev_map.program_page_transfers.at(PageTransferType::UNICAST));
         }
+    }
 
-        if (num_go_signal_multicast_pages) {
-            populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_go_signal_pages.at(PageTransferType::MULTICAST),
-                this->program_to_dev_map.go_signal_page_transfers.at(PageTransferType::MULTICAST));
-        }
-        if (num_go_signal_unicast_pages) {
-            populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST),
-                this->program_to_dev_map.go_signal_page_transfers.at(PageTransferType::UNICAST));
-        }
+    command.add_buffer_transfer_interleaved_instruction(
+        host_data_src,
+        dummy_dst_addr,
+        num_host_data_pages,
+        DeviceCommand::PROGRAM_PAGE_SIZE,
+        uint32_t(BufferType::SYSTEM_MEMORY),
+        dummy_buffer_type, page_index_offset, page_index_offset);
+
+    if (num_runtime_arg_pages) {
+        populate_program_data_transfer_instructions(
+            this->program_to_dev_map.num_transfers_in_runtime_arg_pages.at(PageTransferType::MULTICAST),
+            this->program_to_dev_map.runtime_arg_page_transfers.at(PageTransferType::MULTICAST));
+    }
+
+    if (num_cb_config_pages) {
+        populate_program_data_transfer_instructions(
+            this->program_to_dev_map.num_transfers_in_cb_config_pages.at(PageTransferType::MULTICAST),
+            this->program_to_dev_map.cb_config_page_transfers.at(PageTransferType::MULTICAST));
+    }
+
+    if (num_go_signal_multicast_pages) {
+        populate_program_data_transfer_instructions(
+            this->program_to_dev_map.num_transfers_in_go_signal_pages.at(PageTransferType::MULTICAST),
+            this->program_to_dev_map.go_signal_page_transfers.at(PageTransferType::MULTICAST));
+    }
+    if (num_go_signal_unicast_pages) {
+         populate_program_data_transfer_instructions(
+            this->program_to_dev_map.num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST),
+            this->program_to_dev_map.go_signal_page_transfers.at(PageTransferType::UNICAST));
     }
 
     // TODO (abhullar): deduce whether the producer is on ethernet core rather than hardcoding assuming tensix worker
@@ -938,6 +896,7 @@ void EnqueueProgramCommand::process() {
 
     system_memory_temporary_storage_address = start_addr + align(system_memory_temporary_storage_address - start_addr, DeviceCommand::PROGRAM_PAGE_SIZE);
 
+    start_addr = system_memory_temporary_storage_address;
     array<uint32_t, 4> cb_data;
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         for (const auto buffer_index : cb->buffer_indices()) {
@@ -948,6 +907,54 @@ void EnqueueProgramCommand::process() {
                 // No need to resize since cb_data size is guaranteed to be 16 bytes
                 trace_host_data.insert(trace_host_data.end(), cb_data.begin(), cb_data.end());
             }
+        }
+    }
+
+    system_memory_temporary_storage_address = start_addr + align(system_memory_temporary_storage_address - start_addr, DeviceCommand::PROGRAM_PAGE_SIZE);
+
+    std::vector<KernelGroup> kernel_group_multicast;
+    std::vector<KernelGroup> kernel_group_unicast;
+    for (const KernelGroup& kernel_group : this->program.get_kernel_groups()) {
+        if (kernel_group.get_core_type() == CoreType::WORKER) {
+            kernel_group_multicast.emplace_back(kernel_group);
+        } else if (kernel_group.get_core_type() == CoreType::ETH) {
+            kernel_group_unicast.emplace_back(kernel_group);
+        } else {
+            TT_ASSERT(false, "Constructing command for unsupported core type");
+        }
+    }
+
+    start_addr = system_memory_temporary_storage_address;
+    for (KernelGroup& kernel_group : kernel_group_multicast) {
+        // TODO(agrebenisan): Hanging when we extend the launch msg. Needs to be investigated. For now,
+        // only supporting enqueue program for cq 0 on a device.
+        // kg.launch_msg.dispatch_core_x = dispatch_core.x;
+        // kg.launch_msg.dispatch_core_y = dispatch_core.y;
+        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
+        static_assert(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
+        uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
+        this->manager.cq_write(launch_message_data, sizeof(launch_msg_t), system_memory_temporary_storage_address);
+        system_memory_temporary_storage_address = align(system_memory_temporary_storage_address + sizeof(launch_msg_t), padding_alignment);
+    }
+
+    system_memory_temporary_storage_address =
+        start_addr + align(system_memory_temporary_storage_address - start_addr, DeviceCommand::PROGRAM_PAGE_SIZE);
+
+    for (KernelGroup& kernel_group : kernel_group_unicast) {
+        if (kernel_group.get_core_type() == CoreType::ETH) {
+            const Kernel* kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
+            for (const auto& logical_eth_core : kernel->logical_cores()) {
+                std::vector<uint32_t> launch_erisc_app = {1};
+                this->manager.cq_write(
+                    launch_erisc_app.data(),
+                    launch_erisc_app.size() * sizeof(uint32_t),
+                    system_memory_temporary_storage_address);
+                system_memory_temporary_storage_address = align(
+                    system_memory_temporary_storage_address + launch_erisc_app.size() * sizeof(uint32_t),
+                    padding_alignment);
+            }
+        } else {
+            TT_ASSERT(false, "All non-ethernet core go signals should be muticasted");
         }
     }
 
@@ -1227,7 +1234,30 @@ void CommandQueue::enqueue_program(Program& program, std::optional<std::referenc
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
 
-    uint32_t host_data_num_pages = this->program_to_dev_map(this->device->id()).at(program_id).runtime_arg_page_transfers.size() + this->program_to_dev_map(this->device->id()).at(program_id).cb_config_page_transfers.size();
+    uint32_t host_data_num_pages = this->program_to_dev_map(this->device->id())
+                                       .at(program_id)
+                                       .runtime_arg_page_transfers.at(PageTransferType::MULTICAST)
+                                       .size() +
+                                   this->program_to_dev_map(this->device->id())
+                                       .at(program_id)
+                                       .runtime_arg_page_transfers.at(PageTransferType::UNICAST)
+                                       .size() +
+                                   this->program_to_dev_map(this->device->id())
+                                       .at(program_id)
+                                       .cb_config_page_transfers.at(PageTransferType::MULTICAST)
+                                       .size() +
+                                   this->program_to_dev_map(this->device->id())
+                                       .at(program_id)
+                                       .cb_config_page_transfers.at(PageTransferType::UNICAST)
+                                       .size() +
+                                   this->program_to_dev_map(this->device->id())
+                                       .at(program_id)
+                                       .num_transfers_in_go_signal_pages.at(PageTransferType::MULTICAST)
+                                       .size() +
+                                   this->program_to_dev_map(this->device->id())
+                                       .at(program_id)
+                                       .num_transfers_in_go_signal_pages.at(PageTransferType::UNICAST)
+                                       .size();
 
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
