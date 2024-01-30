@@ -35,8 +35,13 @@ Table of Contents generated with
 accelerators. We are currently working on functionality for other Tenstorrent
 architectures.
 
-If you want to run this software on a Tenstorrent cloud machine, you can provision your own machine on the Tenstorrent cloud using documentation
+If you want to run this software on a Tenstorrent cloud machine and have access
+to the internal Tenstorrent cloud, you can provision your own machine on the
+Tenstorrent cloud using documentation
 [here](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM).
+Note that if you are not part of the tenstorrent-metal organization on GitHub
+and have not been granted explicit access to our internal developer resources,
+you will not be able to view this page.
 
 These are the official ways of installing this software:
 
@@ -104,6 +109,9 @@ The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
 
 As a suggestion, please install the dependencies in a **virtual environment**
 to ensure that your system Python installation does not get polluted.
+
+Please read through the following repositories' READMEs and follow their
+instructions.
 
 #### Installing TTKMD (kernel-mode driver)
 
