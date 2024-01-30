@@ -39,7 +39,7 @@ try {
 } catch (std::runtime_error& e) {
     const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
     const string error = string(e.what());
-    log_info(tt::LogTest, "Caught exception (one is expected in this test): {}", error);
+    log_info(tt::LogTest, "Caught exception (one is expected in this test)");
     EXPECT_TRUE(error.find(expected) != string::npos);
 }
 
