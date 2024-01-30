@@ -142,8 +142,8 @@ std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor scalar_t = full_like(input, scalar, output_mem_config);
-    Tensor result = mul(grad, recip(scalar_t, output_mem_config), std::nullopt, output_mem_config);
+    float inv_scalar = 1.0f/scalar;
+    Tensor result = mul_unary(grad, inv_scalar, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -451,8 +451,8 @@ std::vector<Tensor> rsqrt_bw(const Tensor& grad, const Tensor& input, const Memo
 std::vector<Tensor> _clamp_bw(const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config)
 {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = gte(input, full_like(input, min, output_mem_config), std::nullopt, output_mem_config);
-    Tensor maxT = lte(input, full_like(input, max, output_mem_config), std::nullopt, output_mem_config);
+    Tensor minT = gte_unary(input, min, output_mem_config);
+    Tensor maxT = lte_unary(input, max, output_mem_config);
     Tensor result = logical_and(minT, maxT, std::nullopt, output_mem_config);
     result = mul(grad, result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -467,7 +467,7 @@ std::vector<Tensor> clamp_bw(const Tensor& grad, const Tensor& input, float min,
 std::vector<Tensor> _clamp_min_bw(const Tensor& grad, const Tensor& input, float min, const MemoryConfig& output_mem_config)
 {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = gte(input, full_like(input, min, output_mem_config), std::nullopt, output_mem_config);
+    Tensor minT = gte_unary(input, min, output_mem_config);
     Tensor result = mul(grad, minT, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -481,7 +481,7 @@ std::vector<Tensor> clamp_min_bw(const Tensor& grad, const Tensor& input, float 
 std::vector<Tensor> _clamp_max_bw(const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config)
 {
     std::vector<Tensor> grad_tensor;
-    Tensor maxT = lte(input, full_like(input, max, output_mem_config), std::nullopt, output_mem_config);
+    Tensor maxT = lte_unary(input, max, output_mem_config);
     Tensor result = mul(grad, maxT, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
