@@ -44,6 +44,69 @@ class Cpu:
     ...
 
 
+def validate_input_tensor(
+    operation_name,
+    tensor: "ttnn.Tensor",
+    *,
+    ranks: Tuple[int, ...],
+    dtypes: Tuple[DataType, ...],
+    layouts: Tuple[Layout, ...],
+    can_be_on_device: bool,
+    can_be_on_cpu: bool,
+    can_be_a_scalar: bool = False,
+    is_optional: bool = False,
+):
+    if is_optional and tensor is None:
+        return
+
+    ranks = set(ranks)
+    dtypes = set(dtypes)
+    layouts = set(layouts)
+
+    if can_be_a_scalar:
+        if isinstance(tensor, (int, float)):
+            return
+        elif not isinstance(tensor, Tensor):
+            raise RuntimeError(
+                f"{operation_name}: Tensor must be of type int, float or ttnn.Tensor, but got {type(tensor)}"
+            )
+    else:
+        if not isinstance(tensor, Tensor):
+            raise RuntimeError(f"{operation_name}: Tensor must be of type ttnn.Tensor, but got {type(tensor)}")
+
+    if len(tensor.shape) not in ranks:
+        raise RuntimeError(f"{operation_name}: Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
+
+    if tensor.dtype not in dtypes:
+        raise RuntimeError(f"{operation_name}: Tensor must be of type {dtypes}, but got {tensor.dtype}")
+
+    if tensor.layout not in layouts:
+        raise RuntimeError(f"{operation_name}: Tensor must be of layout {layouts}, but got {tensor.layout}")
+
+    if can_be_on_device and can_be_on_cpu:
+        pass
+    elif can_be_on_device:
+        if not has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError(f"{operation_name}: Tensor must be on device!")
+    elif can_be_on_cpu:
+        if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
+            raise RuntimeError(f"{operation_name}: Tensor must be on host!")
+    else:
+        raise RuntimeError(f"{operation_name}: Tensor must be on host or device!")
+
+
+def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
+        dtypes=(bfloat16, bfloat8_b, uint16, uint32),
+        layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
 class Tensor(ttl.ttnn.tensor.Tensor):
     @property
     def device(self: "Tensor") -> DataType:
@@ -52,22 +115,7 @@ class Tensor(ttl.ttnn.tensor.Tensor):
         else:
             return Cpu()
 
-    def _getitem_validate_input_tensors(operation_name, input_tensor, padding, *args, **kwargs):
-        validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-            dtypes=(bfloat16, bfloat8_b, uint16, uint32),
-            layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
-            can_be_on_device=True,
-            can_be_on_cpu=True,
-        )
-
-    @register_operation(
-        name="ttnn.pad",
-        validate_input_tensors=_getitem_validate_input_tensors,
-    )
-    @register_operation(name="ttnn.Tensor.__getitem__")
+    @register_operation(name="ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors)
     def __getitem__(self: "Tensor", slices) -> "Tensor":
         if self.layout != ROW_MAJOR_LAYOUT:
             raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
@@ -118,57 +166,6 @@ class ShardOrientation(Enum):
 
 
 DEFAULT_SHARD_ORIENTATION = ShardOrientation.ROW_MAJOR
-
-
-def validate_input_tensor(
-    operation_name,
-    tensor: Tensor,
-    *,
-    ranks: Tuple[int, ...],
-    dtypes: Tuple[DataType, ...],
-    layouts: Tuple[Layout, ...],
-    can_be_on_device: bool,
-    can_be_on_cpu: bool,
-    can_be_a_scalar: bool = False,
-    is_optional: bool = False,
-):
-    if is_optional and tensor is None:
-        return
-
-    ranks = set(ranks)
-    dtypes = set(dtypes)
-    layouts = set(layouts)
-
-    if can_be_a_scalar:
-        if isinstance(tensor, (int, float)):
-            return
-        elif not isinstance(tensor, Tensor):
-            raise RuntimeError(
-                f"{operation_name}: Tensor must be of type int, float or ttnn.Tensor, but got {type(tensor)}"
-            )
-    else:
-        if not isinstance(tensor, Tensor):
-            raise RuntimeError(f"{operation_name}: Tensor must be of type ttnn.Tensor, but got {type(tensor)}")
-
-    if len(tensor.shape) not in ranks:
-        raise RuntimeError(f"{operation_name}: Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-
-    if tensor.dtype not in dtypes:
-        raise RuntimeError(f"{operation_name}: Tensor must be of type {dtypes}, but got {tensor.dtype}")
-
-    if tensor.layout not in layouts:
-        raise RuntimeError(f"{operation_name}: Tensor must be of layout {layouts}, but got {tensor.layout}")
-
-    if can_be_on_device and can_be_on_cpu:
-        pass
-    elif can_be_on_device:
-        if not has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
-            raise RuntimeError(f"{operation_name}: Tensor must be on device!")
-    elif can_be_on_cpu:
-        if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
-            raise RuntimeError(f"{operation_name}: Tensor must be on host!")
-    else:
-        raise RuntimeError(f"{operation_name}: Tensor must be on host or device!")
 
 
 def create_sharded_memory_config(
@@ -237,7 +234,7 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     validate_input_tensor(
         operation_name,
         input_tensor,
-        ranks=(1, 2, 3, 4),
+        ranks=(1, 2, 3, 4, 5, 6, 7, 8),
         dtypes=(bfloat16, bfloat8_b, uint16, uint32),
         layouts=(ROW_MAJOR_LAYOUT, TILE_LAYOUT),
         can_be_on_device=True,
@@ -914,10 +911,7 @@ def reallocate(input_tensor: Tensor) -> Tensor:
 
 
 def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwargs):
-    if not isinstance(file_name, str) and not isinstance(file_name, pathlib.Path):
-        raise RuntimeError(
-            f"Unable to dump the tensor to the type {type(file_name)}.  The file_name must either be a str or pathlib.Path."
-        )
+    ...
 
 
 @register_operation(
@@ -925,17 +919,19 @@ def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwar
     validate_input_tensors=_load_tensor_validate_input_tensors,
 )
 def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
+    file_name = pathlib.Path(file_name)
+    if not file_name.exists():
+        raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
+    if not file_name.is_file():
+        raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
+
     def impl(file_name):
         return Tensor(ttl.tensor.load_tensor(str(file_name)))
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
 
 
-def _dump_tensor_validate_input_tensors(operation_name, file_name, tensor, *args, **kwargs):
-    if not isinstance(file_name, str) and not isinstance(file_name, pathlib.Path):
-        raise RuntimeError(
-            f"Unable to dump the tensor to the type {type(file_name)}.  The file_name must either be a str or pathlib.Path."
-        )
+def _dump_tensor_validate_input_tensors(operation_name, _, tensor, *args, **kwargs):
     validate_input_tensor(
         operation_name,
         tensor,
@@ -952,6 +948,8 @@ def _dump_tensor_validate_input_tensors(operation_name, file_name, tensor, *args
     validate_input_tensors=_dump_tensor_validate_input_tensors,
 )
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: Tensor) -> None:
+    file_name = pathlib.Path(file_name)
+
     def impl(file_name, tensor):
         ttl_tensor = tensor.value
         ttl.tensor.dump_tensor(str(file_name), ttl_tensor)

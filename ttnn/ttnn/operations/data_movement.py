@@ -24,7 +24,7 @@ def _torch_pad(input_tensor: ttnn.Tensor, padding, value):
     return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
 
 
-def _pad_validate_input_tensors(operation_name, input_tensor, padding, *args, **kwargs):
+def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
         input_tensor,
@@ -76,15 +76,7 @@ def _torch_permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     return torch.permute(input_tensor, order).contiguous().clone()
 
 
-def _permute_validate_input_tensors(operation_name, input_tensor, order, *args, **kwargs):
-    if not isinstance(order, tuple):
-        raise RuntimeError("order must be a tuple")
-
-    if len(input_tensor.shape) != len(order):
-        raise RuntimeError(
-            "The number of dimensions in the tensor input does not match the length of the desired ordering"
-        )
-
+def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
         input_tensor,
@@ -119,6 +111,13 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         [1, 1, 32, 64]
 
     """
+    if not isinstance(order, tuple):
+        raise RuntimeError("order must be a tuple")
+
+    if len(input_tensor.shape) != len(order):
+        raise RuntimeError(
+            "The number of dimensions in the tensor input does not match the length of the desired ordering"
+        )
 
     on_device = ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
     device = input_tensor.device
@@ -170,11 +169,6 @@ def _torch_concat(tensors, dim=0, **_):
 
 
 def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs):
-    if len(tensors) < 2:
-        raise RuntimeError("You must have at least two tensors to concat!")
-
-    first_tensor = tensors[0]
-    first_tensor_shape = first_tensor.shape
     for input_tensor in tensors:
         ttnn.validate_input_tensor(
             operation_name,
@@ -184,23 +178,6 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
-        )
-        for tensor in tensors:
-            shape = tensor.shape
-            if len(shape) != len(first_tensor_shape) or any(
-                shape[i] != first_tensor_shape[i] for i in range(len(shape)) if i != dim
-            ):
-                raise ValueError(
-                    "All dimensions must be the same size except for the dimension along which the contenation is taking place."
-                )
-
-    rank = len(tensors[0].shape)
-    original_dim = dim
-    if dim < 0:
-        dim = rank + dim
-    if dim < 0 or dim >= rank:
-        raise RuntimeError(
-            f"ttnn: Dimension out of range: dim {original_dim} cannot be used for tensors of rank {rank}"
         )
 
 
@@ -234,6 +211,28 @@ def concat(
         [1, 1, 32, 64]
 
     """
+    if len(tensors) < 2:
+        raise RuntimeError("You must have at least two tensors to concat!")
+
+    first_tensor = tensors[0]
+    first_tensor_shape = first_tensor.shape
+    for tensor in tensors:
+        shape = tensor.shape
+        if len(shape) != len(first_tensor_shape) or any(
+            shape[i] != first_tensor_shape[i] for i in range(len(shape)) if i != dim
+        ):
+            raise ValueError(
+                "All dimensions must be the same size except for the dimension along which the contenation is taking place."
+            )
+
+    rank = len(tensors[0].shape)
+    original_dim = dim
+    if dim < 0:
+        dim = rank + dim
+    if dim < 0 or dim >= rank:
+        raise RuntimeError(
+            f"ttnn: Dimension out of range: dim {original_dim} cannot be used for tensors of rank {rank}"
+        )
 
     rank = len(tensors[0].shape)
 

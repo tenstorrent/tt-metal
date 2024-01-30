@@ -8,7 +8,6 @@ from typing import Tuple, Union
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import register_operation
 
 
 def _torch_pad_to_tile(padded_tensor: ttnn.Tensor):
@@ -39,7 +38,6 @@ def _pad_to_tile_validate_input_tensors(operation_name, input_tensor, *args, **k
     validate_input_tensors=_pad_to_tile_validate_input_tensors,
     torch_function=_torch_pad_to_tile,
 )
-@register_operation(torch_function=_torch_pad_to_tile, name="ttnn.pad_to_tile")
 def pad_to_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""
     pad(input_tensor: ttnn.Tensor) -> ttnn.Tensor
@@ -204,13 +202,22 @@ def _torch_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
     return output_tensor
 
 
-def _embedding_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+def _embedding_validate_input_tensors(operation_name, input_tensor, weight, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
         input_tensor,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.uint16, ttnn.uint32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.uint32,),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        weight,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16,),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
     )
@@ -221,7 +228,6 @@ def _embedding_validate_input_tensors(operation_name, input_tensor, *args, **kwa
     validate_input_tensors=_embedding_validate_input_tensors,
     torch_function=_torch_embedding,
 )
-@register_operation(torch_function=_torch_embedding, name="ttnn.embedding")
 def embedding(
     input_tensor: ttnn.Tensor,
     weight: ttnn.Tensor,
@@ -230,7 +236,7 @@ def embedding(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ):
     r"""
-    embedding(inxput_tensor: ttnn.Tensor, weight: ttnn.Tensor) -> None
+    embedding(inxput_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
 
@@ -249,7 +255,6 @@ def embedding(
             [0.212891, 0.964844, 0.199219, 0.996094],
             [3.78362e-38, 0, 7.89785e-39, 0],
             [8.04479e-38, 0, 1.25815e-38, 0]],
-
            [[2.71833e-38, 0, 3.59995e-38, 0],
             [7.60398e-38, 0, 1.83671e-38, 0],
             [2.22242e-38, 0, 1.88263e-38, 0],
@@ -291,7 +296,7 @@ def _softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -307,7 +312,7 @@ def softmax(
     input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
 ) -> ttnn.Tensor:
     r"""
-    softmax(input_tensor: ttnn.Tensor, dim: int) -> ttnn.Tensor
+    softmax(input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Compute softmax over :attr:`input_tensor` along :attr:`dim`.
 
@@ -368,7 +373,7 @@ def _mean_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -381,6 +386,10 @@ def _mean_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     torch_function=_torch_mean,
 )
 def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor:
+    """
+    mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor
+    """
+
     input_shape = tuple(input_tensor.shape)
     rank = len(input_shape)
 

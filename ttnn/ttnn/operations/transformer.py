@@ -7,7 +7,18 @@ from typing import Optional, Tuple
 import tt_lib as ttl
 
 import ttnn.core as ttnn
-from ttnn.decorators import register_operation
+
+
+def _split_query_key_value_and_split_heads_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(3,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
 
 
 def _torch_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
@@ -42,9 +53,10 @@ def _fallback_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *
     return _torch_split_query_key_value_and_split_heads(input_tensor, num_heads=num_heads)
 
 
-@register_operation(
-    torch_function=_fallback_split_query_key_value_and_split_heads,
+@ttnn.register_operation(
     name="ttnn.transformer.split_query_key_value_and_split_heads",
+    torch_function=_fallback_split_query_key_value_and_split_heads,
+    validate_input_tensors=_split_query_key_value_and_split_heads_validate_input_tensors,
 )
 def split_query_key_value_and_split_heads(
     input_tensor: ttnn.Tensor,
@@ -243,20 +255,26 @@ def _fallback_attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, at
     return _torch_attention_softmax(input_tensor, head_size=head_size, attention_mask=attention_mask)
 
 
-def _attention_softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+def _attention_softmax_validate_input_tensors(operation_name, input_tensor, *args, attention_mask, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
         input_tensor,
         ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
     )
-    b, s, *_ = input_tensor.shape
-    b, s_padded, *_ = input_tensor.shape.padded()
-    if s != s_padded:
-        raise RuntimeError("There can be no padding on the second dimension.")
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
 
 
 @ttnn.register_operation(
@@ -272,7 +290,7 @@ def attention_softmax(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     """
-    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
+    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax
 
@@ -363,7 +381,7 @@ def _concatenate_heads_validate_input_tensors(operation_name, input_tensor, *arg
         operation_name,
         input_tensor,
         ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
