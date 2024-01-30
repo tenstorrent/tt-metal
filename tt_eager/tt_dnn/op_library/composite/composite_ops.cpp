@@ -1447,8 +1447,9 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
     uint32_t dim = input_shape.get_normalized_index(_dim);
     int size = input_a.volume();
 
-    TT_FATAL((input_shape[0] == 1 && input_shape[1] == 1), "Unsupported shapes, supported shapes [1, 1, N, M]");
-    if (dim == (input_shape.rank() - 1)) {
+    //TT_FATAL((input_shape[0] == 1 && input_shape[1] == 1), "Unsupported shapes, supported shapes [1, 1, N, M]");
+    if (dim == (input_shape.rank() - 1))
+    {
         Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::W);
         Tensor max_tensor = zeros_like(input_a, output_mem_config);
@@ -1485,11 +1486,30 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
         Tensor res_index = zeros_like(result, output_mem_config);
         res_index = bcast(res_index, result, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
         return res_index;
-    } else {
-        // TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum
-        // valu index for [1 x 1 x N x M]
-        //  auto& input_shape = input_a.shape();
-        //  int size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
+    }
+    else if (dim == (input_shape.rank() - 3))
+    {
+        Tensor tindex = tt::numpy::index_channel<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor max_val = max(input_a, dim, output_mem_config);
+        int repeat = input_shape[1];
+        std::vector<Tensor> combined_tensors;
+        // combined_tensors.reserve(repeat);
+        for (int cid = 0; cid < repeat; cid++)
+            combined_tensors.emplace_back(max_val);
+        Tensor concat_out = concat(combined_tensors, 1, output_mem_config);
+        Tensor cmp_results = eq(input_a, concat_out, std::nullopt, output_mem_config);
+        Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
+        Tensor midx = full_like(max_indices, size);
+        Tensor result = where(eqz(max_indices), midx, max_indices, output_mem_config);
+        result = min(result, dim, output_mem_config);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result, output_mem_config);
+        return result;
+    }
+    else{
+        //TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum valu index for [1 x 1 x N x M]
+        // auto& input_shape = input_a.shape();
+        // int size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
         Tensor tindex = tt::numpy::index_hw<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::HW);
         Tensor max_tensor = zeros_like(input_a, output_mem_config);

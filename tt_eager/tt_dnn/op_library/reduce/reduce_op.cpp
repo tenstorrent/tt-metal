@@ -246,8 +246,14 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
         out_shape[1] = 1;
 
         auto formatted_input_tensor = input_tensor;
+        float pad_value = 0.0;
+        if (OpKind == ReduceOpMath::MIN)
+        {
+            // For reduce min the minimum value is return as zero because of zero padding hence using its volume as maximum value
+            pad_value = input_tensor.volume();
+        }
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
         Tensor output = transpose(formatted_input_tensor, 1, -2, output_mem_config);
         output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
