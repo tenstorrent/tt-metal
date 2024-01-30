@@ -601,7 +601,6 @@ void py_module(py::module& m_primary) {
         &groupnorm,
         py::arg("input").noconvert(),
         py::arg("num_groups").noconvert(),
-        py::arg("batch").noconvert(),
         py::arg("eps").noconvert(),
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("beta").noconvert() = std::nullopt,

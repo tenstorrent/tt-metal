@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t per_core_Nt = per_core_N / TILE_WIDTH;
     // tensor shape
     const auto shape = a.shape();
-    uint32_t H = shape[2];
+    uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
@@ -211,13 +211,17 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     if (shard_orientation == ShardOrientation::ROW_MAJOR and num_groups_per_core == 1) {
         TT_ASSERT(num_cores_c % num_groups == 0 && "for RM shard, when each group is split across cores, num_cores_c must be divisible by num_groups!");
     } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
-        TT_ASSERT(num_cores_r % num_groups == 0 && "for CM shard, when each group is split across cores, num_cores_c must be divisible by num_groups!");
+        TT_ASSERT(num_cores_r % num_groups == 0 && "for CM shard, when each group is split across cores, num_cores_r must be divisible by num_groups!");
     }
 
-    if (shard_orientation == ShardOrientation::ROW_MAJOR and num_batches_per_core == 1) {
-        TT_ASSERT(num_cores_r % num_batches == 0 && "for RM shard, when each batch is split across cores, num_cores_r must be divisible by num_batches!");
-    } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
-        TT_ASSERT(num_cores_c % num_batches == 0 && "for CM shard, when each batch is split across cores, num_cores_c must be divisible by num_batches!");
+    if (per_core_N != W) { // block sharded
+        if (shard_orientation == ShardOrientation::ROW_MAJOR and num_batches_per_core == 1) {
+            TT_ASSERT(num_cores_r % num_batches == 0 && "for RM shard, when each batch is split across cores, num_cores_r must be divisible by num_batches!");
+        } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
+            TT_ASSERT(num_cores_c % num_batches == 0 && "for CM shard, when each batch is split across cores, num_cores_c must be divisible by num_batches!");
+        }
+    } else { // height sharded
+        TT_ASSERT((num_cores_c*num_cores_r) % num_batches == 0 && "for height shard, number of cores must be divisible by num_batches!");
     }
 
     // get sharded addr
@@ -456,17 +460,11 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     std::string writer_kernel = use_row_major_kernel ? "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/writer_unary_sharded_gn_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/writer_unary_sharded_gn.cpp";
-    auto writer_mcast_sender_kernels_id = CreateKernel(
+    auto writer_kernels_id = CreateKernel(
         program,
         writer_kernel,
-        mcast_sender_cores,
+        all_cores,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
-    );
-    auto writer_mcast_receiver_kernels_id = CreateKernel(
-        program,
-        writer_kernel,
-        mcast_receiver_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_mcast_receiver_compile_time_args, .defines = writer_defines}
     );
     // defines
     std::map<string, string> eltwise_binary_defines;
@@ -719,8 +717,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         writer_mcast_sender_args.push_back(beta_dram_addr);
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
-        tt_metal::SetRuntimeArgs(program, writer_mcast_receiver_kernels_id, core, writer_mcast_sender_args);
-        writer_kernel_ids.push_back(writer_mcast_receiver_kernels_id);
+        tt_metal::SetRuntimeArgs(program, writer_kernels_id, core, writer_mcast_sender_args);
+        writer_kernel_ids.push_back(writer_kernels_id);
 
         gamma_tile_start_id = (gamma_tile_start_id + per_core_Nt) % Wt;
         beta_tile_start_id = (beta_tile_start_id + per_core_Nt) % Wt;
@@ -776,6 +774,7 @@ void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     TT_FATAL(a.shape()[3] % this->num_groups == 0,  "channel must be divisible by num_groups!");
+    TT_FATAL(a.shape()[1] == 1,  "input tensor shape[1] must be 1!");
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
@@ -838,10 +837,11 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     uint32_t num_cores_x = this->program_config.compute_with_storage_grid_size.x;
     uint32_t num_cores_y = this->program_config.compute_with_storage_grid_size.y;
     CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
+    uint32_t batch = a.shape()[0];
 
     return groupnorm_sharded_(
                                 a, gamma, beta, output_tensor, this->eps,
-                                this->num_groups, this->batch,
+                                this->num_groups, batch,
                                 fidelity,
                                 program_config.im_data_format,
                                 program_config.compute_with_storage_grid_size

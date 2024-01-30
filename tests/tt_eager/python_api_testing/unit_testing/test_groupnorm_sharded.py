@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, skip_for_wormhole_b0
 
 
 def manual_group_norm(input_tensor, num_groups, eps=1e-5):
@@ -49,43 +49,18 @@ def ref_groupnorm(x, group_size, eps, **kwargs):
     return lnorm(x)
 
 
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("num_batches", [1, 2], ids=["b-1", "b-2"])
 @pytest.mark.parametrize(
-    "num_batches, C, H, W, num_groups, grid_size, shard_orientation, shard_layout",
+    "C, H, W, num_groups, grid_size, shard_orientation, shard_layout",
     [
-        (1, 1280, 8, 8, 4, (2, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
-        (1, 1280, 8, 8, 8, (8, 2), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
-        (1, 640, 16, 16, 1, (4, 5), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
-        (1, 640, 16, 16, 5, (5, 4), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
-        (
-            1,
-            320,
-            32,
-            32,
-            1,
-            (1, 8),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-        (
-            1,
-            320,
-            32,
-            32,
-            5,
-            (2, 8),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-        (
-            1,
-            320,
-            32,
-            32,
-            5,
-            (4, 8),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
+        (1280, 8, 8, 4, (2, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+        (1280, 8, 8, 8, (8, 2), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+        (640, 16, 16, 1, (4, 5), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+        (640, 16, 16, 5, (5, 4), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+        (320, 32, 32, 1, (1, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
+        (320, 32, 32, 5, (2, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
+        (320, 32, 32, 5, (4, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
     ],
 )
 @pytest.mark.parametrize(
@@ -109,7 +84,7 @@ def test_groupnorm_sharded(
 
     epsf = 1e-2
 
-    in0_shape = (1, 1, num_batches * W * H, C)
+    in0_shape = (num_batches, 1, W * H, C)
     pyt_in0_shape = (num_batches, C, H, W)
     pyt_in0 = torch.rand(pyt_in0_shape) * 2 - 0.95
 
@@ -121,10 +96,9 @@ def test_groupnorm_sharded(
     elif shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
         shard_shape = [int(num_batches * W * H / (grid_size[1] * grid_size[0])), int(C)]
 
-    # logger.info("shard_shape")
     logger.info("shard_shape " + str(shard_shape))
 
-    in0 = pyt_in0.transpose(1, -1).contiguous().view(1, 1, -1, C)
+    in0 = pyt_in0.permute(0, 2, 3, 1).contiguous().view(num_batches, 1, W * H, C)
 
     # pyt_gamma = torch.ones(in0_shape[3])
     pyt_gamma = torch.rand(in0_shape[3]) * 2 - 1
@@ -162,7 +136,6 @@ def test_groupnorm_sharded(
         out_t = ttl.operations.primary.groupnorm(
             in0_t_sharded,
             num_groups,
-            num_batches,
             epsf,
             output_mem_config=out_mem_config,
             program_config=program_config,
@@ -172,7 +145,6 @@ def test_groupnorm_sharded(
         out_t = ttl.operations.primary.groupnorm(
             in0_t_sharded,
             num_groups,
-            num_batches,
             epsf,
             gamma_t,
             output_mem_config=out_mem_config,
@@ -183,7 +155,6 @@ def test_groupnorm_sharded(
         out_t = ttl.operations.primary.groupnorm(
             in0_t_sharded,
             num_groups,
-            num_batches,
             epsf,
             gamma_t,
             beta_t,
@@ -201,7 +172,7 @@ def test_groupnorm_sharded(
     if test_id == 2:
         pyt_groupnorm.bias.data = pyt_beta
     pyt_out = pyt_groupnorm(pyt_in0)
-    pyt_out = pyt_out.transpose(1, -1).contiguous().view(1, 1, -1, C)
+    pyt_out = pyt_out.permute(0, 2, 3, 1).contiguous().view(num_batches, 1, W * H, C)
 
     passing, output = comp_pcc(pyt_out, out)
     logger.info(output)
