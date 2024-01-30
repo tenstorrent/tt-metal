@@ -45,12 +45,21 @@ jobs:
         run: |
           export TT_METAL_HOME=$(pwd)
           make build
-      - name: Activate and build docs
+      - name: Activate docs environment and build docs
         run: |
           export PYTHONPATH=$(pwd)
           source build/python_env/bin/activate
           cd docs/
           make html
+      - name: Build additional ttnn sweeps docs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          export PYTHONPATH=$(pwd)
+          source build/python_env/bin/activate
+          cd docs/
+          make ttnn_sweeps/check_directory
+          make ttnn_sweeps
       - name: Prepare artifact - move output
         run: |
           mkdir gh_pages
