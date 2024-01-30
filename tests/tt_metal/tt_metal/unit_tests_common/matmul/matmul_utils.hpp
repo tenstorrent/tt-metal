@@ -85,6 +85,26 @@ inline void print_faces(std::vector<bfloat16> data, string name) {
     std::cout<<std::endl;
 }
 
+// Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
+// this is usually used for activation so that blocks data is contiguous in memory
+// until we have a more generalized read kernel that can read tiles from different
+// location in memory to make up a block in the activations CB
+inline std::vector<std::uint32_t> transpose_tiles(std::vector<std::uint32_t> data, int row_tiles, int col_tiles, int in0_block_w) {
+    std::vector<std::uint32_t> result;
+    int tile_size = 512;
+    for(int c = 0; c < col_tiles; c+=in0_block_w) {
+        for(int r = 0 ; r < row_tiles; r++) {
+            for(int k = 0; k < in0_block_w; k++) {
+                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                for(int i = 0; i < tile_size; i++) {
+                    result.push_back(data.at(offset + i));
+                }
+            }
+        }
+    }
+    return result;
+}
+
 inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512; // 32*32 packed into u32
