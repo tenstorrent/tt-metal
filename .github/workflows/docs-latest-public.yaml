@@ -6,12 +6,13 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: "pages-${{ github.ref }}"
   cancel-in-progress: false
 
 jobs:
@@ -61,5 +62,6 @@ jobs:
         with:
           path: "gh_pages"
       - name: Deploy to GitHub Pages
+        if: ${{ github.ref }} == 'refs/heads/main'
         id: deployment
         uses: actions/deploy-pages@v2
