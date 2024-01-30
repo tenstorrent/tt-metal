@@ -525,6 +525,20 @@ std::vector<Tensor> atan2_bw(const Tensor& grad, const Tensor& input, const Tens
     return operation::decorate_as_composite(__func__, _atan2_bw)(grad, input, other, output_mem_config);
 }
 
+std::vector<Tensor> _hypot_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result_recip = recip(hypot(input, other, output_mem_config), output_mem_config);
+    Tensor grad_a = mul(grad, mul(input, result_recip, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b = mul(grad, mul(other, result_recip, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> hypot_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _hypot_bw)(grad, input, other, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
