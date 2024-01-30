@@ -99,7 +99,7 @@ std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
         case NOC_DIRECTION::X_PLUS_DIR: return "X_PLUS_DIR";
         case NOC_DIRECTION::Y_MINUS_DIR: return "Y_MINUS_DIR";
         case NOC_DIRECTION::X_MINUS_DIR: return "X_MINUS_DIR";
-        case NOC_DIRECTION::Y_PLUS_DIR: return "X_PLUS_DIR";
+        case NOC_DIRECTION::Y_PLUS_DIR: return "Y_PLUS_DIR";
         default: return "Unknown";
     }
 }
