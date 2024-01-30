@@ -11,12 +11,10 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tests/tt_metal/test_utils/print_helpers.hpp"
 
 using namespace tt;
 
-std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
+inline std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if(N == K) {
         return data;
     }
@@ -43,7 +41,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::vector<bfloat16> get_row_slice(std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
+inline std::vector<bfloat16> get_row_slice(std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
     std::vector<bfloat16> result;
     int rows_per_slice = rows / total_row_slices;
     for(int i = rows_per_slice * row_slice_index * cols; i < rows_per_slice * (row_slice_index + 1) * cols; i++) {
@@ -52,7 +50,7 @@ std::vector<bfloat16> get_row_slice(std::vector<bfloat16> data, int total_row_sl
     return result;
 }
 
-std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
+inline std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
     std::vector<bfloat16> result;
     int cols_per_slice = cols / total_col_slices;
     for(int r = 0; r < rows; r++) {
@@ -63,7 +61,7 @@ std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total_col_sl
     return result;
 }
 
-bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512; // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -81,5 +79,27 @@ bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, 
             tile_id++;
         }
     }
+    return pass;
+}
+
+inline bool move_tiles_to_dram(CommandQueue &cq, Buffer &buffer, std::vector<uint32_t> tensor, int tiles_r, int tiles_c) {
+    bool pass = true;
+    int tile_size = 512;  // 32*32 packed into uint32_t
+    int tile_size_bytes = 32 * 32 * 2;
+    int start_index = 0;
+    int tile_id = 0;
+
+    vector<uint32_t> tiles;
+    for (int i = 0; i < tiles_r; i++) {
+        for (int j = 0; j < tiles_c; j++) {
+            std::vector<uint32_t> tile;
+            tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
+
+            tiles.insert(tiles.end(), tile.begin(), tile.end());
+            start_index += tile_size;
+        }
+    }
+
+    EnqueueWriteBuffer(cq, buffer, tiles, false);
     return pass;
 }
