@@ -149,11 +149,9 @@ const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
     return operation::hash_operation<EltwiseBinaryBroadcast>(
         *this,
         parallelization_strategy,
-        input_tensors.at(0).memory_config().memory_layout,
-        input_tensors.at(0).memory_config().buffer_type,
+        input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
-        input_tensors.at(1).memory_config().memory_layout,
-        input_tensors.at(1).memory_config().buffer_type,
+        input_tensors.at(1).memory_config(),
         input_tensors.at(1).dtype(),
         bcast_scalar);
 }
