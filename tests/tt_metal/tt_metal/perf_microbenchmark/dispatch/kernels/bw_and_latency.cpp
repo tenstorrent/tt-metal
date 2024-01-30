@@ -9,14 +9,18 @@ void kernel_main() {
     for (int i = 0; i < ITERATIONS; i++) {
         uint32_t read_ptr = cb_addr;
         for (int j = 0; j < PAGE_COUNT; j++) {
+#if READ_ONE_PACKET
+            noc_async_read_one_packet(noc_addr, read_ptr, PAGE_SIZE);
+#else
             noc_async_read(noc_addr, read_ptr, PAGE_SIZE);
-#if defined(LATENCY)
+#endif
+#if LATENCY
             noc_async_read_barrier();
 #endif
             read_ptr += PAGE_SIZE;
         }
     }
-#if !defined(LATENCY)
+#if LATENCY
     noc_async_read_barrier();
 #endif
 }
