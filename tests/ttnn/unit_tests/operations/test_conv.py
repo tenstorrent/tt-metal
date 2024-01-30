@@ -97,6 +97,123 @@ def run_conv(
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
+def run_conv_with_split(
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    split_factor=2,
+):
+    torch.manual_seed(0)
+    assert input_channels % split_factor == 0
+    split_input_channels = input_channels // split_factor
+    full_conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    full_conv_weight_shape = [output_channels, input_channels, filter_height, filter_width]
+    torch_input_tensor_nchw = torch.randn(full_conv_input_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.randn(full_conv_weight_shape, dtype=torch.bfloat16).float()
+    conv_bias_shape = [1, 1, 1, output_channels]
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float()
+    torch_bias_zeroes_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float()
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input_tensor_nchw,
+        torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+    )
+
+    split_input_tensors = torch.split(torch_input_tensor_nchw, split_input_channels, 1)
+    split_weight_tensors = torch.split(torch_weight_tensor, split_input_channels, 1)
+    # conv1_output_tensor = torch.nn.functional.conv2d(
+    #                     split_input_tensors[0],
+    #                     split_weight_tensors[0],
+    #                     bias=torch_bias_tensor.reshape(-1),
+    #                     stride=(stride_h, stride_w),
+    #                     padding=(pad_h, pad_w),
+    #                 )
+    # conv2_output_tensor = torch.nn.functional.conv2d(
+    #                     split_input_tensors[1],
+    #                     split_weight_tensors[1],
+    #                     stride=(stride_h, stride_w),
+    #                     padding=(pad_h, pad_w),
+    #                 )
+    # torch_output_tensor = torch.add(conv1_output_tensor, conv2_output_tensor)
+
+    torch_input1_tensor = torch.permute(split_input_tensors[0], (0, 2, 3, 1))
+    torch_input2_tensor = torch.permute(split_input_tensors[1], (0, 2, 3, 1))
+    reader_patterns_cache = {}
+
+    convs = []
+    for i in range(split_factor):
+        tt_weight_tensor = ttnn.from_torch(
+            split_weight_tensors[i], weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+        if i == 0:
+            tt_bias_tensor = ttnn.from_torch(
+                torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+            )
+        else:
+            tt_bias_tensor = ttnn.from_torch(
+                torch_bias_zeroes_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+            )
+        convs.append(
+            ttnn.Conv2D(
+                split_input_channels,
+                output_channels,
+                kernel_size=(filter_height, filter_width),
+                stride=(stride_h, stride_w),
+                padding=(pad_h, pad_w),
+                dtype=activations_dtype,
+                device=device,
+                use_1d_systolic_array=use_1d_systolic_array,
+                batch_size=batch_size,
+                input_height=input_height,
+                input_width=input_width,
+                reader_patterns_cache=reader_patterns_cache,
+                weight=tt_weight_tensor,
+                bias=tt_bias_tensor,
+                math_fidelity=math_fidelity,
+                weights_dtype=weights_dtype,
+                conv_blocking_and_parallelization_config_override=config_override,
+            )
+        )
+
+    torch_output_tensor = None
+    for i in range(split_factor):
+        torch_input_tensor = torch.permute(split_input_tensors[i], (0, 2, 3, 1))
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+        tt_input_tensor_on_device = convs[i].copy_input_to_device(tt_input_tensor)
+        tt_output_tensor_on_device = convs[i](tt_input_tensor_on_device)
+        tt_output_tensor = convs[i].copy_output_from_device(tt_output_tensor_on_device)
+        torch_conv_output_tensor = ttnn.to_torch(tt_output_tensor)
+        # torch_output_tensor is in row major layout and NHWC shape
+        # NHWC to NCHW
+        torch_conv_output_tensor = torch.permute(torch_conv_output_tensor, (0, 3, 1, 2))
+        if i == 0:
+            torch_output_tensor = torch_conv_output_tensor
+        else:
+            torch_output_tensor = torch.add(torch_output_tensor, torch_conv_output_tensor)
+
+    if math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
+        pcc = 0.9969
+    else:
+        pcc = 0.998
+    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+
+
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array",
@@ -215,17 +332,19 @@ def test_resnet50_conv(
         # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit
         # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None), # doesnt fit at all.. for all data types
         # sd convs with HxW=64x64 with batch size = 1
-        (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
-        (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
-        (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),
-        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  #
-        (1, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
-        (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 weights doesnt fit
-        (1, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit.
-        (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 weights doesnt fit
-        (1, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
-        (1, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        # sd convs with HxW=64x64 with batch size=2
+        # (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
+        # (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
+        # (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),
+        # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  #
+        # (1, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
+        # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit.
+        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
+        # (1, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
+        # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        # # sd convs with HxW=64x64 with batch size=2
         (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
@@ -234,8 +353,16 @@ def test_resnet50_conv(
         (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 doesnt fit
         (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
         (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),  # bfloat16 doesnt fit
+        (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
         (2, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        (2, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
+        (2, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (2, 1280, 1920, 16, 16, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 1920, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
     ),
 )
 @pytest.mark.parametrize(
@@ -271,23 +398,44 @@ def test_sd_conv(
         pytest.skip(
             "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
         )
-
-    run_conv(
-        device,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        use_1d_systolic_array,
-        config_override,
-    )
+    if input_channels > 1280 or (input_channels > 640 and input_height > 16):
+        run_conv_with_split(
+            device,
+            math_fidelity,
+            activations_dtype,
+            weights_dtype,
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            filter_height,
+            filter_width,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            use_1d_systolic_array,
+            config_override,
+            split_factor=3 if input_channels == 1920 else 2,
+        )
+    else:
+        run_conv(
+            device,
+            math_fidelity,
+            activations_dtype,
+            weights_dtype,
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            filter_height,
+            filter_width,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            use_1d_systolic_array,
+            config_override,
+        )

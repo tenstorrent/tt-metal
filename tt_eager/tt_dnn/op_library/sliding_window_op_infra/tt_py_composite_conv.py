@@ -32,6 +32,13 @@ def find_closest_largest_divisor(num: int, start_divisor: int):
     return divisor
 
 
+def find_closest_common_largest_divisor(num1: int, num2: int, start_divisor: int):
+    divisor = start_divisor
+    while num1 % divisor != 0 or num2 % divisor != 0:
+        divisor = divisor - 1
+    return divisor
+
+
 def determine_largest_subblock_size(block_height, block_width):
     subblocks = [
         (2, 4),
@@ -120,7 +127,9 @@ def determine_parallel_config(
         actual_num_cores_x = find_closest_largest_divisor_with_num_padding(
             conv_out_2d_matrix_height_ntiles, max_grid_size["x"]
         )
-        actual_num_cores_y = find_closest_largest_divisor(conv_out_2d_matrix_width_ntiles, max_grid_size["y"])
+        actual_num_cores_y = find_closest_common_largest_divisor(
+            conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, max_grid_size["y"]
+        )
         per_core_out_matrix_height_ntiles = math.ceil(conv_out_2d_matrix_height_ntiles / actual_num_cores_x)
         per_core_out_matrix_width_ntiles = (int)(conv_out_2d_matrix_width_ntiles / actual_num_cores_y)
         grid_size = [actual_num_cores_x, actual_num_cores_y]
@@ -181,6 +190,9 @@ def determine_parallel_config(
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
+    # print("grid_size=", grid_size)
+    # print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
+    # print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
     return conv_parallelization_config, num_cores_nhw
 
 
