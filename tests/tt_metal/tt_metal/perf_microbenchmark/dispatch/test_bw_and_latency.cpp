@@ -11,7 +11,7 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/metal_soc_descriptor.h"
 
-constexpr uint32_t DEFAULT_ITERATIONS = 10000;
+constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
 constexpr uint32_t DEFAULT_PAGE_SIZE = 2048;
 constexpr uint32_t DEFAULT_BATCH_SIZE_K = 512;
@@ -34,6 +34,7 @@ uint32_t dram_channel_g;
 bool latency_g;
 bool lazy_g;
 bool time_just_finish_g;
+bool read_one_packet_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -53,6 +54,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -sx: when reading from L1, X of core to read from (default {})", 0);
         log_info(LogTest, "  -sy: when reading from L1, Y of core to read (default {})", 0);
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
+        log_info(LogTest, "  -o: use read_one_packet API.  restrices page size to 8K max (default {})", 0);
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         exit(0);
     }
@@ -70,6 +72,11 @@ void init(int argc, char **argv) {
     uint32_t size_bytes = test_args::get_command_option_uint32(input_args, "-bs", DEFAULT_BATCH_SIZE_K) * 1024;
     latency_g = test_args::has_command_option(input_args, "-l");
     page_size_g = test_args::get_command_option_uint32(input_args, "-p", DEFAULT_PAGE_SIZE);
+    read_one_packet_g = test_args::has_command_option(input_args, "-o");
+    if (read_one_packet_g && page_size_g > 8192) {
+        log_info(LogTest, "Page size must be <= 8K for read_one_packet\n");
+        exit(-1);
+    }
     page_count_g = size_bytes / page_size_g;
 
     worker_g = {.start = {core_x, core_y}, .end = {core_x, core_y}};
@@ -132,7 +139,8 @@ int main(int argc, char **argv) {
             {"LATENCY", std::to_string(latency_g)},
             {"NOC_ADDR_X", std::to_string(noc_addr_x)},
             {"NOC_ADDR_Y", std::to_string(noc_addr_y)},
-            {"NOC_MEM_ADDR", std::to_string(noc_mem_addr)}
+            {"NOC_MEM_ADDR", std::to_string(noc_mem_addr)},
+            {"READ_ONE_PACKET", std::to_string(read_one_packet_g)}
         };
 
         tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
@@ -144,6 +152,15 @@ int main(int argc, char **argv) {
                                           "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/bw_and_latency.cpp",
                                           worker_g,
                                           tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
+
+        CoreCoord w = device->physical_core_from_logical_core(worker_g.start, CoreType::WORKER);
+        log_info(LogTest, "Reader core: {}", w.str());
+        log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
+        log_info(LogTest, "Using API: {}", read_one_packet_g ? "noc_async_read_one_packet" : "noc_async_read");
+        log_info(LogTest, "Lazy: {}", lazy_g);
+        log_info(LogTest, "Page size: {}", page_size_g);
+        log_info(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
+        log_info(LogTest, "Iterations: {}", iterations_g);
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
@@ -163,20 +180,13 @@ int main(int argc, char **argv) {
         Finish(cq);
         auto end = std::chrono::system_clock::now();
 
-        CoreCoord w = device->physical_core_from_logical_core(worker_g.start, CoreType::WORKER);
-        log_info(LogTest, "Reader core: {}", w.str());
-        log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
-        log_info(LogTest, "Lazy: {}", lazy_g);
-        log_info(LogTest, "Size: {}", page_count_g * page_size_g);
-        log_info(LogTest, "Page size: {}", page_size_g);
-
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {}us", std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count());
         if (latency_g) {
             log_info(LogTest, "Latency: {} us",
                 (float)std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count() / (page_count_g * iterations_g));
         } else {
-            float bw = page_count_g * page_size_g * iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
+            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
             log_info(LogTest, "BW: {} GB/s", ss.str());
