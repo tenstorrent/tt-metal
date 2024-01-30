@@ -5,42 +5,120 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t has_work = get_arg_val<uint32_t>(0);
-    if (has_work == 0) return;
-    uint32_t dst_addr  = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
+    uint32_t i = 0;
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
+    if (has_work_for_q_heads == 0) return;
+
+    uint32_t src0_addr            = get_arg_val<uint32_t>(i++);
+    uint32_t dst_addr             = get_arg_val<uint32_t>(i++);
+    uint32_t Mt                   = get_arg_val<uint32_t>(i++);
+    uint32_t Kt                   = get_arg_val<uint32_t>(i++);
+    uint32_t Nt                   = get_arg_val<uint32_t>(i++);
+    uint32_t MtKt                 = get_arg_val<uint32_t>(i++);
+    uint32_t num_kv_heads         = get_arg_val<uint32_t>(i++); // in1[1] (ie. in1 C)
+
+    uint32_t blocks               = get_arg_val<uint32_t>(i++);
+    uint32_t out_num_tiles        = get_arg_val<uint32_t>(i++);
+    uint32_t in0_start_id         = get_arg_val<uint32_t>(i++);
+    uint32_t out_start_id         = get_arg_val<uint32_t>(i++);
+    uint32_t kv_heads_addr_offset = get_arg_val<uint32_t>(i++);
+
+
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
 
-    #ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, num_tiles);
-    #else
 
-    // single-tile ublocks
+    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in1 = 1; // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
+    constexpr uint32_t cb_id_intermed1 = 25;
+    constexpr uint32_t cb_id_intermed2 = 26;
+
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
+    constexpr uint32_t num_rows_in_one_tile = 32;
+    constexpr uint32_t bfloat16_row_bytes = 64;
+    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
+    #ifdef IN0_SHARDED
+    cb_reserve_back(cb_id_in0, blocks * MtKt);
+    cb_push_back(cb_id_in0, blocks * MtKt);
+    #else
+    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
+    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
+        .bank_base_address = src0_addr,
+        .page_size = in0_tile_bytes,
+        .data_format = in0_data_format
+    };
+    #endif
+
+    #ifndef OUT_SHARDED
+    const uint32_t out_tile_bytes = get_tile_size(cb_id_out);
+    const DataFormat out_data_format = get_dataformat(cb_id_out);
     const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
+        .page_size = out_tile_bytes,
+        .data_format = out_data_format
     };
-
-    #ifdef BACKWARDS
-    uint32_t end_id = start_id - num_tiles;
-    for (uint32_t i = start_id; i != end_id; -- i) {
-    #else
-    uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
     #endif
-        cb_wait_front(cb_id_out, onetile);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(i, s, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, onetile);
-    }
+
+    // Only used for interleaved
+    uint32_t in0_batch = in0_start_id;
+    uint32_t in0_Mt;
+    uint32_t in0_tensor_id;
+    uint32_t out_tensor_id = out_start_id;
+
+    for (uint32_t b = 0; b < blocks; b++) {
+        in0_Mt = in0_batch;
+
+        for (uint32_t m = 0; m < Mt; m++) {
+            #ifndef IN0_SHARDED
+            in0_tensor_id = in0_Mt;
+            cb_reserve_back(cb_id_in0, Kt);
+            for (uint32_t kt = 0; kt < Kt; kt++) {
+                // Read in0 tile at (mt, kt)
+                uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                noc_async_read_tile(in0_tensor_id, s0, l1_write_addr_in0);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, onetile);
+
+                in0_tensor_id++; // in0 is MK
+            }
+            #endif
+
+            for (uint32_t n = 0; n < Nt; n++) {
+                cb_reserve_back(cb_id_intermed2, 1);
+                uint32_t cb_intermed2_addr = get_write_ptr(cb_id_intermed2);
+
+                uint32_t row_offset_bytes = 0;
+                for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
+                    // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
+                    cb_wait_front(cb_id_intermed1, 1);
+                    noc_async_read(get_noc_addr(get_read_ptr(cb_id_intermed1)) + row_offset_bytes, cb_intermed2_addr + row_offset_bytes, bfloat16_row_bytes);
+                    noc_async_read_barrier();
+                    cb_pop_front(cb_id_intermed1, 1);
+                    row_offset_bytes += bfloat16_row_bytes;
+                } // 32 tiles loop
+
+                cb_push_back(cb_id_intermed2, 1);
+
+                #ifndef OUT_SHARDED
+                cb_wait_front(cb_id_out, onetile);
+                uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+                noc_async_write_tile(out_tensor_id, s, l1_read_addr);
+                noc_async_write_barrier();
+                cb_pop_front(cb_id_out, onetile);
+                out_tensor_id++;
+                #endif
+            } // Nt loop
+
+            in0_Mt += Kt;
+        } // Mt loop
+        in0_batch += MtKt;
+    } // B loop
+
+    #ifdef OUT_SHARDED
+    cb_wait_front(cb_id_out, out_num_tiles);
     #endif
 }

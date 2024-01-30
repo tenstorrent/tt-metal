@@ -14,17 +14,21 @@ using std::uint32_t;
 //
 namespace NAMESPACE {
 void MAIN {
+    uint32_t i = 0;
 
-    constexpr uint32_t onetile = 1;
+    uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
+    if (has_work_for_q_heads == 0) return;
+
+    uint32_t batch = get_arg_val<uint32_t>(i++);
+    uint32_t Mt = get_arg_val<uint32_t>(i++);
+    uint32_t Kt = get_arg_val<uint32_t>(i++);
+    uint32_t Nt = get_arg_val<uint32_t>(i++);
+    uint32_t num_kv_heads = get_arg_val<uint32_t>(i++); // in1[1] (ie. in1 C)
+    uint32_t kv_heads_id = get_arg_val<uint32_t>(i++);
+
 
     constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
 
-    uint32_t has_work = get_arg_val<uint32_t>(0);
-    if (has_work == 0) return;
-    uint32_t batch = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_in0 = 0;
     constexpr uint32_t cb_in1 = 1;
@@ -33,6 +37,7 @@ void MAIN {
     constexpr uint32_t cb_intermed2 = 26;
     constexpr uint32_t out_cb_id = 16;
 
+    constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
 
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
@@ -44,11 +49,11 @@ void MAIN {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
                     tile_regs_acquire();
                     for (uint32_t kt = 0; kt < Kt; ++kt) {
-                        cb_wait_front(cb_in1, onetile);
+                        cb_wait_front(cb_in1, num_kv_heads);
 
-                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
+                        matmul_tiles(cb_in0, cb_in1, kt, kv_heads_id, 0, transpose_hw);
 
-                        cb_pop_front(cb_in1, onetile);
+                        cb_pop_front(cb_in1, num_kv_heads);
                     }
                     tile_regs_commit();
 
