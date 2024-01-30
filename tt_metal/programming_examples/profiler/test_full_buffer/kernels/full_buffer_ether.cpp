@@ -14,13 +14,13 @@
 void kernel_main() {
     for (int i = 0; i < 5; i ++)
     {
-        //kernel_profiler::mark_time(5);
+        kernel_profiler::mark_time(5);
 //Max unroll size
 #pragma GCC unroll 65534
         for (int j = 0 ; j < 5; j++)
         {
             asm("nop");
         }
-        //kernel_profiler::mark_time(6);
+        kernel_profiler::mark_time(6);
     }
 }

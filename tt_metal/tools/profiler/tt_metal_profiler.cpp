@@ -46,7 +46,7 @@ void InitDeviceProfiler(Device *device){
     };
     tt_metal_device_profiler.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
 
-    std::vector<uint32_t> control_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
+    std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);

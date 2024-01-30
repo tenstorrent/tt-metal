@@ -55,6 +55,24 @@ void DeviceProfiler::readRiscProfilerResults(
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T0);
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T1);
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T2);
+
+        //std::cout << worker_core.x << "," << worker_core.y  << "," << coreFlatID << "," <<  output_dram_buffer.address() << std::endl
+            //<< control_buffer[kernel_profiler::NOC_X] << "," << control_buffer[kernel_profiler::NOC_Y]
+            //<< "," << control_buffer[kernel_profiler::FLAT_ID]
+            //<< "," << control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS]
+            //<< "," << control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR]<< std::endl;
+
+        //vector<std::uint32_t> profile_buffer_L1;
+        //profile_buffer_L1 = tt::llrt::read_hex_vec_from_core(
+                //device_id,
+                //worker_core,
+                //PROFILER_L1_BUFFER_BR,
+                //kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
+        //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS; i++)
+        //{
+             //std::cout << profile_buffer_L1[i] << ",";
+        //}
+        //std::cout << std::endl<< std::endl;
     }
     else
     {
@@ -65,9 +83,26 @@ void DeviceProfiler::readRiscProfilerResults(
             PROFILER_L1_CONTROL_BUFFER_SIZE);
 
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
+
+        //std::cout << worker_core.x << "," << worker_core.y  << "," << coreFlatID << "," <<  output_dram_buffer.address() << std::endl
+            //<< control_buffer[kernel_profiler::NOC_X] << "," << control_buffer[kernel_profiler::NOC_Y]
+            //<< "," << control_buffer[kernel_profiler::FLAT_ID]
+            //<< "," << control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS]
+            //<< "," << control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_ER]<< std::endl;
+
+        //vector<std::uint32_t> profile_buffer_L1;
+        //profile_buffer_L1 = tt::llrt::read_hex_vec_from_core(
+                //device_id,
+                //worker_core,
+                //eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
+                //kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
+        //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS; i++)
+        //{
+             //std::cout << profile_buffer_L1[i] << ",";
+        //}
+        //std::cout << std::endl  << std::endl;
     }
 
-    //std::cout << ": " << worker_core.x << "," << worker_core.y  << "," << coreFlatID << "  ,  " << control_buffer[kernel_profiler::NOC_X] << "," << control_buffer[kernel_profiler::NOC_Y] << "," << control_buffer[kernel_profiler::FLAT_ID] << std::endl;
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_ER] == 0))
@@ -80,6 +115,24 @@ void DeviceProfiler::readRiscProfilerResults(
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (bufferEndIndex > 0)
         {
+            //vector<std::uint32_t> profile_buffer_L1;
+            //profile_buffer_L1 = tt::llrt::read_hex_vec_from_core(
+                    //device_id,
+                    //worker_core,
+                    //eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
+                    //kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
+            //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS; i++)
+            //{
+                 //std::cout << profile_buffer_L1[i] << ",";
+            //}
+            //std::cout << std::endl;
+            //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS + 3; i++)
+            //{
+                 //std::cout << profile_buffer[i] << ",";
+            //}
+            //std::cout << std::endl;
+
+            //return;
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
@@ -147,7 +200,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 coreFlatID,
                                 coreFlatIDRead,
                                 coreFlatIDReadts,
-                                riscNum,
+                                riscEndIndex,
                                 riscNumRead,
                                 riscNumReadts,
                                 marker,
@@ -166,7 +219,7 @@ void DeviceProfiler::readRiscProfilerResults(
         riscNum ++;
     }
 
-    std::vector<uint32_t> zero_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
+    std::vector<uint32_t> zero_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     tt::llrt::write_hex_vec_to_core(
             device_id,
             worker_core,
@@ -203,7 +256,7 @@ void DeviceProfiler::dumpResultToFile(
     std::ofstream log_file;
 
     //TODO(MO) : use enums here
-    std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
+    std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC"};
 
     constexpr int DRAM_ROW = 6;
     if (core.y > DRAM_ROW) {
@@ -365,10 +418,10 @@ void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device
         device_core_data[device_core].contextPopulated = true;
     }
 
-    std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"};
-    uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4};
-    uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3};
-    uint32_t customColors[] = {tracy::Color::Orange2, tracy::Color::Cyan3, tracy::Color::Orchid1, tracy::Color::Plum1, tracy::Color::PaleTurquoise2};
+    std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC"};
+    uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4, tracy::Color::Khaki1};
+    uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3, tracy::Color::Khaki2};
+    uint32_t customColors[] = {tracy::Color::Orange2, tracy::Color::Cyan3, tracy::Color::Orchid1, tracy::Color::Plum1, tracy::Color::PaleTurquoise2, tracy::Color::CadetBlue1};
 
     for (auto& run: device_core_data[device_core].data)
     {

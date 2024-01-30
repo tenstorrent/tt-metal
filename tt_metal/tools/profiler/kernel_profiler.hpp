@@ -28,14 +28,12 @@ namespace kernel_profiler{
 #if defined(COMPILE_FOR_BRISC)
     uint32_t profilerBuffer = PROFILER_L1_BUFFER_BR;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_BR;
-    uint16_t runCounter = 0;
 #elif defined(COMPILE_FOR_NCRISC)
     uint32_t profilerBuffer = PROFILER_L1_BUFFER_NC;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_NC;
 #elif defined(COMPILE_FOR_ERISC)
     uint32_t profilerBuffer = eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_ER;
-    uint16_t runCounter = 0;
 #elif COMPILE_FOR_TRISC == 0
     uint32_t profilerBuffer = PROFILER_L1_BUFFER_T0;
     uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T0;
@@ -50,15 +48,17 @@ namespace kernel_profiler{
     inline __attribute__((always_inline)) void init_profiler(uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0)
     {
 #if defined(PROFILE_KERNEL)
-        volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
-        profiler_control_buffer[deviceBufferEndIndex] = 0;
         wIndex = CUSTOM_MARKERS;
 
 #if defined(COMPILE_FOR_ERISC)
+        volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
+        profiler_control_buffer[deviceBufferEndIndex] = 0;
+
         volatile tt_l1_ptr uint32_t *eriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER);
 
         uint32_t noc_x = my_x[0];
         uint32_t noc_y = my_y[0];
+        uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
 
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
 
@@ -73,6 +73,7 @@ namespace kernel_profiler{
             eriscBuffer[i] = 0x80000000;
         }
 
+
         //TODO(MO): Clean up magic numbers
         eriscBuffer [ID_LL] = runCounter;
 
@@ -80,6 +81,9 @@ namespace kernel_profiler{
 #endif //ERISC_INIT
 
 #if defined(COMPILE_FOR_BRISC)
+        volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
+        profiler_control_buffer[deviceBufferEndIndex] = 0;
+
         volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR);
         volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_NC);
         volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T0);
@@ -90,6 +94,7 @@ namespace kernel_profiler{
         uint32_t noc_id = noc_local_node_id() & 0xFFF;
         uint32_t noc_x = noc_id & NOC_ID_MASK;
         uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
+        uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
 
         uint16_t core_flat_id = noc_xy_to_profiler_flat_id[noc_x][noc_y];
 
@@ -289,8 +294,8 @@ namespace kernel_profiler{
         {
             profiler_control_buffer[hostIndex] = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC+1;
         }
-        noc_async_write_barrier();
-        runCounter ++;
+        eth_noc_async_write_barrier();
+        profiler_control_buffer[RUN_COUNTER] ++;
 #endif
 #if defined(PROFILE_KERNEL) && defined(COMPILE_FOR_BRISC)
         volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
@@ -348,7 +353,7 @@ namespace kernel_profiler{
             }
         }
         noc_async_write_barrier();
-        runCounter ++;
+        profiler_control_buffer[RUN_COUNTER] ++;
 #endif //PROFILE_KERNEL
     }
 }
