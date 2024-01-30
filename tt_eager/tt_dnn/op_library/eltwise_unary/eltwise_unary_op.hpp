@@ -365,6 +365,31 @@ Tensor div_unary(
     float value,
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// relops with unary argument
+Tensor lte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor lte_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor gte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor gte_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor eq_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor eq_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 // same as div_unary(value,tensor)
 Tensor rdiv(
     const Tensor& input_tensor,
