@@ -66,6 +66,6 @@ jobs:
         with:
           path: "gh_pages"
       - name: Deploy to GitHub Pages
-        if: ${{ github.ref }} == 'refs/heads/main'
+        if: ${{ github.ref == 'refs/heads/main' }}
         id: deployment
         uses: actions/deploy-pages@v2
