@@ -308,7 +308,9 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
         compute_volume(input_shape),
         input_tensor.dtype(),
         input_tensor.memory_config(),
+        input_tensor.device()->id(),
         this->output_mem_config);
+
     for (const auto& unary_with_param_op : this->op_chain) {
         hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.op_type);
         if (unary_with_param_op.param.has_value()) {

@@ -80,7 +80,7 @@ def create_sharded_memory_config(
     else:
         raise RuntimeError("Invalid shard orientation")
 
-    grid_coord = ttl.tensor.CoreCoord(grid[1], grid[0])
+    grid_coord = ttl.tensor.CoreCoord(grid[1] - 1, grid[0] - 1)
     shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), grid_coord)})
     shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
     mem_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)

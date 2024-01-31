@@ -1419,24 +1419,26 @@ def test_sharded_matmul_no_mcast(
     assert passing
 
 
+@pytest.mark.parametrize("in0_shape, grid_size", [([12, 16, 384, 64], (12, 8)), ([1, 32, 32, 64], (8, 4))])
 @pytest.mark.parametrize("in0_sharded, out_sharded", [[True, True], [False, False]], ids=["sharded", "unsharded"])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_concat_heads(
     device,
+    in0_shape,
+    grid_size,
     in0_sharded,
     out_sharded,
     activations_dtype,
     function_level_defaults,
 ):
-    grid_size = (12, 8)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     num_cores = grid_size[0] * grid_size[1]
-    B = 12
-    num_heads = 16
-    seq_len = 384
-    head_dim = 64
+    B = in0_shape[0]
+    num_heads = in0_shape[1]
+    seq_len = in0_shape[2]
+    head_dim = in0_shape[3]
 
     in0_shape = [B, num_heads, seq_len, head_dim]
 

@@ -199,7 +199,7 @@ def test_bert(
     device,
 ):
     if is_e75(device):
-        pytest.skip(f"Bert large 15 is not supported on E75")
+        pytest.skip(f"Bert large 11 is not supported on E75")
 
     model_config = get_model_config(batch, model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

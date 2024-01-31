@@ -93,16 +93,16 @@ class TtFalconMLP(nn.Module):
             x,
             self.dense_h_to_4h_weights,
             fused_activation=[tt_lib.tensor.FusibleActivation.GELU, True],
-            output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+            output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
         )
         x.deallocate()
 
         hidden_states = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
             hidden_states,
             self.dense_4h_to_h_weights,
-            output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+            output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
         )
 
         # return TT Tensor

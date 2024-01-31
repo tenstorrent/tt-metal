@@ -115,6 +115,11 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to eltwise binary need to be on the same device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
     TT_FATAL((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to eltwise binary must be tilized");
+    if (this->in_place) {
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
+        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
+        TT_FATAL(input_tensor_a.dtype() == this->output_dtype);
+    }
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             // If we aren't height sharded, we require all sharding schemes to match until we add blocked reader/writers for width and block sharding
@@ -122,11 +127,11 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
         }
         if (input_tensor_b.memory_config().is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config() == input_tensor_b.memory_config());
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout);
             TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
         }
         if (this->output_mem_config.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config() == this->output_mem_config);
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
         } else {
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
@@ -134,7 +139,7 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         if (this->output_mem_config.is_sharded()) {
-            TT_FATAL(input_tensor_b.memory_config() == this->output_mem_config);
+            TT_FATAL(input_tensor_b.memory_config().memory_layout == this->output_mem_config.memory_layout);
         } else {
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
@@ -230,8 +235,10 @@ const operation::Hash EltwiseBinary::compute_program_hash(
         parallelization_strategy,
         input_tensor_a.dtype(),
         input_tensor_a.memory_config(),
+        input_tensor_a.device()->id(),
         input_tensor_b.dtype(),
         input_tensor_b.memory_config(),
+        input_tensor_b.device()->id(),
         this->output_dtype,
         this->output_mem_config,
         this->in_place);

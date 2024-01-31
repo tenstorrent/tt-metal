@@ -340,7 +340,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     } else {
         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
     }
-    uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles  * single_tile_size;
+    uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
 
     std::vector<uint32_t> reader_compile_time_args = {
         q_output_cb_index,
@@ -387,6 +387,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
     uint32_t k_start_addr = k_base_addr;
     uint32_t v_start_addr = v_base_addr;
 
+    uint32_t remote_q_read = 0;
+    uint32_t remote_kv_read = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         bool read_kv_heads = i < k_cores.num_cores();
@@ -416,8 +418,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
         reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
 
-        q_y = (q_x + (remote_q_head_start_idx + per_risc0_out_q_heads) / per_core_in_q_heads) / num_cores_x;
-        q_x = (q_x + (remote_q_head_start_idx + per_risc0_out_q_heads) / per_core_in_q_heads) % num_cores_x;
+        remote_q_read += per_risc0_out_q_heads;
+        q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
+        q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
         remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
         q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
 
@@ -431,8 +434,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
         reader_runtime_args[8] = per_risc0_out_q_heads * single_tile_size;
 
         if (per_risc1_out_q_heads > 0) {
-            q_y = (q_x + (remote_q_head_start_idx + per_risc1_out_q_heads) / per_core_in_q_heads) / num_cores_x;
-            q_x = (q_x + (remote_q_head_start_idx + per_risc1_out_q_heads) / per_core_in_q_heads) % num_cores_x;
+            remote_q_read += per_risc1_out_q_heads;
+            q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
+            q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
             remote_q_head_start_idx = (per_risc1_out_q_heads + remote_q_head_start_idx) % per_core_in_q_heads;
             q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
         }
@@ -440,8 +444,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
         if (read_kv_heads) {
             reader_runtime_args[15] = v_base_addr;
             reader_runtime_args[16] = v_start_addr;
-            kv_y = (kv_x + (remote_kv_head_start_idx + per_core_out_kv_heads) / per_core_in_kv_heads) / num_cores_x;
-            kv_x = (kv_x + (remote_kv_head_start_idx + per_core_out_kv_heads) / per_core_in_kv_heads) % num_cores_x;
+            remote_kv_read += per_core_out_kv_heads;
+            kv_y = (remote_kv_read / per_core_in_kv_heads) / num_cores_x;
+            kv_x = (remote_kv_read / per_core_in_kv_heads) % num_cores_x;
             remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
             k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
             v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;

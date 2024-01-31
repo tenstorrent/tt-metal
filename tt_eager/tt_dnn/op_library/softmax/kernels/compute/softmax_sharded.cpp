@@ -106,6 +106,7 @@ void MAIN {
         #ifdef CAUSAL_MASK
             cb_pop_front(cb_fused_attn, block_w);
         #endif
+        unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
 
         #else
         unpack_reconfig_data_format(cb_in0, cb_in0);

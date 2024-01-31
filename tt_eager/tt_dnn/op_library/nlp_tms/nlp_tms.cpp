@@ -76,8 +76,7 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input shape");
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-        TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.shape()[-1]);
+        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.shape()[-1]);
         TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
@@ -85,8 +84,17 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
         // 1 Head Per Core Max for now
         TT_FATAL(this->num_q_heads <= num_cores);
         TT_FATAL(this->num_kv_heads <= num_cores);
-        TT_FATAL((input_tensor.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor.shape()[-1]})));
         TT_FATAL(this->num_q_heads >= this->num_kv_heads);
+        TT_FATAL(this->num_q_heads % input_tensor.shard_spec().value().num_cores() == 0);
+        if (optional_input_tensors.at(0).has_value()) {
+            TT_FATAL(optional_input_tensors.at(0).value().is_sharded());
+            TT_FATAL(input_tensor.shard_spec().value().grid == optional_input_tensors.at(0).value().shard_spec().value().grid);
+            TT_FATAL(input_tensor.shard_spec().value().orientation == optional_input_tensors.at(0).value().shard_spec().value().orientation);
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads / this->num_kv_heads) * this->head_dim);
+        } else {
+            TT_FATAL(this->num_kv_heads % input_tensor.shard_spec().value().num_cores() == 0);
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads / this->num_kv_heads + 2) * this->head_dim);
+        }
         TT_FATAL(!this->transpose_k_heads);
     } else {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
@@ -106,10 +114,10 @@ void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const st
         TT_FATAL(input_shape_kv[2] == input_shape[2], "KV tensor seq_len dim must be same as Q tensor seq_len!");
         if (input_tensor_kv.is_sharded()) {
             TT_FATAL(input_tensor.is_sharded());
-            TT_FATAL(input_tensor_kv.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == input_tensor_kv.shape()[-1]);
+            TT_FATAL(input_tensor_kv.shard_spec().value().shape[0] == input_tensor_kv.volume() / input_tensor_kv.shape()[-1]);
             TT_FATAL(input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
-            TT_FATAL((input_tensor_kv.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor_kv.shape()[-1]})));
+            TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == 2 * this->head_dim);
+            TT_FATAL(this->num_kv_heads % input_tensor_kv.shard_spec().value().num_cores() == 0);
         }
     }
 }
@@ -189,7 +197,7 @@ void NlpConcatHeads::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(shard_spec.shape[1] == input_tensor.shape()[-1]);
         TT_FATAL(shard_spec.shape[0] % input_tensor.shape()[-2] == 0);
         TT_FATAL(input_tensor.shape()[1] % (shard_spec.shape[0] / input_tensor.shape()[-2]) == 0);
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+        TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
     } else {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
     }

@@ -78,7 +78,6 @@ inline std::vector<Tensor> nlp_create_qkv_heads(
     return operation::run(NlpCreateHeads{num_heads, num_kv_heads_val, head_dim, transpose_k_heads, mem_config}, {input_tensor}, {input_tensor_kv});
 }
 inline Tensor nlp_concat_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    // TODO: Uplift to support generic num_heads and head_dim; currently, hard-coded for falcon-7b
     return operation::run(NlpConcatHeads{mem_config}, {input_tensor_a}).at(0);
 }
 

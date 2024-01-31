@@ -230,8 +230,11 @@ const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>
         this->output_dtype,
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
+        input_tensors.at(0).device()->id(),
         input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype());
+        input_tensors.at(1).dtype(),
+        input_tensors.at(1).device()->id()
+    );
 }
 
 
@@ -389,9 +392,11 @@ const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Te
         input_tensor_a.memory_config().memory_layout,
         input_tensor_a.memory_config().buffer_type,
         input_tensor_a.dtype(),
+        input_tensor_a.device()->id(),
         input_tensor_b.memory_config().memory_layout,
         input_tensor_b.memory_config().buffer_type,
-        input_tensor_b.dtype()
+        input_tensor_b.dtype(),
+        input_tensor_b.device()->id()
     );
 }
 

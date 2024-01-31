@@ -231,7 +231,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         Wbytes,
         Wt,
         cache_start_ids,
-        cb_src0
+        cb_src1
     ](
         const void* operation,
         Program& program,
@@ -249,7 +249,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         auto dst_buffer = input_tensors.at(0).buffer();
 
         if (input_tensors.at(1).is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
         }
 
         for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); ++i){

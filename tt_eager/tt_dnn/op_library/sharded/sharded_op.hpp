@@ -53,25 +53,46 @@ struct Sharded {
 
 inline Tensor interleaved_to_sharded(
     const Tensor &input_tensor,
-    CoreCoord grid_size,
-    std::array<uint32_t, 2> shard_shape,
-    TensorMemoryLayout shard_scheme,
-    ShardOrientation shard_orientation,
-    std::optional<const DataType> output_dtype = std::nullopt) {
-    uint32_t num_cores = 0;
-    uint32_t total_height = input_tensor.volume() / input_tensor.shape()[-1];
-    uint32_t total_width = input_tensor.shape()[-1];
-    switch (shard_scheme) {
-        case TensorMemoryLayout::HEIGHT_SHARDED: num_cores = div_up(total_height, shard_shape[0]); break;
-        case TensorMemoryLayout::WIDTH_SHARDED: num_cores = div_up(total_width, shard_shape[1]); break;
-        case TensorMemoryLayout::BLOCK_SHARDED:
-            num_cores = div_up(total_height, shard_shape[0]) * div_up(total_width, shard_shape[1]);
-            break;
-        default: TT_ASSERT(false, "Unsupported sharding scheme");
-    }
+    const std::variant<CoreCoord, CoreRangeSet> grid,
+    const std::array<uint32_t, 2> shard_shape,
+    const TensorMemoryLayout shard_scheme,
+    const ShardOrientation shard_orientation,
+    const std::optional<const DataType> output_dtype = std::nullopt) {
+
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
-    CoreRangeSet grid = num_cores_to_corerange_set(num_cores, grid_size, row_wise);
-    auto shard_spec = ShardSpec{.shard_grid = grid, .shard_shape = shard_shape, .shard_orientation = shard_orientation};
+    CoreCoord grid_size;
+    CoreRangeSet grid_set({});
+    std::visit(
+        [&](const auto& grid) {
+            using GridType = std::decay_t<decltype(grid)>;
+            if constexpr (
+                std::is_same_v<GridType, CoreCoord>
+            ) {
+                grid_size = grid;
+                uint32_t num_cores = 0;
+                uint32_t total_height = input_tensor.volume() / input_tensor.shape()[-1];
+                uint32_t total_width = input_tensor.shape()[-1];
+                switch (shard_scheme) {
+                    case TensorMemoryLayout::HEIGHT_SHARDED: num_cores = div_up(total_height, shard_shape[0]); break;
+                    case TensorMemoryLayout::WIDTH_SHARDED: num_cores = div_up(total_width, shard_shape[1]); break;
+                    case TensorMemoryLayout::BLOCK_SHARDED:
+                        num_cores = div_up(total_height, shard_shape[0]) * div_up(total_width, shard_shape[1]);
+                        break;
+                    default: TT_ASSERT(false, "Unsupported sharding scheme");
+                }
+                grid_set = num_cores_to_corerange_set(num_cores, grid_size, row_wise);
+            } else if constexpr (
+                std::is_same_v<GridType, CoreRangeSet>
+            ) {
+                TT_FATAL(grid.ranges().size() == 1);
+                auto bbox = grid.bounding_box();
+                grid_size = CoreCoord{.x = bbox.end.x + 1, .y = bbox.end.y + 1};
+                grid_set = grid;
+            }
+        },
+        grid
+    );
+    auto shard_spec = ShardSpec{.shard_grid = grid_set, .shard_shape = shard_shape, .shard_orientation = shard_orientation};
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
     return operation::run(
                Sharded{
@@ -84,20 +105,22 @@ inline Tensor interleaved_to_sharded(
         .at(0);
 }
 
-
-inline Tensor interleaved_to_sharded_core_range_set(
+inline Tensor interleaved_to_sharded(
     const Tensor &input_tensor,
-    CoreRangeSet grid,
-    std::array<uint32_t, 2> shard_shape,
-    TensorMemoryLayout shard_scheme,
-    ShardOrientation shard_orientation,
-    std::optional<const DataType> output_dtype = std::nullopt)
-{
-
-//TODO : extend for CoreRangeSets with multiple core ranges
-    auto core_range = *grid.ranges().begin();
-    auto grid_size = CoreCoord(core_range.end.x - core_range.start.x, core_range.end.y- core_range.start.y);
-    return interleaved_to_sharded(input_tensor, grid_size, shard_shape, shard_scheme, shard_orientation, output_dtype);
+    const MemoryConfig &sharded_mem_config,
+    std::optional<const DataType> output_dtype = std::nullopt) {
+    TT_FATAL(sharded_mem_config.is_sharded());
+    auto bbox = sharded_mem_config.shard_spec.value().grid.bounding_box();
+    auto grid_size = CoreCoord{.x = bbox.end.x + 1, .y = bbox.end.y + 1};
+    return operation::run(
+               Sharded{
+                   .grid_size = grid_size,
+                   .shard_spec = sharded_mem_config.shard_spec.value(),
+                   .sharded_op_type = ShardedOpType::InterleavedToSharded,
+                   .output_mem_config = sharded_mem_config,
+                   .output_dtype = output_dtype.value_or(input_tensor.dtype())},
+               {input_tensor})
+        .at(0);
 }
 
 

@@ -130,7 +130,7 @@ class TupleEncoder(json.JSONEncoder):
 
 def print_chrome_tracing_json(devicesData, setup):
     chromeTraces = []
-    riscToNum = {"BRISC": 1, "NCRISC": 2, "TRISC_0": 3, "TRISC_1": 4, "TRISC_2": 5}
+    riscToNum = {"BRISC": 1, "NCRISC": 2, "TRISC_0": 3, "TRISC_1": 4, "TRISC_2": 5, "ERISC": 6}
     for device in devicesData["devices"].keys():
         minTime = devicesData["devices"][device]["metadata"]["global_min"]["ts"]
         for timerID, timestamp, risc, core in devicesData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"][

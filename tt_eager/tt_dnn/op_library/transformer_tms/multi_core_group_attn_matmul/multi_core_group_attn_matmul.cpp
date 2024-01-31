@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_transformer_group_attn_matmul.cpp",
+        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,

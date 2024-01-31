@@ -161,7 +161,7 @@ def test_perf_virtual_machine(
     device,
 ):
     if is_e75(device):
-        pytest.skip("Bert large 15 is not supported on E75")
+        pytest.skip("Bert large 11 is not supported on E75")
 
     run_perf_bert11(
         expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
@@ -182,7 +182,7 @@ def test_perf_bare_metal(
     device,
 ):
     if is_e75(device):
-        pytest.skip("Bert large 15 is not supported on E75")
+        pytest.skip("Bert large 11 is not supported on E75")
 
     run_perf_bert11(
         expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
