@@ -325,6 +325,44 @@ Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryC
   return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
 }
 
+Tensor lte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config)  {
+    return ltz(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
+}
+Tensor lte_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config)  {
+    return ltz(sub_unary_sfpu(value,input_tensor,output_mem_config),output_mem_config);
+}
+Tensor gte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    return gtz(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
+}
+Tensor gte_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config) {
+    return gtz(sub_unary_sfpu(value,input_tensor,output_mem_config),output_mem_config);
+}
+Tensor eq_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    return eqz(sub_unary_sfpu(input_tensor,value,output_mem_config),output_mem_config);
+}
+
+Tensor eq_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config) {
+        return eq_unary(input_tensor,value,output_mem_config);
+}
+
 Tensor div_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
     return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor, 1.0f/value, output_mem_config);
 }
