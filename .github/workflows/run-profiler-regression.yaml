@@ -30,9 +30,12 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
+      - name: Install ttnn
         run: |
           ./scripts/build_scripts/build_with_profiler_opt.sh
+      - name: Add ttnn to PYTHONPATH
+        run: |
+          echo "PYTHONPATH=${TT_METAL_HOME}/ttnn:${PYTHONPATH}" >> $GITHUB_ENV
       - name: Run profiler regression tests
         run: |
           ./tests/scripts/run_profiler_regressions.sh
