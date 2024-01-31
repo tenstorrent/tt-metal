@@ -58,7 +58,7 @@ def run_test_FalconCausalLM_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
 
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config

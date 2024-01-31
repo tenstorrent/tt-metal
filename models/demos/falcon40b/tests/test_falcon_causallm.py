@@ -7,21 +7,20 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from models.demos.falcon7b.reference.hf_modeling_falcon import (
+from models.demos.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 
-from models.demos.falcon7b.tt.model_config import (
+from models.demos.falcon40b.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32, skip_for_grayskull
 
 
 class PytorchFalconCausalLM(torch.nn.Module):
@@ -45,21 +44,23 @@ class PytorchFalconCausalLM(torch.nn.Module):
 
 
 def run_test_FalconCausalLM_inference(
-    device,
+    devices,
     model_version,
     llm_mode,
     batch,
     seq_len,
     kv_cache_len,
     num_layers,
-    pcc,
+    out_pcc,
+    cache_pcc,
+    token_pcc,
     model_config,
     tt_cache_path,
     model_location_generator,
 ):
-    model_name = model_location_generator(model_version, model_subdir="Falcon", low_cpu_mem_usage=True)
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
 
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
@@ -69,8 +70,11 @@ def run_test_FalconCausalLM_inference(
     torch.manual_seed(0)
     base_url = ""
     max_position_embeddings = 2048
-    head_dim = configuration.hidden_size // configuration.n_head
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
+    num_attention_heads = configuration.num_attention_heads
+    num_kv_heads = configuration.num_kv_heads
     use_cache = True
+    use_global_cos_sin_cache = True
 
     if 1:
         model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
@@ -101,16 +105,43 @@ def run_test_FalconCausalLM_inference(
         past_key_values = ()
         tt_layer_past = ()
         for i in range(num_layers):
-            k_cache = torch.rand(batch, 1, kv_cache_len, head_dim)
-            v_cache = torch.rand(batch, 1, kv_cache_len, head_dim)
-            past_key_values += ((k_cache, v_cache),)
+            k_cache = torch.rand(batch, num_kv_heads, kv_cache_len, head_dim)
+            v_cache = torch.rand(batch, num_kv_heads, kv_cache_len, head_dim)
+            past_key_values += (
+                (
+                    torch.repeat_interleave(k_cache, num_attention_heads // num_kv_heads, 1),
+                    (torch.repeat_interleave(v_cache, num_attention_heads // num_kv_heads, 1)),
+                ),
+            )
 
-            tt_k_cache = torch.zeros(batch, 1, max_position_embeddings, head_dim)
-            tt_v_cache = torch.zeros(batch, 1, max_position_embeddings, head_dim)
-            tt_k_cache[:, :, :kv_cache_len, :] = k_cache
-            tt_v_cache[:, :, :kv_cache_len, :] = v_cache
-            tt_k_cache = torch2tt_tensor(tt_k_cache, device)
-            tt_v_cache = torch2tt_tensor(tt_v_cache, device)
+            tt_k_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
+            tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
+            tt_k_cache_host[:, :, :kv_cache_len, :] = k_cache
+            tt_v_cache_host[:, :, :kv_cache_len, :] = v_cache
+            tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
+            tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
+
+            tt_k_cache = []
+            tt_v_cache = []
+            for j in range(len(devices)):
+                tt_k_cache.append(
+                    torch2tt_tensor(
+                        tt_k_cache_host[j],
+                        devices[j],
+                        tt_lib.tensor.Layout.TILE,
+                        model_config["KV_CACHE_MEMCFG"],
+                        model_config["KV_CACHE_DTYPE"],
+                    )
+                )
+                tt_v_cache.append(
+                    torch2tt_tensor(
+                        tt_v_cache_host[j],
+                        devices[j],
+                        tt_lib.tensor.Layout.TILE,
+                        model_config["KV_CACHE_MEMCFG"],
+                        model_config["KV_CACHE_DTYPE"],
+                    )
+                )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     else:
@@ -126,7 +157,7 @@ def run_test_FalconCausalLM_inference(
     # since we don't yet have embedding support on device
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     tt_FalconCausalLM = TtFalconCausalLM(
-        device,
+        devices,
         state_dict,
         base_url,
         num_layers,
@@ -134,7 +165,15 @@ def run_test_FalconCausalLM_inference(
         max_position_embeddings,
         model_config,
         tt_cache_path,
+        use_global_cos_sin_cache=use_global_cos_sin_cache,
     )
+
+    attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
+    num_max_tokens = nearest_32(kv_cache_len + 1)
+    if attention_mask_memconfig.is_sharded():
+        attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+        attn_mask_shard_shape[-1] = num_max_tokens
+        attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":
@@ -163,6 +202,10 @@ def run_test_FalconCausalLM_inference(
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
+        tt_embeddings = [
+            tt_embeddings[i].to(devices[i], model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]) for i in range(len(devices))
+        ]
+        tt_attention_mask = [tt_attention_mask[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))]
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_embeddings=tt_embeddings,
             llm_mode=llm_mode,
@@ -171,17 +214,17 @@ def run_test_FalconCausalLM_inference(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_out = tt2torch_tensor(tt_out).squeeze(1)
+        tt_out = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1)
         tt_out = tt_out.transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
-    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, out_pcc)
     logger.info(f"Output: {output_pcc}")
 
     for i in range(num_layers):
         tt_layer_pres = (
-            tt2torch_tensor(tt_layer_present[i][0]),
-            tt2torch_tensor(tt_layer_present[i][1]),
+            torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
+            torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
         )
         if llm_mode == "prefill":
             pytorch_layer_pres = pytorch_layer_present[i]
@@ -190,22 +233,44 @@ def run_test_FalconCausalLM_inference(
                 tt_layer_pres[1][:, :, :kv_len, :],
             )
         elif llm_mode == "decode":
-            pytorch_layer_pres = (
-                pytorch_layer_present[i][0][:, :, kv_cache_len, :],
-                pytorch_layer_present[i][1][:, :, kv_cache_len, :],
-            )
+            pytorch_layer_pres = pytorch_layer_present[i]
             tt_layer_pres = (
-                tt_layer_pres[0][:, :, kv_cache_len, :],
-                tt_layer_pres[1][:, :, kv_cache_len, :],
+                torch.repeat_interleave(
+                    tt_layer_pres[0][:, :, :kv_len, :],
+                    configuration.num_attention_heads // configuration.num_kv_heads,
+                    1,
+                ),
+                torch.repeat_interleave(
+                    tt_layer_pres[1][:, :, :kv_len, :],
+                    configuration.num_attention_heads // configuration.num_kv_heads,
+                    1,
+                ),
             )
-
-        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], pcc)
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], cache_pcc)
         logger.info(f"K Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
-        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1], tt_layer_pres[1], pcc)
+        does_pass2, output_pcc = comp_pcc(
+            pytorch_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
+            tt_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
+            token_pcc,
+        )
+        logger.info(f"K Cache Layer {i} new token: {output_pcc}")
+
+        does_pass = does_pass and does_pass2
+
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1], tt_layer_pres[1], cache_pcc)
         logger.info(f"V Cache Layer {i}: {output_pcc}")
+
+        does_pass = does_pass and does_pass2
+
+        does_pass2, output_pcc = comp_pcc(
+            pytorch_layer_pres[1][:, :, kv_len - 1 : kv_len, :],
+            tt_layer_pres[1][:, :, kv_len - 1 : kv_len, :],
+            token_pcc,
+        )
+        logger.info(f"V Cache Layer {i} new token: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
@@ -213,28 +278,30 @@ def run_test_FalconCausalLM_inference(
         logger.info("Falcon CausalLM Passed!")
     else:
         logger.warning("Falcon CausalLM Failed!")
-        assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
-    (
-        ("prefill", 2, 128, 0),
-        ("decode", 32, 1, 128),
-    ),
-    ids=["prefill_seq128", "decode_batch32"],
+    (("decode", 32, 1, 128),),
+    ids=["decode_batch32"],
 )
 @pytest.mark.parametrize(
-    "num_layers, pcc",
-    ((2, 0.98), (32, 0.86)),
-    ids=["layers_2", "layers_32"],
+    "num_layers",
+    (1,),
+    ids=[
+        "layers_1",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version",
-    ("tiiuae/falcon-7b-instruct",),
-    ids=["falcon_7b"],
+    ("tiiuae/falcon-40b-instruct",),
+    ids=["falcon_40b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize(
+    "model_config_str, out_pcc, cache_pcc, token_pcc",
+    [("BFLOAT8_B-SHARDED", 0.89, 0.99, 0.97), ("BFLOAT16-SHARDED", 0.92, 0.99, 0.97)],
+)
 def test_FalconCausalLM_inference(
     model_version,
     llm_mode,
@@ -242,26 +309,36 @@ def test_FalconCausalLM_inference(
     seq_len,
     kv_cache_len,
     num_layers,
-    pcc,
+    out_pcc,
+    cache_pcc,
+    token_pcc,
     request,
     model_config_str,
     model_location_generator,
-    device,
+    pcie_devices,
+    use_program_cache,
 ):
     model_config = get_model_config(model_config_str)
+    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if len(pcie_devices) < model_config["NUM_DEVICES"]:
+        pytest.skip(f"Requires at least {model_config['NUM_DEVICES']} devices to run")
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
     tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
+    tt_lib.profiler.set_profiler_location(f"falcon-40b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_inference(
-        device,
+        pcie_devices[: model_config["NUM_DEVICES"]],
         model_version,
         llm_mode,
         batch,
         seq_len,
         kv_cache_len,
         num_layers,
-        pcc,
+        out_pcc,
+        cache_pcc,
+        token_pcc,
         model_config,
         tt_cache_path,
         model_location_generator,

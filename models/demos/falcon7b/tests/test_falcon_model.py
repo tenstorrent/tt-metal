@@ -53,7 +53,7 @@ def run_test_FalconModel_inference(
     model_location_generator,
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -69,9 +69,7 @@ def run_test_FalconModel_inference(
         model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
     else:
         # batch identical sequences for debugging
-        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(
-            batch, seq_len
-        )
+        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
@@ -109,9 +107,7 @@ def run_test_FalconModel_inference(
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     else:
-        raise NotImplementedError(
-            f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
-        )
+        raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
     # Prepare output -----------------------------------------------------------------------
     pytorch_FalconModel = PytorchFalconModel(hugging_face_reference_model, num_layers)
