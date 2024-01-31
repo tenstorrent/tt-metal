@@ -494,11 +494,12 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
 }
 
 TEST_F(CommonFixture, MatmulMultiCoreSingleDRAM){
+    const char* arch = getenv("ARCH_NAME")
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (getenv("ARCH_NAME") == "wormhole_b0"){
-        log_info(LogTest, "This test is not supported in wormhole_b0");
+    } else if ( strcasecmp(arch,"wormhole_b0") == 0 ) {
+        tt::log_info("This test is disabled in WH B0");
         GTEST_SKIP();
     }
     for(unsigned int id=0; id < devices_.size(); id++){
