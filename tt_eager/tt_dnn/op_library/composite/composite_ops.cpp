@@ -1452,6 +1452,7 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
     {
         Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor max_val = reduce(input_a, ReduceOpMath::MAX, ReduceOpDim::W);
+
         Tensor max_tensor = zeros_like(input_a, output_mem_config);
         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
         max_val.deallocate();
@@ -1466,8 +1467,8 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
         result = where(eq_unary(result, size), res_index, result, output_mem_config);
         res_index = bcast(res_index, result, BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
         result.deallocate();
-        std::vector<int64_t> permute_dims = {0, 1, 3, 2};
-        Tensor transpose_res = permute(res_index, permute_dims, output_mem_config);
+        std::vector<int64_t> permute_dims = {3, 0, 1, 2};
+        Tensor transpose_res = permute(res_index,permute_dims,output_mem_config);
         return transpose_res;
     } else if (dim == (input_shape.rank() - 2)) {
         Tensor tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
@@ -1484,8 +1485,11 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
         result = reduce(result, ReduceOpMath::MIN, ReduceOpDim::H);
         result = where(eq_unary(result, size), 0.0f, result, output_mem_config);
         Tensor res_index = zeros_like(result, output_mem_config);
-        res_index = bcast(res_index, result, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
-        return res_index;
+        result = where(eq(result, full_like(result, size)), res_index, result, output_mem_config);
+        res_index = bcast(res_index, result,  BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        std::vector<int64_t> permute_dims = {2, 0, 1, 3};
+        Tensor transpose_res = permute(res_index,permute_dims,output_mem_config);
+        return transpose_res;
     }
     else if (dim == (input_shape.rank() - 3))
     {
@@ -1493,7 +1497,6 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
         Tensor max_val = max(input_a, dim, output_mem_config);
         int repeat = input_shape[1];
         std::vector<Tensor> combined_tensors;
-        // combined_tensors.reserve(repeat);
         for (int cid = 0; cid < repeat; cid++)
             combined_tensors.emplace_back(max_val);
         Tensor concat_out = concat(combined_tensors, 1, output_mem_config);

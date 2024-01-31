@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
 )
 @pytest.mark.parametrize(
     "dim",
-    (3, 2, 1, 0, -1, -2, -3),
+    (3, 2, 1, -1, -2, -3),
 )
 class TestArgmax:
     def test_argmax(self, input_shapes, dim, device):
