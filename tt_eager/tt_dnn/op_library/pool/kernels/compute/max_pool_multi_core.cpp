@@ -106,7 +106,7 @@ inline void reduce_h(uint32_t out_nelems,
                      uint32_t out_ntiles_c,
                      uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
-    reduce_init_delta_no_pack();
+    reduce_init_delta_no_pack(in_cb_id, in_scalar_cb_id);
     pack_untilize_dst_init_short<in_ntiles_c>();
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
     tile_regs_acquire();
@@ -135,7 +135,7 @@ inline void reduce_h_fused(
     tile_regs_acquire();
     for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
         cb_wait_front(in_cb_id, 1);
-        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc);
+        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
 
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
             reduce_tile_math(in_ntiles_c*out_elem_i + c_i);

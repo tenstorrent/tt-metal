@@ -55,10 +55,10 @@ ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
 }
 
-ALWI void reduce_init_delta_no_pack()
+ALWI void reduce_init_delta_no_pack(uint32_t icb0 = 0, uint32_t icb1 = 1)
 {
     // FIXME: API Update needed in compute kernel?
-    UNPACK(( llk_unpack_AB_init<>(0, 1) ));
+    UNPACK(( llk_unpack_AB_init<>(icb0, icb1) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 }
