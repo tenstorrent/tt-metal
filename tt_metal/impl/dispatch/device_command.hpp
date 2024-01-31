@@ -48,6 +48,7 @@ struct CommandHeader {
     uint8_t event_sync_core_x = 0;
     uint8_t event_sync_core_y = 0;
     uint32_t event_sync_event_id = 0;
+    uint32_t fwd_path = 1;
 };
 
 static_assert((offsetof(CommandHeader, event) % 32) == 0);

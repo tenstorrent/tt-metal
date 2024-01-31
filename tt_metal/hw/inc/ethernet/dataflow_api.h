@@ -124,7 +124,7 @@ FORCE_INLINE
 void wait_for_fd_packet() {
     // There may not be a valid cmd here, since DST router is always polling
     // This should only happen on cluster close
-    while (routing_info->fd_buffer_msgs_sent != 1 && routing_info->routing_enabled) {
+    while (routing_info->fd_buffer_msgs_sent != 1 && routing_info->routing_enabled && erisc_info->launch_user_kernel == 0) {
         // TODO: add timer to restrict this
         risc_context_switch();
     }

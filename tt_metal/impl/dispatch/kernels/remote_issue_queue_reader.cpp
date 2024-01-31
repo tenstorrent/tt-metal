@@ -47,15 +47,11 @@ void kernel_main() {
         uint32_t producer_cb_size = header->producer_cb_size;
         uint32_t consumer_cb_size = header->router_cb_size;
         uint32_t producer_cb_num_pages = header->producer_cb_num_pages;
-        uint32_t consumer_cb_num_pages = header->router_cb_num_pages;
+        uint32_t consumer_cb_num_pages = header->router_cb_num_pages; // AL: is this zero?
         uint32_t num_pages = header->num_pages;
         uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t wrap = header->wrap;
-
-        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
-        const db_cb_config_t* eth_db_cb_config =
-            get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
 
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
@@ -64,6 +60,10 @@ void kernel_main() {
             notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
             continue;
         }
+
+        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+        const db_cb_config_t* eth_db_cb_config =
+            get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, false);
 
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         wait_consumer_space_available(db_semaphore_addr);
@@ -75,13 +75,12 @@ void kernel_main() {
             consumer_cb_num_pages,
             page_size,
             consumer_cb_size);
-        relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(
-            db_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
+        relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
 
         update_producer_consumer_sync_semaphores(((uint64_t)producer_noc_encoding << 32), ((uint64_t)eth_consumer_noc_encoding << 32), db_semaphore_addr, uint32_t(eth_get_semaphore(0)));
 
         // Fetch data and send to the consumer
-        produce_for_eth_src_router<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        produce_for_eth_src_router<true, consumer_cmd_base_addr, consumer_data_buffer_size>(
             command_ptr,
             num_buffer_transfers,
             sharded_buffer_num_cores,
@@ -94,6 +93,5 @@ void kernel_main() {
             eth_db_cb_config);
 
         issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
-
     }
 }

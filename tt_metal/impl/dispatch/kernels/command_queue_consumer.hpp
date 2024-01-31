@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#pragma once
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_runtime_address_map.h"
@@ -34,9 +35,6 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
     noc_nonposted_writes_num_issued[noc_index] += 1;
     noc_nonposted_writes_acked[noc_index] += num_dests;
 }
-
-FORCE_INLINE
-uint32_t get_read_ptr(db_cb_config_t* db_cb_config) { return (db_cb_config->rd_ptr_16B) << 4; }
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_WRITE_PTR);
@@ -120,7 +118,7 @@ FORCE_INLINE void write_buffers(
         const uint32_t dst_page_index = command_ptr[7];
 
         uint32_t num_to_write;
-        uint32_t src_addr = get_read_ptr(db_cb_config);
+        uint32_t src_addr = db_cb_config->rd_ptr_16B << 4;
         uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size_16B << 4);
 
         BufferType buffer_type = (BufferType)dst_buf_type;
@@ -138,12 +136,66 @@ FORCE_INLINE void write_buffers(
         while (page_id < end_page_id) {
             num_to_write = min(end_page_id - page_id, producer_consumer_transfer_num_pages);
             multicore_cb_wait_front(db_cb_config, num_to_write);
-            uint32_t src_addr = get_read_ptr(db_cb_config);
+            uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
             buffer.noc_async_write_buffer(src_addr, page_id, num_to_write);
             noc_async_writes_flushed();
             multicore_cb_pop_front(
                 db_cb_config,
                 remote_db_cb_config,
+                producer_noc_encoding,
+                (l1_consumer_fifo_limit >> 4),
+                num_to_write,
+                db_cb_config->page_size_16B);
+            page_id += num_to_write;
+        }
+    }
+    noc_async_write_barrier();
+}
+
+// TODO (abhullar): Is the same as write_buffers but doesn't interact with completion queue APIs. Consider merging
+//  Andrews event support PR removed completion queue code from write_buffers so it can be used
+FORCE_INLINE void write_remote_buffers(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_producer_db_cb_config,
+    volatile tt_l1_ptr uint32_t* command_ptr,
+    uint32_t num_buffer_transfers,
+    uint32_t sharded_buffer_num_cores,
+    uint64_t producer_noc_encoding,
+    uint32_t producer_consumer_transfer_num_pages) {
+
+    bool sharded = sharded_buffer_num_cores > 1;
+
+    for (uint32_t i = 0; i < num_buffer_transfers; i++) {
+        const uint32_t bank_base_address = command_ptr[1];
+        const uint32_t num_pages = command_ptr[2];
+        const uint32_t page_size = command_ptr[3];
+        const uint32_t dst_buf_type = command_ptr[5];
+        const uint32_t dst_page_index = command_ptr[7];
+
+        uint32_t num_to_write;
+        uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
+        uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size_16B << 4);
+
+        Buffer buffer;
+        if (not(sharded)) {
+            buffer.init((BufferType)dst_buf_type, bank_base_address, page_size);
+        }
+        else {
+            buffer.init_sharded(page_size, sharded_buffer_num_cores, bank_base_address,
+                            command_ptr + COMMAND_PTR_SHARD_IDX);
+        }
+
+        uint32_t page_id = dst_page_index;
+        uint32_t end_page_id = page_id + num_pages;
+        while (page_id < end_page_id) {
+            num_to_write = min(end_page_id - page_id, producer_consumer_transfer_num_pages);
+            multicore_cb_wait_front(db_cb_config, num_to_write);
+            uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
+            buffer.noc_async_write_buffer(src_addr, page_id, num_to_write);
+            noc_async_writes_flushed();
+            multicore_cb_pop_front(
+                db_cb_config,
+                remote_producer_db_cb_config,
                 producer_noc_encoding,
                 (l1_consumer_fifo_limit >> 4),
                 num_to_write,
@@ -190,11 +242,11 @@ FORCE_INLINE void program_page_transfer(
     uint64_t producer_noc_encoding,
     uint32_t producer_consumer_transfer_num_pages,
     uint32_t num_pages_in_transfer) {
-    uint32_t l1_consumer_fifo_limit = get_read_ptr(db_cb_config) + (db_cb_config->total_size_16B << 4);
+    uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
     for (uint32_t page_idx = 0; page_idx < num_pages_in_transfer;) {
         uint32_t num_to_write = min(num_pages_in_transfer - page_idx, producer_consumer_transfer_num_pages);
         multicore_cb_wait_front(db_cb_config, num_to_write);
-        uint32_t src_addr = get_read_ptr(db_cb_config);
+        uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
         for (uint32_t i = 0; i < num_to_write; i++) {
             write_program_page<multicast>(src_addr, command_ptr, i == num_to_write - 1);
             src_addr += DeviceCommand::PROGRAM_PAGE_SIZE;

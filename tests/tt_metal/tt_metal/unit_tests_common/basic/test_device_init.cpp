@@ -88,9 +88,11 @@ TEST_P(DeviceParamFixture, DeviceLoadBlankKernels){
     for (unsigned int id = 0; id < num_devices; id++) {
         devices.at(id) = (tt::tt_metal::CreateDevice(id));
     }
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     for (auto device: devices) {
         ASSERT_TRUE(unit_tests_common::basic::test_device_init::load_all_blank_kernels(device));
     }
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     for (auto device: devices) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }

@@ -74,7 +74,7 @@ void kernel_main() {
             consumer_cb_size);
         relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         if (stall) {
-            wait_consumer_idle(db_semaphore_addr);
+            wait_consumer_idle<2>(db_semaphore_addr);
         }
 
         update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr, get_semaphore(0));
