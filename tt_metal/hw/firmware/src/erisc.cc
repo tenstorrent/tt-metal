@@ -200,7 +200,8 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
 
                 command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER; // jump to buffer transfer region
                 const uint32_t num_pages = command_ptr[2];
-                num_pages_to_tx = min(num_pages, producer_consumer_transfer_num_pages); // get num pages
+                // producer_consumer_transfer_num_pages is the total num of data pages that could fit in a FD packet
+                num_pages_to_tx = min(num_pages, producer_consumer_transfer_num_pages);
 
                 noc_async_write(src_addr, dst_noc_addr, page_size * num_pages_to_tx);
                 uint32_t l1_consumer_fifo_limit_16B =

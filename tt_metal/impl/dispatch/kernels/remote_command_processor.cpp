@@ -16,9 +16,9 @@ void kernel_main() {
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
-    uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
-    uint64_t processor_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
-    uint64_t dispatcher_noc_encoding = uint64_t(NOC_XY_ENCODING(DISPATCHER_NOC_X, DISPATCHER_NOC_Y)) << 32;
+    uint32_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
+    uint32_t processor_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
+    uint32_t dispatcher_noc_encoding = uint64_t(NOC_XY_ENCODING(DISPATCHER_NOC_X, DISPATCHER_NOC_Y));
 
     volatile tt_l1_ptr uint32_t* rx_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 1 by host
@@ -29,21 +29,11 @@ void kernel_main() {
     bool db_tx_buf_switch = false;
     while (true) {
         // Wait for ethernet router to supply a command
-        db_acquire(rx_semaphore_addr, processor_noc_encoding);
+        db_acquire(rx_semaphore_addr, ((uint64_t)processor_noc_encoding << 32));
 
         // For each instruction, we need to jump to the relevant part of the device command
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_addr, data_buffer_size>(rx_buf_switch);
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
-
-        uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];
-        uint32_t stall = command_ptr[DeviceCommand::stall_idx];
-        uint32_t page_size = command_ptr[DeviceCommand::page_size_idx];
-        uint32_t producer_cb_size = command_ptr[DeviceCommand::producer_cb_size_idx];
-        uint32_t consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
-        uint32_t producer_cb_num_pages = command_ptr[DeviceCommand::producer_cb_num_pages_idx];
-        uint32_t consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
-        uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
-        uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
 
         while (db_tx_semaphore_addr[0] == 0)
             ;  // Check that there is space in the dispatcher
@@ -60,25 +50,30 @@ void kernel_main() {
             db_cb_config,
             dispatcher_db_cb_config,
             db_tx_buf_switch,
-            dispatcher_noc_encoding,
+            ((uint64_t)dispatcher_noc_encoding << 32),
             consumer_cb_num_pages,
             page_size,
             consumer_cb_size);
 
-        relay_command<cmd_base_addr, dispatcher_cmd_base_addr, dispatcher_data_buffer_size>(db_tx_buf_switch, dispatcher_noc_encoding);
+        relay_command<cmd_base_addr, dispatcher_cmd_base_addr, dispatcher_data_buffer_size>(db_tx_buf_switch, ((uint64_t)dispatcher_noc_encoding << 32));
+        uint32_t stall = command_ptr[DeviceCommand::stall_idx];
         if (stall) {
             while (*db_tx_semaphore_addr != 2)
                 ;
         }
 
         // Decrement the semaphore value
-        noc_semaphore_inc(producer_noc_encoding | uint32_t(db_tx_semaphore_addr), -1);  // Two's complement addition
+        noc_semaphore_inc(((uint64_t)processor_noc_encoding << 32) | uint32_t(db_tx_semaphore_addr), -1);  // Two's complement addition
         noc_async_write_barrier();
 
         // Notify the consumer
-        noc_semaphore_inc(dispatcher_noc_encoding | get_semaphore(0), 1);
+        noc_semaphore_inc(((uint64_t)dispatcher_noc_encoding << 32) | get_semaphore(0), 1);
         noc_async_write_barrier();  // Barrier for now
 
+        uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];
+        uint32_t producer_cb_size = command_ptr[DeviceCommand::router_cb_size_idx];
+        // producer_consumer_transfer_num_pages is the total number of data pages that were sent from the router
+        uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_router_transfer_num_pages_idx];
         transfer(
             db_cb_config,
             eth_db_cb_config,
@@ -88,14 +83,14 @@ void kernel_main() {
             page_size,
             producer_cb_size,
             (get_db_buf_addr<producer_cmd_base_addr, producer_data_buffer_size>(rx_buf_switch) + producer_cb_size) >> 4,
-            producer_noc_encoding,
+            ((uint64_t)producer_noc_encoding << 32),
             consumer_cb_size,
             (get_db_buf_addr<dispatcher_cmd_base_addr, dispatcher_data_buffer_size>(db_tx_buf_switch) + consumer_cb_size) >> 4,
-            dispatcher_noc_encoding,
+            ((uint64_t)dispatcher_noc_encoding << 32),
             producer_consumer_transfer_num_pages);
 
         // Notify producer ethernet router that it has completed transferring a command
-        noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
+        noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | get_semaphore(0), 1);
         noc_async_write_barrier(); // Barrier for now
 
         db_tx_buf_switch = not db_tx_buf_switch;

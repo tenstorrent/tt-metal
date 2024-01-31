@@ -537,6 +537,15 @@ namespace tt::tt_metal{
             const uint32_t num_tensix_command_slots = 2;
             const uint32_t num_eth_command_slots = 1;
 
+            uint32_t cmd_start_tensix = get_command_start_l1_address(false);
+            uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
+            uint32_t producer_data_buffer_size_tensix = get_producer_data_buffer_size(false);
+            uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size(false);
+
+            uint32_t cmd_start_eth = get_command_start_l1_address(true);
+            uint32_t producer_data_buffer_size_eth = get_producer_data_buffer_size(true);
+            uint32_t consumer_data_buffer_size_eth = get_consumer_data_buffer_size(true);
+
             if (device->is_mmio_capable()) {
                 for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device->id())) {
                     // TODO (abhullar): allow for multiple cqs on remote device, atm device initialization asserts one cq for the remote device
@@ -583,12 +592,17 @@ namespace tt::tt_metal{
                         uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
                         uint32_t issue_queue_start_addr = CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size);
                         uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
-                        uint32_t command0_l1_addr = get_command_start_l1_address(/*use_eth_l1=*/false); // issue queue interface kernels are currently placed on tensix cores
-                        uint32_t data_section_l1_addr = get_data_section_l1_address(/*use_eth_l1=*/false); // issue queue interface kernels are currently placed on tensix cores
-                        uint32_t consumer_cmd_base_addr = get_command_start_l1_address(device_id != device->id()); // device is MMIO capable but current device_id being set up is remote
-                        uint32_t consumer_data_buff_size = get_consumer_data_buffer_size(device_id != device->id()); // device is MMIO capable but current device_id being set up is remote
+
+                        uint32_t consumer_cmd_base_addr =  (device_id != device->id()) ? cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
+                        uint32_t consumer_data_buff_size = (device_id != device->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
                         std::vector<uint32_t> producer_compile_args = {
-                            host_issue_queue_read_ptr_addr, issue_queue_start_addr, command0_l1_addr, data_section_l1_addr, get_producer_data_buffer_size(false), consumer_cmd_base_addr, consumer_data_buff_size};
+                            host_issue_queue_read_ptr_addr,
+                            issue_queue_start_addr,
+                            cmd_start_tensix,
+                            data_section_addr_tensix,
+                            producer_data_buffer_size_tensix,
+                            consumer_cmd_base_addr,
+                            consumer_data_buff_size};
 
                         uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
                         uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -656,20 +670,12 @@ namespace tt::tt_metal{
                 tt::Cluster::instance().write_core(&dst_router_sem_value, sizeof(uint32_t), tt_cxy_pair(device->id(), physical_eth_router_dst), eth_l1_mem::address_map::SEMAPHORE_BASE);
                 tt::Cluster::instance().configure_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
 
-                uint32_t cmd_start_tensix = get_command_start_l1_address(false);
-                uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
-                uint32_t producer_data_buffer_size_tensix = get_producer_data_buffer_size(false);
-                uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size(false);
-
-                uint32_t producer_cmd_start_eth = get_command_start_l1_address(true);
-                uint32_t producer_data_buffer_size_eth = get_producer_data_buffer_size(true);
-
                 std::vector<uint32_t> processor_compile_args = {
                     cmd_start_tensix,
                     data_section_addr_tensix,
                     producer_data_buffer_size_tensix,
-                    cmd_start_tensix, // TODO debug core is on tensix: producer_cmd_start_eth
-                    producer_data_buffer_size_tensix, // TODO debug core is on tensix: producer_data_buffer_size_eth
+                    cmd_start_eth,
+                    producer_data_buffer_size_eth,
                     cmd_start_tensix,
                     consumer_data_buffer_size_tensix,
                 };
