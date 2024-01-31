@@ -7,19 +7,18 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from models.demos.falcon7b.reference.hf_modeling_falcon import (
+from models.demos.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLP
-from models.demos.falcon7b.tt.model_config import (
+from models.demos.falcon40b.tt.falcon_mlp import TtFalconMLP
+from models.demos.falcon40b.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -36,8 +35,9 @@ class PytorchFalconMLPModel(torch.nn.Module):
 
 
 def run_test_FalconMLP_inference(
-    device,
+    devices,
     model_version,
+    llm_mode,
     batch,
     seq_len,
     pcc,
@@ -54,7 +54,11 @@ def run_test_FalconMLP_inference(
 
     # Prepare input
     torch.manual_seed(0)
-    mlp_input = (torch.rand(batch, 1, seq_len, configuration.hidden_size) * 2) - 1
+    if llm_mode == "decode":
+        input_shape = [seq_len, 1, batch, configuration.hidden_size]
+    else:
+        input_shape = [batch, 1, seq_len, configuration.hidden_size]
+    mlp_input = (torch.rand(input_shape) * 2) - 1
     layer_num = 0
     base_url = "transformer.h"
 
@@ -64,7 +68,7 @@ def run_test_FalconMLP_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconMLP_model = TtFalconMLP(
-        device,
+        devices,
         state_dict,
         base_url,
         layer_num,
@@ -73,14 +77,15 @@ def run_test_FalconMLP_inference(
         tt_cache_path,
     )
 
-    tt_mlp_input = torch2tt_tensor(mlp_input, device)
+    tt_mlp_input_host = torch2tt_tensor(mlp_input, None, tt_dtype=model_config["LN_MLP_OUTPUT_DTYPE"])
+    tt_mlp_input = []
+    for device in devices:
+        tt_mlp_input.append(tt_mlp_input_host.to(device, model_config["LN_MLP_OUTPUT_MEMCFG"]))
 
     tt_out = tt_FalconMLP_model(tt_mlp_input)
-    tt_out = tt2torch_tensor(tt_out)
+    tt_out = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
 
     # check outputs ----------------------------------------------------------------------
-    logger.info(comp_allclose(pytorch_out, tt_out))
-
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")
 
@@ -91,33 +96,43 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc",
+    "model_version, llm_mode, batch, seq_len",
     (
         (
-            "tiiuae/falcon-7b-instruct",
+            "tiiuae/falcon-40b-instruct",
+            "decode",
+            32,
             1,
-            128,
-            0.98,
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str, pcc", [("BFLOAT8_B-SHARDED", 0.85), ("BFLOAT16-SHARDED", 0.87)])
 def test_FalconMLP_inference(
     model_version,
+    llm_mode,
     batch,
     seq_len,
     pcc,
     model_config_str,
     model_location_generator,
-    device,
+    pcie_devices,
+    use_program_cache,
 ):
     model_config = get_model_config(model_config_str)
+    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if len(pcie_devices) < model_config["NUM_DEVICES"]:
+        pytest.skip(f"Requires at least {model_config['NUM_DEVICES']} devices to run")
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
     tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_FalconMLP_inference(
-        device,
+        pcie_devices[: model_config["NUM_DEVICES"]],
         model_version,
+        llm_mode,
         batch,
         seq_len,
         pcc,
