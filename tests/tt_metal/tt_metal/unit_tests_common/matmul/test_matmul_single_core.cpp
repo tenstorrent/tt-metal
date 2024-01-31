@@ -27,11 +27,6 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
-    // uint32_t M = 4;
-    // uint32_t K = 4;
-    // uint32_t N = 4;
-    // int out_subblock_h = 4;
-    // int out_subblock_w = 4;
     int in0_block_w = 2;
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
@@ -46,7 +41,6 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
     uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    // log_info(LogTest, "act = /16 {}, weights = /16 {}, size_out = /2 {}", dram_buffer_size_act, dram_buffer_size_weights, dram_buffer_size_out);
 
     tt_metal::InterleavedBufferConfig act_config{
                 .device=device,
@@ -180,14 +174,12 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
-    // tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
     fixture->WriteBuffer(device, src0_dram_buffer, activations_tile_transposed);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    // tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
 
     tt_metal::SetRuntimeArgs(
@@ -203,11 +195,10 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
         writer_rt_args);
 
     log_info(LogTest, "Launching kernels");
-    // tt_metal::detail::LaunchProgram(device, program);
     fixture->RunProgram(device, program);
     log_info(LogTest, "Kernels done");
+
     std::vector<uint32_t> result_vec;
-    // tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
