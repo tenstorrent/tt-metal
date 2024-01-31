@@ -169,13 +169,13 @@ class EnqueueWriteBufferCommand : public Command {
     virtual const DeviceCommand create_buffer_transfer_instruction(uint32_t dst_address, uint32_t padded_page_size, uint32_t num_pages) = 0;
    protected:
     Device* device;
-    Buffer& buffer;
+    const Buffer& buffer;
     uint32_t dst_page_index;
    public:
     EnqueueWriteBufferCommand(
         uint32_t command_queue_id,
         Device* device,
-        Buffer& buffer,
+        const Buffer& buffer,
         const void* src,
         SystemMemoryManager& manager,
         uint32_t event,
@@ -196,7 +196,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
     EnqueueWriteInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
-        Buffer& buffer,
+        const Buffer& buffer,
         const void* src,
         SystemMemoryManager& manager,
         uint32_t event,
@@ -223,7 +223,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
     EnqueueWriteShardedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
-        Buffer& buffer,
+        const Buffer& buffer,
         const void* src,
         SystemMemoryManager& manager,
         uint32_t event,
@@ -298,11 +298,6 @@ class EnqueueCompletionWrapCommand : public EnqueueWrapCommand {
 
      void process();
 };
-
-namespace detail{
-    CommandQueue &GetCommandQueue(Device *device, bool init = false);
-}
-
 
 class Trace {
 
@@ -424,7 +419,9 @@ class HWCommandQueue {
     detail::IssuedReadMap issued_reads;
     detail::thread_safe_map<uint32_t, detail::completion_wrap_mutex> issued_completion_wraps;
 
-    SystemMemoryManager& manager;
+    void enqueue_write_buffer(std::shared_ptr<const Buffer> buffer, const void* src, bool blocking);
+
+    void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
 
     Device* device;
 
@@ -446,23 +443,23 @@ class HWCommandQueue {
     friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, const void* src, bool blocking);
     friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
     friend void Finish(CommandQueue& cq);
-    friend void detail::EnqueueRestart(CommandQueue& cq);
     friend void ClearProgramCache(CommandQueue& cq);
-    friend CommandQueue &detail::GetCommandQueue(Device *device, bool init);
+
+    friend HWCommandQueue & detail::GetHWCommandQueue(Device *device, uint32_t cmd_queue_channel);
 
     // Trace APIs
     friend Trace BeginTrace(CommandQueue& command_queue);
     friend void EndTrace(Trace& trace);
     friend void EnqueueTrace(Trace& trace, bool blocking);
-    friend class Device;
     friend class Trace;
+
    private:
     uint32_t id;
     uint32_t size_B;
 
     SystemMemoryManager& manager;
 
-    Device* device;    
+    Device* device;
 
 };
 
@@ -470,9 +467,11 @@ class CommandQueue
 {
     public:
         CommandQueue () = delete;
-        CommandQueue ( Device * device, uint32_t command_queue_channel) : device_(device), command_queue_channel_(command_queue_channel)
-        {
-        }
+        CommandQueue ( Device * device, uint32_t id) : device_(device), id_(id){}
+        CommandQueue(const CommandQueue&) = default;
+        CommandQueue(CommandQueue&&) = default;
+        CommandQueue& operator=(const CommandQueue&) = default;
+        CommandQueue& operator=(CommandQueue&&) = default;
 
         ~CommandQueue() {}
 
@@ -491,14 +490,14 @@ class CommandQueue
         Device* device() const {
             return device_;
         }
-        uint32_t command_queue_channel() const{
-            return command_queue_channel_;
+        uint32_t id() const{
+            return id_;
         }
 
     private:
         std::mutex mutex_;
         std::optional<tf::AsyncTask> last_;
-        uint32_t command_queue_channel_;
+        uint32_t id_;
         Device * device_;
 };
 

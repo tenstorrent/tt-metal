@@ -91,6 +91,8 @@ class Tensor {
 
      // TODO(arakhmati): clean up the methods below
      Buffer *buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
+     DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->storage_).buffer; }
+
      Device *device() const { return this->buffer()->device(); }
      const MemoryConfig memory_config() const {
          return std::visit(
