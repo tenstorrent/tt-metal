@@ -144,7 +144,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         rank_should_be_updated = len(output_tensor.shape) > rank
         while rank_should_be_updated:
             prior_rank = len(output_tensor.shape)
-            output_tensor = ttnn.squeeze(output_tensor)
+            output_tensor = ttnn.squeeze(output_tensor, dim=0)
             rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
 
         if on_device and not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE):
@@ -260,7 +260,7 @@ def concat(
         rank_should_be_updated = len(output_tensor.shape) > rank
         while rank_should_be_updated:
             prior_rank = len(output_tensor.shape)
-            output_tensor = ttnn.squeeze(output_tensor)
+            output_tensor = ttnn.squeeze(output_tensor, dim=0)
             rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
         return output_tensor
     else:

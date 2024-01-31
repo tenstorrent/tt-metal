@@ -34,30 +34,10 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
 TILE_SIZE = 32
 
-Shape = ttl.ttnn.tensor.Shape
+Shape = ttl.ttnn.types.Shape
 
 
-class Cpu:
-    ...
-
-
-def has_storage_type_of(tensor: "ttnn.Tensor", storage_type) -> bool:
-    return tensor.value.storage_type() == storage_type
-
-
-class Tensor(ttl.ttnn.tensor.Tensor):
-    @property
-    def device(self: "Tensor") -> DataType:
-        if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
-            return self.value.device()
-        else:
-            return Cpu()
-
-    def is_contiguous(self: "Shape") -> bool:
-        if self.layout == ROW_MAJOR_LAYOUT:
-            return self.value.shape() == self.value.shape_without_padding()
-        else:
-            return False
+Tensor = ttl.ttnn.types.Tensor
 
 
 class ShardStrategy(Enum):

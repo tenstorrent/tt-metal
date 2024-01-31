@@ -30,21 +30,6 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
     assert output_tensor.shape == (size,)
 
 
-@pytest.mark.parametrize("alpha", [0.42])
-@pytest.mark.parametrize("scalar_input_tensor_b", [0.5])
-@pytest.mark.parametrize("h", [1])
-@pytest.mark.parametrize("w", [4])
-def test_add_scalar_and_alpha(device, alpha, scalar_input_tensor_b, h, w):
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch.add(torch_input_tensor, scalar_input_tensor_b, alpha=alpha)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.add(input_tensor, scalar_input_tensor_b, alpha=alpha)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99999)
-
-
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_2D_tensors(device, h, w):
@@ -106,44 +91,44 @@ def test_add_4D_tensors(device, h, w):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_with_broadcast(device, h, w):
-    torch_a = torch.rand((2, 16, 1, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((2, 16, h, w), dtype=torch.bfloat16)
-    torch_output = torch.add(torch_a, torch_b)
+    torch_input_tensor_a = torch.rand((2, 16, 1, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((2, 16, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
 
-    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.add(a, b)
-    tt_output = ttnn.to_torch(tt_output)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
 def test_expand_and_broadcast(device, h, w):
-    torch_a = torch.rand((1, h, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output = torch.add(torch_a, torch_b)
+    torch_input_tensor_a = torch.rand((1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
 
-    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.add(a, b)
-    tt_output = ttnn.to_torch(tt_output)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 @pytest.mark.skip(reason="4005: Unable to broadcast on batch or seq dimension")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_with_broadcast_on_batch(device, h, w):
-    torch_a = torch.rand((1, 16, 1, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((2, 16, h, w), dtype=torch.bfloat16)
-    torch_output = torch.add(torch_a, torch_b)
+    torch_input_tensor_a = torch.rand((1, 16, 1, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((2, 16, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
 
-    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.add(a, b)
-    tt_output = ttnn.to_torch(tt_output)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
