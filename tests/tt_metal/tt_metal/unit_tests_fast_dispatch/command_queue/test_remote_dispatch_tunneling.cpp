@@ -80,9 +80,54 @@ TEST_F(CommandQueueMultiDeviceFixture, TestCommandReachesRemoteDevice) {
         tt::Cluster::instance().read_core(remote_cmd_processor_header.data(), num_bytes_in_cmd_header, tt_cxy_pair(remote_processor_location.chip, remote_processor_physical_core), L1_UNRESERVED_BASE);
         EXPECT_EQ(cq_header, remote_cmd_processor_header) << "Remote command processor on remote chip did not receive expected command!";
 
-        std::vector<uint32_t> remote_cmd_processor_data(buff_size / sizeof(uint32_t));
-        tt::Cluster::instance().read_core(remote_cmd_processor_data.data(), buff_size, tt_cxy_pair(remote_processor_location.chip, remote_processor_physical_core), L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
-        EXPECT_EQ(src, remote_cmd_processor_data) << "Remote command processor on remote chip did not receive expected data!";
+        tt_cxy_pair remote_dispatcher_location = dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(device->id(), channel, cq_id);
+        CoreCoord remote_dispatcher_physical_core = tt::get_physical_core_coordinate(remote_dispatcher_location, CoreType::WORKER);
+        std::vector<uint32_t> remote_dispatcher_header(DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER);
+        tt::Cluster::instance().read_core(remote_dispatcher_header.data(), num_bytes_in_cmd_header, tt_cxy_pair(remote_dispatcher_location.chip, remote_dispatcher_physical_core), L1_UNRESERVED_BASE);
+        EXPECT_EQ(cq_header, remote_dispatcher_header) << "Dispatcher on remote chip did not receive expected command!";
+
+        std::vector<uint32_t> remote_dispatch_data(buff_size / sizeof(uint32_t));
+        tt::Cluster::instance().read_core(remote_dispatch_data.data(), buff_size, tt_cxy_pair(remote_dispatcher_location.chip, remote_dispatcher_physical_core), L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+        EXPECT_EQ(src, remote_dispatch_data) << "Dispatcher on remote chip did not receive expected data!";
+    }
+}
+
+TEST_F(CommandQueueMultiDeviceFixture, TestSimpleEnqueueWriteRemoteBuffer) {
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        auto device = devices_.at(id);
+        if (device->is_mmio_capable()) {
+            continue;
+        }
+
+        CommandQueue &remote_cq = detail::GetCommandQueue(device);
+
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        uint8_t num_hw_cqs = device->num_hw_cqs();
+        ASSERT_EQ(num_hw_cqs, 1) << "Expected this test to be run with single HW CQ test suite!";
+        uint8_t cq_id = 0;
+
+        uint32_t num_pages = 2;
+        uint32_t page_size = 2048;
+        uint32_t buff_size = num_pages * page_size;
+        Buffer buffer(device, buff_size, page_size, BufferType::DRAM);
+
+        std::vector<uint32_t> src(buff_size / sizeof(uint32_t), 0);
+        for (uint32_t i = 0; i < src.size(); i++) {
+            src.at(i) = i;
+        }
+
+        EnqueueWriteBuffer(remote_cq, buffer, src.data(), false);
+
+        sleep(1); // sleep because don't have finish signal yet
+        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+
+        std::vector<uint32_t> readback;
+        detail::ReadFromBuffer(buffer, readback);
+        EXPECT_EQ(src, readback);
+
+        // how to know that the device is finished writing ... for now add a sleep?
+
     }
 }
 
