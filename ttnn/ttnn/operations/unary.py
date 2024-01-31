@@ -26,6 +26,9 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "relu": torch.relu,
             "silu": torch.nn.functional.silu,
             "log": torch.log,
+            "sin": torch.sin,
+            "cos": torch.cos,
+            "tan": torch.tan,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -95,6 +98,9 @@ TTL_UNARY_FUNCTIONS = [
     ("rsqrt", ttl.tensor.rsqrt),
     ("silu", ttl.tensor.silu),
     ("log", ttl.tensor.log),
+    ("sin", ttl.tensor.sin),
+    ("cos", ttl.tensor.cos),
+    ("tan", ttl.tensor.tan),
 ]
 
 
