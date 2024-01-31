@@ -57,6 +57,9 @@ Pointwise Unary
    ttnn/sin
    ttnn/cos
    ttnn/tan
+   ttnn/asin
+   ttnn/acos
+   ttnn/atan
 
 Pointwise Binary
 ================

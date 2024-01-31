@@ -84,6 +84,9 @@ from ttnn.operations.unary import (
     sin,
     cos,
     tan,
+    asin,
+    acos,
+    atan,
 )
 
 from ttnn.operations.binary import (
