@@ -21,9 +21,6 @@ test-list:
         function: comp_equal
       args-gen: gen_dtype_layout_device
       output-file: reduce_max_w_sweep.csv
-      env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
@@ -50,9 +47,6 @@ test-list:
         function: comp_equal
       args-gen: gen_dtype_layout_device
       output-file: reduce_max_w_sweep.csv
-      env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

@@ -25,9 +25,6 @@ test-list:
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
       output-file: activation_reglu_sweep.csv
-      env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
   - activation_reglu:
       shape:
         start-shape: [1, 1, 32, 64]
@@ -53,6 +50,3 @@ test-list:
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
       output-file: activation_reglu_sweep.csv
-      env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
