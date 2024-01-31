@@ -135,12 +135,12 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     constexpr bool cmd_consumer_on_ethernet = false;
     uint32_t consumer_cb_num_pages = (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / padded_page_size);
 
-    if (consumer_cb_num_pages >= 4) {
-        consumer_cb_num_pages = (consumer_cb_num_pages / 4) * 4;
-        command.set_producer_consumer_transfer_num_pages(consumer_cb_num_pages / 4);
-    } else {
-        command.set_producer_consumer_transfer_num_pages(1);
+    uint32_t producer_consumer_tx_num_pages = 1;
+    if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+        consumer_cb_num_pages = (consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
+        producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
     }
+    command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
 
     uint32_t consumer_cb_size = consumer_cb_num_pages * padded_page_size;
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
@@ -160,15 +160,13 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     bool route_through_ethernet = not device->is_mmio_capable();
     if (route_through_ethernet) {
         uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
-        // TODO: UPDATE THIS BY MEASURING PERF OF DIFFERENT VALUES
-        if (router_cb_num_pages >= 4) {
-            router_cb_num_pages = (router_cb_num_pages / 4) * 4;
-            command.set_producer_router_transfer_num_pages(router_cb_num_pages / 4);
-            command.set_consumer_router_transfer_num_pages(router_cb_num_pages / 4);
-        } else {
-            command.set_producer_router_transfer_num_pages(1);
-            command.set_consumer_router_transfer_num_pages(1);
+        uint32_t router_tx_num_pages = 1;
+        if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+            router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
+            router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
         }
+        command.set_producer_router_transfer_num_pages(router_tx_num_pages);
+        command.set_consumer_router_transfer_num_pages(router_tx_num_pages);
 
         uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
         TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in router buffer");
@@ -287,12 +285,12 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     constexpr bool cmd_consumer_on_ethernet = false;
     uint32_t consumer_cb_num_pages = (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / padded_page_size);
 
-    if (consumer_cb_num_pages >= 4) {
-        consumer_cb_num_pages = (consumer_cb_num_pages / 4) * 4;
-        command.set_producer_consumer_transfer_num_pages(consumer_cb_num_pages / 4);
-    } else {
-        command.set_producer_consumer_transfer_num_pages(1);
+    uint32_t producer_consumer_tx_num_pages = 1;
+    if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+        consumer_cb_num_pages = (consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
+        producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
     }
+    command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
 
     uint32_t consumer_cb_size = consumer_cb_num_pages * padded_page_size;
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
@@ -310,15 +308,13 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     bool route_through_ethernet = not device->is_mmio_capable();
     if (route_through_ethernet) {
         uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
-        // TODO: UPDATE THIS BY MEASURING PERF OF DIFFERENT VALUES
-        if (router_cb_num_pages >= 4) {
-            router_cb_num_pages = (router_cb_num_pages / 4) * 4;
-            command.set_producer_router_transfer_num_pages(router_cb_num_pages / 4);
-            command.set_consumer_router_transfer_num_pages(router_cb_num_pages / 4);
-        } else {
-            command.set_producer_router_transfer_num_pages(1);
-            command.set_consumer_router_transfer_num_pages(1);
+        uint32_t router_tx_num_pages = 1;
+        if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+            router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
+            router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
         }
+        command.set_producer_router_transfer_num_pages(router_tx_num_pages);
+        command.set_consumer_router_transfer_num_pages(router_tx_num_pages);
 
         uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
         TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in router buffer");
@@ -506,7 +502,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     }
 
     // This needs to be quite small, since programs are small
-    command.set_producer_consumer_transfer_num_pages(4);
+    command.set_producer_consumer_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
 
     return command;
 }

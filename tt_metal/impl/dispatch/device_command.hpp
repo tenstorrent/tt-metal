@@ -66,6 +66,9 @@ class DeviceCommand {
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
     static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
+    // Perf measurements showed best results with divisions of 4 pages being transferred from producer -> consumer
+    // TODO (abhullar): Sync with agrebenisan to replicate measurments for producer -> router -> consumer path
+    static constexpr uint32_t SYNC_NUM_PAGES = 4;
 
     // Ensure any changes to this device command have asserts modified/extended
     static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
