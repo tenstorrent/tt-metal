@@ -505,7 +505,9 @@ tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     bool fp32_dest_acc_en = false;
     if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
         math_fidelity = MathFidelity::HiFi2;
-        fp32_dest_acc_en = true;
+        // TODO: apply packer_l1_acc
+        // TODO: need to consider whether to set these variablias as arguments
+        fp32_dest_acc_en = false;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         math_fidelity = MathFidelity::HiFi4;
         fp32_dest_acc_en = false;
