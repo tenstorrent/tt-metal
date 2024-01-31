@@ -8,9 +8,11 @@ from typing import Tuple
 import transformers
 import torch
 from torch.nn import functional as F
+from transformers.models.bloom.configuration_bloom import BloomConfig
 
 import ttnn
 from ttnn.model_preprocessing import (
+    ParameterDict,
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
@@ -26,7 +28,7 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
     TODO @thomasw21 this doesn't work as nicely due to the masking strategy, and so masking varies slightly.
 
     Args:
-    Returns tensor shaped (batch_size * num_heads, 1, max_seq_len)
+    Returns tensor shaped (batch_size, num_heads, 1, max_seq_len)
         attention_mask (`torch.Tensor`):
             Token-wise attention mask, this should be of shape (batch_size, max_seq_len).
         num_heads (`int`, *required*):
@@ -37,17 +39,27 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
     batch_size, seq_length = attention_mask.shape
     closest_power_of_2 = 2 ** math.floor(math.log2(num_heads))
     base = torch.tensor(
-        2 ** (-(2 ** -(math.log2(closest_power_of_2) - 3))), device=attention_mask.device, dtype=torch.float32
+        2 ** (-(2 ** -(math.log2(closest_power_of_2) - 3))),
+        device=attention_mask.device,
+        dtype=torch.float32,
     )
     powers = torch.arange(1, 1 + closest_power_of_2, device=attention_mask.device, dtype=torch.int32)
     slopes = torch.pow(base, powers)
 
     if closest_power_of_2 != num_heads:
         extra_base = torch.tensor(
-            2 ** (-(2 ** -(math.log2(2 * closest_power_of_2) - 3))), device=attention_mask.device, dtype=torch.float32
+            2 ** (-(2 ** -(math.log2(2 * closest_power_of_2) - 3))),
+            device=attention_mask.device,
+            dtype=torch.float32,
         )
         num_remaining_heads = min(closest_power_of_2, num_heads - closest_power_of_2)
-        extra_powers = torch.arange(1, 1 + 2 * num_remaining_heads, 2, device=attention_mask.device, dtype=torch.int32)
+        extra_powers = torch.arange(
+            1,
+            1 + 2 * num_remaining_heads,
+            2,
+            device=attention_mask.device,
+            dtype=torch.int32,
+        )
         slopes = torch.cat([slopes, torch.pow(extra_base, extra_powers)], dim=0)
 
     # Note: alibi will added to the attention bias that will be applied to the query, key product of attention
@@ -63,8 +75,8 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 
 # Based on transformers/models/bloom/modeling_bloom.py
 def split_query_key_value_and_split_heads(
-    query_key_value: torch.Tensor, num_heads
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    query_key_value: ttnn.Tensor, num_heads: int
+) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     device = query_key_value.device
 
     batch_size, seq_length, three_times_hidden_size = query_key_value.shape
@@ -106,30 +118,6 @@ def split_query_key_value_and_split_heads(
     return query_layer, key_layer, value_layer
 
 
-# TODO: issue 4172
-def create_query_key_value(hidden_states, weight, bias, num_heads, use_core_grid=True):
-    if use_core_grid:
-        query_key_value = ttnn.matmul(hidden_states, weight, core_grid=(9, 12))
-    else:
-        query_key_value = hidden_states @ weight
-    query_key_value = query_key_value + bias
-    return split_query_key_value_and_split_heads(query_key_value, num_heads)
-
-
-def compute_attention_scores(query_layer, key_layer, alibi):
-    *_, head_size = query_layer.shape
-    beta = 1.0
-    inv_norm_factor = 1.0 / math.sqrt(head_size)
-    matmul_result = beta * alibi + inv_norm_factor * (query_layer @ key_layer)
-    return matmul_result
-
-
-def compute_attention_probs(attention_scores, causal_mask):
-    attention_weights = attention_scores + causal_mask
-    attention_probs = ttnn.softmax(attention_weights, dim=-1)
-    return attention_probs
-
-
 # Based on transformers/models/bloom/modeling_bloom.py
 def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
     # What we want to achieve is:
@@ -146,124 +134,159 @@ def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
-def compute_context_layer(attention_probs, value_layer):
-    context_layer = attention_probs @ value_layer
-    return merge_heads(context_layer)
+# TODO: issue 4172
+def create_query_key_value(config: BloomConfig, hidden_states, *, use_core_grid=True, parameters: ParameterDict):
+    if use_core_grid:
+        query_key_value = ttnn.matmul(hidden_states, parameters.query_key_value.weight, core_grid=(9, 12))
+    else:
+        query_key_value = hidden_states @ parameters.query_key_value.weight
+    query_key_value = query_key_value + parameters.query_key_value.bias
+    return split_query_key_value_and_split_heads(query_key_value, config.n_head)
 
 
-def finalize_output(context_layer, output_weight, output_bias):
-    output_tensor = context_layer @ output_weight
-    output_tensor = output_tensor + output_bias
-    return output_tensor
-
-
-def multi_head_attention(
-    hidden_states,
-    alibi,
-    causal_mask,
-    query_key_value_weight,
-    query_key_value_bias,
-    output_weight,
-    output_bias,
+def bloom_attention(
+    config: BloomConfig,
+    hidden_states: ttnn.Tensor,
+    residual: ttnn.Tensor,
+    alibi: ttnn.Tensor,
+    attention_mask: ttnn.Tensor,
     *,
-    num_heads,
     use_core_grid=True,  # TODO: issue 4172
+    parameters: ParameterDict,
 ):
     query_layer, key_layer, value_layer = create_query_key_value(
+        config,
         hidden_states,
-        query_key_value_weight,
-        query_key_value_bias,
-        num_heads,
+        parameters=parameters,
         use_core_grid=use_core_grid,
     )
-    attention_scores = compute_attention_scores(query_layer, key_layer, alibi)
-    attention_probs = compute_attention_probs(attention_scores, causal_mask)
-    context_layer = compute_context_layer(attention_probs, value_layer)
-    output_tensor = finalize_output(context_layer, output_weight, output_bias)
+
+    *_, head_size = query_layer.shape
+    beta = 1.0
+    inv_norm_factor = 1.0 / math.sqrt(head_size)
+    attention_scores = beta * alibi + inv_norm_factor * (query_layer @ key_layer)
+
+    fill_value = -1024
+    attention_weights = attention_scores * (1 + (attention_mask * -1)) + attention_mask * fill_value
+    attention_probs = ttnn.softmax(attention_weights, dim=-1)
+
+    context_layer = merge_heads(attention_probs @ value_layer)
+    output_tensor = context_layer @ parameters.dense.weight + parameters.dense.bias
+    output_tensor += residual
+
     return output_tensor
 
 
-def mlp(
-    hidden_states,
-    dense_h_to_4h_weight,
-    dense_h_to_4h_bias,
-    dense_4h_to_h_weight,
-    dense_4h_to_h_bias,
+def bloom_mlp(
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor,
+    *,
+    parameters: ParameterDict,
 ):
-    hidden_states = hidden_states @ dense_h_to_4h_weight
-    hidden_states = hidden_states + dense_h_to_4h_bias
-    hidden_states = ttnn.gelu(hidden_states)
-    hidden_states = hidden_states @ dense_4h_to_h_weight
-    hidden_states = hidden_states + dense_4h_to_h_bias
-    # output_tensor = F.dropout(dense_4h_to_h, p=0.0, training=False)
-    return hidden_states
+    output_tensor = hidden_states @ parameters.dense_h_to_4h.weight
+    output_tensor += parameters.dense_h_to_4h.bias
+    output_tensor = ttnn.gelu(output_tensor)
+    output_tensor = output_tensor @ parameters.dense_4h_to_h.weight
+    output_tensor += parameters.dense_4h_to_h.bias
+    output_tensor += residual
+
+    return output_tensor
+
+
+def bloom_block(
+    config: BloomConfig,
+    hidden_states: ttnn.Tensor,
+    alibi: ttnn.Tensor,
+    attention_mask: ttnn.Tensor,
+    *,
+    parameters: ParameterDict,
+) -> ttnn.Tensor:
+    layernorm_output = ttnn.layer_norm(
+        input_tensor=hidden_states,
+        weight=parameters.input_layernorm.weight,
+        bias=parameters.input_layernorm.bias,
+    )
+
+    if config.apply_residual_connection_post_layernorm:
+        residual = layernorm_output
+    else:
+        residual = hidden_states
+
+    attention_output = bloom_attention(
+        config,
+        layernorm_output,
+        residual,
+        alibi,
+        attention_mask,
+        parameters=parameters.self_attention,
+    )
+
+    layernorm_output = ttnn.layer_norm(
+        input_tensor=attention_output,
+        weight=parameters.post_attention_layernorm.weight,
+        bias=parameters.post_attention_layernorm.bias,
+    )
+
+    if config.apply_residual_connection_post_layernorm:
+        residual = layernorm_output
+    else:
+        residual = attention_output
+
+    mlp_output = bloom_mlp(
+        layernorm_output,
+        residual,
+        parameters=parameters.mlp,
+    )
+
+    return mlp_output
 
 
 def bloom(
+    config: BloomConfig,
     input_ids,
     alibi,
     causal_mask,
-    parameters,
-    num_heads,
+    *,
+    parameters: ParameterDict,
 ):
     inputs_embeds = ttnn.embedding(
         input_ids,
-        parameters.transformer.word_embeddings.weight,
+        parameters.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
 
     hidden_states = ttnn.layer_norm(
         inputs_embeds,
-        weight=parameters.transformer.word_embeddings_layernorm.weight,
-        bias=parameters.transformer.word_embeddings_layernorm.bias,
+        weight=parameters.word_embeddings_layernorm.weight,
+        bias=parameters.word_embeddings_layernorm.bias,
     )
 
-    for layer_parameters in parameters.transformer.h:
-        normalized_hidden_states = ttnn.layer_norm(
+    for layer_parameters in parameters.h:
+        hidden_states = bloom_block(
+            config,
             hidden_states,
-            weight=layer_parameters.input_layernorm.weight,
-            bias=layer_parameters.input_layernorm.bias,
-        )
-
-        attention_output = multi_head_attention(
-            normalized_hidden_states,
             alibi,
             causal_mask,
-            layer_parameters.self_attention.query_key_value.weight,
-            layer_parameters.self_attention.query_key_value.bias,
-            layer_parameters.self_attention.dense.weight,
-            layer_parameters.self_attention.dense.bias,
-            num_heads=num_heads,
-        )
-        attention_output = attention_output + hidden_states
-
-        normalized_attention_output = ttnn.layer_norm(
-            attention_output,
-            weight=layer_parameters.post_attention_layernorm.weight,
-            bias=layer_parameters.post_attention_layernorm.bias,
+            parameters=layer_parameters,
         )
 
-        mlp_output = mlp(
-            normalized_attention_output,
-            layer_parameters.mlp.dense_h_to_4h.weight,
-            layer_parameters.mlp.dense_h_to_4h.bias,
-            layer_parameters.mlp.dense_4h_to_h.weight,
-            layer_parameters.mlp.dense_4h_to_h.bias,
-        )
-        mlp_output = mlp_output + attention_output
-
-        hidden_states = mlp_output
-
+    # Add last hidden state
     hidden_states = ttnn.layer_norm(
         hidden_states,
-        weight=parameters.transformer.ln_f.weight,
-        bias=parameters.transformer.ln_f.bias,
+        weight=parameters.ln_f.weight,
+        bias=parameters.ln_f.bias,
     )
     return hidden_states
 
 
 def bloom_for_causal_lm(config, input_ids, alibi, causal_mask, *, parameters):
-    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, config.n_head)
+    hidden_states = bloom(
+        config,
+        input_ids,
+        alibi,
+        causal_mask,
+        parameters=parameters.transformer,
+    )
 
     # Unfortuntely we do not have the ability to handle large tensors yet. So running final matmul ising torch is a workaround.
     hidden_states = ttnn.from_device(hidden_states)
@@ -274,8 +297,22 @@ def bloom_for_causal_lm(config, input_ids, alibi, causal_mask, *, parameters):
     return output
 
 
-def bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads):
-    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads)
+def bloom_for_question_answering(
+    config,
+    input_ids,
+    alibi,
+    causal_mask,
+    *,
+    parameters,
+):
+    hidden_states = bloom(
+        config,
+        input_ids,
+        alibi,
+        causal_mask,
+        parameters=parameters.transformer,
+    )
+
     hidden_states = ttnn.linear(hidden_states, parameters.qa_outputs.weight, bias=parameters.qa_outputs.bias)
     return hidden_states
 
@@ -298,22 +335,21 @@ def preprocess_inputs(
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long)
     attention_mask = F.pad(attention_mask, (0, padding_needed, 0, 0))
 
-    alibi = build_alibi_tensor(attention_mask, num_heads, dtype=torch.float)
-    alibi = ttnn.from_torch(alibi, dtype=ttnn.bfloat16)
-    alibi = ttnn.to_layout(alibi, ttnn.TILE_LAYOUT)
-    alibi = ttnn.to_device(alibi, device)
+    alibi = build_alibi_tensor(attention_mask, num_heads, dtype=torch.float32)
+    alibi = ttnn.from_torch(alibi, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     batch_size, padded_seq_length = attention_mask.shape
     mask = torch.empty((padded_seq_length, padded_seq_length), dtype=torch.bool)
     seq_ids = torch.arange(padded_seq_length)
-    mask[:, 0:] = seq_ids[:, None] < seq_ids[None, :]
+    mask[:, :] = seq_ids[:, None] < seq_ids[None, :]
     causal_mask = mask[None, None, :, :].expand(batch_size, num_heads, padded_seq_length, padded_seq_length)
-    causal_mask = causal_mask.float()
-    causal_mask *= -100
 
-    causal_mask = ttnn.from_torch(causal_mask, dtype=ttnn.bfloat16)
-    causal_mask = ttnn.to_layout(causal_mask, ttnn.TILE_LAYOUT)
-    causal_mask = ttnn.to_device(causal_mask, device)
+    expanded_mask = ~(attention_mask[:, None, None, :].to(torch.bool))
+    expanded_mask = expanded_mask.expand(batch_size, num_heads, padded_seq_length, padded_seq_length)
+
+    causal_mask = expanded_mask | causal_mask
+    causal_mask = causal_mask.float()
+    causal_mask = ttnn.from_torch(causal_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     return padded_input_ids, alibi, causal_mask
 
