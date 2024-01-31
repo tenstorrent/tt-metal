@@ -59,7 +59,7 @@ ttnn_sweeps/check_directory:
 
 ttnn_sweeps:
 	@echo "Note that GITHUB_TOKEN must be set before calling this"
-	@cd .. && python tests/ttnn/sweep_tests/build_html_sweep_results.py --dir docs/$(TTNN_SWEEPS_DIR) --token $(GITHUB_TOKEN)
+	@cd .. && python tests/ttnn/sweep_tests/build_rst_sweep_results.py --dir docs/$(TTNN_SWEEPS_DIR) --token $(GITHUB_TOKEN)
 
 server:
 	@echo "Navigate to: \033[4;33mlocalhost:$(PORT)/index.html\033[0m"
