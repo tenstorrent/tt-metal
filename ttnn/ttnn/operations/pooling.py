@@ -96,7 +96,27 @@ def _torch_average_pool2d(input_tensor: ttnn.Tensor):
     return torch.nn.AdaptiveAvgPool2d(output_size)(input_tensor)
 
 
-@ttnn.register_operation(torch_function=_torch_average_pool2d, name="ttnn.average_pool2d")
+def _average_pool2d_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    b, s, *_ = input_tensor.shape
+    b, s_padded, *_ = input_tensor.shape.padded()
+    if s != s_padded:
+        raise RuntimeError("There can be no padding on the second dimension.")
+
+
+@ttnn.register_operation(
+    name="ttnn.average_pool2d",
+    validate_input_tensors=_average_pool2d_validate_input_tensors,
+    torch_function=_torch_average_pool2d,
+)
 def average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     output = ttl.tensor.average_pool_2d(input_tensor.value)
 

@@ -106,13 +106,28 @@ TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
-environment](docs/source/get_started/get_started.rst).
+environment](docs/source/get_started/get_started.rst), along with any required
+`PYTHONPATH` variables.
 
-2. Build the HTML Documentation page.
+2. Build the HTML documentation.
 
 ```
 cd docs
-make all
+make clean
+make html
+```
+
+You can optionally build and view the ttnn sweeps results with:
+
+```
+make ttnn_sweeps/check_directory
+make ttnn_sweeps
+```
+
+then turn on the server to view.
+
+```
+make server
 ```
 
 You can customize the port by using the `PORT=<port>` environment variable. If

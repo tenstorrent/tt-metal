@@ -37,15 +37,36 @@ followed the instructions for [installing and building the software](https://git
     * When using the ttnn library, the operation requires the first parameter to be the tensor and the next to be the new order of dimensions within a parenthesis.
 
 #### Frequently asked questions
+* Where are the tests for ttnn?
+    * All tests can be found under tests/ttnn
+* Tell me the differences between each kind of test under tests/ttnn?
+    * tests/ttnn/integration_tests
+        * Demonstrates the inference models built with ttnn
+    * tests/ttnn/sweep_tests
+        * Used to check coverage of what is and what is NOT supported
+        * Tests can be added well before the actuall implementation is finished
+        * These tests do not block the continuous integration pipeline
+        * They are built so that their results can be uniformly reported
+        * Can be run with pytest although they follow a strict format when built
+    * tests/ttnn/unit_test
+        * These are traditional unit tests written with pytest
+        * Failures on these tests will cause alarms if code is merged into main
+* Why do the sweep tests use a dictionary for all the combinations of input and then use a special run method?  Could you not have done this with a traditional pytest instead?
+    * The primary reason was because we needed a way to create a consolidated report per operation in the form of a csv file.  The idea was that each operation would get its own python file where all the test combinations are handled by a single run method.  Each permuation of the input combinations would become the header for the resulting csv which is then uploaded and reported on.
+* How do I run sweep tests with pytest?
+    * To run all of the sweep tests for a given python operation file:
+        * pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>
+        * Example for matmul: pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul
+    * To run just one sample combination for an operation:
+        * pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>[<operation>.py-<index-of-test-instance>]
+        * Example for matmul: pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]
 * What if my device hangs?
-    * Try resetting the board on the command line with: `tt-smi -tr all`
+    * Be sure that you have a clean build with the latest code update.  Updating code without rebuilding is often the source of the issue.
+    * If you have a clean build, you can reset the board on the command line using the tt-smi command and the device id with: `tt-smi -tr 0` where 0 represents the device id.
 * What types are supported on device?
     * We currently support ttnn.bfloat16, ttnn.bfloat8 and ttnn.uint32.
 * What shapes are supported on device?
-    * The last dimension of the shape multiplied by the number of bytes of the sizeof the dataype must be a multiple of four.  For example, ttnn.bloat16 would need to have the last dimension be even.
-    * TODO : address ttnn.bfloat8_b and how mantissa is stored per tile
-    * TODO : address converting from int in data type for torch tensors to ttnn.uint32
-    * TODO : mention how ttnn.blfloat32 is not supported on device
+    * The last dimension of the shape multiplied by the number of bytes of the sizeof the dataype must be a multiple of four.  For example, ttnn.bloat16 would need to have the last dimension be even for a tensor using ttnn.ROW_MAJOR_LAYOUT.  For ttnn.TILE_LAYOUT the to_layout operation will automatically do padding to ensure the the last two dimensions (height and width) are multiples of 32.
 * Is slicing available?
     * Slicing is supported.  At the moment this feature falls back to using PyTorch slicing on the host.
     * Example:
@@ -63,7 +84,55 @@ followed the instructions for [installing and building the software](https://git
         *   `export TT_METAL_LOGGER_LEVEL=DEBUG`
     * For the location of the operations use the following environment variable
         * `export OPERATION_HISTORY_CSV=<filename>`
+* What is the format for git commit messages?
+    * As mentioned in other documenation, the use of the '#' symbol to identify an issue request number is expected on each commit message.
+        * For example your git commit message might be: "#4003: Your message here" for github issue 4003.
+    * Consider using: `git config --global core.commentChar '>'`
 
+#### Steps to setup ttnn tests from vscode
+* Add the Makefile Tools extension to vscode
+* Add the Python extension to vscode
+* Update settings.json to make vscode aware of the pytests
+    * ```
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": [
+            "tests/ttnn"
+        ],
+        "python.autoComplete.extraPaths": [
+            "${workspaceFolder}/tests/ttnn"
+        ],
+        "python.analysis.extraPaths": [
+            "${workspaceFolder}/tests/ttnn"
+        ],
+    ```
+
+#### Steps to launch the tt-eager example code from within vscode
+* Add the Makefile Tools extension
+* Be sure to build with `make tests/tt_eager`
+* Update launch.json to debug the code sample you want to run.  For example if you want to run test_bert, your update to launch.json might look like like:
+    ```
+            {
+                "name": "test_bert",
+                "type": "cppdbg",
+                "request": "launch",
+                "args": [],
+                "stopAtEntry": false,
+                "externalConsole": false,
+                "cwd": "${workspaceFolder}/build",
+                "program": "${workspaceFolder}/build/test/tt_eager/integration_tests/test_bert",
+                "MIMode": "gdb",
+                "miDebuggerPath": "gdb",
+                "setupCommands": [
+                    {
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
+                        "ignoreFailures": true
+                    }
+                ]
+            },
+
+    ```
+ * Debug with vscode by launching it from the "Run and Debug"
 
 #### How to debug from python and C++ at the same time within vscode
 * `export CONFIG=debug` within your virtual environment and run `make build`
