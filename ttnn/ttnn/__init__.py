@@ -80,6 +80,9 @@ from ttnn.operations.unary import (
     relu,
     silu,
     log,
+    sin,
+    cos,
+    tan,
 )
 
 from ttnn.operations.binary import (

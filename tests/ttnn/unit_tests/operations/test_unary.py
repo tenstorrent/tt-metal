@@ -66,3 +66,21 @@ def test_silu(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log, torch.log)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sin(device, h, w):
+    run_unary_test(device, h, w, ttnn.sin, torch.sin)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_cos(device, h, w):
+    run_unary_test(device, h, w, ttnn.cos, torch.cos, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_tan(device, h, w):
+    run_unary_test(device, h, w, ttnn.tan, torch.tan)
