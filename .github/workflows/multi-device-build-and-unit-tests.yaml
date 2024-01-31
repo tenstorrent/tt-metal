@@ -1,4 +1,4 @@
-name: "[post-commit] all - Slow Dispatch multi-Nebula post-commit main build and unit tests"
+name: "[post-commit] all - Fast/Slow Dispatch multi-Nebula post-commit main build and unit tests"
 
 on:
   workflow_dispatch:
@@ -24,7 +24,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
-      TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -49,4 +48,4 @@ jobs:
         timeout-minutes: 30
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit_multi_device --dispatch-mode slow
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit_multi_device --dispatch-mode ""

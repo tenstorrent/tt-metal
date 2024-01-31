@@ -239,10 +239,7 @@ def reset_tensix(request, silicon_arch_name):
 def device_init_destroy(request):
     import tt_lib as ttl
 
-    silicon_arch_name = request.config.getoption("tt_arch")
     device_id = request.config.getoption("device_id")
-
-    arch = getattr(ttl.device.Arch, silicon_arch_name.upper())
 
     device = ttl.device.CreateDevice(device_id)
     ttl.device.SetDefaultDevice(device)
@@ -259,6 +256,23 @@ def device(device_init_destroy):
     device = ttl.device.GetDefaultDevice()
     yield device
     ttl.device.DeallocateBuffers(device)
+
+
+@pytest.fixture(scope="function")
+def pcie_devices(request):
+    import tt_lib as ttl
+
+    num_devices = ttl.device.GetNumPCIeDevices()
+
+    # Get only physical devices
+    devices = ttl.device.CreateDevices([i for i in range(num_devices)])
+
+    yield [devices[i] for i in range(num_devices)]
+
+    for device in devices.values():
+        ttl.device.DeallocateBuffers(device)
+
+    ttl.device.CloseDevices(devices)
 
 
 @pytest.fixture(autouse=True)

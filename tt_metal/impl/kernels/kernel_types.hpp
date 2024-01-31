@@ -64,6 +64,25 @@ struct EthernetConfig {
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
 };
+
+struct SenderEthernetConfig : public EthernetConfig {
+    SenderEthernetConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
+        EthernetConfig{
+            .eth_mode = Eth::SENDER,
+            .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
+            .compile_args = compile_args,
+            .defines = defines} {}
+};
+
+struct ReceiverEthernetConfig : public EthernetConfig {
+    ReceiverEthernetConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
+        EthernetConfig{
+            .eth_mode = Eth::RECEIVER,
+            .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
+            .compile_args = compile_args,
+            .defines = defines} {}
+};
+
 } // namespace tt::tt_metal::experimental
 
 } // namespace tt::tt_metal

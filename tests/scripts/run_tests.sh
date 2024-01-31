@@ -177,12 +177,7 @@ run_post_commit_multi_device_pipeline_tests() {
 
     # Switch to modules only soon
     # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
-    if [[ $dispatch_mode == "slow" ]]; then
-        ./tests/scripts/run_pre_post_commit_regressions_multi_device.sh
-    else
-        echo "Only slow dispatch mode is currently supported with multi-device"
-        exit 1
-    fi
+    ./tests/scripts/run_pre_post_commit_regressions_multi_device.sh
 }
 
 run_microbenchmarks_pipeline_tests() {
