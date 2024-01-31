@@ -57,14 +57,6 @@ inline void llk_unpack_A_init(
         within_face_16x16_transpose);
 }
 
-// TODO: This function needs to be properly integrated with the LLK
-inline void llk_unpack_B_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0) {
-    static constexpr uint unpack_srcb =
-        TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    ckernel_unpack_template tmp = ckernel_unpack_template::lB(unpack_srcb);
-    tmp.program(instrn_buffer);
-}
-
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,

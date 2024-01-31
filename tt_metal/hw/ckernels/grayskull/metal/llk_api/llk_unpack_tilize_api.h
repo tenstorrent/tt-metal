@@ -79,7 +79,6 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 * LLK UNPACK TILIZE SRC A, UNPACK SRC B
 *************************************************************************/
 
-
 template <bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_unpack_tilizeA_B_hw_configure(const llk_unpack_AB_params_t *llk_unpack_tilizeA_B) {
 
@@ -88,8 +87,8 @@ inline void llk_unpack_tilizeA_B_hw_configure(const llk_unpack_AB_params_t *llk_
 
     configure_unpack_AB(
         unpack_src_format[unpA_operand_id],
-        unpack_dst_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
+        unpack_dst_format[unpA_operand_id],
         unpack_dst_format[unpB_operand_id]
     );
 }
@@ -117,7 +116,7 @@ inline void llk_unpack_tilizeA_B_mop_config() {
     tmp.program(instrn_buffer);
 }
 
-inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA=0, const std::uint32_t operandB=0, const std::uint32_t ct_dim=0) {
+inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
 
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t src_format_A = (std::uint32_t)unpack_src_format[operandA_id];
@@ -204,8 +203,12 @@ inline void llk_unpack_tilizeA_B(
     }
 }
 
-inline void llk_unpack_tilizeA_B_block(std::uint32_t operandA, std::uint32_t operandB, std::uint32_t block_c_tiles) {
-    for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
-        llk_unpack_tilizeA_B(operandA, operandB, tile_index, 0 /*Only 1 tile for constants for SrcB*/, block_c_tiles);
+inline void llk_unpack_tilizeA_B_block(
+    std::uint32_t operandA,
+    std::uint32_t operandB,
+    std::uint32_t block_c_tiles_a,
+    std::uint32_t tile_idx_b) {
+    for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
+        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
     }
 }

@@ -43,6 +43,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
  */
 ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb = 16)
 {
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilizeA_B_hw_configure_disaggregated(icb0, icb1_scaler) ));
     UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1_scaler, block) ));
@@ -54,6 +55,7 @@ ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t bl
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>(ocb) ));
+    #endif
 }
 #endif
 
@@ -73,7 +75,9 @@ ALWI void tilize_init_unpack(uint32_t icb, uint32_t block)
 
 ALWI void tilizeA_B_init_unpack(uint32_t icb0, uint32_t icb1, uint32_t block)
 {
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1, block) ));
+    #endif
 }
 
 /**
@@ -113,9 +117,11 @@ ALWI void unpack_tilize_block(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
 }
 
-ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block)
+ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b)
 {
-    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block) ));
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b) ));
+    #endif
 }
 
 /**
