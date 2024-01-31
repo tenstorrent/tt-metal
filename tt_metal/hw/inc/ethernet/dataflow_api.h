@@ -261,6 +261,7 @@ void eth_wait_for_receiver_done() {
  * | dst_local_l1_addr           | Address in local L1 memory                                | uint32_t | 0..1MB                                                        | True     |
  * | size                        | Size of data transfer in bytes                            | uint32_t | 0..1MB                                                        | True     |
  */
+template<bool write_barrier = false>
 FORCE_INLINE
 void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr,
@@ -272,8 +273,11 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     eth_send_packet(0, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, 1);
     eth_noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
     noc_async_read(receiver_data_noc_addr, local_eth_l1_curr_src_addr, size);
-    eth_noc_async_read_barrier();
     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+    eth_noc_async_read_barrier();
+    if constexpr (write_barrier) {
+        eth_noc_async_write_barrier();
+    }
     noc_semaphore_inc(receiver_semaphore_noc_addr, 1);
     while (erisc_info->user_buffer_bytes_sent != 0) {
         internal_::risc_context_switch();

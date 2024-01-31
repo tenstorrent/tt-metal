@@ -18,6 +18,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
 
 namespace tt::tt_metal::detail{
 
@@ -495,6 +496,12 @@ namespace tt::tt_metal::detail{
         m_tensor.def("sharded_to_interleaved", &sharded_to_interleaved,
             py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
+        );
+
+        // Multi-Device ops
+        m_tensor.def("all_gather", &all_gather,
+            py::arg("input_tensors"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            R"doc(Performs all gather on a list of tensors that form one tensor that is distributed across devices. The output is a list of a tensor which has been duplciated across the input devices.)doc"
         );
     }
 
