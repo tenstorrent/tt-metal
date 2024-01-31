@@ -497,6 +497,9 @@ TEST_F(CommonFixture, MatmulMultiCoreSingleDRAM){
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
+    } else if (getenv("ARCH_NAME") == "wormhole_b0"){
+        log_info(LogTest, "This test is not supported in wormhole_b0");
+        GTEST_SKIP();
     }
     for(unsigned int id=0; id < devices_.size(); id++){
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(devices_.at(id)));
