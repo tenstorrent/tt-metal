@@ -41,7 +41,7 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
 
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
+        TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
         TT_FATAL(this->use_multicore == true);
         TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
     } else {
@@ -116,7 +116,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
 
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
-        TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
+        TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
         for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
             if (i != input_tensor_a.shape().rank() - 2) {
                 TT_FATAL(input_tensor_a.shape()[i] == this->output_tensor_shape[i]);

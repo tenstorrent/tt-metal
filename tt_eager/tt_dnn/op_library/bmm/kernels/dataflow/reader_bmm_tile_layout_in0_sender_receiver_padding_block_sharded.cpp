@@ -78,8 +78,7 @@ void kernel_main() {
     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
     cb_reserve_back(cb_id_in2, batch * in0_block_num_tiles);
-    uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-    uint64_t local_read_addr = get_noc_addr(l1_write_addr_in2);
+    uint32_t local_read_addr = get_read_ptr(cb_id_in2);
 
     for (uint32_t b = 0; b < batch; ++b) {
         for(uint32_t block = 0; block < num_blocks; ++block) {

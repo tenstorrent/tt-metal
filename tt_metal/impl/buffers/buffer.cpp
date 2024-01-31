@@ -343,16 +343,23 @@ tt::stl::reflection::Attributes ShardSpec::attributes() const {
 }
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
-    if (spec_a.shape != spec_b.shape) {
+    if (spec_a.grid != spec_b.grid) {
         return false;
     }
-    if (spec_a.grid != spec_b.grid) {
+    if (spec_a.shape != spec_b.shape) {
         return false;
     }
     if (spec_a.orientation != spec_b.orientation) {
         return false;
     }
+    if (spec_a.halo != spec_b.halo) {
+        return false;
+    }
     return true;
+}
+
+bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
+    return not (spec_a == spec_b);
 }
 
 }  // namespace tt_metal

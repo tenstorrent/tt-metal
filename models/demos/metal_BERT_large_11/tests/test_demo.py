@@ -16,7 +16,7 @@ from models.utility_functions import is_e75
 )
 def test_demo(input_path, model_location_generator, device, use_program_cache):
     if is_e75(device):
-        pytest.skip(f"Bert large 15 is not supported on E75")
+        pytest.skip(f"Bert large 11 is not supported on E75")
 
     expected_answers = {
         0: "scientific archaeology",

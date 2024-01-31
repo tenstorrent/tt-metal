@@ -23,7 +23,6 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE && cache_tensor.layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_FATAL(input_tensor.dtype() == cache_tensor.dtype());
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
 
     TT_FATAL(input_tensor.shape()[-1] == cache_tensor.shape()[-1]);

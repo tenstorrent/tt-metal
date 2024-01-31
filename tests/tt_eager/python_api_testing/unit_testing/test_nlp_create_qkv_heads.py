@@ -303,19 +303,24 @@ def run_sharded_nlp_create_qkv_heads_test(
 ):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
-    num_cores = seq_len * batch // 32
+    num_cores = num_kv_heads
     shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    q_shape = [seq_len, 1, batch, num_cores, num_q_heads // num_cores * head_dim]
+    kv_shape = [seq_len, 1, batch, num_cores, num_kv_heads // num_cores * head_dim]
+    Q = torch.randn(q_shape)
+    K = torch.randn(kv_shape)
+    V = torch.randn(kv_shape)
 
     if read_from_input_tensor_kv:
-        in0_shape = [seq_len, 1, batch, num_q_heads * head_dim]
-        in1_shape = [seq_len, 1, batch, 2 * num_kv_heads * head_dim]
-        A = torch.randn(in0_shape)
-        B = torch.randn(in1_shape)
+        A = torch.concat([Q.flatten(-2, -1)], -1)
+        B = torch.concat([K.flatten(-2, -1), V.flatten(-2, -1)], -1)
+        A_interleaved = torch.concat([Q], -1).flatten(-2, -1)
+        B_interleaved = torch.concat([K, V], -1).flatten(-2, -1)
         in0_shard_spec = ttl.tensor.ShardSpec(
             shard_grid,
             [
-                32,
-                in0_shape[-1],
+                seq_len * batch,
+                A_interleaved.shape[-1] // num_cores,
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -323,36 +328,36 @@ def run_sharded_nlp_create_qkv_heads_test(
         in1_shard_spec = ttl.tensor.ShardSpec(
             shard_grid,
             [
-                32,
-                in1_shape[-1],
+                seq_len * batch,
+                B_interleaved.shape[-1] // num_cores,
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
         in0_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
         )
         in1_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, in1_shard_spec
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, in1_shard_spec
         )
-        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
-        in1_t = ttl.tensor.Tensor(B, dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
+        in0_t = ttl.tensor.Tensor(A_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+        in1_t = ttl.tensor.Tensor(B_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
     else:
-        in0_shape = [seq_len, 1, batch, (num_q_heads + 2 * num_kv_heads) * head_dim]
-        A = torch.randn(in0_shape)
+        A = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
+        A_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
         in0_shard_spec = ttl.tensor.ShardSpec(
             shard_grid,
             [
-                32,
-                in0_shape[-1],
+                seq_len * batch,
+                A_interleaved.shape[-1] // num_cores,
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
         in0_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
         )
-        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+        in0_t = ttl.tensor.Tensor(A_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
 
     out_shard_spec = in0_shard_spec
     out_mem_config = ttl.tensor.MemoryConfig(
@@ -419,8 +424,8 @@ def run_sharded_nlp_create_qkv_heads_test(
     (
         (32, 1, 64, 16, 1, False),
         (32, 1, 64, 16, 1, True),
-        (32, 1, 64, 32, 1, False),
-        (32, 1, 64, 32, 1, True),
+        (32, 1, 64, 32, 2, False),
+        (32, 1, 64, 32, 2, True),
         (32, 1, 64, 32, 32, False),
         (32, 1, 64, 32, 32, True),
     ),

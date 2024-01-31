@@ -152,7 +152,9 @@ const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
         input_tensors.at(1).memory_config(),
+        input_tensors.at(0).device()->id(),
         input_tensors.at(1).dtype(),
+        input_tensors.at(1).device()->id(),
         bcast_scalar);
 }
 

@@ -465,41 +465,30 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
     """
 
     ttl_tensor = tensor.value
+    if ttnn.get_memory_config(tensor) == memory_config:
+        return tensor
+
     # to_sharded path
     if memory_config.is_sharded():
         if ttl_tensor.is_sharded():
-            if (
-                tensor.memory_config.shard_spec.orientation == memory_config.shard_spec.orientation
-                and tensor.memory_config.shard_spec.grid == memory_config.shard_spec.grid
-                and tensor.memory_config.shard_spec.shape == memory_config.shard_spec.shape
-                and tensor.memory_config.shard_spec.orientation == memory_config.shard_spec.orientation
-            ):
-                return tensor
-            else:
-                # reshard
-                def impl(ttl_tensor, sharded_memory_config):
-                    ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
-                    return ttl.tensor.interleaved_to_sharded_core_range_set(
-                        ttl_tensor,
-                        sharded_memory_config.shard_spec.grid,
-                        sharded_memory_config.shard_spec.shape,
-                        sharded_memory_config.memory_layout,
-                        sharded_memory_config.shard_spec.orientation,
-                    )
-
-                ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
-                    ttl_tensor, memory_config
+            # reshard
+            def impl(ttl_tensor, sharded_memory_config):
+                ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
+                return ttl.tensor.interleaved_to_sharded(
+                    ttl_tensor,
+                    sharded_memory_config,
                 )
+
+            ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
+                ttl_tensor, memory_config
+            )
 
         else:
 
             def impl(ttl_tensor, sharded_memory_config):
-                return ttl.tensor.interleaved_to_sharded_core_range_set(
+                return ttl.tensor.interleaved_to_sharded(
                     ttl_tensor,
-                    sharded_memory_config.shard_spec.grid,
-                    sharded_memory_config.shard_spec.shape,
-                    sharded_memory_config.memory_layout,
-                    sharded_memory_config.shard_spec.orientation,
+                    sharded_memory_config,
                 )
 
             ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
@@ -508,16 +497,13 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
     # to_interleaved path
     else:
         if not ttl_tensor.is_sharded():
-            if tensor.memory_config.memory_layout == memory_config.memory_layout:
-                return tensor
-            else:
-                # L1 to DRAM or DRAM to L1
-                def impl(ttl_tensor, output_memory_config):
-                    return ttl.tensor.clone(ttl_tensor, output_memory_config)
+            # L1 to DRAM or DRAM to L1
+            def impl(ttl_tensor, output_memory_config):
+                return ttl.tensor.clone(ttl_tensor, output_memory_config)
 
-                ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
-                    ttl_tensor, memory_config
-                )
+            ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
+                ttl_tensor, memory_config
+            )
 
         else:
 

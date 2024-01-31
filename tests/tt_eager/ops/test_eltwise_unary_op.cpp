@@ -81,7 +81,7 @@ void test_operation_infrastructure() {
     auto op = operation::DeviceOperation(EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}, MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
-    TT_FATAL(program_hash == 12562815007089060282ULL, fmt::format("Actual value is {}", program_hash));
+    TT_FATAL(program_hash == 13008201745214372940ULL, fmt::format("Actual value is {}", program_hash));
 
     auto profiler_info = op.create_profiler_info({input_tensor});
     TT_FATAL(

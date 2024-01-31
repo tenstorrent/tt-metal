@@ -69,7 +69,8 @@ void py_module(py::module& m_transformers) {
             py::arg("block_w").noconvert(),
             py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
             py::arg("im_data_format").noconvert()
-        );
+        )
+        .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
 
     m_transformers.def(
         "scale_mask_softmax_in_place",
