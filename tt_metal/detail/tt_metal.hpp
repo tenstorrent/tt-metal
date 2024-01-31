@@ -287,6 +287,23 @@ namespace tt::tt_metal{
             return *(command_queues[id]);
         }
 
+        inline HWCommandQueue &GetHWCommandQueue(Device *device, uint32_t cmd_queue_channel)
+        {
+            detail::DispatchStateCheck(true);
+            // For now there is only one SW HWCommandQueue per device
+            static std::vector<std::unique_ptr<HWCommandQueue>> command_queues( GetNumAvailableDevices() );
+            chip_id_t id = device->id();
+            TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
+            TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
+            static std::mutex cq_creation_mutex;
+            {
+                std::lock_guard<std::mutex> lock(cq_creation_mutex);
+                if ( command_queues[device->id()] == nullptr || command_queues[device->id()]->device != device )
+                    command_queues[device->id()] = std::make_unique<HWCommandQueue>(device, cmd_queue_channel);
+            }
+            return *(command_queues[id]);
+        }
+
         inline void Synchronize(Device *device)
         {
             if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {

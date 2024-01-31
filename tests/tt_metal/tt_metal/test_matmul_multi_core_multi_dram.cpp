@@ -316,7 +316,7 @@ bool move_tiles_to_dram(
         }
     }
 
-    EnqueueWriteBuffer(cq, buffer, tiles, false);
+    EnqueueWriteBuffer(cq, std::ref(buffer), tiles, false);
     return pass;
 }
 

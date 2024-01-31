@@ -265,7 +265,7 @@ std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kerne
  * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &                  |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, std::vector<uint32_t>& dst, bool blocking);
 
 /**
  * Reads a buffer from the device
@@ -279,7 +279,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  * | dst          | The memory where the result will be stored                             | void*                               |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, void* dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void * dst, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -293,7 +293,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  * | src          | The vector we are writing to the device                                | vector<uint32_t> &                  |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, std::vector<uint32_t>& src, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -307,7 +307,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  * | src          | The memory we are writing to the device                                | const void*                         |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, const void* src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
 
 /**
  * Writes a program to the device and launches it
