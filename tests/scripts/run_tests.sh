@@ -104,7 +104,6 @@ run_frequent_api_pipeline_tests() {
     export PYTHONPATH=$TT_METAL_HOME
 
     # Please put model runs in here from now on - thank you
-    ./tests/scripts/run_models.sh
     if [[ $dispatch_mode == "slow" ]]; then
         echo "Running Python API unit tests in SD for frequent..."
         ./tests/scripts/run_python_api_unit_tests.sh
