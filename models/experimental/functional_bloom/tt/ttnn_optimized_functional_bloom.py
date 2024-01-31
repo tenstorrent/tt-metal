@@ -283,8 +283,8 @@ def bloom_for_causal_lm(config, input_ids, alibi, causal_mask, *, parameters):
     return output
 
 
-def bloom_for_question_answering(input_ids, alibi, casual_mask, parameters, num_heads):
-    hidden_states = bloom(input_ids, alibi, casual_mask, parameters, num_heads)
+def bloom_for_question_answering(config, input_ids, alibi, casual_mask, *, parameters):
+    hidden_states = bloom(input_ids, alibi, casual_mask, parameters, config.n_head)
     hidden_states = ttnn.linear(
         hidden_states,
         parameters.qa_outputs.weight,
