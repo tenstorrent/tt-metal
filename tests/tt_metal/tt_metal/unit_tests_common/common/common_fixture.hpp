@@ -34,7 +34,6 @@ public:
             tt::log_info(tt::LogTest, "Writing to buffer in fast dispatch mode");
             CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
             EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
-            Finish(cq);
         }
     }
     void ReadBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &out_buffer, std::vector<uint32_t> &dst_vec){
@@ -45,7 +44,6 @@ public:
             tt::log_info(tt::LogTest, "Reading from buffer in fast dispatch mode");
             CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
             EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
-            Finish(cq);
         }
     }
 

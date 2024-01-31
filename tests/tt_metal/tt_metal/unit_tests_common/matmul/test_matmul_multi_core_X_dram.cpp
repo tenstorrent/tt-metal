@@ -506,7 +506,7 @@ TEST_F(CommonFixture, MatmulMultiCoreSingleDRAM){
 TEST_F(CommonFixture, MatmulMultiCoreMultiDRAM){
     // need to update move_tiles_to_dram to support both slow and fast
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        log_info(LogTest, "This test is not supported in slow dispatch mode");
+        log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
