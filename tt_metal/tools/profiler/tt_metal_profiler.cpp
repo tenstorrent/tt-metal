@@ -18,7 +18,7 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
     auto worker_cores_used_in_program =
         device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
 
-    detail::DumpDeviceProfileResults(device, worker_cores_used_in_program);
+    detail::DumpDeviceProfileResults(device);
 }
 
 

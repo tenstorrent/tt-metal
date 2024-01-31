@@ -159,6 +159,10 @@ void DeviceProfiler::readRiscProfilerResults(
                     coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
 
                     runCounterRead = profile_buffer[index + 1];
+                    if (device_core_data[deviceCore].runCounter == 0)
+                    {
+                        runCounterRead = 0;
+                    }
 
                     newRunStart = false;
                 }
@@ -209,7 +213,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
                         if (riscNum == 0 && marker == 1)
                         {
-                            TT_ASSERT (runCounterRead == device_core_data[deviceCore].runCounter, fmt::format("Unexpected run id, expected {}, read {}", device_core_data[deviceCore].runCounter, runCounterRead));
+                            TT_ASSERT (runCounterRead == device_core_data[deviceCore].runCounter, fmt::format("Unexpected run id, expected {}, read {}. In core {},{}", device_core_data[deviceCore].runCounter, runCounterRead, worker_core.x, worker_core.y));
                             device_core_data[deviceCore].runCounter ++;
                         }
                     }
@@ -478,6 +482,7 @@ void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device
         }
     }
     device_core_data[device_core].data.clear();
+    device_core_data[device_core].runCounter = 0;
 
 #endif
 }

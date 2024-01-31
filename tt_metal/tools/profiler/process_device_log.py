@@ -458,8 +458,7 @@ def is_new_op_device(tsCore, coreOpMap):
     appendTs = False
     isNewOp = False
     isNewOpFinished = False
-    # if core[1] != NON_COMPUTE_ROW:
-    if False:
+    if core[1] != NON_COMPUTE_ROW:
         appendTs = True
         if risc == "BRISC" and timerID == 1:
             assert (
@@ -743,7 +742,10 @@ def translate_metaData(metaData, core, risc):
             metaRisc = content
         elif type(content) == tuple:
             metaCore = content
-    if core != "ANY" and metaCore:
+
+    if metaCore[1] == NON_COMPUTE_ROW:
+        core = None
+    elif core != "ANY" and metaCore:
         core = metaCore
     if risc != "ANY" and metaRisc:
         risc = metaRisc

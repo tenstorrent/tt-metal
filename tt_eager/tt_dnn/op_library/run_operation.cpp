@@ -235,6 +235,7 @@ std::vector<Tensor> run_device_operation(
                     operation.get_type_name(),
                     elapsed_seconds);
 #endif
+                op_profiler::dump_device_profiler_results(device, program);
             } else {
                 ::detail::LaunchProgram(device, program);
             }

@@ -166,6 +166,7 @@ namespace op_profiler {
                 {
                     TT_ASSERT (profileFolder != "", "Bad log folder location, folder has been setup wrong");
                     tt::tt_metal::detail::SetHostProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
+                    tt::tt_metal::detail::SetDeviceProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
                     if (freshTTmetalLogs)
                     {
                         tt::tt_metal::detail::FreshProfilerHostLog();
