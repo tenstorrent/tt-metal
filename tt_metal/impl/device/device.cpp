@@ -444,6 +444,33 @@ void Device::compile_command_queue_programs() {
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_logical_core, 0);
         // second semaphore is between processor and dispatcher to detect whether dispatcher can accept commands
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_logical_core, num_tensix_command_slots);
+
+        std::vector<uint32_t> dispatcher_compile_args = {
+            cmd_start_tensix, consumer_data_buffer_size_tensix, cmd_start_tensix, consumer_data_buffer_size_tensix};
+
+        std::map<string, string> dispatcher_defines = {
+            {"DISPATCH_KERNEL", "1"},
+            {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
+            {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
+            {"SIGNALLER_NOC_X", std::to_string(remote_signaller_physical_core.x)},
+            {"SIGNALLER_NOC_Y", std::to_string(remote_signaller_physical_core.y)},
+        };
+
+        tt::tt_metal::CreateKernel(
+            *command_queue_program_ptr,
+            "tt_metal/impl/dispatch/kernels/remote_dispatcher.cpp",
+            dispatch_logical_core,
+            tt::tt_metal::DataMovementConfig {
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = dispatcher_compile_args,
+                .defines = dispatcher_defines});
+
+        // First semaphore is between processor and dispatcher to signal whether the latter can receive commands
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_logical_core, 0);
+        // second semaphore is between dispatcher and remote completion signaller to signal if the former can send data
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_logical_core, num_tensix_command_slots);
+
     }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
