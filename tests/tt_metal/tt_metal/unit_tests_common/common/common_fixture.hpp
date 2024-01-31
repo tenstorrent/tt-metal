@@ -7,7 +7,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-// #include "tests/tt_metal/tt_metal/unit_tests_common/matmul/matmul_utils.hpp"
 
 // A dispatch-agnostic test fixture
 class CommonFixture: public ::testing::Test {
@@ -15,12 +14,8 @@ public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::Device* device, Program& program) {
         if (this->slow_dispatch_) {
-            // Slow dispatch uses LaunchProgram
-            tt::log_info(tt::LogTest, "Running program in slow dispatch mode.");
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
-            // Fast Dispatch uses the command queue
-            tt::log_info(tt::LogTest, "Running program in fast dispatch mode.");
             CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
             EnqueueProgram(cq, program, false);
             Finish(cq);
@@ -28,25 +23,22 @@ public:
     }
     void WriteBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &in_buffer, std::vector<uint32_t> &src_vec){
         if (this->slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Writing to buffer in slow dispatch mode");
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
-            tt::log_info(tt::LogTest, "Writing to buffer in fast dispatch mode");
             CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
             EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
         }
     }
     void ReadBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &out_buffer, std::vector<uint32_t> &dst_vec){
         if (this->slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Reading from buffer in slow dispatch mode");
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
         } else {
-            tt::log_info(tt::LogTest, "Reading from buffer in fast dispatch mode");
             CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
             EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
         }
     }
 
+    // Not complete or in use..
     template <typename T>
     bool MoveTilesToDRAM(tt::tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, T buffer){
         if (this->slow_dispatch_) {

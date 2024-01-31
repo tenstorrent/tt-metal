@@ -288,14 +288,12 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
         activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     }
     fixture->WriteBuffer(device, src0_dram_buffer, activations);
-    // tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
-    tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -311,12 +309,8 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
 
     CoreCoord debug_core = {1, 1};
 
-
-
-    // tt_metal::detail::LaunchProgram(device, program);
     fixture->RunProgram(device, program);
     std::vector<uint32_t> result_vec;
-    // tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
 
     ////////////////////////////////////////////////////////////////////////////

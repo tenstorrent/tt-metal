@@ -43,6 +43,7 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = M * K;             // only if M = K = N
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
+    // for multi_tile case buffer size will vary depending on M, N, K
     // uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     // uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     // uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -212,12 +213,12 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
     }else {
         pass &= (tensor.get_values() == result_flat_layout); // src1 is all 0's
     }
-    // DeallocateBuffer(src0_dram_buffer);
-    // DeallocateBuffer(src1_dram_buffer);
-    // if (cfg.with_bias) {
-    //     DeallocateBuffer(src2_dram_buffer);
-    // }
-    // DeallocateBuffer(dst_dram_buffer);
+    DeallocateBuffer(src0_dram_buffer);
+    DeallocateBuffer(src1_dram_buffer);
+    if (cfg.with_bias) {
+        DeallocateBuffer(src2_dram_buffer);
+    }
+    DeallocateBuffer(dst_dram_buffer);
     return pass;
 }
 } // namespace unit_tests_common::matmul::test_matmul_X_tile
@@ -280,7 +281,7 @@ TEST_F(CommonFixture, MatmulMultiTile){
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = transpose_tiles(activations, M, K, 1);
 
-    auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
+    auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bfloat16 32x32 identity
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
