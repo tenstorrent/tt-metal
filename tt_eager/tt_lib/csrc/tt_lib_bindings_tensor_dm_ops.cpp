@@ -47,6 +47,24 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op<true, true>(m_tensor, "assign", py::overload_cast<const Tensor&, const MemoryConfig&, std::optional<const DataType>>(&assign), R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
 
         // *** tensor manipulation ***
+        m_tensor.def("typecast", &typecast,
+            py::arg("input_tensors").noconvert(), py::arg("dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
+
+                Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
+
+                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,UINT32 and UINT16.
+
+                Output tensor will be on device, in same layout, and have the given data type.
+
+                .. csv-table::
+                    :header: "Argument", "Description", "Data type", "Required"
+
+                    "input_tensors", "Input tensors to typecast", "List of Tensors", "Yes"
+                    "dtype", "datatype of typecast", "Datatype", "Yes"
+                    "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
+            )doc"
+        );
         m_tensor.def("concat", &concat,
             py::arg("input_tensors").noconvert(), py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg1``.
