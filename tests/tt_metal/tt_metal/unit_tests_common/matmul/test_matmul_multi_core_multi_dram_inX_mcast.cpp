@@ -191,7 +191,7 @@ bool write_runtime_args_to_device(
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
             int core_x = in1_or_in0 ? core.x : start_core_x;
             int core_y = in1_or_in0 ? start_core_y : core.y;
-            log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
+            // log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
             CoreCoord mcast_sender = {(std::size_t)core_x, (std::size_t) core_y};
             CoreCoord core_start = {(std::size_t)(core_x + (1 - in1_or_in0)), (std::size_t) (core_y + in1_or_in0)};
             CoreCoord core_end = {(std::size_t)(core_x + (1 - in1_or_in0) * (num_cores_c - 1)), (std::size_t) (core_y + in1_or_in0 * (num_cores_r - 1))};
