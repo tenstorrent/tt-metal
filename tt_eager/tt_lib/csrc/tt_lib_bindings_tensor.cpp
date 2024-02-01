@@ -8,6 +8,7 @@
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 #include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "tt_dnn/op_library/upsample/upsample_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 #include "tt_dnn/op_library/pool/average_pool.hpp"
 #include "tt_dnn/op_library/pool/max_pool.hpp"
@@ -551,6 +552,23 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("average_pool_2d", &average_pool_2d,
         py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,  py::arg("output_dtype").noconvert() = std::nullopt,  R"doc(
         Average Pool 2D
+        It operates on tensors whose that have channels as the last dimension
+
+        +----------+----------------------------+------------+-------------------------------+----------+
+        | Argument | Description                | Data type  | Valid range                   | Required |
+        +==========+============================+============+===============================+==========+
+        | act      | Input activations tensor   | Tensor     |                               | Yes      |
+        +----------+----------------------------+------------+-------------------------------+----------+
+    )doc");
+
+    // Upsample
+    m_tensor.def("upsample", &upsample,
+        py::arg("input").noconvert(),
+        py::arg("scale_factor_h").noconvert(),
+        py::arg("scale_factor_w").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("use_multicore") = false , R"doc(
+        UpSample 2D
         It operates on tensors whose that have channels as the last dimension
 
         +----------+----------------------------+------------+-------------------------------+----------+
