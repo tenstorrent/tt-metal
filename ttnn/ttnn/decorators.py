@@ -8,10 +8,9 @@ import inspect
 
 from loguru import logger
 
-import ttnn.core as ttnn
-
 
 def compare(torch_outputs, outputs, pcc):
+    import ttnn.core as ttnn
     import torch
 
     from models.utility_functions import comp_pcc
@@ -65,6 +64,8 @@ def override_pearson_correlation_coefficient(value):
 
 
 def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
+    import ttnn.core as ttnn
+
     torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
     if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
         torch_output = ttnn.to_device(torch_output, output.device)
@@ -72,6 +73,8 @@ def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
 
 
 def document_input_tensors(name, function, validate_input_tensors):
+    import ttnn.core as ttnn
+
     signature = inspect.signature(validate_input_tensors)
     arguments = {arg_name: None for arg_name in signature.parameters}
     arguments["operation_name"] = name
@@ -131,6 +134,8 @@ def document_input_tensors(name, function, validate_input_tensors):
 
 
 def register_operation(*, name, validate_input_tensors, torch_function=None):
+    import ttnn.core as ttnn
+
     def operation_decorator(function):
         document_input_tensors(name, function, validate_input_tensors)
 
