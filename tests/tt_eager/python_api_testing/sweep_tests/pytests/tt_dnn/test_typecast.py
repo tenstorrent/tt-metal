@@ -6,6 +6,7 @@ import pytest
 import torch
 from functools import partial
 import tt_lib as ttl
+from collections import defaultdict
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -36,6 +37,8 @@ mem_configs = [
     (
         (torch.bfloat16, ttl.tensor.DataType.BFLOAT16),
         (torch.float32, ttl.tensor.DataType.BFLOAT8_B),
+        (torch.int32, ttl.tensor.DataType.UINT16),
+        (torch.int32, ttl.tensor.DataType.UINT32),
     ),
 )
 @pytest.mark.parametrize(
@@ -74,8 +77,23 @@ class TestTypecast:
             pytest.skip(f"{tt_input_dtype} cannot be converted yet. Skip")
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
+        if tt_input_dtype in [ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.FLOAT32]:
+            if tt_output_dtype in [ttl.tensor.DataType.UINT16, ttl.tensor.DataType.UINT32]:
+                pytest.skip(f"{tt_input_dtype} cannot be converted yet. Skip")
+
+        options = defaultdict(lambda: (-100, 100))
+        options[ttl.tensor.DataType.UINT16] = (0, 255)
+        options[ttl.tensor.DataType.UINT16] = (-30000, 30000)
+        options[ttl.tensor.DataType.UINT32] = (
+            -207483647,
+            2137483647,
+        )  # uint max value is 4294967295, as torch dont have uint32
+
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=10), pt_input_dtype)
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=options[tt_output_dtype][0], high=options[tt_output_dtype][1]),
+                pt_input_dtype,
+            )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["pt_input_dtype"] = [pt_input_dtype]

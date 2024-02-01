@@ -206,8 +206,21 @@ ALWI void signbit_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX, SyncHalf>(idst) ));
 }
 
+ALWI void to_uint16_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_to_uint16_init<APPROX>() ));
+}
 
+ALWI void to_uint16_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_to_uint16<APPROX, SyncHalf>(idst) ));
+}
 
+ALWI void to_uint32_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_to_uint32_init<APPROX>() ));
+}
+
+ALWI void to_uint32_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_to_uint32<APPROX, SyncHalf>(idst) ));
+}
 /**
  * Performs element-wise computation of absolute value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
