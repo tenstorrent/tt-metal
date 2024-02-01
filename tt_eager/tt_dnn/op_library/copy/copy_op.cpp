@@ -87,8 +87,8 @@ Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config, std::op
     return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);
 }
 
-Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config ) {
-    return operation::run(Copy{output_mem_config, dtype}, {input_tensor}).at(0);
+Tensor to_bfloat(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config ) {
+        return operation::run(Copy{output_mem_config, dtype}, {input_tensor}).at(0);
 }
 
 //unary assign

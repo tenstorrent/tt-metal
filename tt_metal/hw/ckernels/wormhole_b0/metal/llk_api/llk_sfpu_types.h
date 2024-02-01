@@ -65,5 +65,7 @@ enum SfpuType {
     dequant_int32,
     requant_int32,
     quant_int32,
+    to_uint16,
+    to_uint32,
     unused,
 };

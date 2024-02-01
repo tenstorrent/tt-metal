@@ -100,6 +100,10 @@ inline void llk_math_calculate_sfpu(
         calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::silu) {
         calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
+    }else if constexpr (operation == SfpuType::to_uint16) {
+        calculate_to_uint16<APPROXIMATION_MODE, ITERATIONS>();
+    }else if constexpr (operation == SfpuType::to_uint32) {
+        calculate_to_uint32<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

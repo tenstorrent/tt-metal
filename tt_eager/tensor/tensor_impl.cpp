@@ -160,8 +160,8 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
-            (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::UINT32 || dtype == DataType::UINT16) &&
-            "Only BFLOAT16, BFLOAT8_B, UINT32, or UINT16 is supported on device!"
+            (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::FLOAT32) &&
+            "Only BFLOAT16, BFLOAT8_B, UINT32, Float32 or UINT16 is supported on device!"
         );
     };
     auto supported_layout = [&dtype, &layout]() {
