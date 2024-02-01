@@ -4,7 +4,6 @@
 
 from contextlib import contextmanager
 from functools import wraps
-import inspect
 
 from loguru import logger
 

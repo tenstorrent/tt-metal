@@ -5,7 +5,8 @@
 import pathlib
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
-
+import ttnn.decorators
+import ttnn.core
 from ttnn.core import (
     TILE_SIZE,
     Device,

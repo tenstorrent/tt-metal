@@ -144,7 +144,7 @@ def document_input_tensors(name, function, validate_input_tensors):
         return wrapper
 
     original_validate_input_tensor = validate_input_tensor
-    validate_input_tensor = document_validate_input_tensor(ttnn.validate_input_tensor)
+    validate_input_tensor = document_validate_input_tensor(validate_input_tensor)
     try:
         validate_input_tensors(**arguments)
     except:
