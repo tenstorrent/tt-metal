@@ -285,6 +285,19 @@ def bloom(
     return hidden_states
 
 
+def bloom_for_causal_lm(config: BloomConfig, input_ids, alibi, causal_mask, *, parameters):
+    bloom_output = bloom(
+        config,
+        input_ids,
+        alibi,
+        causal_mask,
+        parameters=parameters.transformer,
+    )
+
+    # return logits
+    return bloom_output @ parameters.lm_head.weight
+
+
 def bloom_for_question_answering(
     config,
     input_ids,
