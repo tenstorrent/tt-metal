@@ -86,7 +86,7 @@ void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
     vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
-    if (str == "all") {
+    if (str != nullptr && strcmp(str, "all") == 0) {
         dprint_all_cores = true;
         return;
     }
