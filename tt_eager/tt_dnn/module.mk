@@ -141,6 +141,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/update_cache/multi_core/update_cache_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/update_cache/single_core/update_cache_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/update_cache/update_cache_op.cpp \
+	tt_eager/tt_dnn/op_library/upsample/upsample_single_core/upsample_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/upsample/upsample_op.cpp \
 
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
