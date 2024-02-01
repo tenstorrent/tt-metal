@@ -5,7 +5,7 @@
 
 from typing import Optional
 
-import ttnn.core as ttnn
+import ttnn
 
 import tt_lib as ttl
 

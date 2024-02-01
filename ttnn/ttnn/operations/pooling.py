@@ -6,7 +6,7 @@ from typing import Tuple, Union, Dict
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     TTPyMaxPool,

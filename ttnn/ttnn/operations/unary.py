@@ -6,7 +6,7 @@ import sys
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 
 THIS_MODULE = sys.modules[__name__]
@@ -88,6 +88,8 @@ def register_ttl_unary_function(name, ttl_unary_function):
 
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = ttnn.{name}(tensor)
+
+        {unary_function.__doc__}
 
         """
     setattr(THIS_MODULE, name, unary_function)
