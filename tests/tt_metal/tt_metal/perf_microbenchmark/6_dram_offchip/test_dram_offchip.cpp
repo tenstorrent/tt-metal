@@ -289,6 +289,8 @@ int main(int argc, char **argv) {
             num_reqs_at_a_time,
             single_tile_size,
             access_type);
+
+        pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message
