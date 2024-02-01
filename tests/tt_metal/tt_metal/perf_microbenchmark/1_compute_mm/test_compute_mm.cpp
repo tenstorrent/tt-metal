@@ -182,7 +182,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (fast_dispatch_mode == false) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
-            setenv("TT_METAL_DEVICE_PROFILER", "1", true);
 
 #if !defined(PROFILER)
             log_error(
@@ -191,6 +190,13 @@ int main(int argc, char** argv) {
                 "'ENABLE_PROFILER=1'");
             TT_ASSERT(false);
 #endif
+
+            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            TT_FATAL(
+                device_profiler,
+                "Before running the program, do one of the following in a shell: "
+                "either export the environment variable by executing export TT_METAL_DEVICE_PROFILER=1, "
+                "or run the program with TT_METAL_DEVICE_PROFILER=1 prefixed to the command");
         }
 
         int pci_express_slot = 0;

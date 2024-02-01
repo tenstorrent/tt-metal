@@ -142,7 +142,12 @@ int main(int argc, char **argv) {
                 "Metal library and test code should be build with "
                 "'ENABLE_PROFILER=1' to use device profiler");
 #endif
-            setenv("TT_METAL_DEVICE_PROFILER", "1", true);
+            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            TT_FATAL(
+                device_profiler,
+                "Before running the program, do one of the following in a shell: "
+                "either export the environment variable by executing export TT_METAL_DEVICE_PROFILER=1, "
+                "or run the program with TT_METAL_DEVICE_PROFILER=1 prefixed to the command");
         }
 
         tt::DataFormat tile_format = tt::DataFormat::Float16_b;
