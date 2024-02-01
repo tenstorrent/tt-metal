@@ -3,12 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 import torch
-import ttnn
-from tt_lib.utils import (
-    _nearest_32 as nearest_32,
-    tilize as tilize_util,
-    untilize as untilize_util,
-)
+from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
 from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
     lamb_optimizer_kernel,
 )
@@ -41,7 +36,7 @@ def clone(x, *args, **kwargs):
 def typecast(x, pt_input_dtype, pt_output_dtype, *args, **kwargs):
     return x.to(pt_input_dtype[0]).to(pt_output_dtype[0])
 
-    
+
 def concat(x, y, *args, dim, **kwargs):
     return torch.concat([x, y], dim)
 
@@ -1092,15 +1087,7 @@ def untilize(x, *args, **kwargs):
 
 def tilize_with_zero_padding(x, *args, **kwargs):
     return tilize_util(
-        torch.nn.functional.pad(
-            x,
-            (
-                0,
-                nearest_32(x.shape[-1]) - x.shape[-1],
-                0,
-                nearest_32(x.shape[-2]) - x.shape[-2],
-            ),
-        )
+        torch.nn.functional.pad(x, (0, nearest_32(x.shape[-1]) - x.shape[-1], 0, nearest_32(x.shape[-2]) - x.shape[-2]))
     )
 
 
@@ -1165,22 +1152,14 @@ def pad_to_tile(x, pad_value, *args, **kwargs):
         nearest_32(input_tensor_shape[-1]),
     ]
     out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
-    out[
-        0 : input_tensor_shape[0],
-        0 : input_tensor_shape[1],
-        0 : input_tensor_shape[2],
-        0 : input_tensor_shape[3],
-    ] = x
+    out[0 : input_tensor_shape[0], 0 : input_tensor_shape[1], 0 : input_tensor_shape[2], 0 : input_tensor_shape[3]] = x
 
     return out
 
 
 def unpad_from_tile(x, output_tensor_shape, *args, **kwargs):
     out = x[
-        0 : output_tensor_shape[0],
-        0 : output_tensor_shape[1],
-        0 : output_tensor_shape[2],
-        0 : output_tensor_shape[3],
+        0 : output_tensor_shape[0], 0 : output_tensor_shape[1], 0 : output_tensor_shape[2], 0 : output_tensor_shape[3]
     ]
 
     return out
@@ -1189,11 +1168,7 @@ def unpad_from_tile(x, output_tensor_shape, *args, **kwargs):
 def conv(x, y, *args, **kwargs):
     conv_params = kwargs.pop("conv_params")
     return torch.nn.functional.conv2d(
-        x,
-        y,
-        bias=None,
-        stride=(conv_params[2], conv_params[3]),
-        padding=(conv_params[4], conv_params[5]),
+        x, y, bias=None, stride=(conv_params[2], conv_params[3]), padding=(conv_params[4], conv_params[5])
     )
 
 
@@ -1286,8 +1261,7 @@ def embeddings(x, y, *args, **kwargs):
     embedding_dim = y_shape[3]
 
     z = torch.nn.functional.embedding(
-        x_ref.reshape((batch_size, num_rows)),
-        y_ref.reshape((num_embeddings, embedding_dim)),
+        x_ref.reshape((batch_size, num_rows)), y_ref.reshape((num_embeddings, embedding_dim))
     ).reshape((batch_size, 1, num_rows, embedding_dim))
     return z
 
