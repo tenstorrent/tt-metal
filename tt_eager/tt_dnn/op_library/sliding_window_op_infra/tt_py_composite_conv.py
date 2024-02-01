@@ -190,6 +190,7 @@ def determine_parallel_config(
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
+    # print("num_cores_nhw=", num_cores_nhw)
     # print("grid_size=", grid_size)
     # print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
     # print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
@@ -636,8 +637,7 @@ class TTPyCompositeConv(TTPyOp):
                 assert bias.dtype() == weights_untiled_dtype
                 assert bias.shape() == bias_shape
 
-                assert K % (weight_block_w_ntiles * 32) == 0
-                bias_channels_padded_shape = [1, 1, 32, _nearest_32(K)]
+                bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
                 # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
                 bias_untiled = bias_untiled.to_torch()
@@ -791,7 +791,9 @@ class TTPyCompositeConv(TTPyOp):
             self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2],
             self.input_tensor_shape[3],
         ).to(self.device, interleaved_mem_config)
+        shallow_conv = True
         if input_channels >= 32:
+            shallow_conv = False
             input_padded_shape = ttl.tensor.pad_to_tile_shape(conv_input_on_device.shape(), False, False, True, True)
             if conv_input.shape() != input_padded_shape:
                 conv_input_on_device = ttl.tensor.format_input_tensor(
@@ -806,20 +808,26 @@ class TTPyCompositeConv(TTPyOp):
                 conv_input_on_device = ttl.tensor.tilize(
                     conv_input_on_device, interleaved_mem_config, use_multicore=True
                 )
-
+        if shallow_conv:
+            assert (
+                input_channels == 16
+            ), "Unsupported input_channels. Expected input_channels=16. Pad input channels to 16 with zeros."
         input_size_to_shard_evenly = _nearest_y(
             self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
         )
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
         if act_c_num_blocks > 1:  # 2D conv
-            assert input_channels % act_c_num_blocks == 0
+            assert _nearest_32(input_channels) % act_c_num_blocks == 0
+            assert (
+                not shallow_conv
+            ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True"
             conv_input_on_device = ttl.tensor.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
-                    (int)(input_channels / act_c_num_blocks),
+                    (int)(_nearest_32(input_channels) / act_c_num_blocks),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttl.tensor.ShardOrientation.COL_MAJOR,
@@ -830,7 +838,7 @@ class TTPyCompositeConv(TTPyOp):
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
-                    input_channels,
+                    input_channels if shallow_conv else _nearest_32(input_channels),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttl.tensor.ShardOrientation.ROW_MAJOR,

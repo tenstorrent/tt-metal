@@ -224,8 +224,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         TT_ASSERT(bias.value().buffer() != nullptr);
         auto bias_shape_without_padding = bias.value().shape().without_padding();
         TT_ASSERT(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
-        // TT_ASSERT(bias_shape_without_padding[1] == 1 && bias_shape_without_padding[2] == 1, "Bias should have H == W == 1");
-        TT_ASSERT(bias_shape_without_padding[3] == output_channels, "Bias should have output_channels");
     }
 
     // Normal matrix shape check
