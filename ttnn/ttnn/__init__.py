@@ -120,6 +120,12 @@ from ttnn.operations.relational import (
     lez,
     nez,
     eqz,
+    gt,
+    gte,
+    lt,
+    lte,
+    eq,
+    ne,
 )
 
 from ttnn.operations.normalization import (
