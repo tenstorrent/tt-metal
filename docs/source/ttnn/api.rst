@@ -84,6 +84,12 @@ Pointwise Relational
    ttnn/lez
    ttnn/nez
    ttnn/eqz
+   ttnn/gt
+   ttnn/gte
+   ttnn/lt
+   ttnn/lte
+   ttnn/eq
+   ttnn/ne
 
 Reduction
 =========

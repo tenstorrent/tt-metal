@@ -1,4 +1,4 @@
-personal_ws-1.1 en 457
+personal_ws-1.1 en 462
 ABI
 ADDI
 API
@@ -238,6 +238,7 @@ enqueue
 enqueued
 enum
 env
+eq
 eqz
 erf
 erfc
@@ -258,6 +259,7 @@ genindex
 gez
 grayskull
 grey
+gte
 gtz
 hardsigmoid
 hardswish
@@ -297,6 +299,8 @@ llrt
 loadi
 loadis
 loopback
+lt
+lte
 ltz
 lut
 lv
@@ -312,6 +316,7 @@ namespace
 nans
 ncrisc
 nd
+ne
 nez
 noc
 nodebias
