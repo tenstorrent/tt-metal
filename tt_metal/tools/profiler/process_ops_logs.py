@@ -109,6 +109,7 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", PROFILER_DEVICE_SIDE_LOG)
     if os.path.isfile(deviceLogPath):
         setup = device_post_proc_config.default_setup()
+        setup.intrestingCores = None
         setup.deviceInputLog = deviceLogPath
         setup.timerAnalysis = {
             "FW_START->FW_END": {

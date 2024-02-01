@@ -18,7 +18,7 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
     auto worker_cores_used_in_program =
         device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
 
-    detail::DumpDeviceProfileResults(device);
+    detail::DumpDeviceProfileResults(device, worker_cores_used_in_program);
 }
 
 
@@ -38,13 +38,17 @@ void InitDeviceProfiler(Device *device){
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
 
-    tt::tt_metal::InterleavedBufferConfig dram_config{
-                .device= device,
-                .size = pageSize * dramBankCount,
-                .page_size =  pageSize,
-                .buffer_type = tt::tt_metal::BufferType::DRAM
-    };
-    tt_metal_device_profiler.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+
+    if (tt_metal_device_profiler.output_dram_buffer.size() == 0 )
+    {
+        tt::tt_metal::InterleavedBufferConfig dram_config{
+                    .device= device,
+                    .size = pageSize * dramBankCount,
+                    .page_size =  pageSize,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+        };
+        tt_metal_device_profiler.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+    }
 
     std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();

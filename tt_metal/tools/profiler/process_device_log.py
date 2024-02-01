@@ -328,7 +328,6 @@ def import_device_profile_log(
     ignoreMarkers=None,
 ):
     devicesData = {"devices": {}}
-    programsData = {"programs": {}}
     with open(logPath) as csvFile:
         csvReader = csv.reader(csvFile, delimiter=",")
         arch = ""
@@ -368,34 +367,6 @@ def import_device_profile_log(
                     devicesData["devices"][chipID] = {
                         "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData)]}}}}
                     }
-
-                if programID in programsData["programs"].keys():
-                    if chipID in programsData["programs"][programID]["devices"].keys():
-                        if core in programsData["programs"][programID]["devices"][chipID]["cores"].keys():
-                            if (
-                                risc
-                                in programsData["programs"][programID]["devices"][chipID]["cores"][core]["riscs"].keys()
-                            ):
-                                programsData["programs"][programID]["devices"][chipID]["cores"][core]["riscs"][risc][
-                                    "timeseries"
-                                ].append((timerID, timeData))
-                            else:
-                                programsData["programs"][programID]["devices"][chipID]["cores"][core]["riscs"][risc] = {
-                                    "timeseries": [(timerID, timeData)]
-                                }
-                        else:
-                            programsData["programs"][programID]["devices"][chipID]["cores"][core] = {
-                                "riscs": {risc: {"timeseries": [(timerID, timeData)]}}
-                            }
-                    else:
-                        programsData["programs"][programID]["devices"][chipID] = {
-                            "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData)]}}}}
-                        }
-                else:
-                    programsData["programs"][programID] = {
-                        "devices": {chipID: {"cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData)]}}}}}}
-                    }
-                    programsData["programs"][programID].update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
     def sort_timeseries_and_find_min(devicesData):
         globalMinTS = (1 << 64) - 1
@@ -440,43 +411,8 @@ def import_device_profile_log(
 
     # Sort all timeseries and find global min timestamp
     sort_timeseries_and_find_min(devicesData)
-    # for programID, programData in programsData["programs"].items():
-    # sort_timeseries_and_find_min(programData)
 
-    return devicesData, programsData
-
-
-def is_new_op_core(tsRisc):
-    timerID, tsValue, risc = tsRisc
-    if risc == "BRISC" and timerID == 1:
-        return True
-    return False
-
-
-def is_new_op_device(tsCore, coreOpMap):
-    timerID, tsValue, risc, core = tsCore
-    appendTs = False
-    isNewOp = False
-    isNewOpFinished = False
-    if core[1] != NON_COMPUTE_ROW:
-        appendTs = True
-        if risc == "BRISC" and timerID == 1:
-            assert (
-                core not in coreOpMap.keys()
-            ), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}, this could be caused by soft resets"
-            isNewOp = True
-            coreOpMap[core] = (tsValue,)
-        elif risc == "BRISC" and timerID == 4:
-            assert core in coreOpMap.keys() and len(coreOpMap[core]) == 1, "Unexpected BRISC end"
-            coreOpMap[core] = (coreOpMap[core][0], tsValue)
-            isNewOpFinished = True
-            for opDuration in coreOpMap.values():
-                pairSize = len(opDuration)
-                assert pairSize == 1 or pairSize == 2, "Wrong op duration"
-                if pairSize == 1:
-                    isNewOpFinished = False
-                    break
-    return appendTs, isNewOp, isNewOpFinished
+    return devicesData
 
 
 def risc_to_core_timeseries(devicesData):
@@ -489,16 +425,7 @@ def risc_to_core_timeseries(devicesData):
 
             tmpTimeseries.sort(key=lambda x: x[1])
 
-            ops = []
-            for ts in tmpTimeseries:
-                timerID, tsValue, risc = ts
-                if is_new_op_core(ts):
-                    ops.append([ts])
-                else:
-                    if len(ops) > 0:
-                        ops[-1].append(ts)
-
-            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "ops": ops}
+            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries}
 
 
 def core_to_device_timeseries(devicesData):
@@ -519,18 +446,6 @@ def core_to_device_timeseries(devicesData):
         for risc in tmpTimeseries["riscs"].keys():
             tmpTimeseries["riscs"][risc]["timeseries"].sort(key=lambda x: x[1])
 
-        ops = []
-        coreOpMap = {}
-        for ts in tmpTimeseries["riscs"]["TENSIX"]["timeseries"]:
-            appendTs, isNewOp, isNewOpFinished = is_new_op_device(ts, coreOpMap)
-            if appendTs:
-                if isNewOp:
-                    ops.append({"timeseries": []})
-                ops[-1]["timeseries"].append(ts)
-            if isNewOpFinished:
-                coreOpMap = {}
-
-        tmpTimeseries["riscs"]["TENSIX"]["ops"] = ops
         deviceData["cores"]["DEVICE"] = tmpTimeseries
 
 
@@ -743,9 +658,7 @@ def translate_metaData(metaData, core, risc):
         elif type(content) == tuple:
             metaCore = content
 
-    if metaCore[1] == NON_COMPUTE_ROW:
-        core = None
-    elif core != "ANY" and metaCore:
+    if core != "ANY" and metaCore:
         core = metaCore
     if risc != "ANY" and metaRisc:
         risc = metaRisc
@@ -802,14 +715,6 @@ def model_first_last_analysis(riscData, analysis):
     return first_last_analysis(riscData["timeseries"], analysis)
 
 
-def op_first_last_analysis(riscData, analysis):
-    durations = []
-    if "ops" in riscData.keys():
-        for op in riscData["ops"]:
-            durations += first_last_analysis(op, analysis)
-    return durations
-
-
 def adjacent_LF_analysis(riscData, analysis):
     timeseries = riscData["timeseries"]
     durations = []
@@ -838,8 +743,6 @@ def timeseries_analysis(riscData, name, analysis):
         tmpList = adjacent_LF_analysis(riscData, analysis)
     elif analysis["type"] == "model_first_last":
         tmpList = model_first_last_analysis(riscData, analysis)
-    elif analysis["type"] == "op_first_last":
-        tmpList = op_first_last_analysis(riscData, analysis)
 
     tmpDF = pd.DataFrame(tmpList)
     tmpDict = {}
@@ -883,18 +786,6 @@ def device_analysis(name, analysis, devicesData):
         assert risc in deviceData["cores"][core]["riscs"].keys()
         riscData = deviceData["cores"][core]["riscs"][risc]
         timeseries_analysis(riscData, name, analysis)
-
-
-def ops_analysis(name, analysis, devicesData):
-    for chipID, deviceData in devicesData["devices"].items():
-        core = "DEVICE"
-        risc = "TENSIX"
-        assert core in deviceData["cores"].keys()
-        assert risc in deviceData["cores"][core]["riscs"].keys()
-        riscData = deviceData["cores"][core]["riscs"][risc]
-        if "ops" in riscData.keys():
-            for op in riscData["ops"]:
-                timeseries_analysis(op, name, analysis)
 
 
 def generate_device_level_summary(devicesData):
@@ -942,7 +833,7 @@ def validate_setup(ctx, param, setup):
 
 
 def import_log_run_stats(setup=device_post_proc_config.default_setup()):
-    devicesData, programsData = import_device_profile_log(
+    devicesData = import_device_profile_log(
         setup.deviceInputLog, setup.cycleRange, setup.intrestingCores, setup.ignoreMarkers
     )
     risc_to_core_timeseries(devicesData)
@@ -953,8 +844,6 @@ def import_log_run_stats(setup=device_post_proc_config.default_setup()):
             core_analysis(name, analysis, devicesData)
         elif analysis["across"] == "device":
             device_analysis(name, analysis, devicesData)
-        elif analysis["across"] == "ops":
-            ops_analysis(name, analysis, devicesData)
 
     generate_device_level_summary(devicesData)
     return devicesData
@@ -1148,9 +1037,6 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
 
     if not no_print_stats:
         print_stats(devicesData, setup)
-        for opCount, op in enumerate(devicesData["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]):
-            if "analysis" in op.keys():
-                print(f"{opCount +1} : {op['analysis']['OPs']['series']}")
 
     timelineFigs = {}
     if not no_plots:

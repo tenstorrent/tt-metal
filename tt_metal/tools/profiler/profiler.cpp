@@ -30,7 +30,7 @@ void DeviceProfiler::readRiscProfilerResults(
     ZoneScoped;
 
     std::pair<uint32_t, CoreCoord> deviceCore = {device_id,worker_core};
-    TT_ASSERT (device_core_data.find(deviceCore) != device_core_data.end(), "Device {}, workder core {},{} not present in recorded data" , device_id, worker_core.x, worker_core.y);
+    TT_ASSERT (device_core_data.find(deviceCore) != device_core_data.end(), "Device {}, worker core {},{} not present in recorded data" , device_id, worker_core.x, worker_core.y);
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
     uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
@@ -60,6 +60,8 @@ void DeviceProfiler::readRiscProfilerResults(
             //<< control_buffer[kernel_profiler::NOC_X] << "," << control_buffer[kernel_profiler::NOC_Y]
             //<< "," << control_buffer[kernel_profiler::FLAT_ID]
             //<< "," << control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS]
+            //<< "," << control_buffer[kernel_profiler::RUN_COUNTER]
+            //<< "," << control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR]
             //<< "," << control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR]<< std::endl;
 
         //vector<std::uint32_t> profile_buffer_L1;
@@ -136,7 +138,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
-                log_warning("Profiler DRAM buffers were full, markers were dropped! worker core {}, {}, bufferEndIndex = {}, host_size = {}",worker_core.x, worker_core.y,bufferEndIndex , PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC );
+                log_warning("Profiler DRAM buffers were full, markers were dropped! worker core {}, {}, Risc {},  bufferEndIndex = {}, host_size = {}",worker_core.x, worker_core.y, riscEndIndex, bufferEndIndex , PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC );
                 bufferEndIndex = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
             }
 
@@ -338,7 +340,8 @@ DeviceProfiler::DeviceProfiler()
     output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::create_directories(output_dir);
 
-    tracy::set_cpu_time();
+    TracySetCpuTime();
+
 #endif
 }
 
@@ -405,6 +408,9 @@ void DeviceProfiler::dumpResults (
         {
             pushTracyDeviceResults(device_core);
 
+            device_core_data[device_core].data.clear();
+            device_core_data[device_core].runCounter = 0;
+
             std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
             TracyTTContextName(device_core_data[device_core].tracyContext, tracyTTCtxName.c_str(), tracyTTCtxName.size());
         }
@@ -414,7 +420,7 @@ void DeviceProfiler::dumpResults (
 
 void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device_core)
 {
-#if defined(PROFILER)
+#if defined(PROFILER) && defined(TRACY_ENABLE)
     TT_ASSERT (device_core_data.find(device_core) != device_core_data.end(), "Device {}, core {},{} not present in recorded data" , device_core.first, device_core.second.x, device_core.second.y);
     if (!device_core_data[device_core].contextPopulated)
     {
