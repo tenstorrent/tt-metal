@@ -8,9 +8,10 @@ import inspect
 
 from loguru import logger
 
+import ttnn
+
 
 def compare(torch_outputs, outputs, pcc):
-    import ttnn.core as ttnn
     import torch
 
     from models.utility_functions import comp_pcc
@@ -64,8 +65,6 @@ def override_pearson_correlation_coefficient(value):
 
 
 def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
-    import ttnn.core as ttnn
-
     torch_output = ttnn.from_torch(torch_output, dtype=output.dtype, layout=output.layout)
     if ttnn.has_storage_type_of(output, ttnn.DEVICE_STORAGE_TYPE):
         torch_output = ttnn.to_device(torch_output, output.device)
@@ -73,8 +72,6 @@ def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
 
 
 def document_input_tensors(name, function, validate_input_tensors):
-    import ttnn.core as ttnn
-
     signature = inspect.signature(validate_input_tensors)
     arguments = {arg_name: None for arg_name in signature.parameters}
     arguments["operation_name"] = name
@@ -107,35 +104,38 @@ def document_input_tensors(name, function, validate_input_tensors):
     if len(tensor_names) != len(tensor_schemas):
         raise RuntimeError(f"Expected {len(tensor_names)} tensor_schemas, got {len(tensor_schemas)}")
 
+    doc = function.__doc__ if function.__doc__ is not None else ""
     for tensor_name, tensor_schema in zip(tensor_names, tensor_schemas):
-        function.__doc__ = f"{function.__doc__}\n    .. list-table:: {tensor_name}\n\n"
+        doc = f"{doc}\n    .. list-table:: {tensor_name}\n\n"
 
         for index, arg_name in enumerate(tensor_schema.keys()):
             arg_name = arg_name.replace("_", " ")
             bullet_point = f"* -" if index == 0 else "  -"
-            function.__doc__ = f"{function.__doc__}        {bullet_point} {arg_name}\n"
+            doc = f"{doc}        {bullet_point} {arg_name}\n"
 
         for index, value in enumerate(tensor_schema.values()):
             if isinstance(value, (list, tuple)):
 
                 def to_string(object):
-                    if isinstance(object, ttnn.DataType):
-                        return f"ttnn.{object.name.lower()}"
-                    elif isinstance(object, ttnn.Layout):
-                        return f"ttnn.{object.name}_LAYOUT"
-                    else:
+                    try:
+                        if isinstance(object, ttnn.DataType):
+                            return f"ttnn.{object.name.lower()}"
+                        elif isinstance(object, ttnn.Layout):
+                            return f"ttnn.{object.name}_LAYOUT"
+                        else:
+                            return f"{object}"
+                    except Exception as e:
+                        logger.warning(str(e))
                         return f"{object}"
 
                 value = f"{', '.join([to_string(element) for element in value])}"
             bullet_point = f"* -" if index == 0 else "  -"
-            function.__doc__ = f"{function.__doc__}        {bullet_point} {value}\n"
+            doc = f"{doc}        {bullet_point} {value}\n"
 
-    function.__doc__ = f"{function.__doc__}\n"
+    function.__doc__ = f"{doc}\n"
 
 
 def register_operation(*, name, validate_input_tensors, torch_function=None):
-    import ttnn.core as ttnn
-
     def operation_decorator(function):
         document_input_tensors(name, function, validate_input_tensors)
 
@@ -164,8 +164,8 @@ def register_operation(*, name, validate_input_tensors, torch_function=None):
                     if not matches:
                         if USE_TORCH_OUTPUT_IF_MISMATCHES:
                             logger.warning(f"{name}: Comparing against PyTorch failed, using PyTorch output")
-                            if not isinstance(output, ttnn.Tensor):
-                                raise TypeError(f"Expected ttnn.Tensor, got {type(output)}")
+                            if not isinstance(output, Tensor):
+                                raise TypeError(f"Expected Tensor, got {type(output)}")
                             output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
                         else:
                             output = ttnn.to_torch(output)

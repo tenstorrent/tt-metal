@@ -7,7 +7,7 @@ from typing import Tuple, Union
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 
 def _torch_pad_to_tile(padded_tensor: ttnn.Tensor):
