@@ -113,6 +113,15 @@ from ttnn.operations.binary import (
     multiply,
 )
 
+from ttnn.operations.relational import (
+    gtz,
+    ltz,
+    gez,
+    lez,
+    nez,
+    eqz,
+)
+
 from ttnn.operations.normalization import (
     layer_norm,
     rms_norm,
