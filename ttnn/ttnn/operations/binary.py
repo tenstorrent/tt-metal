@@ -9,7 +9,7 @@ import sys
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 
 THIS_MODULE = sys.modules[__name__]
@@ -56,7 +56,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         return output_tensor
 
     binary_function.__name__ = f"ttnn.{name}"
-    binary_function.__doc__ = doc
+    binary_function.__doc__ = doc + binary_function.__doc__
 
     setattr(THIS_MODULE, name, binary_function)
 

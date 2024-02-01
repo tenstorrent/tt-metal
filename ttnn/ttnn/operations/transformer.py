@@ -6,10 +6,12 @@ from typing import Optional, Tuple
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 
-def _split_query_key_value_and_split_heads_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+def _split_query_key_value_and_split_heads_validate_input_tensors(
+    operation_name, input_tensor, kv_input_tensor=None, *args, **kwargs
+):
     ttnn.validate_input_tensor(
         operation_name,
         input_tensor,
@@ -18,6 +20,16 @@ def _split_query_key_value_and_split_heads_validate_input_tensors(operation_name
         layouts=(ttnn.TILE_LAYOUT,),
         can_be_on_device=True,
         can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        kv_input_tensor,
+        ranks=(3,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
     )
 
 

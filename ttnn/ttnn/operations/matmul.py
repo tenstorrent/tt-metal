@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 
 def _shape_is_broadcastable(input_shape_a, input_shape_b):

@@ -6,7 +6,7 @@ import pathlib
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
-from ttnn.core import (
+from ttnn.types import (
     TILE_SIZE,
     Device,
     DataType,
@@ -22,7 +22,6 @@ from ttnn.core import (
     ShardStrategy,
     ShardOrientation,
     DEFAULT_SHARD_ORIENTATION,
-    create_sharded_memory_config,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -30,6 +29,25 @@ from ttnn.core import (
     DEVICE_STORAGE_TYPE,
     Shape,
     Tensor,
+    has_storage_type_of,
+)
+
+from ttnn.core import (
+    has_padding,
+    create_sharded_memory_config,
+)
+
+from ttnn.validation import validate_input_tensor
+
+from ttnn.decorators import register_operation
+
+from ttnn.device import open, close
+
+from ttnn.program_cache import (
+    enable_program_cache,
+)
+
+from ttnn.operations.core import (
     from_torch,
     to_torch,
     to_device,
@@ -41,13 +59,8 @@ from ttnn.core import (
     reallocate,
     load_tensor,
     dump_tensor,
-    has_storage_type_of,
-)
-
-from ttnn.device import open, close
-
-from ttnn.program_cache import (
-    enable_program_cache,
+    unsqueeze_to_4D,
+    squeeze,
 )
 
 from ttnn.operations.matmul import (

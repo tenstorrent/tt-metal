@@ -6,7 +6,7 @@ from typing import Tuple, Union, List
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
+import ttnn
 
 
 def _torch_pad(input_tensor: ttnn.Tensor, padding, value):
