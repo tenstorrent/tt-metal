@@ -67,8 +67,6 @@ def generate_text(
     return tokenizer.decode(input_ids[0], skip_special_tokens=True)
 
 
-# Verify that the torch functional model matches exactly the default model.
-@pytest.mark.skip(reason="Output mismatches")
 def test_torch_bloom_for_causal_lm():
     model_name = "bigscience/bloom-560m"
     config = BloomConfig.from_pretrained(model_name)

@@ -288,7 +288,7 @@ def bloom_for_causal_lm(config, input_ids, alibi, causal_mask, *, parameters):
         parameters=parameters.transformer,
     )
 
-    # Unfortuntely we do not have the ability to handle large tensors yet. So running final matmul ising torch is a workaround.
+    # Unfortunately we do not have the ability to handle large tensors yet. So running final matmul using torch as a workaround.
     hidden_states = ttnn.from_device(hidden_states)
     hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
     hidden_states = ttnn.to_torch(hidden_states).to(torch.float32)

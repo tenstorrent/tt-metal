@@ -319,6 +319,9 @@ def matmul(
         output_tensor = ttnn.Tensor(ttl_output_tensor)
 
     elif height_a == 1 and width_b == 1:  # dot product
+        if dtype != input_tensor_a.dtype:
+            raise RuntimeError("dtype is not supported for dot product")
+
         ttl_input_tensor_a = input_tensor_a.value
         ttl_input_tensor_b = input_tensor_b.value
 
@@ -341,6 +344,8 @@ def matmul(
         output_shape = (32,)
 
     elif _shape_is_broadcastable(input_shape_a, input_shape_b):
+        if dtype != input_tensor_a.dtype:
+            raise RuntimeError("dtype is not supported for matmul without core grid")
         if width_a != height_b:
             raise RuntimeError("The width of the first tensor must be equal to the height of the second tensor")
         if all(x == 1 for x in batch_shape_b):

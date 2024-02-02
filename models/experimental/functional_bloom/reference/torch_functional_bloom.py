@@ -169,7 +169,7 @@ def bloom_attention(
     inv_norm_factor = 1.0 / math.sqrt(head_size)
     attention_scores = beta * alibi + inv_norm_factor * (query_layer @ key_layer)
 
-    fill_value = -1024
+    fill_value = -100
     attention_weights = attention_scores * (1 + (attention_mask * -1)) + attention_mask * fill_value
     attention_probs = F.softmax(attention_weights, dim=-1, dtype=attention_scores.dtype)
 

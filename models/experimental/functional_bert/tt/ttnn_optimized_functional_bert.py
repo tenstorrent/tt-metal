@@ -9,11 +9,8 @@ def bert_attention(
     config,
     hidden_states,
     attention_mask,
-    query_key_value_weight,
-    query_key_value_bias,
-    self_output_weight,
-    self_output_bias,
     *,
+    parameters,
     num_cores_x=12,
 ):
     num_heads = config.num_attention_heads
@@ -22,8 +19,8 @@ def bert_attention(
 
     query_key_value_output = ttnn.linear(
         hidden_states,
-        query_key_value_weight,
-        bias=query_key_value_bias,
+        parameters.self.query_key_value.weight,
+        bias=parameters.self.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         core_grid=(batch_size, num_cores_x),
@@ -71,42 +68,90 @@ def bert_attention(
 
     self_output = ttnn.linear(
         context_layer,
-        self_output_weight,
-        bias=self_output_bias,
+        parameters.output.dense.weight,
+        bias=parameters.output.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         core_grid=(batch_size, num_cores_x),
     )
     ttnn.deallocate(context_layer)
 
-    return self_output
+    attention_output = ttnn.layer_norm(
+        hidden_states + self_output,
+        weight=parameters.output.LayerNorm.weight,
+        bias=parameters.output.LayerNorm.bias,
+        epsilon=config.layer_norm_eps,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(hidden_states)
+    ttnn.deallocate(self_output)
+
+    return attention_output
 
 
-def bert_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, ff2_bias, num_cores_x=12):
+def bert_intermediate(
+    hidden_states,
+    *,
+    parameters,
+    num_cores_x=12,
+):
     batch_size, *_ = hidden_states.shape
 
-    num_cores_x = 12
-    ff1_output = ttnn.linear(
+    output = ttnn.linear(
         hidden_states,
-        ff1_weight,
-        bias=ff1_bias,
+        parameters.dense.weight,
+        bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         core_grid=(batch_size, num_cores_x),
         activation="gelu",
     )
+    return output
 
-    ff2_output = ttnn.linear(
-        ff1_output,
-        ff2_weight,
-        bias=ff2_bias,
+
+def bert_output(
+    config,
+    hidden_states,
+    residual,
+    *,
+    parameters,
+    num_cores_x=12,
+):
+    batch_size, *_ = hidden_states.shape
+
+    output = ttnn.linear(
+        hidden_states,
+        parameters.dense.weight,
+        bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         core_grid=(batch_size, num_cores_x),
     )
-    ttnn.deallocate(ff1_output)
+    ttnn.deallocate(hidden_states)
 
-    return ff2_output
+    normalized_output = ttnn.layer_norm(
+        output,
+        residual_input_tensor=residual,
+        weight=parameters.LayerNorm.weight,
+        bias=parameters.LayerNorm.bias,
+        epsilon=config.layer_norm_eps,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(output)
+    ttnn.deallocate(residual)
+
+    return normalized_output
+
+
+def bert_feedforward(
+    config,
+    hidden_states,
+    *,
+    parameters,
+):
+    intermediate = bert_intermediate(hidden_states, parameters=parameters.intermediate)
+    hidden_states = bert_output(config, intermediate, hidden_states, parameters=parameters.output)
+    return hidden_states
 
 
 def bert_encoder(
@@ -119,41 +164,16 @@ def bert_encoder(
         config,
         hidden_states,
         attention_mask,
-        parameters.attention.self.query_key_value.weight,
-        parameters.attention.self.query_key_value.bias,
-        parameters.attention.output.dense.weight,
-        parameters.attention.output.dense.bias,
+        parameters=parameters.attention,
     )
-
-    multi_head_attention_add_and_layer_norm_output = ttnn.layer_norm(
-        hidden_states,
-        residual_input_tensor=multi_head_attention_output,
-        weight=parameters.attention.output.LayerNorm.weight,
-        bias=parameters.attention.output.LayerNorm.bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    ttnn.deallocate(hidden_states)
-    ttnn.deallocate(multi_head_attention_output)
 
     feedforward_output = bert_feedforward(
-        multi_head_attention_add_and_layer_norm_output,
-        parameters.intermediate.dense.weight,
-        parameters.intermediate.dense.bias,
-        parameters.output.dense.weight,
-        parameters.output.dense.bias,
+        config,
+        multi_head_attention_output,
+        parameters=parameters,
     )
 
-    feedforward_add_and_layer_norm_output = ttnn.layer_norm(
-        multi_head_attention_add_and_layer_norm_output,
-        residual_input_tensor=feedforward_output,
-        weight=parameters.output.LayerNorm.weight,
-        bias=parameters.output.LayerNorm.bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    ttnn.deallocate(multi_head_attention_add_and_layer_norm_output)
-    ttnn.deallocate(feedforward_output)
-
-    return feedforward_add_and_layer_norm_output
+    return feedforward_output
 
 
 def bert(
