@@ -20,7 +20,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tensor &output, bool backwards) {
     Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     bool tilized = output.layout() == Layout::TILE;
 
