@@ -336,7 +336,7 @@ namespace kernel_profiler{
                 .page_size = pageSize
             };
 
-            if ( currEndIndex < PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
+            if ( currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {
                 uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 

@@ -17,7 +17,8 @@ include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multicore_reuse_mc
 
 PROFILER_TESTS += \
 		  programming_examples/profiler/test_custom_cycle_count\
-		  programming_examples/profiler/test_full_buffer
+		  programming_examples/profiler/test_full_buffer\
+		  programming_examples/profiler/test_multi_op
 
 programming_examples: programming_examples/loopback \
                       programming_examples/eltwise_binary \

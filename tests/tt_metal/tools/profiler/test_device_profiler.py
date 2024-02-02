@@ -54,6 +54,25 @@ def get_function_name():
     return frame.f_code.co_name
 
 
+def test_multi_op():
+    REF_COUNT_DICT = {
+        "grayskull": [330, 270],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "wormhole_b0": [222, 198, 174],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setup=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    statName = f"BRISC KERNEL_START->KERNEL_END"
+
+    assert statName in stats.keys(), "Wrong device analysis format"
+    assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
 def test_custom_cycle_count():
     REF_CYCLE_COUNT_PER_LOOP = 52
     LOOP_COUNT = 2000

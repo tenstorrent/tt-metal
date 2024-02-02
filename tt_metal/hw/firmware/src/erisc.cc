@@ -107,7 +107,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         kernel_profiler::mark_fw_start();
         if (erisc_info->launch_user_kernel == 1) {
             kernel_init();
-            kernel_profiler::mark_time(CC_MAIN_END);
         }
         if (my_routing_mode == EthRouterMode::FD_SRC) {
             eth_db_acquire(eth_db_semaphore_addr, ((uint64_t)eth_router_noc_encoding << 32));
@@ -157,6 +156,4 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         kernel_profiler::send_profiler_data_to_dram();
     }
     internal_::disable_erisc_app();
-    kernel_profiler::mark_fw_end();
-    kernel_profiler::send_profiler_data_to_dram();
 }

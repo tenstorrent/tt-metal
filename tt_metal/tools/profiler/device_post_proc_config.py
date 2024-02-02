@@ -199,6 +199,17 @@ class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(default_setup):
     }
 
 
+class test_multi_op(default_setup):
+    timerAnalysis = {
+        "BRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
+            "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
+        },
+    }
+
+
 class test_full_buffer(default_setup):
     timerAnalysis = {
         "Marker Repeat": {
