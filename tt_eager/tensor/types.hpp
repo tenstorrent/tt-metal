@@ -93,7 +93,29 @@ struct Padding {
     const auto attribute_values() const {
         return std::make_tuple(std::cref(this->rank_), std::cref(this->pad_dimensions_), std::cref(this->pad_value_));
     }
+    friend std::ostream& operator<<(std::ostream& os, const Padding& padding);
 };
+
+inline std::ostream& operator<<(std::ostream& os, const Padding& padding) {
+    os << "Padding(";
+    os << "rank: " << padding.rank_;
+    os << ", pad_dimensions: [";
+    for (std::size_t i = 0; i < padding.rank_; ++i) {
+        os << "{front: " << padding.pad_dimensions_[i].front << ", back: " << padding.pad_dimensions_[i].back << "}";
+        if (i < padding.rank_ - 1) os << ", ";
+    }
+    os << "]";
+    os << ", pad_value: ";
+    switch (padding.pad_value_) {
+        case Padding::PadValue::Any: os << "Any"; break;
+        case Padding::PadValue::Zero: os << "Zero"; break;
+        case Padding::PadValue::Infinity: os << "Infinity"; break;
+        case Padding::PadValue::NegativeInfinity: os << "NegativeInfinity"; break;
+        default: os << "Unknown";
+    }
+    os << ")";
+    return os;
+}
 
 bool operator==(const Padding&, const Padding&);
 bool operator!=(const Padding&, const Padding&);
@@ -151,7 +173,29 @@ class Shape {
     const auto attribute_values() const {
         return std::make_tuple(std::cref(this->rank_), std::cref(this->dimensions_), std::cref(this->padding_));
     }
+    friend std::ostream& operator<<(std::ostream& os, const Shape& shape);
 };
+
+inline std::ostream& operator<<(std::ostream& os, const Shape& padded_shape) {
+    os << "Shape([";
+    const auto shape = padded_shape.without_padding();
+    const auto& padding = padded_shape.padding();
+    for (auto i = 0; i < shape.rank(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        if (padding[i].front > 0) {
+            os << padding[i].front << " + ";
+        }
+        os << shape[i];
+        if (padding[i].back > 0) {
+            os << " + " << padding[i].back;
+        }
+    }
+    os << "])";
+    return os;
+}
+
 
 bool operator==(const Shape&, const Shape&);
 bool operator!=(const Shape&, const Shape&);
@@ -269,6 +313,17 @@ template<typename T>
 constexpr void raise_unsupported_storage() {
     static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }
+
+inline bool operator==(const Storage& v1, const Storage& v2) {
+    return std::visit([](const auto& a, const auto& b) -> bool {
+        if constexpr (std::is_same_v<decltype(a), decltype(b)>) {
+            return a == b;
+        } else {
+            return false;
+        }
+    }, v1, v2);
+};
+
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
 bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);

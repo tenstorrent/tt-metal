@@ -151,7 +151,8 @@ inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE")
 std::vector<Tensor> run_device_operation(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
     ZoneScoped;
     ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
 
@@ -205,8 +206,8 @@ std::vector<Tensor> run_device_operation(
         };
     }
 
-    operation.validate(input_tensors, optional_input_tensors);
-    auto output_tensors = operation.create_output_tensors(input_tensors);
+    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+    auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
 
     // Enqueue or Launch Program
@@ -256,8 +257,9 @@ std::vector<Tensor> run(const HostOperation& operation, const std::vector<Tensor
 std::vector<Tensor> run(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-    return detail::decorate_operation(detail::run_device_operation)(operation, input_tensors, optional_input_tensors);
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    return detail::decorate_operation(detail::run_device_operation)(operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 
 std::vector<Tensor> run_without_autoformat(
@@ -285,7 +287,36 @@ std::vector<Tensor> run_without_autoformat(
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
         }
     }
-    return run(operation, input_tensors_on_dev, optional_input_tensors_on_dev);
+    return run(operation, input_tensors_on_dev, optional_input_tensors_on_dev, {});
+}
+
+std::vector<Tensor> run_without_autoformat(
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors
+) {
+    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+
+    std::vector<Tensor> input_tensors_on_dev;
+    input_tensors_on_dev.reserve(input_tensors.size());
+    for (auto& input_tensor : input_tensors) {
+        if (input_tensor.storage_type() != StorageType::DEVICE) {
+            input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
+        } else {
+            input_tensors_on_dev.push_back(input_tensor);
+        }
+    }
+    std::vector<std::optional<const Tensor>> optional_input_tensors_on_dev;
+    optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
+    for (auto& optional_input_tensor : optional_input_tensors) {
+        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() != StorageType::DEVICE) {
+            optional_input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
+        } else {
+            optional_input_tensors_on_dev.push_back(optional_input_tensor);
+        }
+    }
+    return run(operation, input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors);
 }
 
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
