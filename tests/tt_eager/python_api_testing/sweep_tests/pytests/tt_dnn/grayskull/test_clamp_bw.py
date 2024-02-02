@@ -23,12 +23,10 @@ def run_clamp_bw(input_shape, dtype, dlayout, in_mem_config, out_mem_config, dat
 
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     y = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    x = torch.where(x.abs() > 1e-3, x, 1e-3)
-    y = torch.where(y.abs() > 1e-3, y, 1e-3)
-    ref_value = pytorch_ops.clamp_max_bw(x, y, scalar)
 
-    # something wrong with clamp_max_bw when inputs are negative.
-    tt_result = tt_lib_ops.clamp_max_bw(
+    ref_value = pytorch_ops.clamp_bw(x, y, scalar)
+
+    tt_result = tt_lib_ops.clamp_bw(
         x=x,
         y=y,
         scalar=scalar,

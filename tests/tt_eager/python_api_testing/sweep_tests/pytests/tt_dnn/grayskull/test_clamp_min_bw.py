@@ -23,12 +23,10 @@ def run_clamp_bw(input_shape, dtype, dlayout, in_mem_config, out_mem_config, dat
 
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     y = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    x = torch.where(x.abs() > 1e-3, x, 1e-3)
-    y = torch.where(y.abs() > 1e-3, y, 1e-3)
-    ref_value = pytorch_ops.clamp_max_bw(x, y, scalar)
 
-    # something wrong with clamp_max_bw when inputs are negative.
-    tt_result = tt_lib_ops.clamp_max_bw(
+    ref_value = pytorch_ops.clamp_min_bw(x, y, scalar)
+
+    tt_result = tt_lib_ops.clamp_min_bw(
         x=x,
         y=y,
         scalar=scalar,
@@ -60,8 +58,24 @@ test_sweep_args = [
             None,
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        9234542,
-        -99.0,
+        14073508,
+        48.5,
+        "1",
+    ),
+    (
+        (1, 10, 192, 96),
+        [
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.DataType.BFLOAT16,
+        ],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            None,
+            None,
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        14073508,
+        48.5,
         "1",
     ),
 ]

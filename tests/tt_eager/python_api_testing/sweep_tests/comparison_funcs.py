@@ -7,6 +7,12 @@ import numpy as np
 from loguru import logger
 
 
+def replace_inf_to_0(t: torch.Tensor) -> torch.Tensor:
+    t = torch.where(t >= 2.65e38, 0, t)
+    t = torch.where(t <= -2.64e38, 0, t)
+    return t
+
+
 def get_atol_rtol_pcc(golden, calculated):
     if golden.is_complex() and calculated.is_complex():
         golden = torch.view_as_real(golden.clone())

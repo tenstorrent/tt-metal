@@ -21,8 +21,6 @@ def run_rmsnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     print(in_mem_config)
 
     x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10)
-    x = torch.where(x.abs() > 1e-3, x, 1e-3)
-
     x_ref = x.detach().clone()
 
     # compute ref value --------------------------
@@ -60,7 +58,7 @@ test_sweep_args = [
         [ttl.tensor.DataType.BFLOAT8_B],
         [ttl.tensor.Layout.TILE],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17493725,

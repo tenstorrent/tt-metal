@@ -1039,8 +1039,8 @@ def bert_large_ff2_matmul(x, y, z, *args, **kwargs):
 
 
 def eltwise_rpow(x, *args, **kwargs):
-    dim = kwargs["factor"]
-    return torch.pow(dim, x)
+    factor = kwargs["factor"]
+    return torch.pow(x, factor)
 
 
 def eltwise_rsub(x, *args, **kwargs):

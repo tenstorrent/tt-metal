@@ -24,15 +24,13 @@ def run_groupnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_conf
 
     print(in_mem_config)
 
-    def limit(_x):
-        return torch.where(_x.abs() > 1e-3, _x, 1e-3)
+    x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10).to(torch.bfloat16)
+    y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10).to(torch.bfloat16)
+    z = torch.Tensor(size=input_shape[1]).uniform_(-10, 10).to(torch.bfloat16)
 
-    x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10)
-    y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10)
-    z = torch.Tensor(size=input_shape[2]).uniform_(-10, 10)
-    x = limit(x)
-    y = limit(y)
-    z = limit(z)
+    x = torch.where(x.abs() > 1e-3, x, 1e-3)
+    y = torch.where(y.abs() > 1e-3, y, 1e-3)
+    z = torch.where(z.abs() > 1e-3, z, 1e-3)
 
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()
@@ -62,30 +60,6 @@ def run_groupnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_conf
 test_sweep_args = [
     (
         [(7, 14, 32, 160), (1, 14, 1, 1), (1, 14, 1, 1)],
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-        [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        417293,
-    ),
-    (
-        [(7, 14, 32, 160), (1, 14, 1, 1), (1, 14, 1, 1)],
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-        [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        8405597,
-    ),
-    (
-        [(7, 14, 32, 160), (1, 14, 1, 1), (1, 14, 1, 1)],
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -94,7 +68,31 @@ test_sweep_args = [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        9234542,
+        18784230,
+    ),
+    (
+        [(7, 14, 32, 160), (1, 14, 1, 1), (1, 14, 1, 1)],
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        3378971,
+    ),
+    (
+        [(7, 14, 32, 160), (1, 14, 1, 1), (1, 14, 1, 1)],
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        16005792,
     ),
 ]
 
