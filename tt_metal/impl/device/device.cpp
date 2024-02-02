@@ -45,7 +45,7 @@ bool ActiveDevices::activate_device(chip_id_t id) {
     } else if (this->active_devices_[id] == ActiveState::ACTIVE) {
         TT_THROW("Cannot re-initialize device {}, must first call close()", id);
     } else {
-        already_initialized = true;
+        already_initialized = (this->active_devices_[id] == ActiveState::INACTIVE) ? true : false;
     }
     this->active_devices_[id] = ActiveState::ACTIVE;
 
