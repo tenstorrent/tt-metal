@@ -10,6 +10,50 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
 
 @pytest.mark.parametrize(
     "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+@pytest.mark.parametrize(
+    "exponent",
+    [
+        -0.01,
+        -1.0,
+    ],
+)
+def test_negative_exponent(input_shapes, exponent, device):
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+
+    with pytest.raises(RuntimeError) as _e:
+        tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
+    assert "exponent >= 0.0" in str(_e)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+@pytest.mark.parametrize(
+    "exponent",
+    [
+        0,
+    ],
+)
+def test_fw_exponent(input_shapes, exponent, device):
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+
+    golden_tensor = [
+        torch.pow(grad_data, 0.0),
+    ]
+    tt_output_tensor_on_device = tt_lib.tensor.pow(grad_tensor, 0.0)
+    status = compare_results([tt_output_tensor_on_device], golden_tensor)
+    assert status
+
+    # assert "exponent >= 0.0" in str(_e)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
@@ -22,6 +66,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         0.0,
         1.0,
         2.0,
+        5.0,
     ],
 )
 def test_bw_unary_pow(input_shapes, exponent, device):
