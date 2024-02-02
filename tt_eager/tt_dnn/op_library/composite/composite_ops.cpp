@@ -1447,7 +1447,6 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
     uint32_t dim = input_shape.get_normalized_index(_dim);
     int size = input_a.volume();
 
-    TT_FATAL((input_shape[0] == 1), "Unsupported shapes, supported shapes [1, C, N, M]");
     if (dim == (input_shape.rank() - 1))
     {
         Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
@@ -1494,12 +1493,37 @@ Tensor _argmax(const Tensor& input_a, int64_t _dim, const MemoryConfig& output_m
     {
         Tensor tindex = tt::numpy::index_channel<bfloat16>(input_shape, DataType::BFLOAT16);
         Tensor max_val = max(input_a, dim, output_mem_config);
-        int repeat = input_shape[1];
+        int repeat = input_shape[dim];
         std::vector<Tensor> combined_tensors;
         for (int cid = 0; cid < repeat; cid++)
             combined_tensors.emplace_back(max_val);
         max_val.deallocate();
-        Tensor concat_out = concat(combined_tensors, 1, output_mem_config);
+        Tensor concat_out = concat(combined_tensors, dim, output_mem_config);
+        Tensor cmp_results = eq(input_a, concat_out, std::nullopt, output_mem_config);
+        concat_out.deallocate();
+        Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
+        cmp_results.deallocate();
+        Tensor midx = full_like(max_indices, size);
+        Tensor result = where(eqz(max_indices), midx, max_indices, output_mem_config);
+        max_indices.deallocate();
+        result = min(result, dim, output_mem_config);
+        Tensor res_index = zeros_like(result, output_mem_config);
+        result = where(eq(result, full_like(result, size)), res_index, result, output_mem_config);
+        res_index.deallocate();
+        std::vector<int64_t> permute_dims = {1, 0, 2, 3};
+        Tensor transpose_res = permute(result,permute_dims,output_mem_config);
+        return transpose_res;
+    }
+    else if (dim == (input_shape.rank() - 4))
+    {
+        Tensor tindex = tt::numpy::index_batch<bfloat16>(input_shape, DataType::BFLOAT16);
+        Tensor max_val = max(input_a, dim, output_mem_config);
+        int repeat = input_shape[dim];
+        std::vector<Tensor> combined_tensors;
+        for (int cid = 0; cid < repeat; cid++)
+            combined_tensors.emplace_back(max_val);
+        max_val.deallocate();
+        Tensor concat_out = concat(combined_tensors, dim, output_mem_config);
         Tensor cmp_results = eq(input_a, concat_out, std::nullopt, output_mem_config);
         concat_out.deallocate();
         Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
