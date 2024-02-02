@@ -29,7 +29,15 @@ def test_upsample(device, batch_size, f, h, w, scale_h, scale_w):
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_result, output_tensor, 0.997)
+    assert_with_pcc(torch_result, output_tensor)
+
+    allclose = torch.allclose(output_tensor, torch_result)
+    isclose = torch.all(torch.isclose(output_tensor, torch_result))
+    isequal = torch.equal(output_tensor, torch_result)
+
+    assert allclose
+    assert isclose
+    assert isequal
 
 
 @skip_for_wormhole_b0()
@@ -61,4 +69,12 @@ def test_upsample_with_input_shape(device, input_shapes, scale_h, scale_w):
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_result, output_tensor, 0.997)
+    assert_with_pcc(torch_result, output_tensor)
+
+    allclose = torch.allclose(output_tensor, torch_result)
+    isclose = torch.all(torch.isclose(output_tensor, torch_result))
+    isequal = torch.equal(output_tensor, torch_result)
+
+    assert allclose
+    assert isclose
+    assert isequal
