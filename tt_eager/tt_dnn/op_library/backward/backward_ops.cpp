@@ -45,6 +45,13 @@ std::vector<Tensor> unary_mul_bw(const Tensor& grad, const Tensor& input, float 
 
 std::vector<Tensor> _unary_pow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon()*10.0f;
+    TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
+    if ( std::abs(exponent) < ZERO_THRESHOLD ) {
+        grad_tensor.emplace_back( zeros_like( input, output_mem_config) );
+        return grad_tensor;
+    }
+
     Tensor power_input = power(input, exponent - 1, output_mem_config);
 
     Tensor result = mul_unary(power_input, exponent, output_mem_config);

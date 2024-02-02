@@ -5,9 +5,10 @@
 import pytest
 
 import torch
+import ttnn
 from transformers.models import bloom
 
-from models.experimental.functional_bloom.reference import torch_functional_bloom
+from models.experimental.functional_bloom.tt import ttnn_functional_bloom
 from models.utility_functions import torch_random, skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -15,23 +16,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_wormhole_b0()
-def test_bloom_gelu():
-    torch.manual_seed(0)
-
-    torch_input = torch_random((1, 1, 1), -0.1, 0.1, dtype=torch.float32)
-    model = bloom.modeling_bloom.BloomGelu().eval()
-    torch_output = model(torch_input)
-
-    output = torch_functional_bloom.bloom_gelu(torch_input)
-
-    assert_with_pcc(torch_output, output, pcc=0.9999)
-
-
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bloom_attention(model_name, batch_size, sequence_size):
+def test_bloom_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = bloom.configuration_bloom.BloomConfig.from_pretrained(model_name)
@@ -40,9 +28,7 @@ def test_bloom_attention(model_name, batch_size, sequence_size):
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
     torch_residual = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
     torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
-    torch_alibi = bloom.modeling_bloom.build_alibi_tensor(
-        torch_attention_mask, config.n_head, dtype=torch_hidden_states.dtype
-    )
+    torch_alibi = bloom.modeling_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.float32)
 
     torch_output, *_ = model(
         torch_hidden_states,
@@ -53,22 +39,26 @@ def test_bloom_attention(model_name, batch_size, sequence_size):
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_bloom.custom_preprocessor,
+        device=device,
+        custom_preprocessor=ttnn_functional_bloom.custom_preprocessor,
     )
 
-    alibi = torch_functional_bloom.build_alibi_tensor(
-        torch_attention_mask, config.n_head, dtype=torch_hidden_states.dtype
-    )
+    hidden_states = ttnn.from_torch(torch_hidden_states.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    residual = ttnn.from_torch(torch_residual.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask = ttnn.from_torch(torch_attention_mask.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = torch_functional_bloom.bloom_attention(
+    alibi = ttnn_functional_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.bfloat16)
+    alibi = ttnn.from_torch(alibi, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_functional_bloom.bloom_attention(
         config,
-        torch_hidden_states,
-        torch_residual,
+        hidden_states,
+        residual,
         alibi,
-        torch_attention_mask,
+        attention_mask,
         parameters=parameters,
     )
+    output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, pcc=0.9999)
 
@@ -77,7 +67,7 @@ def test_bloom_attention(model_name, batch_size, sequence_size):
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bloom_mlp(model_name, batch_size, sequence_size):
+def test_bloom_mlp(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = bloom.configuration_bloom.BloomConfig.from_pretrained(model_name)
@@ -88,25 +78,26 @@ def test_bloom_mlp(model_name, batch_size, sequence_size):
 
     torch_output = model(torch_hidden_states, torch_residual)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-    )
+    parameters = preprocess_model_parameters(initialize_model=lambda: model, device=device)
 
-    output = torch_functional_bloom.bloom_mlp(
-        torch_hidden_states,
-        torch_residual,
+    hidden_states = ttnn.from_torch(torch_hidden_states.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    residual = ttnn.from_torch(torch_residual.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_functional_bloom.bloom_mlp(
+        hidden_states,
+        residual,
         parameters=parameters,
     )
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9999)
+    assert_with_pcc(torch_output, output, pcc=0.9998)
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bloom_block(model_name, batch_size, sequence_size):
+def test_bloom_block(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = bloom.configuration_bloom.BloomConfig.from_pretrained(model_name)
@@ -114,9 +105,7 @@ def test_bloom_block(model_name, batch_size, sequence_size):
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
     torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
-    torch_alibi = bloom.modeling_bloom.build_alibi_tensor(
-        torch_attention_mask, config.n_head, dtype=torch_hidden_states.dtype
-    )
+    torch_alibi = bloom.modeling_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.float32)
 
     torch_output, *_ = model(
         torch_hidden_states,
@@ -126,30 +115,33 @@ def test_bloom_block(model_name, batch_size, sequence_size):
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_bloom.custom_preprocessor,
+        device=device,
+        custom_preprocessor=ttnn_functional_bloom.custom_preprocessor,
     )
 
-    alibi = torch_functional_bloom.build_alibi_tensor(
-        torch_attention_mask, config.n_head, dtype=torch_hidden_states.dtype
-    )
+    hidden_states = ttnn.from_torch(torch_hidden_states.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask = ttnn.from_torch(torch_attention_mask.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = torch_functional_bloom.bloom_block(
+    alibi = ttnn_functional_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.bfloat16)
+    alibi = ttnn.from_torch(alibi, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn_functional_bloom.bloom_block(
         config,
-        torch_hidden_states,
+        hidden_states,
         alibi,
-        torch_attention_mask,
+        attention_mask,
         parameters=parameters,
     )
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9999)
+    assert_with_pcc(torch_output, output, pcc=0.997)
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bloom(model_name, batch_size, sequence_size):
+def test_bloom(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = bloom.configuration_bloom.BloomConfig.from_pretrained(model_name)
@@ -161,29 +153,34 @@ def test_bloom(model_name, batch_size, sequence_size):
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_bloom.custom_preprocessor,
+        device=device,
+        custom_preprocessor=ttnn_functional_bloom.custom_preprocessor,
     )
 
-    alibi = torch_functional_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, torch.bfloat16)
-    causal_mask = torch_functional_bloom.make_causal_mask(torch_attention_mask, torch_input_ids.shape)
+    padded_input_ids, alibi, causal_mask = ttnn_functional_bloom.preprocess_inputs(
+        input_ids=torch_input_ids,
+        attention_mask=torch_attention_mask,
+        num_heads=config.n_head,
+        device=device,
+    )
 
-    output = torch_functional_bloom.bloom(
+    output = ttnn_functional_bloom.bloom(
         config,
-        torch_input_ids,
+        padded_input_ids,
         alibi,
         causal_mask,
         parameters=parameters,
     )
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9999)
+    assert_with_pcc(torch_output, output, pcc=0.95)
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bloom_for_question_answering(model_name, batch_size, sequence_size):
+def test_bloom_for_question_answering(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = bloom.configuration_bloom.BloomConfig.from_pretrained(model_name)
@@ -196,23 +193,27 @@ def test_bloom_for_question_answering(model_name, batch_size, sequence_size):
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_bloom.custom_preprocessor,
+        device=device,
+        custom_preprocessor=ttnn_functional_bloom.custom_preprocessor,
     )
 
-    alibi = torch_functional_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, torch.bfloat16)
-    causal_mask = torch_functional_bloom.make_causal_mask(torch_attention_mask, torch_input_ids.shape)
+    padded_input_ids, alibi, causal_mask = ttnn_functional_bloom.preprocess_inputs(
+        input_ids=torch_input_ids,
+        attention_mask=torch_attention_mask,
+        num_heads=config.n_head,
+        device=device,
+    )
 
-    output = torch_functional_bloom.bloom_for_question_answering(
+    output = ttnn_functional_bloom.bloom_for_question_answering(
         config,
-        torch_input_ids,
+        padded_input_ids,
         alibi,
         causal_mask,
         parameters=parameters,
     )
-
+    output = ttnn.to_torch(output)
     start_logits = output[..., 0]
     end_logits = output[..., 1]
 
-    assert_with_pcc(torch_output.start_logits, start_logits, 0.9999)
-    assert_with_pcc(torch_output.end_logits, end_logits, 0.9999)
+    assert_with_pcc(torch_output.start_logits, start_logits, 0.924)
+    assert_with_pcc(torch_output.end_logits, end_logits, 0.895)

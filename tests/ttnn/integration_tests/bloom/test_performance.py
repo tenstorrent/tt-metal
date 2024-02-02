@@ -81,7 +81,7 @@ def test_performance_of_bloom_for_question_answering(
         start = time.time()
         with ttnn.disable_validate_decorator():
             tt_output = functional_bloom.bloom_for_question_answering(
-                input_ids, alibi, causal_mask, parameters, num_heads
+                config, input_ids, alibi, causal_mask, parameters=parameters
             )
             tt_output = ttnn.from_device(tt_output)
         end = time.time()
