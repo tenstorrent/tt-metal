@@ -44,6 +44,13 @@ RunTimeOptions::RunTimeOptions() {
     TT_FATAL(!(get_dprint_enabled() && get_profiler_enabled()), "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
+
+    clear_l1 = true;
+    const char *clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
+    if (clear_l1_enabled_str != nullptr) {
+        if (clear_l1_enabled_str[0] == '0') clear_l1 = false;
+        if (clear_l1_enabled_str[0] == '1') clear_l1 = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() {

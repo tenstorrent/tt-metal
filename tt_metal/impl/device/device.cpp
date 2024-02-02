@@ -66,7 +66,9 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    this->clear_l1_state();
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
 #ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
@@ -348,7 +350,9 @@ bool Device::close() {
         }
     }
 
-    this->clear_l1_state();
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 
