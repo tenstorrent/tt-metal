@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x*num_cores_y;
-    CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
+    CoreRange total_cores = {{0, 0}, {num_cores_x-1, num_cores_y-1}};
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
@@ -263,7 +263,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
+    CoreRange total_cores = {{0, 0}, {num_cores_x-1, num_cores_y-1}};
 
     auto shard_spec = a.shard_spec().value();
 

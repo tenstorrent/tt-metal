@@ -17,7 +17,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, const Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
 
     Program program{};
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);

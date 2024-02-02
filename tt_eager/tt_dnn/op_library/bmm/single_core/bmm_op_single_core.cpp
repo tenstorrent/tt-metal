@@ -16,7 +16,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     tt_metal::Program program{};
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
