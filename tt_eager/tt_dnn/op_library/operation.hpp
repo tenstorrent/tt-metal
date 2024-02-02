@@ -81,17 +81,56 @@ constexpr bool implements_validate() {
     return std::experimental::is_detected_v<has_validate_t, T, const std::vector<Tensor>&>;
 }
 
-template <class T, class... Args>
-using has_validate_with_optional_input_tensors_t = decltype(std::declval<T>().validate(std::declval<Args>()...));
 
 template <class T>
 constexpr bool implements_validate_with_optional_input_tensors() {
     return std::experimental::is_detected_v<
-        has_validate_with_optional_input_tensors_t,
+        has_validate_t,
         T,
         const std::vector<Tensor>&,
         const std::vector<std::optional<const Tensor>>&>;
 }
+
+template <class T, class... Args>
+using has_validate_with_output_tensors_t = decltype(std::declval<T>().validate_with_output_tensors(std::declval<Args>()...));
+
+template <class T>
+constexpr bool implements_validate_with_output_tensors() {
+    return std::experimental::is_detected_v<
+        has_validate_with_output_tensors_t,
+        T,
+        const std::vector<Tensor>&, // input_tensors
+        const std::vector<std::optional<Tensor>>&>; // optional output_tensors
+}
+
+template <class T>
+constexpr bool implements_validate_with_output_tensors_and_optional_input_tensors() {
+    return std::experimental::is_detected_v<
+        has_validate_with_output_tensors_t,
+        T,
+        const std::vector<Tensor>&, // input_tensors
+        const std::vector<std::optional<const Tensor>>&, // optional input_tensors
+        const std::vector<std::optional<Tensor>>&>; // optional output_tensors
+}
+
+
+template <class T, class... Args>
+using has_create_output_tensors_t = decltype(std::declval<T>().create_output_tensors(std::declval<Args>()...));
+
+template <class T>
+constexpr bool implements_create_output_tensors() {
+    return std::experimental::is_detected_v<has_create_output_tensors_t, T, const std::vector<Tensor>&>;
+}
+
+template <class T>
+constexpr bool implements_create_output_tensors_with_optional_output_tensors() {
+    return std::experimental::is_detected_v<
+        has_create_output_tensors_t,
+        T,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<Tensor>>&>;
+}
+
 
 template <class T, class... Args>
 using has_create_program_t = decltype(std::declval<T>().create_program(std::declval<Args>()...));
@@ -218,22 +257,23 @@ struct HostOperation final {
 };
 
 struct DeviceOperation final {
-    using storage_t = std::array<std::byte, 816>;
+    using storage_t = std::array<std::byte, 1152>;
 
     inline const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 
     inline const void validate(
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-        return this->validate_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+        return this->validate_impl_(this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
     inline const std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
         return this->compute_output_shapes_impl_(this->type_erased_storage, input_tensors);
     }
 
-    inline const std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-        return this->create_output_tensors_impl_(this->type_erased_storage, input_tensors);
+    inline const std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+        return this->create_output_tensors_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
     inline ProgramWithCallbacks create_program(
@@ -295,19 +335,44 @@ struct DeviceOperation final {
         validate_impl_{
             [](const storage_t& storage,
                const std::vector<Tensor>& input_tensors,
-               const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> void {
+               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+               const std::vector<std::optional<Tensor>>& optional_output_tensors) -> void {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                if constexpr ((detail::implements_validate<T>() || detail::implements_validate_with_optional_input_tensors<T>()) &&
+                        (detail::implements_validate_with_output_tensors<T>() || detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>())){
+                    static_assert(tt::stl::concepts::always_false_v<T>, "You cannot implement both validate and validate_with_output_tensors");
+                }
+                else if constexpr ((detail::implements_validate_with_output_tensors<T>() || detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>())
+                    && not detail::implements_create_output_tensors_with_optional_output_tensors<T>()){
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_output_tensors with ant optional output tensors argument when using validate_with_output_tensors");
+                }
+                else if constexpr(detail::implements_validate<T>() && !detail::implements_create_program<T>()){
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement both the validate and the correct create_program methods");
+                }
+                else if constexpr(detail::implements_validate_with_optional_input_tensors<T>() && !detail::implements_create_program_with_optional_input_tensors<T>()){
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement both the validate and the correct create_program methods with the optional input tensors");
+                }
+
                 if constexpr (detail::implements_validate<T>()) {
                     TT_FATAL(optional_input_tensors.empty());
-                    static_assert(detail::implements_create_program<T>());
                     operation.validate(input_tensors);
-                } else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
-                    TT_FATAL(not optional_input_tensors.empty());
-                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
-                    operation.validate(input_tensors, optional_input_tensors);
-                } else {
-                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement validate");
                 }
+                else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
+                    TT_FATAL(not optional_input_tensors.empty());
+                    operation.validate(input_tensors, optional_input_tensors);
+                }
+                else if constexpr (detail::implements_validate_with_output_tensors<T>()){
+                    TT_FATAL(optional_input_tensors.empty());
+                    TT_FATAL(not optional_output_tensors.empty());
+                    operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
+                } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()){
+                    TT_FATAL(not optional_input_tensors.empty());
+                    TT_FATAL(not optional_output_tensors.empty());
+                    operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
+                }else{
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation must implement either validate or validate_with_output_tensors");
+                }
+
             }},
         compute_output_shapes_impl_{
             [](const storage_t& storage, const std::vector<Tensor>& input_tensors) -> const std::vector<Shape> {
@@ -315,9 +380,14 @@ struct DeviceOperation final {
                 return operation.compute_output_shapes(input_tensors);
             }},
         create_output_tensors_impl_{
-            [](const storage_t& storage, const std::vector<Tensor>& input_tensors) -> const std::vector<Tensor> {
+            [](const storage_t& storage, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) -> const std::vector<Tensor> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                return operation.create_output_tensors(input_tensors);
+                if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
+                    return operation.create_output_tensors(input_tensors, output_tensors);
+                }
+                else{
+                    return operation.create_output_tensors(input_tensors);
+                }
             }},
         create_program_impl_{
             [](const storage_t& storage,
@@ -407,9 +477,11 @@ struct DeviceOperation final {
 
     const std::string (*get_type_name_impl_)(const storage_t& value);
     void (*validate_impl_)(
-        const storage_t& value, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&);
+        const storage_t& value, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, const std::vector<std::optional<Tensor>>&);
+    void (*validate_with_output_tensors_impl_)(
+        const storage_t& value, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, const std::vector<std::optional<Tensor>>&);
     const std::vector<Shape> (*compute_output_shapes_impl_)(const storage_t& value, const std::vector<Tensor>&);
-    const std::vector<Tensor> (*create_output_tensors_impl_)(const storage_t& value, const std::vector<Tensor>&);
+    const std::vector<Tensor> (*create_output_tensors_impl_)(const storage_t& value, const std::vector<Tensor>&, const std::vector<std::optional<Tensor>>&);
     ProgramWithCallbacks (*create_program_impl_)(
         const storage_t& value,
         const std::vector<Tensor>&,

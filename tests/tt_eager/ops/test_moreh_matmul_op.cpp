@@ -151,27 +151,59 @@ int main(int argc, char **argv) {
         // Mt, Nt, Kt = num tiles, B = batch
         Shape shapea = {a_B1, a_B2, a_Mt * TILE_HEIGHT, a_Kt * TILE_WIDTH};
         Shape shapeb = {b_B1, b_B2, b_Kt * TILE_HEIGHT, b_Nt * TILE_WIDTH};
+        Shape shapec = {b_B1, b_B2, a_Mt * TILE_HEIGHT, b_Nt * TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
         Tensor b = diagonal(shapeb, 1.0f).to(Layout::TILE).to(device);
+        Tensor output_tensor_cpu = create_device_tensor(shapec, a.dtype(), Layout::TILE, device, a.memory_config());
         Tensor out_cpu = tt::operations::primary::moreh_matmul(a, b, std::nullopt, false, static_cast<bool>(transpose_b)).cpu();
+
+        const auto expected_storage = std::get<DeviceStorage>(output_tensor_cpu.storage());
+        Tensor with_output_tensor = tt::operations::primary::moreh_matmul(a, b, output_tensor_cpu, false, static_cast<bool>(transpose_b));
+        const auto actual_storage = std::get<DeviceStorage>(with_output_tensor.storage());
+        Tensor out_cpu_with_output_tensor = with_output_tensor.cpu();
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         const auto &out_shape = out_cpu.shape();
         log_info(
             LogTest,
-            "out_shape {} - {}, {}, {}, {}",
+            "out_cpu shape {} - {}, {}, {}, {}",
             out_shape.rank(),
             out_shape[0],
             out_shape[1],
             out_shape[2],
             out_shape[3]);
 
+        const auto &out_cpu_with_output_tensor_shape = out_cpu_with_output_tensor.shape();
+        log_info(
+            LogTest,
+            "out_cpu_with_output_tensor shape {} - {}, {}, {}, {}",
+            out_cpu_with_output_tensor_shape.rank(),
+            out_cpu_with_output_tensor_shape[0],
+            out_cpu_with_output_tensor_shape[1],
+            out_cpu_with_output_tensor_shape[2],
+            out_cpu_with_output_tensor_shape[3]);
+
         pass &= compare(
             a.cpu().to(Layout::ROW_MAJOR),
             out_cpu.to(Layout::ROW_MAJOR),
+            out_shape[0],
+            out_shape[1],
+            out_shape[2],
+            out_shape[3],
+            shapea[3],
+            shapea[0],
+            shapea[1],
+            true);
+
+        pass &= out_shape == out_cpu_with_output_tensor_shape;
+        pass &= expected_storage.buffer.get() == actual_storage.buffer.get();
+        pass &= compare(
+            a.cpu().to(Layout::ROW_MAJOR),
+            out_cpu_with_output_tensor.to(Layout::ROW_MAJOR),
             out_shape[0],
             out_shape[1],
             out_shape[2],

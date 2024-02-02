@@ -193,7 +193,8 @@ template<typename OperationType>
 inline void log_operation(
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {
     tt::log_debug(
         tt::LogOp,
         "Launching Operation: \"{}\" ({})",
@@ -237,7 +238,8 @@ template <typename OperationType>
 inline void log_operation(
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {}
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {}
 #endif
 
 bool is_logging_enabled();
@@ -249,13 +251,17 @@ std::vector<Tensor> run(
 std::vector<Tensor> run(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
 );
+
+
 template<typename ConcreteOperation>
 inline std::vector<Tensor> run(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
 ) {
     if constexpr (detail::is_host_operation<ConcreteOperation>()) {
         TT_ASSERT(optional_input_tensors.empty());
@@ -263,7 +269,7 @@ inline std::vector<Tensor> run(
         return run(operation, input_tensors);
     } else if constexpr (detail::is_device_operation<ConcreteOperation>()) {
         const auto operation = DeviceOperation(concrete_op);
-        return run(operation, input_tensors, optional_input_tensors);
+        return run(operation, input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
         static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
@@ -272,16 +278,18 @@ inline std::vector<Tensor> run(
 std::vector<Tensor> run_without_autoformat(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
 );
 template<typename ConcreteOperation>
 inline std::vector<Tensor> run_without_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
 ) {
     const auto operation = DeviceOperation(concrete_op);
-    return run_without_autoformat(operation, input_tensors, optional_input_tensors);
+    return run_without_autoformat(operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 
 std::vector<Tensor> run_with_autoformat(
