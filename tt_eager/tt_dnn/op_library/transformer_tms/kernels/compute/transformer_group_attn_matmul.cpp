@@ -19,12 +19,27 @@ void MAIN {
     uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
     if (has_work_for_q_heads == 0) return;
 
-    uint32_t batch = get_arg_val<uint32_t>(i++);
-    uint32_t Mt = get_arg_val<uint32_t>(i++);
-    uint32_t Kt = get_arg_val<uint32_t>(i++);
-    uint32_t Nt = get_arg_val<uint32_t>(i++);
-    uint32_t num_kv_heads = get_arg_val<uint32_t>(i++); // in1[1] (ie. in1 C)
-    uint32_t kv_heads_id = get_arg_val<uint32_t>(i++);
+    uint32_t batch                  = get_arg_val<uint32_t>(i++);
+    uint32_t Mt                     = get_arg_val<uint32_t>(i++);
+    uint32_t num_kv_heads_skip      = get_arg_val<uint32_t>(i++);
+    uint32_t num_kv_heads_remaining = get_arg_val<uint32_t>(i++);
+
+    // matmul params
+    uint32_t in0_block_w            = get_arg_val<uint32_t>(i++);
+    uint32_t out_subblock_h         = get_arg_val<uint32_t>(i++);
+    uint32_t out_subblock_w         = get_arg_val<uint32_t>(i++);
+    uint32_t out_block_w            = get_arg_val<uint32_t>(i++);
+    uint32_t in1_num_subblocks      = get_arg_val<uint32_t>(i++);
+    uint32_t in1_num_blocks         = get_arg_val<uint32_t>(i++);
+    uint32_t in0_block_num_tiles    = get_arg_val<uint32_t>(i++);
+    uint32_t in1_block_num_tiles    = get_arg_val<uint32_t>(i++);
+    uint32_t out_subblock_num_tiles = get_arg_val<uint32_t>(i++);
+    uint32_t intermediate_num_tiles = get_arg_val<uint32_t>(i++);
+    uint32_t out_num_tiles          = get_arg_val<uint32_t>(i++);
+
+    // matmul inner loop tracking
+    uint32_t in0_subblock_num_tiles = get_arg_val<uint32_t>(i++);
+    uint32_t in1_per_core_w         = get_arg_val<uint32_t>(i++);
 
 
     constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
@@ -39,67 +54,92 @@ void MAIN {
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
+    constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
+
 
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
 
-    for (uint32_t nb = 0; nb < batch; ++nb) {
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) { // output tile of C
-            cb_wait_front(cb_in0, Kt);
-            for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) { // output tile index of C
-                for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
-                    tile_regs_acquire();
-                    for (uint32_t kt = 0; kt < Kt; ++kt) {
-                        cb_wait_front(cb_in1, num_kv_heads);
+    for (uint32_t b = 0; b < batch; b++) {
+        for (uint32_t m = 0; m < Mt; m++) {  // TODO: Must be 1; generalize to support batch > 32 (ie. Mt > 1)
+            for (uint32_t in0_block = 0; in0_block < in0_num_blocks_w; in0_block++) { // TODO: Must be 1; generalize to support inner dim blocking
+                cb_wait_front(cb_in0, in0_block_num_tiles);
+                for (uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
+                    uint32_t in0_index_subblock_offset = 0;
+                    for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
+                        cb_wait_front(cb_in1, in1_block_num_tiles);
+                        cb_pop_front(cb_in1, num_kv_heads_skip);
 
-                        matmul_tiles(cb_in0, cb_in1, kt, kv_heads_id, 0, transpose_hw);
+                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) { // TODO: Must be 1; need to review inner dim blocking and the untilizing
+                            uint32_t in1_index_subblock_offset = 0;
 
-                        cb_pop_front(cb_in1, num_kv_heads);
-                    }
-                    tile_regs_commit();
+                            tile_regs_acquire();
 
-                    cb_reserve_back(cb_intermed0, onetile);
-                    tile_regs_wait();
-                    pack_tile(0, cb_intermed0);
-                    tile_regs_release();
-                    cb_push_back(cb_intermed0, onetile);
+                            uint32_t dst_index = 0;
+                            uint32_t in0_index_h_offset = 0;
+                            for (uint32_t h = 0; h < out_subblock_h; h++) {
+                                for (uint32_t w = 0; w < out_subblock_w; w++) {
+                                    uint32_t in1_index_inner_dim_offset = 0;
+                                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                                        uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
+                                        uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        in1_index_inner_dim_offset += in1_per_core_w;
+                                    }
+                                    dst_index++;
+                                }
+                                in0_index_h_offset += in0_block_w;
+                            }
+                            tile_regs_commit();
 
-                    // untilize tile and write to CB::c_intermed1
-                    unpack_reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    cb_wait_front(cb_intermed0, onetile);
-                    untilize_init_short(cb_intermed0);
-                    cb_reserve_back(cb_intermed1, onetile);
-                    untilize_block(cb_intermed0, onetile, cb_intermed1);
-                    cb_push_back(cb_intermed1, onetile);
+                            // TODO: Review inner dim blocking, untilizing, and in1_num_subblocks > 1 (with pack_untilize, can only untilize up to dst num tiles)
+                            cb_reserve_back(cb_intermed0, out_subblock_num_tiles);
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                pack_tile(i, cb_intermed0);
+                            }
+                            tile_regs_release();
+                            cb_push_back(cb_intermed0, out_subblock_num_tiles);
 
-                    cb_pop_front(cb_intermed0, onetile);
-                    untilize_uninit(cb_intermed0);
+                            in1_index_subblock_offset += out_subblock_w;
+                        } // in1_num_subblocks loop
+                        cb_pop_front(cb_in1, num_kv_heads_remaining);
 
-                    unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
-                    mm_init_short(transpose_hw);
-                }
+                        // untilize tile and write to CB::c_intermed1
+                        unpack_reconfig_data_format_srca(cb_in1, cb_intermed0);
+                        cb_wait_front(cb_intermed0, onetile);
+                        untilize_init_short(cb_intermed0);
+                        cb_reserve_back(cb_intermed1, intermediate_num_tiles);
+                        untilize_block(cb_intermed0, intermediate_num_tiles, cb_intermed1);
+                        cb_push_back(cb_intermed1, intermediate_num_tiles);
 
-                // cb_intermed2 comes from reader; untilized row-major tile
-                unpack_reconfig_data_format_srca(cb_in1, cb_intermed2);
-                pack_reconfig_data_format(cb_intermed1, out_cb_id);
-                cb_wait_front(cb_intermed2, onetile);
-                cb_reserve_back(out_cb_id, onetile);
+                        cb_pop_front(cb_intermed0, intermediate_num_tiles);
+                        untilize_uninit(cb_intermed0);
 
-                // tilize CB::intermed2 and write to CB::c_out0
-                tilize_init_short(cb_intermed2, onetile);
-                tilize_block(cb_intermed2, onetile, out_cb_id);
-                cb_push_back(out_cb_id, onetile);
+                        unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
+                        mm_init_short(transpose_hw);
+                    }  // 32 tiles loop
 
-                cb_pop_front(cb_intermed2, onetile);
-                tilize_uninit();
+                    in0_index_subblock_offset += in0_subblock_num_tiles;
+                }  // in1_num_blocks loop
+            } // in0_num_blocks_w
 
-                // Hangs when in0 is BFLOAT8_B if we don't force the reconfig
-                unpack_reconfig_data_format_srca(cb_in1);
-                pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_init_short(transpose_hw);
-            }  // Nt
+            // cb_intermed2 comes from reader; untilized row-major tile
+            unpack_reconfig_data_format_srca(cb_in1, cb_intermed2);
+            pack_reconfig_data_format(cb_intermed1, out_cb_id);
+            cb_wait_front(cb_intermed2, out_num_tiles);
 
-            cb_pop_front(cb_in0, Kt);
-        }  // Mt
+            cb_reserve_back(out_cb_id, out_num_tiles);
+
+            // tilize CB::intermed2 and write to CB::c_out0
+            tilize_init_short(cb_intermed2, out_num_tiles);
+            tilize_block(cb_intermed2, out_num_tiles, out_cb_id);
+            cb_push_back(out_cb_id, out_num_tiles);
+
+            cb_pop_front(cb_intermed2, out_num_tiles);
+            tilize_uninit();
+
+            cb_pop_front(cb_in0, in0_block_num_tiles);
+        } // Mt loop
     }  // batch
 
 }
