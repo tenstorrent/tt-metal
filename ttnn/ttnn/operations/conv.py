@@ -40,6 +40,7 @@ class Conv2D:
         reallocate_halo_output: bool = False,
         using_parameters_cache: bool = False,
         move_weights_to_device: bool = True,
+        use_shallow_conv_variant: bool = False,
     ):
         assert (
             padding_mode == "zeros"
@@ -106,6 +107,7 @@ class Conv2D:
             move_utwh_output=reallocate_halo_output,
             using_parameters_cache=using_parameters_cache,
             move_weights_to_device=move_weights_to_device,
+            use_shallow_conv_variant=use_shallow_conv_variant,
         )
 
     def __call__(self, activation: ttnn.Tensor):

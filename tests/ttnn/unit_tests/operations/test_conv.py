@@ -30,6 +30,7 @@ def run_conv(
     pad_w,
     use_1d_systolic_array,
     config_override,
+    use_shallow_conv_variant=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -73,6 +74,7 @@ def run_conv(
         math_fidelity=math_fidelity,
         weights_dtype=weights_dtype,
         conv_blocking_and_parallelization_config_override=config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
     )
 
     assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
@@ -248,7 +250,7 @@ def run_conv_with_split(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 def test_resnet50_conv(
     use_program_cache,
     device,
@@ -268,13 +270,8 @@ def test_resnet50_conv(
     pad_w,
     use_1d_systolic_array,
 ):
-    if input_channels == 16:
-        pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
-
-    if math_fidelity != ttnn.MathFidelity.LoFi:
-        pytest.skip(
-            "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
-        )
+    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
+        pytest.skip("Batch > 8 must be run fully bfp8")
 
     if (
         activations_dtype == ttnn.bfloat16
@@ -288,13 +285,6 @@ def test_resnet50_conv(
         )
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
-
-    if (
-        input_channels >= 320
-        and (not input_channels == 512)
-        and (activations_dtype == ttnn.bfloat16 or weights_dtype == ttnn.bfloat16)
-    ):
-        pytest.skip("Skipping tests with bfloat16 for sd convs")
 
     run_conv(
         device,
@@ -314,6 +304,7 @@ def test_resnet50_conv(
         pad_w,
         use_1d_systolic_array,
         config_override=None,
+        use_shallow_conv_variant=(input_channels == 16),
     )
 
 
@@ -374,7 +365,7 @@ def test_resnet50_conv(
     "activations_dtype",
     [ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 def test_sd_conv(
     use_program_cache,
     device,
@@ -395,10 +386,6 @@ def test_sd_conv(
     use_1d_systolic_array,
     config_override,
 ):
-    if math_fidelity != ttnn.MathFidelity.LoFi:
-        pytest.skip(
-            "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
-        )
     if input_channels > 1280 or (input_channels > 640 and input_height > 16):
         run_conv_with_split(
             device,
@@ -439,6 +426,7 @@ def test_sd_conv(
             pad_w,
             use_1d_systolic_array,
             config_override,
+            use_shallow_conv_variant=(input_channels == 16),
         )
 
 
@@ -460,7 +448,21 @@ def test_sd_conv(
         (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None),
         (2, 32, 64, 264, 40, 3, 3, 1, 1, 1, 1, True, None),
         (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None),
-        # (2, 16, 48, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 32}), # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
+        (
+            2,
+            16,
+            48,
+            528,
+            80,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            True,
+            {"act_block_h": 32},
+        ),  # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
         (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None),
         (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}),
         (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}),
@@ -475,7 +477,7 @@ def test_sd_conv(
     "activations_dtype",
     [ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 def test_unet_conv(
     use_program_cache,
     device,
@@ -496,18 +498,10 @@ def test_unet_conv(
     use_1d_systolic_array,
     config_override,
 ):
-    if math_fidelity != ttnn.MathFidelity.LoFi:
-        pytest.skip(
-            "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
-        )
+    use_shallow_conv_variant = False
     if input_channels == 3:
         # use shallow conv variant for first conv only
-        # TODO: add automatic padding with 0s in the unit test
-        input_channels = 16
-    elif input_channels < 32:
-        # this is an intermediate conv. The shape would already be padded to 32 (tile shape) by previous op
-        # TODO: add automatic padding with 0s in the unit test
-        input_channels = 32
+        use_shallow_conv_variant = True
     run_conv(
         device,
         math_fidelity,
@@ -526,4 +520,5 @@ def test_unet_conv(
         pad_w,
         use_1d_systolic_array,
         config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
     )

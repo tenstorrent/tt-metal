@@ -650,6 +650,7 @@ def test_resnet50_conv(
             weights_dtype=weights_dtype,
             output_dtype=activations_dtype,
             math_fidelity=math_fidelity,
+            use_shallow_conv_variant=(C == 16),
         )
 
         conv_input = tt_lib.tensor.Tensor(

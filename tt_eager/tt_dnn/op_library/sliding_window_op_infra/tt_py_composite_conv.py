@@ -204,6 +204,7 @@ def determine_per_core_block_config(
     per_core_out_matrix_width_ntiles,
     input_channels,
     sliding_window_op_params,
+    use_shallow_conv_variant,
     config_override={},
 ):
     act_block_h_override = 0
@@ -214,15 +215,22 @@ def determine_per_core_block_config(
     act_block_h_ntiles = (
         act_block_h_ntiles_override if act_block_h_ntiles_override > 0 else per_core_out_matrix_height_ntiles
     )
+    # TODO: for shallow conv variant, pad only till 8 for bfp16
+    padded_input_channels = _nearest_y(input_channels, 16) if use_shallow_conv_variant else _nearest_32(input_channels)
     act_block_w_ntiles = (int)(
-        (_nearest_32(input_channels * sliding_window_op_params.window_w) if is_1d_systolic else input_channels) / 32
+        (
+            _nearest_32(padded_input_channels * sliding_window_op_params.window_w)
+            if is_1d_systolic
+            else padded_input_channels
+        )
+        / 32
     )
     if is_1d_systolic:
         act_c_num_blocks = 1
     else:
         act_c_num_blocks = grid_size.y
         assert (
-            input_channels % act_c_num_blocks == 0
+            padded_input_channels % act_c_num_blocks == 0
         ), "Cannot parallelize conv as a 2d systolic array. Input channels must be divisible by act_c_num_blocks."
     out_block_h_ntiles = per_core_out_matrix_height_ntiles
     assert out_block_h_ntiles % act_block_h_ntiles == 0, "act_block_h must evenly divide out_block_h"
@@ -230,7 +238,7 @@ def determine_per_core_block_config(
     out_subblock_h_ntiles, out_subblock_w_ntiles = determine_largest_subblock_size(
         act_block_h_ntiles, weight_block_w_ntiles
     )
-    if input_channels == 16 and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
+    if padded_input_channels == 16 and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
         assert is_1d_systolic
         # TODO: fix this temporary hack for shallow conv
         assert act_block_h_ntiles % 2 == 0
@@ -335,7 +343,9 @@ class TTPyCompositeConv(TTPyOp):
         move_utwh_output=False,
         using_parameters_cache=False,
         move_weights_to_device=True,
+        use_shallow_conv_variant=False,
     ):
+        self.use_shallow_conv_variant = use_shallow_conv_variant
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
 
@@ -384,6 +394,7 @@ class TTPyCompositeConv(TTPyOp):
             self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles,
             input_channels,
             sliding_window_op_params,
+            use_shallow_conv_variant,
             config_override=conv_blocking_and_parallelization_config_override,
         )
 
@@ -467,6 +478,7 @@ class TTPyCompositeConv(TTPyOp):
             bias=bias,
             weights_dtype=weights_dtype,
             using_parameters_cache=using_parameters_cache,
+            use_shallow_conv_variant=use_shallow_conv_variant,
             move_weights_to_device=move_weights_to_device,
         )
 
@@ -594,6 +606,7 @@ class TTPyCompositeConv(TTPyOp):
         weights_dtype,
         bias,
         using_parameters_cache,
+        use_shallow_conv_variant,
         move_weights_to_device=False,
     ):
         assert len(conv_params) == 10
@@ -603,7 +616,12 @@ class TTPyCompositeConv(TTPyOp):
 
         if not using_parameters_cache:
             weights_shape = [K, C, R, S]
-            weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
+            weights_channels_padded_shape = [
+                _nearest_32(K),
+                _nearest_y(C, 16) if use_shallow_conv_variant else _nearest_32(C),
+                R,
+                S,
+            ]
             if weights_dtype is None:
                 weights_dtype = weight.dtype()
             weights_untiled_dtype = (
@@ -784,17 +802,29 @@ class TTPyCompositeConv(TTPyOp):
         grid_size = (num_cores_w, num_cores_h)
         assert input_channels % act_c_num_blocks == 0
 
-        # Convert activation RM to tile layout
-        conv_input_on_device = conv_input.reshape(
+        # Reshape 4d to 2d
+        conv_input = conv_input.reshape(
             1,
             1,
             self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2],
             self.input_tensor_shape[3],
-        ).to(self.device, interleaved_mem_config)
-        shallow_conv = True
-        if input_channels >= 32:
-            shallow_conv = False
+        )
+
+        # Pad for 16 byte alignnment
+        # TODO: for bfp16, pad to 8 only
+        padded_input_channels = _nearest_y(conv_input.shape()[3], 16)
+        channels_padded_shape = [
+            conv_input.shape()[0],
+            conv_input.shape()[1],
+            conv_input.shape()[2],
+            padded_input_channels,
+        ]
+        conv_input = conv_input.pad(channels_padded_shape, (0, 0, 0, 0), 0)
+        conv_input_on_device = conv_input.to(self.device, interleaved_mem_config)
+
+        if not self.use_shallow_conv_variant:
             input_padded_shape = ttl.tensor.pad_to_tile_shape(conv_input_on_device.shape(), False, False, True, True)
+            padded_input_channels = input_padded_shape[3]
             if conv_input.shape() != input_padded_shape:
                 conv_input_on_device = ttl.tensor.format_input_tensor(
                     conv_input_on_device,
@@ -808,26 +838,22 @@ class TTPyCompositeConv(TTPyOp):
                 conv_input_on_device = ttl.tensor.tilize(
                     conv_input_on_device, interleaved_mem_config, use_multicore=True
                 )
-        if shallow_conv:
-            assert (
-                input_channels == 16
-            ), "Unsupported input_channels. Expected input_channels=16. Pad input channels to 16 with zeros."
         input_size_to_shard_evenly = _nearest_y(
             self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
         )
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
         if act_c_num_blocks > 1:  # 2D conv
-            assert _nearest_32(input_channels) % act_c_num_blocks == 0
+            assert padded_input_channels % act_c_num_blocks == 0
             assert (
-                not shallow_conv
-            ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True"
+                not self.use_shallow_conv_variant
+            ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
             conv_input_on_device = ttl.tensor.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
-                    (int)(_nearest_32(input_channels) / act_c_num_blocks),
+                    (int)(padded_input_channels / act_c_num_blocks),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttl.tensor.ShardOrientation.COL_MAJOR,
@@ -838,7 +864,7 @@ class TTPyCompositeConv(TTPyOp):
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
-                    input_channels if shallow_conv else _nearest_32(input_channels),
+                    padded_input_channels,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
