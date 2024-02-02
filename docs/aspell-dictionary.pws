@@ -1,4 +1,4 @@
-personal_ws-1.1 en 492
+personal_ws-1.1 en 494
 ABI
 ADDI
 API
@@ -324,6 +324,7 @@ maxdepth
 md
 mish
 modindex
+mse
 mul
 multicast
 multigammaln
@@ -419,6 +420,7 @@ skillset
 smi
 smsg
 softmax
+softplus
 softshrink
 softsign
 sqrt

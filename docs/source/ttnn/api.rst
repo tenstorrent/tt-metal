@@ -154,6 +154,29 @@ Activation
    ttnn/softsign
    ttnn/swish
    ttnn/hardsigmoid
+   ttnn/softplus
+
+Tensor Creation
+===============
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/ones
+   ttnn/ones_like
+   ttnn/zeros
+   ttnn/zeros_like
+   ttnn/full
+   ttnn/full_like
+
+Losses
+======
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/l1_loss
+   ttnn/mse_loss
 
 Reduction
 =========
@@ -162,6 +185,8 @@ Reduction
    :maxdepth: 1
 
    ttnn/mean
+   ttnn/std
+   ttnn/var
 
 Data Movement
 =============

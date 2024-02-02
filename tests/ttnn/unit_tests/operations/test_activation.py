@@ -94,6 +94,12 @@ def test_swish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.swish, F.hardswish)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_softplus(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.softplus, F.softplus)
+
+
 def torch_heaviside(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))

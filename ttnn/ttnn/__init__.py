@@ -114,6 +114,25 @@ from ttnn.operations.others import (
     upsample,
 )
 
+from ttnn.operations.creation import (
+    ones,
+    ones_like,
+    zeros,
+    zeros_like,
+    full,
+    full_like,
+)
+
+from ttnn.operations.reduction import (
+    std,
+    var,
+)
+
+from ttnn.operations.losses import (
+    l1_loss,
+    mse_loss,
+)
+
 from ttnn.operations.data_movement import (
     concat,
     pad,
@@ -193,6 +212,7 @@ from ttnn.operations.activation import (
     softshrink,
     softsign,
     swish,
+    softplus,
 )
 
 from ttnn.operations.math import (

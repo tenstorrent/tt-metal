@@ -33,6 +33,7 @@ def register_ttl_activation_function_unary(name, ttl_activation_function, op_nam
             "sign": torch.sign,
             "softsign": F.softsign,
             "swish": F.hardswish,
+            "softplus": F.softplus,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -289,6 +290,7 @@ TTL_ACTIVATION_FUNCTIONS_UNARY = [
     ("sign", ttl.tensor.sign, "sign"),
     ("softsign", ttl.tensor.softsign, "softsign"),
     ("swish", ttl.tensor.swish, "swish"),
+    ("softplus", ttl.tensor.softplus, "softplus"),
 ]
 
 TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
