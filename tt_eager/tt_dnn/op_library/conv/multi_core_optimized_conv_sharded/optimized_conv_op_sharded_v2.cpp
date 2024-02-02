@@ -171,10 +171,11 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     return {cb_sharded_act, cb_output};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output, bool split_reader) {
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    TT_ASSERT(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
@@ -185,16 +186,60 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     //assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
     TT_ASSERT(out_block_h_ntiles >= act_block_h_ntiles, "Output block height (in # of tiles) should be greater than or equal to activation block height (in # of tiles)");
 
+    // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
+    TT_ASSERT(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
+    TT_ASSERT(b.shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_ASSERT(b.shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.shape()[2];
+    uint32_t weight_matrix_width = b.shape()[3];
+    uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
+    uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
+
     // Partitions conv inner dim into blocks to support sharding along this dim
     // TODO: Only 2D convs with sharded input use this, but we can uplift to support generically
     // TODO: Only updated variables which is affected, but there may be more that needs to account for this
     // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     uint32_t conv_act_c_blocks = block_config.act_c_num_blocks;
+    auto shard_shape = a.shard_spec().value().shape;
 
-    uint32_t conv_act_size_h = ashape[1];
-    uint32_t conv_act_size_w = ashape[2];
-    uint32_t conv_act_size_c = ashape[3];
+    // parallelization config
+    const auto& p_config = parallelization_config;
+    uint32_t num_cores_x = p_config.grid_size.x;
+    uint32_t num_cores_y = p_config.grid_size.y;
+    uint32_t total_num_cores = num_cores_x * num_cores_y;
+    assert(num_cores_x < 13);
+    assert(num_cores_y < 10);
+    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
+    uint32_t per_core_weight_matrix_width_ntiles = p_config.per_core_weight_matrix_width_ntiles;
+
+    // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
+    bool weight_width_sliced = per_core_weight_matrix_width_ntiles < weight_matrix_width_ntiles;
+    assert(conv_act_c_blocks == weight_matrix_width_ntiles / per_core_weight_matrix_width_ntiles);
+    uint32_t input_channels_padded = 0;
+    if(weight_width_sliced) {
+        TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_blocks to be equal to height of grid");
+        input_channels_padded = shard_shape[1] * num_cores_y;
+    } else {
+        input_channels_padded = shard_shape[1];
+    }
+    TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
+    // check is for 16-byte alignment
+    TT_FATAL(input_channels_padded % 16 == 0, "Expected input channels to be padded for 16 byte alignment in L1"); // TODO: For bfp16, check if its divisible by 8 not 16.
+    // Always use split reader for first conv in resnet which has input channels = 16
+    // TODO: Expose option to split readers for 1D convs to python?
+    bool split_reader = false;
+    if (input_channels_padded == 16) {
+        split_reader = true; // shallow conv variant
+    }
+    if (split_reader) {
+        TT_FATAL(block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0, "Out_block_h must be divisible by out_subblock_h!");
+        TT_FATAL((block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles) % 2 == 0, "Number of out_subblock_h must be divisible by 2 for split reader!");
+    }
+    Shape ashape_with_channels_padded = {ashape[0], ashape[1], ashape[2], input_channels_padded};
+    uint32_t conv_act_size_h = ashape_with_channels_padded[1];
+    uint32_t conv_act_size_w = ashape_with_channels_padded[2];
+    uint32_t conv_act_size_c = ashape_with_channels_padded[3];
     uint32_t weight_size_h = (uint32_t) conv_params[0];
     uint32_t weight_size_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
@@ -203,20 +248,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t pad_w = (uint32_t) conv_params[5];
 
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape_with_channels_padded, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t) act_matrix_shape[2];
     uint32_t act_matrix_height_unpadded = (uint32_t) act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t) act_matrix_shape_unpadded[2];
-
-    // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
-    TT_ASSERT(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
-    TT_ASSERT(b.shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_ASSERT(b.shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.shape()[2];
-    uint32_t weight_matrix_width = b.shape()[3];
 
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
@@ -249,8 +287,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     // Convert tensor dims to tile dims
     uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
     uint32_t act_matrix_width_ntiles = act_matrix_width / TILE_WIDTH;
-    uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
-    uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
 
     assert(act_matrix_height_ntiles % act_block_h_ntiles == 0);
     assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
@@ -406,18 +442,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         log_debug(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
         log_debug(tt::LogOp, "num_groups: {}", num_groups);
     }
-    // parallelization config
-    const auto& p_config = parallelization_config;
-    uint32_t num_cores_x = p_config.grid_size.x;
-    uint32_t num_cores_y = p_config.grid_size.y;
-    uint32_t total_num_cores = num_cores_x * num_cores_y;
-    assert(num_cores_x < 13);
-    assert(num_cores_y < 10);
-    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
-    uint32_t per_core_weight_matrix_width_ntiles = p_config.per_core_weight_matrix_width_ntiles;
 
-    // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = per_core_weight_matrix_width_ntiles < weight_matrix_width_ntiles;
     uint32_t window_outer;
     uint32_t window_inner;
     if (weight_width_sliced) {
