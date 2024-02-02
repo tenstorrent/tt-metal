@@ -31,7 +31,7 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
         auto end = core_range.end;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
-                CoreCoord logical_core({.x=x, .y=y});
+                CoreCoord logical_core({x, y});
                 this->logical_cores_.insert(logical_core);
                 max_x = std::max( max_x, x );
                 max_y = std::max( max_y, y);
