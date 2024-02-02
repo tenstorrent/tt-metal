@@ -45,8 +45,9 @@ void kernel_main() {
 
         if (!reading_buffer) {
             // Received this command just to signal that it finished
-            // Clear out num_buffer_transfers so downstream dispatch cores do not expect data to be coming in with the command
-            header->num_buffer_transfers = 0; // this is hacky
+            // This is hacky(!) but here we clear out cmd metadata so ethernet routers and completion queue write interface do not expect incoming data
+            header->num_buffer_transfers = 0;
+            header->num_pages = 0;
         }
 
         relay_command<cmd_base_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(tx_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
