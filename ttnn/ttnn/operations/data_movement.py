@@ -155,7 +155,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
         def torch_permute(tensor, order):
             return tensor.permute(order).contiguous().clone()
 
-        tensor = ttnn.to_torch(tensor)
+        tensor = ttnn.to_torch(input_tensor)
         tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
         tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
         return tensor
