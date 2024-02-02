@@ -77,13 +77,11 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
     SHAPE shape = {1, 1, 32, 32};
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
-    // tt_metal::detail::WriteToBuffer(dram_buffer, activations);
     fixture->WriteBuffer(device, dram_buffer, activations);
 
     tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
 
     log_info(LogTest, "Launching kernels");
-    // tt_metal::detail::LaunchProgram(device, program);
     fixture->RunProgram(device, program);
     log_info(LogTest, "Kernels done");
 

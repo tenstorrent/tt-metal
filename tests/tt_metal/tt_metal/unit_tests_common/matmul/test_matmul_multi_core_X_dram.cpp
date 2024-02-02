@@ -60,26 +60,19 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
     int cores_c = cfg.multi_dram ? 1 : num_cores_c;
     for(int i = 0; i < cores_r; i++) {
         for(int j = 0; j < cores_c; j++) {
-            // int core_index = i * num_cores_c + j;
-            // CoreCoord core = {(std::size_t) j, (std::size_t) i};
-
             uint32_t src0_cb_index = 0;
             uint32_t cb0_tiles = in0_block_tiles * 2;  // double buffer
             tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-            // auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
             uint32_t src1_cb_index = 1;
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, single_tile_size);
-            // auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-            // CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
             tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size)
                 .set_page_size(interm0_cb_index, single_tile_size);
-            // auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
             if (cfg.multi_dram){
                 auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
                 auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
@@ -96,13 +89,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
         program,
-        cfg.reader_kernel, //"tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
+        cfg.reader_kernel,
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        cfg.writer_kernel, //"tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp",
+        cfg.writer_kernel,
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 

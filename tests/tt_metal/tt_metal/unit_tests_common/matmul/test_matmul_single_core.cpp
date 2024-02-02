@@ -200,21 +200,11 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
 
     std::vector<uint32_t> result_vec;
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Validation & Teardown
-    ////////////////////////////////////////////////////////////////////////////
+
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
     auto result_flat_layout = convert_to_flat_layout(result_bfp16);
     auto result_untilized = test_utils::untilize(result_flat_layout, M*32, N*32);
-    // print_vec(result_bfp16, 128, 128, "Result bfp16");
-    // print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");
-    // print_faces(unpack_uint32_vec_into_bfloat16_vec(weights), "Weights tile transposed");
-    // print_faces(result_bfp16, "Result bfp16");
-    // print_vec_of_uint32_as_packed_bfloat16(weights, 16, "weights tile transposed");
-    // print_vec(result_untilized, M*32, N*32, "Result");
-    // print_vec(tensor.get_values(), 128, 128, "Golden");
     auto golden = select_columns(tensor.get_values(), M, K, std::min(K, N));
-    // auto golden = tensor.get_values();
     pass &= test_utils::is_close_vectors<bfloat16> (
         golden,
         result_untilized,

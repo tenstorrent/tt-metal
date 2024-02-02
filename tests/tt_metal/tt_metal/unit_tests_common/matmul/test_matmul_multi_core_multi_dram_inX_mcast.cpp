@@ -54,10 +54,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
     CoreRange mcast_senders{
         .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
         .end={(std::size_t) start_core_x + mcast_xy_offset * (num_cores_c - 1), (std::size_t) start_core_y + mcast_yx_offset * (num_cores_r - 1)}};
-        // in1 : 1, 0   in2 : 0, 1
-        // = {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}} OR {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}}
     CoreRange mcast_receivers{
-        // = {(std::size_t) start_core_x, (std::size_t) start_core_y + 1} OR {(std::size_t) start_core_x + 1, (std::size_t) start_core_y}
         .start={(std::size_t) start_core_x + mcast_yx_offset, (std::size_t) start_core_y + mcast_xy_offset},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
@@ -95,13 +92,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
     std::string kernel_receiver = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in" + std::to_string(mcast_xy_offset) + "_mcast_receiver.cpp";
     auto mm_reader_kernel_sender = tt_metal::CreateKernel(
         program,
-        kernel_sender, //"tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in1_mcast_sender.cpp", // !!
+        kernel_sender,
         mcast_senders,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program,
-        kernel_receiver, //"tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in1_mcast_receiver.cpp", // !!
+        kernel_receiver,
         mcast_receivers,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
@@ -287,7 +284,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
     log_info(LogTest, "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}", in0_block_w, per_core_N, K / in0_block_w, per_core_N / out_subblock_w);
     SHAPE shape = {1, 1, M * 32, K * 32};
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 identity
+    auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bfloat16 identity
     auto golden = select_columns(tensor.get_values(), M, K, N);
 
     auto [program, mm_reader_kernel_sender, mm_reader_kernel_receiver, unary_writer_kernel]  = unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast::create_program(

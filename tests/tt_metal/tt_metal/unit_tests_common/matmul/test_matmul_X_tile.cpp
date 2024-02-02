@@ -160,9 +160,6 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
         tt_metal::ComputeConfig{.compile_args = cfg.compute_kernel_args}
     );
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
     fixture->WriteBuffer(device, src0_dram_buffer, activations);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
 
