@@ -30,6 +30,13 @@ namespace tt::tt_metal{
             return fd;
         }
 
+        std::map<chip_id_t, Device *> CreateDevices(
+            std::vector<chip_id_t> device_ids,
+            const uint8_t num_hw_cqs = 1,
+            const std::vector<uint32_t> &l1_bank_remap = {});
+
+        void CloseDevices(std::map<chip_id_t, Device *> devices);
+
         /**
         * Copies data from a host buffer into the specified buffer
         *

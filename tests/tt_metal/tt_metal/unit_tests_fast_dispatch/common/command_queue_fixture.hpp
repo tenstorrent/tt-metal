@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt::tt_metal;
 class CommandQueueFixture : public ::testing::Test {
@@ -81,21 +82,20 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
             GTEST_SKIP();
         }
 
+        std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
-            auto* device = tt::tt_metal::CreateDevice(id);
-            devices_.push_back(device);
+            chip_ids.push_back(id);
         }
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        for (const auto& id : chip_ids) {
+            devices_.push_back(reserved_devices_.at(id));
+        }
     }
 
-    void TearDown() override {
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-        for (unsigned int id = 0; id < devices_.size(); id++) {
-            tt::tt_metal::CloseDevice(devices_.at(id));
-        }
-    }
+    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
     std::vector<tt::tt_metal::Device*> devices_;
+    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
