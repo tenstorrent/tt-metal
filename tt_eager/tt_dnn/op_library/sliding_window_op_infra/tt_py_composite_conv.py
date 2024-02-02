@@ -344,7 +344,9 @@ class TTPyCompositeConv(TTPyOp):
         using_parameters_cache=False,
         move_weights_to_device=True,
         use_shallow_conv_variant=False,
+        enable_auto_formatting=False,
     ):
+        self.enable_auto_formatting = enable_auto_formatting
         self.use_shallow_conv_variant = use_shallow_conv_variant
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
@@ -707,7 +709,12 @@ class TTPyCompositeConv(TTPyOp):
             self.conv = composite_conv
 
     def __call__(self, activation):
-        return self.conv(activation)
+        if self.enable_auto_formatting:
+            activation = self.conv_input_interleaved_to_sharded(activation)
+        activation = self.conv(activation)
+        if self.enable_auto_formatting:
+            activation = self.conv_output_sharded_to_interleaved(activation)
+        return activation
 
     def get_parallelization_config(self):
         return self.opt_conv_parall_conf_auto
@@ -788,56 +795,17 @@ class TTPyCompositeConv(TTPyOp):
         conv_input_on_device = conv_input.to(self.device, mem_config, shard_spec)
         return conv_input_on_device
 
-    def copy_input_to_device(self, conv_input: ttl.tensor.Tensor):
-        interleaved_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        )
-        assert conv_input.shape() == self.input_tensor_shape
+    def conv_input_interleaved_to_sharded(self, conv_input_on_device: ttl.tensor.Tensor):
         num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
         num_cores_w = self.sliding_window_op_params.num_cores_w
         num_cores_h = self.sliding_window_op_params.num_cores_h
 
         input_channels = self.input_tensor_shape[3]
+        padded_input_channels = conv_input_on_device.shape()[3]
+        assert padded_input_channels >= input_channels
         act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
         grid_size = (num_cores_w, num_cores_h)
-        assert input_channels % act_c_num_blocks == 0
 
-        # Reshape 4d to 2d
-        conv_input = conv_input.reshape(
-            1,
-            1,
-            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2],
-            self.input_tensor_shape[3],
-        )
-
-        # Pad for 16 byte alignnment
-        # TODO: for bfp16, pad to 8 only
-        padded_input_channels = _nearest_y(conv_input.shape()[3], 16)
-        channels_padded_shape = [
-            conv_input.shape()[0],
-            conv_input.shape()[1],
-            conv_input.shape()[2],
-            padded_input_channels,
-        ]
-        conv_input = conv_input.pad(channels_padded_shape, (0, 0, 0, 0), 0)
-        conv_input_on_device = conv_input.to(self.device, interleaved_mem_config)
-
-        if not self.use_shallow_conv_variant:
-            input_padded_shape = ttl.tensor.pad_to_tile_shape(conv_input_on_device.shape(), False, False, True, True)
-            padded_input_channels = input_padded_shape[3]
-            if conv_input.shape() != input_padded_shape:
-                conv_input_on_device = ttl.tensor.format_input_tensor(
-                    conv_input_on_device,
-                    self.device,
-                    input_padded_shape,
-                    0.0,
-                    ttl.tensor.Layout.TILE,
-                    interleaved_mem_config,
-                )
-            else:
-                conv_input_on_device = ttl.tensor.tilize(
-                    conv_input_on_device, interleaved_mem_config, use_multicore=True
-                )
         input_size_to_shard_evenly = _nearest_y(
             self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
         )
@@ -871,12 +839,65 @@ class TTPyCompositeConv(TTPyOp):
             )
         return conv_input_on_device
 
+    def copy_input_to_device(self, conv_input: ttl.tensor.Tensor):
+        interleaved_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+        )
+        assert conv_input.shape() == self.input_tensor_shape
+        # Reshape 4d to 2d
+        conv_input = conv_input.reshape(
+            1,
+            1,
+            self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2],
+            self.input_tensor_shape[3],
+        )
+
+        if conv_input.storage_type() != ttl.tensor.StorageType.DEVICE:
+            # Pad for 16 byte alignnment
+            # TODO: for bfp16, pad to 8 only
+            padded_input_channels = _nearest_y(conv_input.shape()[3], 16)
+            channels_padded_shape = [
+                conv_input.shape()[0],
+                conv_input.shape()[1],
+                conv_input.shape()[2],
+                padded_input_channels,
+            ]
+            conv_input = conv_input.pad(channels_padded_shape, (0, 0, 0, 0), 0)
+            conv_input_on_device = conv_input.to(self.device, interleaved_mem_config)
+        else:
+            conv_input_on_device = conv_input
+        assert conv_input_on_device.shape()[3] % 16 == 0
+        if not self.use_shallow_conv_variant:
+            input_padded_shape = ttl.tensor.pad_to_tile_shape(conv_input_on_device.shape(), False, False, True, True)
+            padded_input_channels = input_padded_shape[3]
+            if conv_input.shape() != input_padded_shape:
+                conv_input_on_device = ttl.tensor.format_input_tensor(
+                    conv_input_on_device,
+                    self.device,
+                    input_padded_shape,
+                    0.0,
+                    ttl.tensor.Layout.TILE,
+                    interleaved_mem_config,
+                )
+            else:
+                conv_input_on_device = ttl.tensor.tilize(
+                    conv_input_on_device, interleaved_mem_config, use_multicore=True
+                )
+        return self.conv_input_interleaved_to_sharded(conv_input_on_device)
+
+    def conv_output_sharded_to_interleaved(self, conv_output_on_device):
+        interleaved_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+        )
+        # Convert sharded output to tiled interleaved
+        return ttl.tensor.sharded_to_interleaved(conv_output_on_device, interleaved_mem_config)
+
     def copy_output_from_device(self, conv_output_on_device):
         interleaved_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
         )
         # Convert sharded output to tiled interleaved
-        conv_output_on_device = ttl.tensor.sharded_to_interleaved(conv_output_on_device, interleaved_mem_config)
+        conv_output_on_device = self.conv_output_sharded_to_interleaved(conv_output_on_device)
 
         # convert tiled output to RM
         assert conv_output_on_device.layout() == ttl.tensor.Layout.TILE

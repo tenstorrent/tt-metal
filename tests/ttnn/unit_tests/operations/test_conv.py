@@ -12,6 +12,30 @@ import ttnn
 import math
 
 
+def prepare_conv_input_and_copy_to_device_interleaved(
+    device, torch_input_tensor_nhwc, input_tensor_shape, use_shallow_conv_variant
+):
+    # Pad for 16 byte alignnment
+    # TODO: for bfp16, pad to 8 only
+    padded_input_channels = math.ceil(torch_input_tensor_nhwc.shape[3] / 16) * 16
+    torch_input_tensor_nhwc = torch.nn.functional.pad(
+        torch_input_tensor_nhwc, (0, 0, 0, 0, 0, padded_input_channels - torch_input_tensor_nhwc.shape[3])
+    )
+    # Reshape 4d to 2d
+    torch_input_tensor_nhwc = torch.reshape(
+        torch_input_tensor_nhwc,
+        (1, 1, input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2], input_tensor_shape[3]),
+    )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
+    tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
+
+    if not use_shallow_conv_variant:
+        tt_input_tensor_on_device = ttnn.pad_to_tile(tt_input_tensor_on_device)
+        tt_input_tensor_on_device = ttnn.to_layout(tt_input_tensor_on_device, ttnn.TILE_LAYOUT)
+    return tt_input_tensor_on_device
+
+
 def run_conv(
     device,
     math_fidelity,
@@ -31,6 +55,7 @@ def run_conv(
     use_1d_systolic_array,
     config_override,
     use_shallow_conv_variant=False,
+    enable_auto_formatting=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -47,6 +72,12 @@ def run_conv(
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
     )
+    output_shape_nhwc = [
+        torch_out_golden_tensor.shape[0],
+        torch_out_golden_tensor.shape[2],
+        torch_out_golden_tensor.shape[3],
+        torch_out_golden_tensor.shape[1],
+    ]
 
     reader_patterns_cache = {}
 
@@ -75,24 +106,36 @@ def run_conv(
         weights_dtype=weights_dtype,
         conv_blocking_and_parallelization_config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        enable_auto_formatting=enable_auto_formatting,
     )
 
     assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
-
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-    tt_input_tensor_on_device = conv.copy_input_to_device(tt_input_tensor)
+    if enable_auto_formatting:
+        tt_input_tensor_on_device = prepare_conv_input_and_copy_to_device_interleaved(
+            device,
+            torch_input_tensor,
+            [batch_size, input_height, input_width, input_channels],
+            use_shallow_conv_variant,
+        )
+    else:
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+        tt_input_tensor_on_device = conv.copy_input_to_device(tt_input_tensor)
     tt_output_tensor_on_device = conv(tt_input_tensor_on_device)
-    tt_output_tensor = conv.copy_output_from_device(tt_output_tensor_on_device)
+    if enable_auto_formatting:
+        tt_output_tensor_on_device = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
+        tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+        torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+        torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]
+        torch_output_tensor = torch.reshape(torch_output_tensor, output_shape_nhwc)
+    else:
+        tt_output_tensor = conv.copy_output_from_device(tt_output_tensor_on_device)
+        assert tt_output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+        torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert tt_output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-
-    reader_patterns_cache.clear()
-
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-
+    reader_patterns_cache.clear()
     if math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.9969
     else:
@@ -366,6 +409,7 @@ def test_resnet50_conv(
     [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("enable_auto_formatting", [True, False])
 def test_sd_conv(
     use_program_cache,
     device,
@@ -385,8 +429,11 @@ def test_sd_conv(
     pad_w,
     use_1d_systolic_array,
     config_override,
+    enable_auto_formatting,
 ):
     if input_channels > 1280 or (input_channels > 640 and input_height > 16):
+        if enable_auto_formatting:
+            pytest.skip("Not running split SD conv with auto formatting")
         run_conv_with_split(
             device,
             math_fidelity,
@@ -427,6 +474,7 @@ def test_sd_conv(
             use_1d_systolic_array,
             config_override,
             use_shallow_conv_variant=(input_channels == 16),
+            enable_auto_formatting=enable_auto_formatting,
         )
 
 
