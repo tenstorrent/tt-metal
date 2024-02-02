@@ -8,6 +8,7 @@
 #include <ctime>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
 
 #include "llrt.hpp"
 #include "watcher.hpp"
