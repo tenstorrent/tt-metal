@@ -61,6 +61,9 @@ void multicore_eth_cb_pop_front(
 FORCE_INLINE
 void eth_db_acquire(volatile uint32_t *semaphore, uint64_t noc_encoding) {
     while (semaphore[0] == 0 and routing_info->routing_enabled and erisc_info->launch_user_kernel == 0) {
+        // Without this context switch a src router on R chip of N300 may get configured for FD
+        //  and block L chip of N300 from sending config for dst router on R because the path to the dst router is through the src router
+        internal_::risc_context_switch();
     }
 }
 
