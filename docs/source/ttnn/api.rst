@@ -111,6 +111,7 @@ Pointwise Relational
    ttnn/lte
    ttnn/eq
    ttnn/ne
+   ttnn/isclose
 
 Pointwise Math
 ==============
@@ -139,6 +140,10 @@ Pointwise Math
    ttnn/erfinv
    ttnn/exp2
    ttnn/expm1
+   ttnn/atan2
+   ttnn/hypot
+   ttnn/lerp
+   ttnn/squared_difference
 
 Activation
 ==========

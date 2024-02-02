@@ -190,6 +190,7 @@ from ttnn.operations.relational import (
     lte,
     eq,
     ne,
+    isclose,
 )
 
 from ttnn.operations.activation import (
@@ -237,6 +238,10 @@ from ttnn.operations.math import (
     erfinv,
     exp2,
     expm1,
+    atan2,
+    hypot,
+    squared_difference,
+    lerp,
 )
 
 from ttnn.operations.normalization import (

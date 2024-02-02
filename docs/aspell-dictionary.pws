@@ -1,4 +1,4 @@
-personal_ws-1.1 en 494
+personal_ws-1.1 en 497
 ABI
 ADDI
 API
@@ -281,6 +281,7 @@ hpp
 hs
 html
 hw
+hypot
 icb
 idst
 ie
@@ -292,6 +293,7 @@ intrinsics
 iomanip
 ios
 ipynb
+isclose
 isfinite
 isinf
 isinstance
@@ -304,6 +306,7 @@ iy
 jupyter
 labelled
 ld
+lerp
 lez
 lgamma
 linenos
