@@ -8,47 +8,71 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 class default_setup(metaclass=MergeMetaclass):
     timerAnalysis = {
-        "FW_START->FW_END": {
+        "T0 -> BRISC FW start": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "timerID": 0},
+            "end": {"risc": "BRISC", "timerID": 1},
+        },
+        "TRISC0 kernel start -> TRISC0 kernel end": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "TRISC_0", "timerID": 2},
+            "end": {"risc": "TRISC_0", "timerID": 3},
+        },
+        "TRISC1 kernel start -> TRISC1 kernel end": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "TRISC_1", "timerID": 2},
+            "end": {"risc": "TRISC_1", "timerID": 3},
+        },
+        "TRISC2 kernel start -> TRISC2 kernel end": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "TRISC_2", "timerID": 2},
+            "end": {"risc": "TRISC_2", "timerID": 3},
+        },
+        "BRISC kernel start -> BRISC kernel end": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "timerID": 2},
+            "end": {"risc": "BRISC", "timerID": 3},
+        },
+        "NCRISC kernel start -> NCRISC kernel end": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "NCRISC", "timerID": 2},
+            "end": {"risc": "NCRISC", "timerID": 3},
+        },
+        "ANY RISC FW start -> ANY RISC FW end": {
+            "across": "core",
+            "type": "launch_first_last",
+            "start": {"risc": "ANY", "timerID": 1},
+            "end": {"risc": "ANY", "timerID": 4},
+        },
+        "ANY RISC FW end -> BRISC FW start": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ANY", "timerID": 4},
+            "end": {"risc": "BRISC", "timerID": 1},
+        },
+        "T0 -> ANY RISC FW end": {
+            "across": "core",
+            "type": "session_first_last",
+            "start": {"risc": "BRISC", "timerID": 0},
+            "end": {"risc": "ANY", "timerID": 4},
+        },
+        "BRISC FW start -> ANY RISC FW end": {
+            "across": "core",
+            "type": "session_first_last",
+            "start": {"risc": "ANY", "timerID": 1},
+            "end": {"risc": "ANY", "timerID": 4},
+        },
+        "T0 -> ANY CORE ANY RISC FW end": {
             "across": "device",
-            "type": "model_first_last",
+            "type": "session_first_last",
             "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
             "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
-        },
-        "KERNEL_START->KERNEL_END": {
-            "across": "device",
-            "type": "model_first_last",
-            "start": {"core": "ANY", "risc": "ANY", "timerID": 2},
-            "end": {"core": "ANY", "risc": "ANY", "timerID": 3},
-        },
-        "BR_KERNEL_START->BR_KERNEL_END": {
-            "across": "device",
-            "type": "model_first_last",
-            "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
-            "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
-        },
-        "NC_KERNEL_START->NC_KERNEL_END": {
-            "across": "device",
-            "type": "model_first_last",
-            "start": {"core": "ANY", "risc": "NCRISC", "timerID": 2},
-            "end": {"core": "ANY", "risc": "NCRISC", "timerID": 3},
-        },
-        "T0_KERNEL_START->T0_KERNEL_END": {
-            "across": "device",
-            "type": "model_first_last",
-            "start": {"core": "ANY", "risc": "TRISC_0", "timerID": 2},
-            "end": {"core": "ANY", "risc": "TRISC_0", "timerID": 3},
-        },
-        "T1_KERNEL_START->T1_KERNEL_END": {
-            "across": "device",
-            "type": "model_first_last",
-            "start": {"core": "ANY", "risc": "TRISC_1", "timerID": 2},
-            "end": {"core": "ANY", "risc": "TRISC_1", "timerID": 3},
-        },
-        "T2_KERNEL_START->T2_KERNEL_END": {
-            "across": "device",
-            "type": "model_first_last",
-            "start": {"core": "ANY", "risc": "TRISC_2", "timerID": 2},
-            "end": {"core": "ANY", "risc": "TRISC_2", "timerID": 3},
         },
     }
 
@@ -72,7 +96,7 @@ class default_setup(metaclass=MergeMetaclass):
 
     timerIDLabels = [(0, "Start"), (1, "Firmware Start"), (2, "Kernel start"), (3, "Kernel End"), (4, "Firmware End")]
 
-    displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum"]
+    displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum", "Range"]
 
     plotBaseHeight = 200
     plotPerCoreHeight = 100
@@ -183,6 +207,41 @@ class test_full_buffer(default_setup):
             "start": {"risc": "ANY", "timerID": 5},
             "end": {"risc": "ANY", "timerID": 5},
         }
+    }
+
+
+class test_custom_cycle_count(default_setup):
+    timerAnalysis = {
+        "BRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
+            "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
+        },
+        "NCRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "NCRISC", "timerID": 2},
+            "end": {"core": "ANY", "risc": "NCRISC", "timerID": 3},
+        },
+        "TRISC_0 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "timerID": 2},
+            "end": {"core": "ANY", "risc": "TRISC_0", "timerID": 3},
+        },
+        "TRISC_1 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "timerID": 2},
+            "end": {"core": "ANY", "risc": "TRISC_1", "timerID": 3},
+        },
+        "TRISC_2 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "timerID": 2},
+            "end": {"core": "ANY", "risc": "TRISC_2", "timerID": 3},
+        },
     }
 
 

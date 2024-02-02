@@ -132,37 +132,6 @@ class TupleEncoder(json.JSONEncoder):
         return super().iterencode(self._preprocess_tuple(obj))
 
 
-def print_chrome_tracing_json(devicesData, setup):
-    chromeTraces = []
-    riscToNum = {"BRISC": 1, "NCRISC": 2, "TRISC_0": 3, "TRISC_1": 4, "TRISC_2": 5}
-    for device in devicesData["devices"].keys():
-        minTime = devicesData["devices"][device]["metadata"]["global_min"]["ts"]
-        for timerID, timestamp, risc, core in devicesData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"][
-            "timeseries"
-        ]:
-            x, y = core
-            traceID = riscToNum[risc] + x * 100 + y * 10000
-            phaseType = ""
-            if timerID in [1]:
-                phaseType = "B"
-                chromeTraces.append(
-                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": minTime}
-                )
-            elif timerID in [4]:
-                phaseType = "E"
-
-                chromeTraces.append(
-                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": timestamp}
-                )
-
-            chromeTraces.append(
-                {"name": "thread_name", "ph": "M", "pid": traceID, "tid": traceID, "args": {"name": f"{core}"}}
-            )
-
-    with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceChromeTracing}", "w") as devicesDataJson:
-        json.dump(chromeTraces, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
-
-
 def print_json(devicesData, setup):
     with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
         json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
@@ -338,16 +307,21 @@ def import_device_profile_log(
                 devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
             elif lineCount > 1:
-                programID = int(row[0].strip())
-                chipID = int(row[1])
-                core = (int(row[2]), int(row[3]))
+                programID = -1
+                if len(row) == 7:
+                    startCol = 1
+                    programID = int(row[0].strip())
+                else:
+                    startCol = 0
+                chipID = int(row[startCol])
+                core = (int(row[startCol + 1]), int(row[startCol + 2]))
                 if intrestingCores and core not in intrestingCores:
                     continue
-                risc = row[4].strip()
-                timerID = int(row[5])
+                risc = row[startCol + 3].strip()
+                timerID = int(row[startCol + 4])
                 if ignoreMarkers and timerID in ignoreMarkers:
                     continue
-                timeData = int(row[6])
+                timeData = int(row[startCol + 5])
 
                 if chipID in devicesData["devices"].keys():
                     if core in devicesData["devices"][chipID]["cores"].keys():
@@ -1031,8 +1005,8 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
 
     prepare_output_folder(setup)
 
-    # print_stats_outfile(devicesData, setup)
-    # print_rearranged_csv(devicesData, setup)
+    print_stats_outfile(devicesData, setup)
+    print_rearranged_csv(devicesData, setup)
     print_json(devicesData, setup)
 
     if not no_print_stats:
@@ -1042,8 +1016,8 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
     if not no_plots:
         timelineFigs = generate_plots(devicesData, setup)
 
-    # if not no_artifacts:
-    # generate_artifact_tarball(setup)
+    if not no_artifacts:
+        generate_artifact_tarball(setup)
 
     if not no_webapp:
         run_dashbaord_webapp(devicesData, timelineFigs, setup)
