@@ -268,19 +268,41 @@ namespace tt::tt_metal::detail{
             R"doc("Scalar", "float", "")doc"
         );
 
-        detail::bind_unary_op_with_param(
-            m_tensor, "argmax", &argmax,
-            py::arg("dim"),
-            R"doc(Returns the indices of the maximum value of all elements in the ``input`` tensor. Currently supported dimension are H, W, and HW. By default it returns argmax across HW. Suported shapes [1, 1, H, W])doc",
-            R"doc("dim", "int", "")doc"
-        );
+        m_tensor.def("argmax", &argmax,
+            py::arg("input").noconvert(), py::arg("dim"), py::arg("all") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns the indices of the maximum value of elements in the ``input`` tensor
+            If ``all`` is set to ``true`` irrespective of given dimension it will return the indices of maximum value of all elements in given ``input``
 
-        detail::bind_unary_op_with_param(
-            m_tensor, "argmin", &argmin,
-            py::arg("dim"),
-            R"doc(Returns the indices of the minimum value of all elements in the ``input`` tensor. Currently supported dimension are H, W, and HW. By default it returns argmin across HW. Suported shapes [1, 1, H, W])doc",
-            R"doc("dim", "int", "")doc"
-        );
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor argmax is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "dim", "Dimension to perform argmax", "int", "", "Yes"
+                "all", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("argmin", &argmin,
+            py::arg("input").noconvert(), py::arg("dim"), py::arg("all") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns the indices of the minimum value of elements in the ``input`` tensor
+            If ``all`` is set to ``true`` irrespective of given dimension it will return the indices of minimum value of all elements in given ``input``
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor argmin is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "dim", "Dimension to perform argmin", "int", "", "Yes"
+                "all", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
 
         m_tensor.def("hardtanh", &hardtanh,
             py::arg("input").noconvert(), py::arg("low") = -1.0f, py::arg("high") = +1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
