@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
+    CoreRange total_cores = {{0, 0}, {num_cores_x-1, num_cores_y-1}};
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 

@@ -26,10 +26,10 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
     std::vector<CoreRange> logical_core_ranges;
     auto split_core_range_containing_controller = [&](const CoreRange &controller_core_range) {
         TT_ASSERT(controller_core_range.start == logical_controller);
-        CoreRange right_block = CoreRange{.start = CoreCoord{.x = logical_controller.x + 1, .y = logical_controller.y}, .end = controller_core_range.end};
+        CoreRange right_block = CoreRange{CoreCoord{.x = logical_controller.x + 1, .y = logical_controller.y}, controller_core_range.end};
         CoreRange remaining_stick = CoreRange{
-            .start = CoreCoord{.x = logical_controller.x, .y = logical_controller.y + 1},
-            .end = CoreCoord{.x = logical_controller.x, .y = controller_core_range.end.y}
+            CoreCoord{.x = logical_controller.x, .y = logical_controller.y + 1},
+            CoreCoord{.x = logical_controller.x, .y = controller_core_range.end.y}
         };
 
         logical_core_ranges.push_back(right_block);
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     std::vector<CoreRange> noc_multicast_regions;
     for (const auto &logical_cr : logical_multicast_regions) {
-        CoreRange noc_cr = {.start = device->worker_core_from_logical_core(logical_cr.start), .end = device->worker_core_from_logical_core(logical_cr.end)};
+        CoreRange noc_cr = {device->worker_core_from_logical_core(logical_cr.start), device->worker_core_from_logical_core(logical_cr.end)};
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 

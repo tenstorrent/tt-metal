@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
 
     CreateCircularBuffer(
         program,
-        std::set<CoreRange>{CoreRange{.start = core, .end = core}},
+        std::set<CoreRange>{CoreRange{core, core}},
         cb_data_format,
         {
             {CB::c_in0, in0_t},
