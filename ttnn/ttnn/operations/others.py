@@ -438,4 +438,58 @@ def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool =
     return output_tensor
 
 
+def _upsample_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+def _torch_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_):
+    import torch
+
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    return torch.nn.functional.upsample(input_tensor, scale_factor=scale_factor)
+
+
+@ttnn.register_operation(
+    name="ttnn.upsample",
+    validate_input_tensors=_upsample_validate_input_tensors,
+    torch_function=_torch_upsample,
+)
+def upsample(
+    input_tensor: ttnn.Tensor,
+    scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float, float]],
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """
+    upsample(input_tensor: ttnn.Tensor, scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float, float]) -> ttnn.Tensor
+    """
+
+    scale_h, scale_w = 1, 1
+    if isinstance(scale_factor, float):
+        scale_h = 1
+        scale_w = scale_factor
+    elif len(scale_factor) == 2:
+        scale_h, scale_w = scale_factor
+    elif len(scale_factor) == 4:
+        scale_h, scale_w = scale_factor[1], scale_factor[2]
+    else:
+        RuntimeError("Invalid scale factor")
+
+    ttl_input_tensor = input_tensor.value
+    output_tensor = ttl.tensor.upsample(ttl_input_tensor, int(scale_h), int(scale_w), output_mem_config=memory_config)
+    output_tensor = ttnn.Tensor(output_tensor)
+
+    return output_tensor
+
+
 __all__ = []

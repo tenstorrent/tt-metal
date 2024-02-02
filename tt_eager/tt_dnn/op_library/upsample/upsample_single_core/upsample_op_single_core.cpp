@@ -16,167 +16,104 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks upsample_single_core(const Tensor &a, Tensor& output) {
-
-    tt_metal::Program program = tt_metal::CreateProgram();
-
+operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, int scale_factor_h, int scale_factor_w) {
+    Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    tt_metal::Buffer *src0_buffer = a.buffer();
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    auto output_shape = output.shape();
-    auto input_shape = a.shape();
-    std::cout <<  "Log testing input shape: --> "  <<  input_shape[0] << " " << input_shape[1] << " " << input_shape[2] << " "  << input_shape[3]; //<< std::endl;
-    std::cout <<  "Log testing output shape: --> " <<  output_shape[0] << " " << output_shape[1] << " " << output_shape[2] << " "  << output_shape[3] << std::endl;
-
-    /*for(int i=0; i<output_shape.size(); i++) {
-        std::cout << output_shape[i] << " ";
-    }*/
-    std::cout << std::endl;
-    tt_metal::Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    std::cout << "input_single_tile_size: " << input_single_tile_size << std::endl;
-
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t input_unit_size = input.shape()[-1] * input.element_size();
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
-    std::cout << "output_single_tile_size: " << output_single_tile_size << std::endl;
-    std::cout <<  "Log testing output shape: _1" << std::endl;
+    uint32_t output_unit_size = output.shape()[-1] * output.element_size();
 
-    int32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t output_num_units = output.volume() / output.shape()[-1]; // N*H*W for outout
+    uint32_t input_num_units = input.volume() / input.shape()[-1];  // N*H*W for input
 
-    auto width = a.shape()[-1];
-    uint32_t stick_s =  width;
-    uint32_t num_sticks = a.volume() / width;
-    uint32_t stick_size = stick_s * a.element_size(); // Assuming bfloat16 dataformat
-    std::cout << "num_tiles " << num_tiles << " " << stick_s << "   " << std::endl;
+    auto output_shape = output.shape();
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = output.device();
 
-    uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
-    // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
-    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size); // 2 CBs
-    // Currently need the number of tiles in a row to be divisible by tiles in a block
-    std::cout << "num_tiles_in_row: " << num_tiles_in_row << "max_tiles: " << max_tiles << std::endl;
-    uint32_t num_tiles_per_block = 1;
+    //circulat buffer for input
+    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t num_input_units = 2;
+    uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, aligned_input_unit_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-        if (num_tiles_in_row <= max_tiles) {
-        num_tiles_per_block = num_tiles_in_row;
-    } else {
-        for(uint32_t n_t = max_tiles; n_t > 0; n_t--) {
-            if (num_tiles_in_row % n_t == 0) {
-                num_tiles_per_block = n_t;
-                break;
-            }
-        }
-    }
+    //circulat buffer same for input and output. No compute kernels.
+    uint32_t output_cb_index = src0_cb_index; // same as input cb
 
-    std::cout <<  "Log testing output shape: _3" << std::endl;
-    uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
-    std::cout << "block_width_size: " << block_width_size << std::endl;
-    std::cout <<  "Log testing output shape: _3.1.1" << std::endl;
-    std::cout << "num_tiles_per_block --> "  << num_tiles_per_block << std::endl;
-    uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
-        std::cout <<  "Log testing output shape: _3.1.2" << std::endl;
-    uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
-        std::cout <<  "Log testing output shape: _3.1.3" << std::endl;
-    uint32_t leftover_width_in_row = num_leftover_tiles * a.element_size();
-    std::cout <<  "Log testing output shape: _3.1" << std::endl;
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = num_tiles_per_block;
-    std::cout <<  "Log testing output shape: _3.2" << std::endl;
+    auto src_buffer = input.buffer();
+    auto dst_buffer = output.buffer();
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-		.set_page_size(src0_cb_index, input_single_tile_size);
-	auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
-    std::cout <<  "Log testing output shape: _3.3" << std::endl;
+    /*
+    The data layout is mapped in DRAM as follows:
+        number of channel = stick size
+        NHW is number of sticks
+    */
 
-    uint32_t output_cb_index = 16; // output operands start at index 16
-    uint32_t num_output_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-		.set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-    std::cout <<  "output_cb_index: _3.4 " << output_cb_index << std::endl;
-
-    vector<uint32_t> reader_kernel_args = {
-        src0_buffer->address(),
-        num_sticks,
-        stick_size,
-        num_tiles_per_block,
-        block_width_size,
-        num_full_blocks_in_row,
-        num_leftover_tiles,
-        leftover_width_in_row,
-        0                       // row_start_id
-    };
-    std::cout <<  "Log testing output shape: _4" << std::endl;
-    // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) src0_is_dram,
-        (std::uint32_t) stick_size_is_power_of_two,
-        (std::uint32_t) log2_stick_size,
+    std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
+    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
+    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(input_unit_size) : 0;
+    reader_compile_time_args = {
+        (std::uint32_t) src0_cb_index,
+        (std::uint32_t) src_is_dram,
+        (std::uint32_t) src_stick_size_is_power_of_two,
+        (std::uint32_t) src_log2_stick_size
     };
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {
+    bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
+    uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
+    writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        (std::uint32_t) out_is_dram
+        (std::uint32_t) dst_is_dram,
+        (std::uint32_t) dst_stick_size_is_power_of_two,
+        (std::uint32_t) dst_log2_stick_size
     };
-    std::cout <<  "Log testing output shape: 5" << std::endl;
-    // Tilized reader
+
+    std::map<string, string> kernel_defines;
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/upsample/kernels/dataflow/reader_upsample_unary_stick_layout_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = kernel_defines});
 
-    // Tilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/writer_twice_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/upsample/kernels/dataflow/writer_upsample_unary_stick_layout_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args, .defines = kernel_defines});
 
-    vector<uint32_t> compute_args = {
-        uint32_t(num_tiles / num_tiles_per_block), // per_core_block_cnt
-        uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
-    };
-    std::cout <<  "Log testing output shape: 6" << std::endl;
 
-    auto upsample_kernel_id = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/kernels/compute/upsample_wh.cpp",
-        core,
-        tt_metal::ComputeConfig{.compile_args = compute_args}
-    );
-
-    tt_metal::SetRuntimeArgs(
+    SetRuntimeArgs(
         program,
         unary_reader_kernel_id,
         core,
-        reader_kernel_args
+        {
+            src_buffer->address(),
+            input_unit_size,
+            input_num_units
+        }
     );
 
-    tt_metal::SetRuntimeArgs(
+    SetRuntimeArgs(
         program,
         unary_writer_kernel_id,
         core,
-        {dst_buffer->address(),
-        (uint32_t) num_tiles,
-        (uint32_t) 0}
+        {
+            dst_buffer->address(),
+            input_unit_size,
+            input_num_units,
+            (uint32_t)scale_factor_h,
+            (uint32_t)scale_factor_w,
+            (uint32_t)output_shape[1],
+            (uint32_t)output_shape[2]
+        }
     );
-    std::cout <<  "Log testing output shape: 7" << std::endl;
 
-    auto override_runtime_args_callback = [
-        reader_kernel_id=unary_reader_kernel_id,
-        writer_kernel_id=unary_writer_kernel_id
-    ](
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
         const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
@@ -189,20 +126,18 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &a, Tensor& ou
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     };
-    std::cout <<  "Log testing output shape: _11 " << std::endl;
-    return {std::move(program), override_runtime_args_callback};
 
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }  // namespace tt_metal
-
 }  // namespace tt

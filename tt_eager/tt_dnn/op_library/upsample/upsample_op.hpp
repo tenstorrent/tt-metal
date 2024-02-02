@@ -11,15 +11,11 @@ enum class UpSampleParallelizationStrategy {
 };
 
 struct UpSample{
-    //uint32_t in_n_; // nbatch
-    //uint32_t in_h_, in_w_;
-    const float scale_factor_;
+    const int scale_factor_h_;
+    const int scale_factor_w_;
     const MemoryConfig output_mem_config;
-    //const int fake_value;
     const bool use_multicore;
 
-    //uint32_t out_h_, out_w_;
-    //const DataType output_dtype;
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -27,30 +23,26 @@ struct UpSample{
     UpSampleParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple(
-        /*"in_n",
-        "in_h",
-        "in_w",*/
-        "scale_factor",
+        "scale_factor_h",
+        "scale_factor_w",
         "output_mem_config",
         "use_multicore");
     const auto attribute_values() const {
         return std::make_tuple(
-            /*std::cref(this->in_n_),
-            std::cref(this->in_h_),
-            std::cref(this->in_w_),*/
-            std::cref(this->scale_factor_),
+            std::cref(this->scale_factor_h_),
+            std::cref(this->scale_factor_w_),
             std::cref(this->output_mem_config),
             std::cref(this->use_multicore));
     }
 };
 
 Tensor upsample(const Tensor &input,
-                  //uint32_t in_n, uint32_t in_h, uint32_t in_w,
-                  float scale_factor,
+                  int scale_factor_h,
+                  int scale_factor_w,
                   const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                   bool use_multicore = false);
 
-operation::ProgramWithCallbacks upsample_single_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks upsample_single_core(const Tensor &a, Tensor& output, int scale_factor_h_, int scale_factor_w_);
 
 }  // namespace tt_metal
 }  // namespace tt
