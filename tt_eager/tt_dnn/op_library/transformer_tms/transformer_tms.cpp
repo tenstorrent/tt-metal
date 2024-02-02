@@ -50,7 +50,7 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
         ShardOrientation shard_orientation;
         auto num_cores_x = this->compute_with_storage_grid_size.x;
         auto num_cores_y = this->compute_with_storage_grid_size.y;
-        all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_cores_x - 1, num_cores_y - 1}}});
+        all_cores = CoreRangeSet({CoreRange{{0, 0}, {num_cores_x - 1, num_cores_y - 1}}});
         // shard spec
         uint32_t per_core_M_qv = (num_heads / num_cores_y) * M; // 768
         uint32_t per_core_N_qv = K; // 64

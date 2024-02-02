@@ -18,7 +18,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx) {
     Program program{};
 
-    CoreRangeSet core({CoreRange{.start={0, 0}, .end={0, 0}}});
+    CoreRangeSet core({CoreRange{{0, 0}, {0, 0}}});
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
     uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx) {
     Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);

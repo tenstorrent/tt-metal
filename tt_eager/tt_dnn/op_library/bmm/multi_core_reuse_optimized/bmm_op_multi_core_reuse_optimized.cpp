@@ -125,12 +125,12 @@ operation::ProgramWithCallbacks create_program(
     uint32_t num_cores_r = core_range.y;
 
     CoreRange left_half{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + 5, (std::size_t) start_core_y + num_cores_r - 1}};
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + 5, (std::size_t) start_core_y + num_cores_r - 1}};
 
     CoreRange right_half{
-        .start={(std::size_t) start_core_x + 6, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+        {(std::size_t) start_core_x + 6, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     // Compile time args
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     tt_metal::Device *device = output.device();
 

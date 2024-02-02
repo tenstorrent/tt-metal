@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);

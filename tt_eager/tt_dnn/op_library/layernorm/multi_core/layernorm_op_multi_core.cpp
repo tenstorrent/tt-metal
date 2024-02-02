@@ -484,13 +484,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     CoreCoord start_core = {0, 0};
     CoreRangeSet all_cores = shard_spec.grid;
-    CoreRange sender_cores{.start=start_core, .end=start_core};
+    CoreRange sender_cores{start_core, start_core};
     CoreRangeSet all_to_all_cores({});
     CoreRangeSet all_to_all_workers_except_sender({});
     CoreRangeSet not_all_to_all_workers({});
     uint32_t num_cores_x_mcast, num_cores_y_mcast;
     if (mcast_1d) {
-        sender_cores = {.start=start_core, .end=start_core};
+        sender_cores = {start_core, start_core};
         all_to_all_cores = num_cores_to_corerange_set(start_core, num_cores_all_to_all, grid_size, row_wise);
         if (row_wise) {
             if (use_mcast) {
@@ -540,39 +540,39 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     } else {
         if (row_wise) {
             sender_cores = {
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
             all_to_all_cores = CoreRangeSet({CoreRange{
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
             if (use_mcast && num_cores_all_to_all > 1) {
                 all_to_all_workers_except_sender = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
-                    .end={(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                    {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
+                    {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
             }
             if (num_none_all_to_all_workers > 0) {
                 not_all_to_all_workers = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
-                    .end = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                    {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
             }
             num_cores_x_mcast = num_cores_x;
             num_cores_y_mcast = 1;
         } else {
             sender_cores = {
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
             all_to_all_cores = CoreRangeSet({CoreRange{
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
             if (use_mcast && num_cores_all_to_all > 1) {
                 all_to_all_workers_except_sender = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
-                    .end = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
+                    {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
             }
             if (num_none_all_to_all_workers > 0) {
                 not_all_to_all_workers = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
-                    .end = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                    {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
             }
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;

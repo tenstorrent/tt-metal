@@ -228,7 +228,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
@@ -1090,7 +1090,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core = {{0, 0}, {0, 0}};
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
