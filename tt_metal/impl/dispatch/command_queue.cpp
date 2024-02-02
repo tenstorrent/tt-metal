@@ -135,10 +135,11 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     constexpr bool cmd_consumer_on_ethernet = false;
     uint32_t consumer_cb_num_pages = (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / padded_page_size);
 
+    // Number of pages that are transferred in one shot from producer to consumer
     uint32_t producer_consumer_tx_num_pages = 1;
     if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-        consumer_cb_num_pages = (consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
         producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+        consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
     }
     command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
 
@@ -162,8 +163,8 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
         uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
         uint32_t router_tx_num_pages = 1;
         if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-            router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
             router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+            router_cb_num_pages = router_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
         }
         command.set_producer_router_transfer_num_pages(router_tx_num_pages);
         command.set_consumer_router_transfer_num_pages(router_tx_num_pages);
@@ -287,8 +288,8 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
 
     uint32_t producer_consumer_tx_num_pages = 1;
     if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-        consumer_cb_num_pages = (consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
         producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+        consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
     }
     command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
 
@@ -310,8 +311,8 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
         uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
         uint32_t router_tx_num_pages = 1;
         if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-            router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
             router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+            router_cb_num_pages = router_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
         }
         command.set_producer_router_transfer_num_pages(router_tx_num_pages);
         command.set_consumer_router_transfer_num_pages(router_tx_num_pages);

@@ -70,7 +70,7 @@ void kernel_main() {
             notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
             wait_consumer_space_available(db_semaphore_addr);
             relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
-            update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr);
+            update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr, get_semaphore(0));
             db_buf_switch = false; // Resteart the db buf switch as well
             continue;
         }
@@ -89,7 +89,7 @@ void kernel_main() {
             wait_consumer_idle(db_semaphore_addr);
         }
 
-        update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr);
+        update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr, get_semaphore(0));
 
         // Fetch data and send to the consumer
         produce<consumer_cmd_base_addr, consumer_data_buffer_size>(

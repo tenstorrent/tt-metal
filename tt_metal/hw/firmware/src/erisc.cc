@@ -190,13 +190,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                 consumer_cb_size);
             relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, ((uint64_t)relay_dst_noc_encoding << 32));
 
-            // Decrement the semaphore value
-            noc_semaphore_inc(((uint64_t)eth_router_noc_encoding << 32) | uint32_t(eth_db_semaphore_addr), -1);  // Two's complement addition
-            noc_async_write_barrier();
-
-            // Notify the consumer
-            noc_semaphore_inc(((uint64_t)relay_dst_noc_encoding << 32) | get_semaphore(0), 1);
-            noc_async_write_barrier();  // Barrier for now
+            update_producer_consumer_sync_semaphores(((uint64_t)eth_router_noc_encoding << 32), ((uint64_t)relay_dst_noc_encoding << 32), eth_db_semaphore_addr, get_semaphore(0));
 
             // Send the data that was in this packet
             uint32_t total_num_pages = header->num_pages;

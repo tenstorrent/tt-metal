@@ -37,13 +37,16 @@ void wait_consumer_space_available(volatile tt_l1_ptr uint32_t* db_semaphore_add
 }
 
 FORCE_INLINE
-void update_producer_consumer_sync_semaphores(uint64_t producer_noc_encoding, uint64_t consumer_noc_encoding, volatile tt_l1_ptr uint32_t* db_semaphore_addr) {
+void update_producer_consumer_sync_semaphores(
+    uint64_t producer_noc_encoding,
+    uint64_t consumer_noc_encoding,
+    volatile tt_l1_ptr uint32_t* producer_db_semaphore_addr,
+    uint32_t consumer_db_semaphore) {
     // Decrement the semaphore value
-    noc_semaphore_inc(producer_noc_encoding | uint32_t(db_semaphore_addr), -1);  // Two's complement addition
-    noc_async_write_barrier();
+    noc_semaphore_inc(producer_noc_encoding | uint32_t(producer_db_semaphore_addr), -1);  // Two's complement addition
 
     // Notify the consumer
-    noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
+    noc_semaphore_inc(consumer_noc_encoding | consumer_db_semaphore, 1);
     noc_async_write_barrier();  // Barrier for now
 }
 

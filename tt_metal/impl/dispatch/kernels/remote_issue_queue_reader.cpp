@@ -77,13 +77,8 @@ void kernel_main() {
             consumer_cb_size);
         relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(
             db_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
-        // Decrement the semaphore value
-        noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | uint32_t(db_semaphore_addr), -1);  // Two's complement addition
-        noc_async_write_barrier();
 
-        // Notify the eth SRC router
-        noc_semaphore_inc(((uint64_t)eth_consumer_noc_encoding << 32) | uint32_t(eth_get_semaphore(0)), 1);
-        noc_async_write_barrier();  // Barrier for now
+        update_producer_consumer_sync_semaphores(((uint64_t)producer_noc_encoding << 32), ((uint64_t)eth_consumer_noc_encoding << 32), db_semaphore_addr, uint32_t(eth_get_semaphore(0)));
 
         // Fetch data and send to the consumer
         produce_for_eth_src_router<consumer_cmd_base_addr, consumer_data_buffer_size>(
