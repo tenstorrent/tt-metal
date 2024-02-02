@@ -401,7 +401,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool mcast_1d = M == block_h;
     bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {.x=bbox.end.x + 1, .y=bbox.end.y+1};
+    CoreCoord grid_size = {bbox.end.x + 1, bbox.end.y+1};
     if (mcast_1d) {
         num_blocks = shard_spec.num_cores();
     } else if (row_wise) {
@@ -497,9 +497,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 CoreCoord all_start_core;
                 CoreCoord end_core = sender_cores.end;
                 if (end_core.x == bbox.end.x) {
-                    all_start_core = {.x = 0, .y = end_core.y + 1};
+                    all_start_core = {0, end_core.y + 1};
                 } else {
-                    all_start_core = {.x = end_core.x + 1, .y = end_core.y};
+                    all_start_core = {end_core.x + 1, end_core.y};
                 }
                 all_to_all_workers_except_sender = num_cores_to_corerange_set(all_start_core, num_cores_all_to_all - 1, grid_size, row_wise);
             }
@@ -507,9 +507,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 CoreCoord none_start_core;
                 CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end;
                 if (end_core.x == bbox.end.x) {
-                    none_start_core = {.x = 0, .y = end_core.y + 1};
+                    none_start_core = {0, end_core.y + 1};
                 } else {
-                    none_start_core = {.x = end_core.x + 1, .y = end_core.y};
+                    none_start_core = {end_core.x + 1, end_core.y};
                 }
                 not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, grid_size, row_wise);
             }
@@ -518,19 +518,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 CoreCoord all_start_core;
                 CoreCoord end_core = sender_cores.end;
                 if (end_core.y == bbox.end.y) {
-                    all_start_core = {.x = end_core.x + 1, .y = 0};
+                    all_start_core = {end_core.x + 1, 0};
                 } else {
-                    all_start_core = {.x = end_core.x, .y = end_core.y + 1};
+                    all_start_core = {end_core.x, end_core.y + 1};
                 }
-                all_to_all_workers_except_sender = num_cores_to_corerange_set(CoreCoord{.x=start_core.x, .y=start_core.y + 1}, num_cores_all_to_all - 1, grid_size, row_wise);
+                all_to_all_workers_except_sender = num_cores_to_corerange_set(CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, grid_size, row_wise);
             }
             if (num_none_all_to_all_workers > 0) {
                 CoreCoord none_start_core;
                 CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end;
                 if (end_core.y == bbox.end.y) {
-                    none_start_core = {.x = end_core.x + 1, .y = 0};
+                    none_start_core = {end_core.x + 1, 0};
                 } else {
-                    none_start_core = {.x = end_core.x, .y = end_core.y + 1};
+                    none_start_core = {end_core.x, end_core.y + 1};
                 }
                 not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, grid_size, row_wise);
             }
