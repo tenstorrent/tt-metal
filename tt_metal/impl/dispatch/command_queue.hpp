@@ -437,18 +437,9 @@ class HWCommandQueue {
     void restart();
     void launch(launch_msg_t& msg);
 
-    friend void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking);
-    friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& src, bool blocking);
-    friend void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, void* dst, bool blocking);
-    friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, const void* src, bool blocking);
-    friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
-    friend void Finish(CommandQueue& cq);
-    friend void ClearProgramCache(CommandQueue& cq);
-
     friend HWCommandQueue & detail::GetHWCommandQueue(Device *device, uint32_t cmd_queue_channel);
 
     // Trace APIs
-    friend Trace BeginTrace(CommandQueue& command_queue);
     friend void EndTrace(Trace& trace);
     friend void EnqueueTrace(Trace& trace, bool blocking);
     friend class Trace;
