@@ -21,24 +21,11 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 \
 		 tests/tt_metal/test_add_two_ints \
 		 tests/tt_metal/test_compile_args \
-		 tests/tt_metal/test_dram_to_l1_multicast \
-		 tests/tt_metal/test_dram_to_l1_multicast_loopback_src \
-		 tests/tt_metal/test_dram_loopback_single_core \
-		 tests/tt_metal/test_dram_loopback_single_core_db \
 		 tests/tt_metal/test_eltwise_binary \
 		 tests/tt_metal/test_eltwise_unary \
 		 tests/tt_metal/test_matmul_single_tile_bfp8b \
-		 tests/tt_metal/test_matmul_single_tile \
 		 tests/tt_metal/test_matmul_single_tile_output_in_l1 \
-		 tests/tt_metal/test_matmul_multi_tile \
-		 tests/tt_metal/test_matmul_large_block \
-		 tests/tt_metal/test_matmul_single_core \
-		 tests/tt_metal/test_matmul_single_core_small \
-		 tests/tt_metal/test_matmul_multi_core_single_dram \
-		 tests/tt_metal/test_matmul_multi_core_multi_dram \
-		 tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast \
-		 tests/tt_metal/test_matmul_multi_core_multi_dram_in1_mcast \
-		 tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast \
+		 tests/tt_metal/test_dram_loopback_single_core \
 		 tests/tt_metal/test_datacopy_bfp8b \
 		 tests/tt_metal/test_datacopy \
 		 tests/tt_metal/test_datacopy_output_in_l1 \
@@ -67,6 +54,19 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_compile_sets_kernel_binaries \
 		 tests/tt_metal/test_compile_program \
 		 # test/tt_metal/test_datacopy_multi_core_multi_dram \  # this does not compile
+		 # tests/tt_metal/test_dram_to_l1_multicast \ # these tests have all been converted to gtest
+		 # tests/tt_metal/test_dram_to_l1_multicast_loopback_src \
+		 # tests/tt_metal/test_dram_loopback_single_core_db \
+		 # tests/tt_metal/test_matmul_multi_tile \
+		 # tests/tt_metal/test_matmul_large_block \
+		 # tests/tt_metal/test_matmul_single_core \
+		 # tests/tt_metal/test_matmul_single_core_small \
+		 # tests/tt_metal/test_matmul_multi_core_single_dram \
+		 # tests/tt_metal/test_matmul_multi_core_multi_dram \
+		 # tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast \
+		 # tests/tt_metal/test_matmul_multi_core_multi_dram_in1_mcast \
+		 # tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast \
+		 # tests/tt_metal/test_matmul_single_tile \
 
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))
 
