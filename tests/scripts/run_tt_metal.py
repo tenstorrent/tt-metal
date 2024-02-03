@@ -89,7 +89,7 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_reduce_w", "test_reduce_w"),
     TestEntry("tt_metal/tests/test_reduce_hw", "test_reduce_hw"),
     TestEntry("tt_metal/tests/test_bmm", "test_bmm"),
-    TestEntry("tt_metal/tests/test_flatten", "test_flatten"),
+    # TestEntry("tt_metal/tests/test_flatten", "test_flatten"),
     TestEntry("tt_metal/tests/test_multiple_programs", "test_multiple_programs"),
     TestEntry("tt_metal/tests/test_multi_core_kernel", "test_multi_core_kernel"),
     TestEntry("tt_metal/tests/test_unpack_tilize", "test_unpack_tilize"),

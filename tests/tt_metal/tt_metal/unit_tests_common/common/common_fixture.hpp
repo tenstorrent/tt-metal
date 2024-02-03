@@ -38,17 +38,6 @@ public:
         }
     }
 
-    // Not complete or in use..
-    template <typename T>
-    bool MoveTilesToDRAM(tt::tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, T buffer){
-        if (this->slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Moves tiles to DRAM in slow dispatch mode");
-
-        } else {
-            tt::log_info(tt::LogTest, "Moves tiles to DRAM in fast dispatch mode");
-        }
-        return move_tiles_to_dram(device, tensor, tiles_r, tiles_c, buffer);
-    }
 
 protected:
     tt::ARCH arch_;

@@ -2,10 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//////////////////////////////////////////////////////////////////////////////////////////
+// Tests data movement between N cores with proper use of semaphores for sync
+// Uses "reader_first_stage", "reader_intermediate_stage", "sender_intermediate_stage", "writer_last_stage" kernels
+// to create pipeline of cores.
+// No compute: uses blank compute kernel - "tt_metal/kernels/compute/blank.cpp"
+// Test can be config with different number of cores, tiles, block size, number of blocks in CB, IO data in DRAM,
+// and number of repetitions
+//////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
 #include "common/bfloat16.hpp"
-#include "command_queue_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this

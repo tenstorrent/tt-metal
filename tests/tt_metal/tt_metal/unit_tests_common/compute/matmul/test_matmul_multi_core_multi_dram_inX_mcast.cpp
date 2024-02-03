@@ -15,8 +15,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/matmul/matmul_utils.hpp"
-
+#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast {
