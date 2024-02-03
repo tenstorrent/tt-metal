@@ -173,7 +173,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
         return {};
     }
     if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec{.grid=CoreRangeSet({}), .shape={0, 0}};
+        ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
         if (input_tensor_a.memory_config().is_sharded()) {
             shard_spec = input_tensor_a.shard_spec().value();
         } else if (input_tensor_b.memory_config().is_sharded()) {

@@ -139,11 +139,11 @@ std::vector<Tensor> NlpCreateHeads::create_output_tensors(const std::vector<Tens
     if (this->output_mem_config.is_sharded()) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         auto q_shard_grid = num_cores_to_corerange_set(this->num_q_heads, core_grid, true);
-        ShardSpec q_shard_spec{.grid = q_shard_grid, .shape = {TILE_HEIGHT, this->head_dim}};
+        ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, this->head_dim}};
         auto q_mem_config = this->output_mem_config;
         q_mem_config.shard_spec = q_shard_spec;
         auto kv_shard_grid = num_cores_to_corerange_set(this->num_kv_heads, core_grid, true);
-        ShardSpec kv_shard_spec{.grid = kv_shard_grid, .shape = {TILE_HEIGHT, this->head_dim}};
+        ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, this->head_dim}};
         auto kv_mem_config = this->output_mem_config;
         kv_mem_config.shard_spec = kv_shard_spec;
         auto output_shapes = this->compute_output_shapes(input_tensors);

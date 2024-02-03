@@ -54,10 +54,10 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
         // shard spec
         uint32_t per_core_M_qv = (num_heads / num_cores_y) * M; // 768
         uint32_t per_core_N_qv = K; // 64
-        ShardSpec shard_spec_qv = ShardSpec{.grid=all_cores, .shape={per_core_M_qv, per_core_N_qv}, .orientation=ShardOrientation::COL_MAJOR};
+        ShardSpec shard_spec_qv = ShardSpec{all_cores, {per_core_M_qv, per_core_N_qv}, ShardOrientation::COL_MAJOR};
         uint32_t per_core_M_k = (num_heads / num_cores_y) * K; // 128
         uint32_t per_core_N_k = M; // 384
-        ShardSpec shard_spec_k = ShardSpec{.grid=all_cores, .shape={per_core_M_k, per_core_N_k}, .orientation=ShardOrientation::COL_MAJOR};
+        ShardSpec shard_spec_k = ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, ShardOrientation::COL_MAJOR};
         // create sharded tensors
         auto mem_config_qv = this->output_mem_config;
         mem_config_qv.shard_spec = shard_spec_qv;
@@ -347,7 +347,7 @@ std::vector<Tensor> GroupAttnMatmul::create_output_tensors(const std::vector<Ten
             CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
 
             ShardOrientation shard_orientation = this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
-            ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={output_shape[2], output_shape[3]}, .orientation=shard_orientation};
+            ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
             output_mem_config.shard_spec = shard_spec;
         }
         return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), output_mem_config)};
