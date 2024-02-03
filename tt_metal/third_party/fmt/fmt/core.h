@@ -1987,7 +1987,7 @@ FMT_BEGIN_DETAIL_NAMESPACE
 template <typename Char> struct fill_t {
  private:
   enum { max_size = 4 };
-  Char data_[max_size] = {Char(' '), Char(0), Char(0), Char(0)};
+  Char data_[max_size+1] = {Char(' '), Char(0), Char(0), Char(0), Char(0)};
   unsigned char size_ = 1;
 
  public:
