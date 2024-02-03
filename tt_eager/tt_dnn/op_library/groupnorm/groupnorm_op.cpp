@@ -391,7 +391,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         program,
         "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/reader_mcast_sender_unary_sharded_gn.cpp",
         mcast_sender_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
+        tt_metal::ReaderDataMovementConfig(reader_mcast_sender_compile_time_args, reader_mcast_sender_defines)
     );
     KernelHandle reader_mcast_receiver_kernels_id = -1;
     if (use_mcast) {
@@ -399,7 +399,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
             program,
             "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn.cpp",
             mcast_receiver_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
+            tt_metal::ReaderDataMovementConfig(reader_mcast_receiver_compile_time_args, reader_mcast_receiver_defines)
         );
     }
 
@@ -464,7 +464,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         program,
         writer_kernel,
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
+        tt_metal::WriterDataMovementConfig(writer_mcast_sender_compile_time_args, writer_defines)
     );
     // defines
     std::map<string, string> eltwise_binary_defines;

@@ -244,7 +244,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = reader_ct_args});
+            tt_metal::ReaderDataMovementConfig(reader_ct_args));
     } else {
         bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         vector<uint32_t> reader_ct_args = {
@@ -255,8 +255,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             program,
             "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
             all_cores,
-            ReaderDataMovementConfig{
-                .compile_args = reader_ct_args});
+            ReaderDataMovementConfig(reader_ct_args));
     }
 
     /** writer
@@ -270,7 +269,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig{.compile_args = writer_ct_args});
+            tt_metal::WriterDataMovementConfig(writer_ct_args));
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         if (src_block_sharded) {
@@ -281,7 +280,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
                 program,
                 "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
                 all_cores,
-                WriterDataMovementConfig{.compile_args = writer_ct_args});
+                WriterDataMovementConfig(writer_ct_args));
         } else {
             bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
             uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t) std::log2(block_size_nbytes) : 0;
@@ -295,7 +294,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
                 program,
                 "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
                 all_cores,
-                WriterDataMovementConfig{.compile_args = writer_ct_args});
+                WriterDataMovementConfig(writer_ct_args));
         }
     }
 
@@ -673,7 +672,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_ct_args});
+        tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     /** writer
      */
@@ -687,7 +686,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             program,
             "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_unpad_batch_rows_sharded.cpp",
             all_cores,
-            WriterDataMovementConfig{.compile_args = writer_ct_args});
+            WriterDataMovementConfig(writer_ct_args));
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         vector<uint32_t> writer_ct_args = {
@@ -697,7 +696,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             program,
             "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
-            WriterDataMovementConfig{.compile_args = writer_ct_args});
+            WriterDataMovementConfig(writer_ct_args));
     }
 
     /** compute

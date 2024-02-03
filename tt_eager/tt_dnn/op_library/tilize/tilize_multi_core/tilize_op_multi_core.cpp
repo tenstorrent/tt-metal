@@ -201,8 +201,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         program,
         "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
-        ReaderDataMovementConfig{
-            .compile_args = reader_ct_args});
+        ReaderDataMovementConfig(
+            reader_ct_args));
 
     /** writer
      */
@@ -215,8 +215,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        WriterDataMovementConfig{
-            .compile_args = writer_ct_args});
+        WriterDataMovementConfig(
+            writer_ct_args));
 
     /** compute
      */
@@ -415,13 +415,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
         uint32_t(num_tiles_per_shard / num_tiles_per_row),
@@ -565,7 +565,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
         program,
         "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_pad_height_width_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_ct_args});
+        tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     /** writer
      */
@@ -578,8 +578,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
-        WriterDataMovementConfig{
-            .compile_args = writer_ct_args});
+        WriterDataMovementConfig(
+            writer_ct_args));
 
     /** compute
      */
