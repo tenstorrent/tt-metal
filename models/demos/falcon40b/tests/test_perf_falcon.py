@@ -19,7 +19,6 @@ from models.demos.falcon40b.tt.falcon_common import (
 
 from models.demos.falcon40b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 
 from models.utility_functions import (
@@ -446,6 +445,7 @@ def test_perf_bare_metal(
     request,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
     pcie_devices,
 ):
     model_config = get_model_config(model_config_str)
@@ -455,7 +455,9 @@ def test_perf_bare_metal(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 

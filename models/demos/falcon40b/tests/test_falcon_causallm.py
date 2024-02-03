@@ -14,7 +14,6 @@ from models.demos.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.falcon40b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -315,6 +314,7 @@ def test_FalconCausalLM_inference(
     request,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
     pcie_devices,
     use_program_cache,
 ):
@@ -324,7 +324,9 @@ def test_FalconCausalLM_inference(
         pytest.skip(f"Requires at least {model_config['NUM_DEVICES']} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
 
     tt_lib.profiler.set_profiler_location(f"falcon-40b_{request.node.callspec.id}")
 
