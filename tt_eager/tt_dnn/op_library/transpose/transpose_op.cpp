@@ -28,7 +28,8 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     if (this->dim == TransposeOpDim::WH) {
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            const auto& shard_spec = input_tensor.shard_spec().value();
+            const auto& spec = input_tensor.shard_spec();
+            const auto& shard_spec = spec.value();
             TT_FATAL(shard_spec.shape[1] == W);
             TT_FATAL(shard_spec.shape[0] % H == 0);
             TT_FATAL(this->output_mem_config.is_sharded());

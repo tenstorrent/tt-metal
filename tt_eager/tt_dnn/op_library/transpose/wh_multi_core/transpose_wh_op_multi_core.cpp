@@ -371,7 +371,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         bool src0_sharded = src_tensor.is_sharded();
         bool out_sharded = dst_tensor.is_sharded();
 
-        auto& shard_spec = src_tensor.shard_spec().value();
+        auto& spec = src_tensor.shard_spec();
+        auto& shard_spec = spec.value();
 
         uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
 
