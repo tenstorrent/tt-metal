@@ -116,13 +116,13 @@ operation::ProgramWithCallbacks moreh_sum_w(const Tensor &a, const Tensor &outpu
         program,
         "tt_eager/tt_dnn/op_library/moreh_sum/kernels/reader_moreh_sum_w.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, reader_defines});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_sum/kernels/writer_moreh_sum_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     vector<uint32_t> compute_kernel_args_group_1 = {
