@@ -72,7 +72,7 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
             auto shard_grid = num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
             uint32_t fused_height = input_tensor.volume() / input_tensor.shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.shape()[-1]};
-            ShardSpec shard_spec{.grid=shard_grid, .shape=shard_shape, .orientation=ShardOrientation::ROW_MAJOR};
+            ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
