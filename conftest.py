@@ -50,6 +50,26 @@ def model_location_generator():
     return model_location_generator_
 
 
+@pytest.fixture(scope="session")
+def get_tt_cache_path():
+    def get_tt_cache_path_(model_version, model_subdir="", default_dir=""):
+        model_folder = Path("tt_dnn-models/tt") / model_subdir
+        internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
+        has_internal_weka = internal_weka_path.exists()
+        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
+        has_internal_cache = internal_cache_path.exists()
+        if has_internal_weka:
+            return internal_weka_path
+        elif has_internal_cache:
+            return internal_cache_path
+        else:
+            default_path = Path(default_dir) / model_folder / model_version
+            default_path.mkdir(parents=True, exist_ok=True)
+            return default_path
+
+    return get_tt_cache_path_
+
+
 ALL_ARCHS = set(
     [
         "grayskull",

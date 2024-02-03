@@ -13,7 +13,6 @@ from models.demos.falcon40b.reference.hf_modeling_falcon import (
 from models.demos.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.falcon40b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 from models.utility_functions import nearest_32, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -296,6 +295,7 @@ def test_FalconAttention_inference(
     token_pcc,
     model_config_str,
     model_location_generator,
+    get_tt_cache_path,
     pcie_devices,
     use_program_cache,
 ):
@@ -306,7 +306,9 @@ def test_FalconAttention_inference(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
 
     run_test_FalconAttention_inference(
         pcie_devices[: model_config["NUM_DEVICES"]],

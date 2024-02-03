@@ -121,7 +121,8 @@ def get_model_config(model_config_str):
         "MOVE_DECODER_OUTPUT_BOOL": False,
         "NUM_DEVICES": 4,
         "MAX_GRID_SIZE": (8, 4),
-    }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
+        "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon40b/datasets/"),
+    }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
 
@@ -565,16 +566,6 @@ def get_model_config(model_config_str):
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config
-
-
-# TODO: Generalize TT tensor caching
-def get_tt_cache_path(model_version):
-    tt_cache_path = Path("/mnt/MLPerf/tt_dnn-models/tt/Falcon") / model_version
-    if tt_cache_path.exists():
-        return tt_cache_path
-    else:
-        Path(f"models/demos/falcon40b/datasets/{model_version}").mkdir(parents=True, exist_ok=True)
-        return Path(f"models/demos/falcon40b/datasets/{model_version}")
 
 
 model_config_entries = {
