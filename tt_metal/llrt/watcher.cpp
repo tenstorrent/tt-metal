@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <thread>
 #include <unistd.h>
 #include <chrono>
