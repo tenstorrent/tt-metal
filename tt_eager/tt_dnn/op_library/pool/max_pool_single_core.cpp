@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             const_buffer_size * in_nbytes,
                                             (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // TODO: generalize num rows to fill in in_cb
                                             };
-    auto reader_config = ReaderDataMovementConfig{.compile_args = reader_ct_args};
+    auto reader_config = ReaderDataMovementConfig(reader_ct_args);
     std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
     auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
      */
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     std::vector<uint32_t> writer_rt_args = reader_rt_args;
-    auto writer_config = WriterDataMovementConfig{.compile_args = writer_ct_args};
+    auto writer_config = WriterDataMovementConfig(writer_ct_args);
     std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                                   writer_kernel_fname,

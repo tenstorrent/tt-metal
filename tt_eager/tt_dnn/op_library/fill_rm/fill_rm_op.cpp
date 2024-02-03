@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     tt_metal::KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program, "tt_eager/tt_dnn/op_library/fill_rm/kernels/dataflow/fill_rm_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args=reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::SetRuntimeArgs(
         program, binary_reader_kernel_id, core,

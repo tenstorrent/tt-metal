@@ -88,13 +88,13 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
 
 
@@ -239,13 +239,13 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
 
     auto all_runtime_args = get_runtime_args_hc(a, output);
@@ -354,13 +354,13 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_cn_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
     auto all_runtime_args = get_runtime_args_cn(a, output);
 

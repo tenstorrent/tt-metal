@@ -125,16 +125,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
-        tt_metal::ReaderDataMovementConfig{
-            .compile_args = reader_compile_time_args,
-            .defines = softmax_defines
-    });
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args,
+            softmax_defines
+    ));
 
     auto writer_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
-        tt_metal::WriterDataMovementConfig{
-            .compile_args = writer_compile_time_args
-    });
+        tt_metal::WriterDataMovementConfig(
+            writer_compile_time_args
+    ));
 
     // for broadcasting in H direction we need to
     // NCHt, Nt, Wt
@@ -482,10 +482,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm_rm_mask.cpp" : "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig{
-            .compile_args = reader_compile_time_args,
-            .defines = softmax_defines
-    });
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args,
+            softmax_defines
+    ));
     // compute kernel compile time args
     std::vector<uint32_t> compute_compile_time_args = {
         block_ht,
