@@ -8,8 +8,8 @@
 #include <functional>
 #include <random>
 
-#include "basic_fixture.hpp"
-#include "device_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests/common/basic_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests/common/device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -80,80 +80,8 @@ bool dram_ping(
     }
     return pass;
 }
-
-/// @brief load_blank_kernels into all cores and will launch
-/// @param device
-/// @return
-bool load_all_blank_kernels(tt_metal::Device* device) {
-    bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram();
-    CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
-    CreateKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-    CreateKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
-
-    tt_metal::detail::LaunchProgram(device, program);
-    return pass;
-}
 }  // namespace unit_tests::basic::device
 
-
-TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
-    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (is_multi_device_gs_machine(arch, num_devices)) {
-        GTEST_SKIP();
-    }
-    ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device*> devices;
-
-    try
-    {
-        for (unsigned int id = 0; id < num_devices; id++) {
-            devices.push_back(tt::tt_metal::CreateDevice(id));
-        }
-    } catch (...) {}
-    for (auto device : devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-    }
-}
-TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
-    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (is_multi_device_gs_machine(arch, num_devices)) {
-        GTEST_SKIP();
-    }
-    ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device*> devices;
-
-    try
-    {
-        for (unsigned int id = 0; id < num_devices; id++) {
-            devices.push_back(tt::tt_metal::CreateDevice(id));
-        }
-        for (unsigned int id = 0; id < num_devices; id++) {
-            unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
-        }
-    } catch (...) {}
-    for (auto device: devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-    }
-}
-
-TEST_F(BasicFixture, SingleDeviceInitializeAndTeardown) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
-    tt::tt_metal::Device* device;
-    const unsigned int device_id = 0;
-    device = tt::tt_metal::CreateDevice(device_id);
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-}
 TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
@@ -189,14 +117,7 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 
-TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
-    tt::tt_metal::Device* device;
-    const unsigned int device_id = 0;
-    device = tt::tt_metal::CreateDevice(device_id);
-    unit_tests::basic::device::load_all_blank_kernels(device);
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-}
+
 TEST_F(DeviceFixture, PingAllLegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         {

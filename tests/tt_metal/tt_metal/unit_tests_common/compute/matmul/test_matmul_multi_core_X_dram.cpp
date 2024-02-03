@@ -15,8 +15,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/matmul/matmul_utils.hpp"
-
+#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram {
@@ -407,7 +406,6 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
         in0_block_w, out_subblock_h, out_subblock_w
         );
 
-
     // CommandQueue& cq = device->command_queue();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -453,14 +451,12 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     log_info(LogTest, "Writing kernel runtime args to device complete");
 
     log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-    // EnqueueProgram(cq, program, false);
     fixture->RunProgram(device, program);
 
     log_info(LogTest, "Matmul test done");
     log_info(LogTest, "Gathering data back from dram and checking against golden");
 
     vector<uint32_t> result;
-    // EnqueueReadBuffer(cq, out_buffer, result, true);
     fixture->ReadBuffer(device, out_buffer, result);
     auto golden = select_columns(tensor.get_values(), M, K, N);
 

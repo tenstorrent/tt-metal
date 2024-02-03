@@ -14,7 +14,7 @@
 #include "test_tiles.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/matmul/matmul_utils.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 
 using namespace tt;
 
