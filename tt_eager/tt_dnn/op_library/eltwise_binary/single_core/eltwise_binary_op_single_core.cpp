@@ -83,13 +83,13 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         program,
         "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_kernel_args = {
     };

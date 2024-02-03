@@ -195,13 +195,13 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(
         program,
         "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = kernel_defines});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args, .defines = kernel_defines});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     vector<uint32_t> compute_kernel_args = {
         (std::uint32_t)input_cb_index,
