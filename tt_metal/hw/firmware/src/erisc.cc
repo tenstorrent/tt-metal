@@ -196,8 +196,8 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             uint32_t total_num_pages = header->num_pages;
             uint32_t num_pages_to_tx = 0;
             if (num_pages_transferred < total_num_pages) {
-                uint32_t src_addr = eth_db_cb_config->rd_ptr << 4;
-                uint64_t dst_noc_addr = ((uint64_t)relay_dst_noc_encoding << 32) | (eth_db_cb_config->wr_ptr << 4);
+                uint32_t src_addr = eth_db_cb_config->rd_ptr_16B << 4;
+                uint64_t dst_noc_addr = ((uint64_t)relay_dst_noc_encoding << 32) | (eth_db_cb_config->wr_ptr_16B << 4);
 
                 uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
                 command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER; // jump to buffer transfer region

@@ -35,7 +35,7 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
 }
 
 FORCE_INLINE
-uint32_t get_read_ptr(db_cb_config_t* db_cb_config) { return (db_cb_config->rd_ptr) << 4; }
+uint32_t get_read_ptr(db_cb_config_t* db_cb_config) { return (db_cb_config->rd_ptr_16B) << 4; }
 
 inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_WRITE_PTR);
@@ -113,7 +113,7 @@ FORCE_INLINE void write_buffers(
 
         uint32_t num_to_write;
         uint32_t src_addr = get_read_ptr(db_cb_config);
-        uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size << 4);
+        uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size_16B << 4);
 
         BufferType buffer_type = (BufferType)dst_buf_type;
         Buffer buffer;
@@ -142,7 +142,7 @@ FORCE_INLINE void write_buffers(
                 producer_noc_encoding,
                 (l1_consumer_fifo_limit >> 4),
                 num_to_write,
-                db_cb_config->page_size);
+                db_cb_config->page_size_16B);
             page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
@@ -188,7 +188,7 @@ FORCE_INLINE void program_page_transfer(
     uint64_t producer_noc_encoding,
     uint32_t producer_consumer_transfer_num_pages,
     uint32_t num_pages_in_transfer) {
-    uint32_t l1_consumer_fifo_limit = get_read_ptr(db_cb_config) + (db_cb_config->total_size << 4);
+    uint32_t l1_consumer_fifo_limit = get_read_ptr(db_cb_config) + (db_cb_config->total_size_16B << 4);
     for (uint32_t page_idx = 0; page_idx < num_pages_in_transfer;) {
         uint32_t num_to_write = min(num_pages_in_transfer - page_idx, producer_consumer_transfer_num_pages);
         multicore_cb_wait_front(db_cb_config, num_to_write);

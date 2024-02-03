@@ -127,10 +127,10 @@ void program_consumer_cb(
     db_cb_config->ack = 0;
     db_cb_config->recv = 0;
     db_cb_config->num_pages = num_pages;
-    db_cb_config->page_size = page_size >> 4;
-    db_cb_config->total_size = cb_size >> 4;
-    db_cb_config->rd_ptr = cb_start_rd_addr >> 4;
-    db_cb_config->wr_ptr = cb_start_wr_addr >> 4;
+    db_cb_config->page_size_16B = page_size >> 4;
+    db_cb_config->total_size_16B = cb_size >> 4;
+    db_cb_config->rd_ptr_16B = cb_start_rd_addr >> 4;
+    db_cb_config->wr_ptr_16B = cb_start_wr_addr >> 4;
 
     noc_async_write(
         (uint32_t)(db_cb_config), consumer_noc_encoding | (uint32_t)(remote_db_cb_config), sizeof(db_cb_config_t));
@@ -202,7 +202,7 @@ void produce(
         the consumer. It continues like this in a loop, context switching between pulling in data and
         writing to the consumer.
     */
-    uint32_t consumer_cb_size = (db_cb_config->total_size << 4);
+    uint32_t consumer_cb_size = (db_cb_config->total_size_16B << 4);
     uint32_t consumer_cb_num_pages = db_cb_config->num_pages;
 
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
@@ -256,7 +256,7 @@ void produce(
                     num_reads_completed = num_reads_issued;
                 }
 
-                uint32_t dst_addr = (db_cb_config->wr_ptr << 4);
+                uint32_t dst_addr = (db_cb_config->wr_ptr_16B << 4);
                 uint64_t dst_noc_addr = consumer_noc_encoding | dst_addr;
                 uint32_t l1_read_ptr = get_read_ptr(0);
                 noc_async_write(l1_read_ptr, dst_noc_addr, page_size * num_to_write);
@@ -288,7 +288,7 @@ void produce_for_eth_src_router(
         This API prefetches data from host memory and writes data to the an ethernet core that relays the command
         to a remote chip, which will have a corresponding remote processor to consume the command.
     */
-    uint32_t consumer_cb_size = (db_cb_config->total_size << 4);
+    uint32_t consumer_cb_size = (db_cb_config->total_size_16B << 4);
     uint32_t consumer_cb_num_pages = db_cb_config->num_pages;
 
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
@@ -342,7 +342,7 @@ void produce_for_eth_src_router(
                     num_reads_completed = num_reads_issued;
                 }
 
-                uint32_t dst_addr = (db_cb_config->wr_ptr << 4);
+                uint32_t dst_addr = (db_cb_config->wr_ptr_16B << 4);
                 uint64_t dst_noc_addr = eth_consumer_noc_encoding | dst_addr;
                 uint32_t l1_read_ptr = get_read_ptr(0);
                 noc_async_write(l1_read_ptr, dst_noc_addr, page_size * num_to_write);
@@ -396,9 +396,9 @@ void transfer(
         while (num_transfers_completed != num_pages) {
             // Wait for data to be received in local CB
             multicore_cb_wait_front(db_cb_config, num_to_transfer);
-            uint32_t src_addr = (db_cb_config->rd_ptr) << 4;
+            uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
             // Transfer data to consumer CB
-            uint32_t dst_addr = (db_cb_config->wr_ptr << 4);
+            uint32_t dst_addr = (db_cb_config->wr_ptr_16B << 4);
             uint64_t dst_noc_addr = consumer_noc_encoding | dst_addr;
             noc_async_write(src_addr, dst_noc_addr, page_size * num_to_transfer);
             multicore_cb_push_back(
@@ -414,7 +414,7 @@ void transfer(
                 producer_noc_encoding,
                 l1_producer_fifo_limit_16B,
                 num_to_transfer,
-                db_cb_config->page_size);
+                db_cb_config->page_size_16B);
             num_transfers_completed += num_to_transfer;
             num_to_transfer = min(num_pages - num_transfers_completed, producer_consumer_transfer_num_pages);
         }

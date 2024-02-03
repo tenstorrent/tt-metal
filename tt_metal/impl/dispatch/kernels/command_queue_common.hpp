@@ -14,10 +14,10 @@ struct db_cb_config_t {
     volatile uint32_t ack ATTR_ALIGNL1;
     volatile uint32_t recv ATTR_ALIGNL1;
     volatile uint32_t num_pages ATTR_ALIGNL1;
-    volatile uint32_t page_size ATTR_ALIGNL1;   // 16B
-    volatile uint32_t total_size ATTR_ALIGNL1;  // 16B
-    volatile uint32_t rd_ptr ATTR_ALIGNL1;      // 16B
-    volatile uint32_t wr_ptr ATTR_ALIGNL1;      // 16B
+    volatile uint32_t page_size_16B ATTR_ALIGNL1;   // 16B
+    volatile uint32_t total_size_16B ATTR_ALIGNL1;  // 16B
+    volatile uint32_t rd_ptr_16B ATTR_ALIGNL1;      // 16B
+    volatile uint32_t wr_ptr_16B ATTR_ALIGNL1;      // 16B
 };
 static constexpr uint32_t l1_db_cb_addr_offset = sizeof(db_cb_config_t);
 
@@ -64,10 +64,10 @@ void multicore_cb_push_back(
     uint32_t consumer_fifo_16b_limit,
     uint32_t num_to_write) {
     db_cb_config->recv += num_to_write;
-    db_cb_config->wr_ptr += db_cb_config->page_size * num_to_write;
+    db_cb_config->wr_ptr_16B += db_cb_config->page_size_16B * num_to_write;
 
-    if (db_cb_config->wr_ptr >= consumer_fifo_16b_limit) {
-        db_cb_config->wr_ptr -= db_cb_config->total_size;
+    if (db_cb_config->wr_ptr_16B >= consumer_fifo_16b_limit) {
+        db_cb_config->wr_ptr_16B -= db_cb_config->total_size_16B;
     }
 
     uint32_t remote_pages_recv_addr = (uint32_t)(&(remote_db_cb_config->recv));
@@ -93,10 +93,10 @@ void multicore_cb_pop_front(
     uint32_t num_to_write,
     uint32_t page_size_16B) {
     db_cb_config->ack += num_to_write;
-    db_cb_config->rd_ptr += page_size_16B * num_to_write;
+    db_cb_config->rd_ptr_16B += page_size_16B * num_to_write;
 
-    if (db_cb_config->rd_ptr >= consumer_fifo_limit_16B) {
-        db_cb_config->rd_ptr -= db_cb_config->total_size;
+    if (db_cb_config->rd_ptr_16B >= consumer_fifo_limit_16B) {
+        db_cb_config->rd_ptr_16B -= db_cb_config->total_size_16B;
     }
 
     uint32_t pages_ack_addr = (uint32_t)(&(remote_db_cb_config->ack));
