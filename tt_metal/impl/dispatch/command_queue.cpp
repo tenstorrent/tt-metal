@@ -830,7 +830,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t total_pages_to_write = buffer.num_pages();
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
+    const uint32_t command_issue_limit = this->sysmem_manager_.get_issue_queue_limit(this->id);
     uint32_t dst_page_index = 0;
     while (total_pages_to_write > 0) {
         int32_t num_pages_available =
@@ -894,8 +894,8 @@ void HWCommandQueue::enqueue_program(
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
 
-    if ((this->manager.get_issue_queue_write_ptr(this->id)) + host_data_and_device_command_size >=
-        this->manager.get_issue_queue_size(this->id)) {
+    if ((this->sysmem_manager_.get_issue_queue_write_ptr(this->id)) + host_data_and_device_command_size >=
+        this->sysmem_manager_.get_issue_queue_size(this->id)) {
         TT_FATAL(
             host_data_and_device_command_size <= this->manager.get_issue_queue_size(this->id) - CQ_START,
             "EnqueueProgram command size too large");
@@ -993,7 +993,7 @@ void CommandQueue::read_completion_queue() {
 }
 
 void HWCommandQueue::finish() {
-    ZoneScopedN("CommandQueue_finish");
+    ZoneScopedN("HWCommandQueue_finish");
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id);
     if (tt::llrt::OptionsG.get_test_mode_enabled()) {
         while (this->num_issued_commands > this->num_completed_commands) {
@@ -1012,7 +1012,7 @@ void HWCommandQueue::finish() {
     }
 }
 
-void CommandQueue::issue_wrap() {
+void HWCommandQueue::issue_wrap() {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap for channel {}", this->id);
     EnqueueIssueWrapCommand command(this->id, this->device, this->manager);
@@ -1033,7 +1033,7 @@ void HWCommandQueue::restart() {
     this->enqueue_command(command, true);
 
     // Reset the manager
-    this->manager.reset(this->id);
+    this->sysmem_manager_.reset(this->id);
 }
 
 Trace::Trace(HWCommandQueue& command_queue): command_queue(command_queue) {
@@ -1049,8 +1049,8 @@ void Trace::record(const TraceNode& trace_node) {
 
 void Trace::create_replay() {
     // Reconstruct the hugepage from the command cache
-    SystemMemoryManager& manager = this->command_queue.manager;
-    const uint32_t command_queue_id = this->command_queue.id;
+    SystemMemoryManager& manager = this->command_queue.sysmem_manager();
+    const uint32_t command_queue_id = this->command_queue.cq_id();
     const bool lazy_push = true;
     for (auto& [device_command, data, command_type, num_data_bytes] : this->history) {
         uint32_t issue_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
@@ -1101,14 +1101,14 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
         std::future<void> f;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
             cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
-                HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-                hcq.enqueue_read_buffer(b, dst, blocking);
+
+                device->hw_command_queue(cq_id).enqueue_read_buffer(b, dst, blocking);
             }, f );
         }
         else if constexpr ( std::is_same_v<T, std::shared_ptr<Buffer> >) {
             cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
-                HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-                hcq.enqueue_read_buffer(*b, dst, blocking);
+
+                device->hw_command_queue(cq_id).enqueue_read_buffer(*b, dst, blocking);
             }, f );
         }
         f.get();
@@ -1124,14 +1124,14 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
         std::future<void> f;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
             cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
-                HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-                hcq.enqueue_write_buffer(b, src, blocking);
+
+                device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
             }, f );
         }
         else if constexpr ( std::is_same_v<T, std::shared_ptr<Buffer> >) {
             cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
-                HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-                hcq.enqueue_write_buffer(b, src, blocking);
+
+                device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
             }, f );
         }
        f.get();
@@ -1151,8 +1151,8 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
 
                     program.get().allocate_circular_buffers();
                     detail::ValidateCircularBufferRegion(program, device);
-                    HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-                    hcq.enqueue_program(program, trace, blocking);
+
+                    device->hw_command_queue(cq_id).enqueue_program(program, trace, blocking);
                 } );
             } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
                 cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
@@ -1160,8 +1160,8 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                     detail::CompileProgram(device, *program);
                     program->allocate_circular_buffers();
                     detail::ValidateCircularBufferRegion(*program, device);
-                    HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-                    hcq.enqueue_program(*program, trace, blocking);
+
+                    device->hw_command_queue(cq_id).enqueue_program(*program, trace, blocking);
                 } );
             }
         }, program);
@@ -1171,8 +1171,7 @@ void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     std::future<void> f;
     cq.submit( [device = cq.device(), cq_id = cq.id()] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-        hcq.finish();
+        device->hw_command_queue(cq_id).finish();
     }, f);
     f.get();
 }
@@ -1180,10 +1179,9 @@ void Finish(CommandQueue& cq) {
 
 Trace BeginTrace(CommandQueue& cq) {
     // Resets the command queue state
-    HWCommandQueue & hcq = detail::GetHWCommandQueue(cq.device(), cq.id());
-    hcq.restart();
-
-    return Trace(hcq);
+    Device * device = cq.device();
+    device->hw_command_queue(cq.id()).restart();
+    return Trace(device->hw_command_queue(cq.id()));
 }
 
 void EndTrace(Trace& trace) {
@@ -1199,19 +1197,19 @@ void EndTrace(Trace& trace) {
         command_queue_id, trace.num_data_bytes + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * trace.history.size());
     trace.command_queue.restart();
     trace.create_replay();
-    manager.reset(trace.command_queue.id);
+    manager.reset(trace.command_queue.cq_id());
 }
 
 void EnqueueTrace(Trace& trace, bool blocking) {
     // Run the trace
     HWCommandQueue& command_queue = trace.command_queue;
     uint32_t trace_size = trace.history.size() * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + trace.num_data_bytes;
-    command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
-    command_queue.manager.issue_queue_push_back(trace_size, false, command_queue.id);
+    command_queue.sysmem_manager().issue_queue_reserve_back(trace_size, command_queue.cq_id());
+    command_queue.sysmem_manager().issue_queue_push_back(trace_size, false, command_queue.cq_id());
 
     // This will block because the wr toggles will be different between the host and the device
     if (blocking) {
-        command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
+        command_queue.sysmem_manager().issue_queue_reserve_back(trace_size, command_queue.cq_id());
     }
 }
 
@@ -1222,8 +1220,8 @@ void EnqueueRestart(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     std::future<void> f;
     cq.submit( [device = cq.device(), cq_id = cq.id()] {
-        HWCommandQueue & hcq = detail::GetHWCommandQueue(device, cq_id);
-        hcq.restart();
+
+        device->hw_command_queue(cq_id).restart();
     }, f);
     f.get();
 }

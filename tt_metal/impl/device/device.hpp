@@ -24,6 +24,7 @@ class Buffer;
 class Program;
 class JitBuildEnv;
 class HWCommandQueue;
+class CommandQueue;
 
 namespace detail {
 // TODO(agrebenisan): Need device to hold onto command queue programs,
@@ -149,8 +150,6 @@ class Device {
     // Set of logical storage only core coordinates
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
 
-    std::unique_ptr<SystemMemoryManager> manager;
-
     // Set of logical dispatch core coordinates
 
     // Set of logical ethernet core coordinates
@@ -169,8 +168,9 @@ class Device {
     const JitBuildState& build_firmware_state(JitBuildProcessorType t, int i) const;
     const JitBuildState& build_kernel_state(JitBuildProcessorType t, int i) const;
     const JitBuildStateSubset build_kernel_states(JitBuildProcessorType t) const;
-
-   private:
+    SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
+    HWCommandQueue& hw_command_queue(size_t cq_id = 0);
+    CommandQueue& command_queue(size_t cq_id = 0);
     void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
@@ -208,15 +208,15 @@ class Device {
     JitBuildStateSet firmware_build_states_;
     JitBuildStateSet kernel_build_states_;
 
-    // SystemMemoryManager is the interface to the hardware command queue
-    std::unique_ptr<SystemMemoryManager> sysmem_manager;
-    // Allows access to sysmem_writer
-    friend class HWCommandQueue;
-
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
 
+    // SystemMemoryManager is the interface to the hardware command queue
+    std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
+    std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
+    std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+    vector<std::unique_ptr<Program, detail::ProgramDeleter>> command_queue_programs_;
     const uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;

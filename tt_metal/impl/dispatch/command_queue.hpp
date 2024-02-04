@@ -437,20 +437,14 @@ class HWCommandQueue {
     void restart();
     void launch(launch_msg_t& msg);
 
-    friend HWCommandQueue & detail::GetHWCommandQueue(Device *device, uint32_t cmd_queue_channel);
+    SystemMemoryManager& sysmem_manager() { return this->sysmem_manager_; }
 
-    // Trace APIs
-    friend void EndTrace(Trace& trace);
-    friend void EnqueueTrace(Trace& trace, bool blocking);
-    friend class Trace;
-
+    uint32_t cq_id() const { return this->id; }
    private:
     uint32_t id;
     uint32_t size_B;
-
-    SystemMemoryManager& manager;
-
     Device* device;
+    SystemMemoryManager& sysmem_manager_;
 
 };
 

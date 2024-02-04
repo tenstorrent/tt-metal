@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     // Device Setup
     int device_id = 0;
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-    CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+    CommandQueue& cq = device->command_queue();
 
     // Application Setup
     uint32_t single_tile_size = 2 * 1024;

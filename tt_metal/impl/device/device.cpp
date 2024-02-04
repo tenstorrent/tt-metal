@@ -61,6 +61,7 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
 {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
+
     this->initialize(l1_bank_remap);
     tt::tt_metal::detail::GetCommandQueue(this, true); // Needed to initialize a new command queue
 }
@@ -514,7 +515,11 @@ void Device::configure_command_queue_programs() {
 
 void Device::initialize_command_queue() {
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
-    this->manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    hw_command_queues_.resize(num_hw_cqs());
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
+    }
 
     this->compile_command_queue_programs();
     TT_ASSERT(this->command_queue_programs.size() == 1);
@@ -789,6 +794,15 @@ const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, co
     return bs.get_target_out_path(kernel_name);
 }
 
+HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
+    TT_ASSERT( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    return *hw_command_queues_[cq_id];
+}
+
+CommandQueue& Device::command_queue(size_t cq_id) {
+    TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    return *sw_command_queues_[cq_id];
+}
 }  // namespace tt_metal
 
 }  // namespace tt

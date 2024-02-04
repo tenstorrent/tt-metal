@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
         /*
         * Setup program and command queue to execute along with its buffers and kernels to use
         */
-        CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+        CommandQueue& cq = device->command_queue();
         Program program = CreateProgram();
 
         constexpr CoreCoord core = {0, 0};
