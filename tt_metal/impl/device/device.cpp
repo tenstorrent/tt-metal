@@ -796,11 +796,13 @@ const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, co
 
 HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
     TT_ASSERT( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *hw_command_queues_[cq_id];
 }
 
 CommandQueue& Device::command_queue(size_t cq_id) {
     TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *sw_command_queues_[cq_id];
 }
 }  // namespace tt_metal
