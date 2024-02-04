@@ -428,7 +428,7 @@ inline void read_data_from_device_buffer_slow_dispatch(const Tensor& tensor, vec
 }
 
 template <typename T, template <typename> typename BufferType>
-inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& device_buffer) {
+inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, DeviceBuffer device_buffer) {
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
@@ -938,10 +938,10 @@ void memcpy(Tensor& dst, const Tensor& src) {
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         EnqueueReadBuffer(
-            src.device()->command_queue(), *src.buffer(), get_raw_host_data_ptr(dst), true);
+            src.device()->command_queue(), src.device_buffer(), get_raw_host_data_ptr(dst), true);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         EnqueueWriteBuffer(
-            dst.device()->command_queue(), *dst.buffer(), get_raw_host_data_ptr(src), false);
+            dst.device()->command_queue(), dst.device_buffer(), get_raw_host_data_ptr(src), false);
     } else {
         TT_THROW("Unsupported memcpy");
     }
