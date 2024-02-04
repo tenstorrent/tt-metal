@@ -280,7 +280,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
         tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
-        auto& cq = tt::tt_metal::detail::GetCommandQueue(device);
+        auto& cq = device->command_queue();
 
         EnqueueProgram(cq, programs.at(device->id()), false);
         cqs.emplace_back(cq);
@@ -427,7 +427,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
         tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
-        auto& cq = tt::tt_metal::detail::GetCommandQueue(device);
+        auto& cq = device->command_queue();
 
         EnqueueProgram(cq, programs.at(device->id()), false);
         cqs.emplace_back(cq);

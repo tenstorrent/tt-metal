@@ -32,7 +32,7 @@ void DumpDeviceProfileResults(
         ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");
         //TODO: (MO) This global is temporary need to update once the new interface is in
         if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-            Finish(GetCommandQueue(device));
+            Finish(device->command_queue());
         }
 
         TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");

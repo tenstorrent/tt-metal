@@ -1213,8 +1213,8 @@ int main(int argc, char** argv) {
 
     // took from run_operation.cpp
     auto start = std::chrono::high_resolution_clock::now();
-    EnqueueProgram(::detail::GetCommandQueue(device), program, false);
-    Finish(::detail::GetCommandQueue(device));
+    EnqueueProgram(device->command_queue(), program, false);
+    Finish(device->command_queue());
     auto end = std::chrono::high_resolution_clock::now();
     duration = end - start;
     tt_metal::DumpDeviceProfileResults(device, program);

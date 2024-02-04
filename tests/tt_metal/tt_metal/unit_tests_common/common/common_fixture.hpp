@@ -16,7 +16,7 @@ public:
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
-            CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+            CommandQueue& cq = device->command_queue();
             EnqueueProgram(cq, program, false);
             Finish(cq);
         }
@@ -25,7 +25,7 @@ public:
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
-            CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+            CommandQueue& cq = device->command_queue();
             EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
         }
     }
@@ -33,7 +33,7 @@ public:
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
         } else {
-            CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+            CommandQueue& cq = device->command_queue();
             EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
         }
     }

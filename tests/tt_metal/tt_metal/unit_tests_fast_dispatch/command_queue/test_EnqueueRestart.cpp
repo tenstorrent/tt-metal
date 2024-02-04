@@ -23,7 +23,7 @@ TEST_F(CommandQueueFixture, TestEnqueueRestart) {
         program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CommandQueue cq(this->device_, 0);
-    HWCommandQueue &hcq = detail::GetHWCommandQueue(this->device_, 0);
+    HWCommandQueue &hcq = this->device_->hw_command_queue(0);
     uint32_t starting_issue_read_ptr;
     uint32_t starting_issue_write_ptr;
     tt_cxy_pair physical_producer_core(this->device_->id(), this->device_->worker_core_from_logical_core(hcq.issue_queue_reader_core));

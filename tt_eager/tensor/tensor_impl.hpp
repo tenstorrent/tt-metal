@@ -433,8 +433,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
-    EnqueueWriteBuffer(
-        tt::tt_metal::detail::GetCommandQueue(device_buffer.device(), false), device_buffer, host_buffer.data(), false);
+    EnqueueWriteBuffer( device_buffer.device()->command_queue(), device_buffer, host_buffer.data(), false);
 
 }
 
@@ -939,10 +938,10 @@ void memcpy(Tensor& dst, const Tensor& src) {
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         EnqueueReadBuffer(
-            tt::tt_metal::detail::GetCommandQueue(src.device(), false), *src.buffer(), get_raw_host_data_ptr(dst), true);
+            src.device()->command_queue(), *src.buffer(), get_raw_host_data_ptr(dst), true);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         EnqueueWriteBuffer(
-            tt::tt_metal::detail::GetCommandQueue(dst.device(), false), *dst.buffer(), get_raw_host_data_ptr(src), false);
+            dst.device()->command_queue(), *dst.buffer(), get_raw_host_data_ptr(src), false);
     } else {
         TT_THROW("Unsupported memcpy");
     }
