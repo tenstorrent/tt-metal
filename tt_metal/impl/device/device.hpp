@@ -68,11 +68,11 @@ class Device {
     ~Device();
 
     // TODO: Add copy/move semantics
-    Device(const Device &other): num_hw_cqs_(other.num_hw_cqs_) { }
-    Device& operator=(const Device &other) { return *this; }
+    Device(const Device &other) = delete;
+    Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other): num_hw_cqs_(other.num_hw_cqs_) { }
-    Device& operator=(Device &&other) { return *this; }
+    Device(Device &&other) = default;
+    Device& operator=(Device &&other) = default;
 
     tt::ARCH arch() const;
 
