@@ -404,8 +404,11 @@ namespace detail {
         detail::DispatchStateCheck( false );
         detail::ProfileTTMetalScope profile_this =
             detail::ProfileTTMetalScope(std::string("LaunchProgram ") + std::to_string(device->id()));
+        log_info(LogTest, "Compiling...");
         detail::CompileProgram(device, program);
+        log_info(LogTest, "Writing runtime args...");
         detail::WriteRuntimeArgsToDevice(device, program);
+        log_info(LogTest, "Configuring...");
         detail::ConfigureDeviceWithProgram(device, program);
         auto device_id = device->id();
 
