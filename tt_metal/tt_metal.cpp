@@ -410,6 +410,7 @@ namespace detail {
         detail::WriteRuntimeArgsToDevice(device, program);
         log_info(LogTest, "Configuring...");
         detail::ConfigureDeviceWithProgram(device, program);
+        log_info(LogTest, "Barriers...");
         auto device_id = device->id();
 
         tt::Cluster::instance().dram_barrier(device_id);
@@ -447,12 +448,14 @@ namespace detail {
 
         auto device_id = device->id();
 
+        log_info(LogTest, "Validate cbs...");
         program.allocate_circular_buffers();
         detail::ValidateCircularBufferRegion(program, device);
 
         std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
+                log_info(LogTest, "Configuring core {}...", logical_core.str());
                 KernelGroup *kernel_group = program.kernels_on_core(logical_core);
                 CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
