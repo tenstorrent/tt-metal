@@ -264,14 +264,6 @@ void DeviceProfiler::dumpResultToFile(
     //TODO(MO) : use enums here
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC"};
 
-    constexpr int DRAM_ROW = 6;
-    if (core.y > DRAM_ROW) {
-        core.y = core.y - 2;
-    } else {
-        core.y--;
-    }
-    core.x--;
-
     tracy::TTDeviceEvent event = tracy::TTDeviceEvent(runID, device_id, core.x, core.y, risc_num, timer_id);
     if (timer_id > PROFILER_L1_GUARANTEED_MARKER_COUNT)
     {
@@ -429,8 +421,8 @@ void DeviceProfiler::pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device
     }
 
     std::string riscName[] = {"BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC"};
-    uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4, tracy::Color::Khaki1};
-    uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3, tracy::Color::Khaki2};
+    uint32_t FWColors[] = {tracy::Color::Red4, tracy::Color::Green4, tracy::Color::Blue4, tracy::Color::Purple3, tracy::Color::Yellow4, tracy::Color::Aquamarine4};
+    uint32_t KernelColors[] = {tracy::Color::Red2, tracy::Color::Green3, tracy::Color::Blue3, tracy::Color::Purple1, tracy::Color::Yellow3, tracy::Color::Aquamarine1};
     uint32_t customColors[] = {tracy::Color::Orange2, tracy::Color::Cyan3, tracy::Color::Orchid1, tracy::Color::Plum1, tracy::Color::PaleTurquoise2, tracy::Color::CadetBlue1};
 
     for (auto& run: device_core_data[device_core].data)

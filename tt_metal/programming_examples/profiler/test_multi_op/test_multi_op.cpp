@@ -7,7 +7,7 @@
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int fastDispatch)
+void RunCustomCycle(tt_metal::Device *device, int fastDispatch)
 {
     bool pass = true;
 
@@ -15,7 +15,6 @@ bool RunCustomCycle(tt_metal::Device *device, int fastDispatch)
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores{.start=start_core, .end=end_core};
-    auto eth_cores =  device->get_active_ethernet_cores();
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
@@ -34,27 +33,11 @@ bool RunCustomCycle(tt_metal::Device *device, int fastDispatch)
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args});
 
-    for (auto core : eth_cores)
+    for (int i = 0; i < fastDispatch; i++)
     {
-        auto eth_reader_kernel = tt_metal::CreateKernel(
-            program, "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op_ether.cpp",
-            (CoreCoord){core.x,core.y},
-            tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        EnqueueProgram(tt_metal::detail::GetCommandQueue(device), program, false);
     }
 
-    if (!fastDispatch)
-    {
-        tt_metal::detail::LaunchProgram(device, program);
-    }
-    else
-    {
-        for (int i = 0; i < fastDispatch; i++)
-        {
-            EnqueueProgram(tt_metal::detail::GetCommandQueue(device), program, false);
-        }
-    }
-
-    return pass;
 }
 
 int main(int argc, char **argv) {
@@ -69,18 +52,8 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(device_id);
 
         constexpr int host_loop_count = 3;
-
-        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-
-        if (USE_FAST_DISPATCH)
-        {
-            pass &= RunCustomCycle(device, host_loop_count);
-            tt_metal::detail::DumpDeviceProfileResults(device);
-        }
-        else
-        {
-            pass &= RunCustomCycle(device, 0);
-        }
+        RunCustomCycle(device, host_loop_count);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         pass &= tt_metal::CloseDevice(device);
 

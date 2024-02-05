@@ -21,6 +21,6 @@ void kernel_main() {
         {
             asm("nop");
         }
-        kernel_profiler::mark_time(6);
+        kernel_profiler::mark_time(5);
     }
 }
