@@ -747,8 +747,11 @@ void convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buff
     free(temp);
 }
 
-// Read buffer command is enqueued in the issue region and device writes requested buffer data into the completion
-// region
+void HWCommandQueue::enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* dst, bool blocking) {
+    this->enqueue_read_buffer(*buffer, dst, blocking);
+}
+
+// Read buffer command is enqueued in the issue region and device writes requested buffer data into the completion region
 void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking) {
     ZoneScopedN("HWCommandQueue_read_buffer");
 
@@ -1099,19 +1102,12 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
     std::visit ( [&cq, dst, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
         std::future<void> f;
-        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
+        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer> > ) {
             cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
-
                 device->hw_command_queue(cq_id).enqueue_read_buffer(b, dst, blocking);
             }, f );
         }
-        else if constexpr ( std::is_same_v<T, std::shared_ptr<Buffer> >) {
-            cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
-
-                device->hw_command_queue(cq_id).enqueue_read_buffer(*b, dst, blocking);
-            }, f );
-        }
-        f.get();
+        f.wait();
     }, buffer);
 }
 
@@ -1120,21 +1116,13 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
     detail::DispatchStateCheck(true);
     std::visit ( [&cq, src, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
-        using SRCPTR = std::decay_t<decltype(src)>;
         std::future<void> f;
-        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
+        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> ||  std::is_same_v<T, std::shared_ptr<Buffer> > ) {
             cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
-
                 device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
             }, f );
         }
-        else if constexpr ( std::is_same_v<T, std::shared_ptr<Buffer> >) {
-            cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
-
-                device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
-            }, f );
-        }
-       f.get();
+       f.wait();
     }, buffer);
 }
 
@@ -1149,10 +1137,8 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                 cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
                     TT_ASSERT(cq_id == 0, "EnqueueProgram only supported on first command queue on device for time being.");
                     detail::CompileProgram(device, program);
-
                     program.get().allocate_circular_buffers();
                     detail::ValidateCircularBufferRegion(program, device);
-
                     device->hw_command_queue(cq_id).enqueue_program(program, trace, blocking);
                 }, f);
             } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
@@ -1161,7 +1147,6 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                     detail::CompileProgram(device, *program);
                     program->allocate_circular_buffers();
                     detail::ValidateCircularBufferRegion(*program, device);
-
                     device->hw_command_queue(cq_id).enqueue_program(*program, trace, blocking);
                 }, f );
             }
@@ -1175,7 +1160,7 @@ void Finish(CommandQueue& cq) {
     cq.submit( [device = cq.device(), cq_id = cq.id()] {
         device->hw_command_queue(cq_id).finish();
     }, f);
-    f.get();
+    f.wait();
 }
 
 
@@ -1222,7 +1207,6 @@ void EnqueueRestart(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     std::future<void> f;
     cq.submit( [device = cq.device(), cq_id = cq.id()] {
-
         device->hw_command_queue(cq_id).restart();
     }, f);
     f.get();
