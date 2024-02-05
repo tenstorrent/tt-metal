@@ -70,6 +70,7 @@ void RunTest(Device *device) {
 
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     log_info(LogTest, "Running program...");
+    try {
     if (slow_dispatch) {
         // Slow dispatch uses LaunchProgram
         tt::tt_metal::detail::LaunchProgram(device, program);
@@ -78,6 +79,12 @@ void RunTest(Device *device) {
         CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
         EnqueueProgram(cq, program, false);
         Finish(cq);
+    }
+    } catch (std::runtime_error& e) {
+        const string error = string(e.what());
+        log_info(tt::LogTest, "Caught exception: {}", error);
+        EXPECT_TRUE(false);
+        return;
     }
 
     // Check results
