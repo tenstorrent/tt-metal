@@ -63,9 +63,9 @@ int main(int argc, char **argv) {
         auto src1_dram_buffer = CreateBuffer(dram_config);
         auto dst_l1_buffer = CreateBuffer(l1_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-        auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 1;
@@ -139,10 +139,10 @@ int main(int argc, char **argv) {
             program,
             mm_reader_kernel,
             core,
-            {src0_dram_buffer.address(),
+            {src0_dram_buffer->address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            src1_dram_buffer.address(),
+            src1_dram_buffer->address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             1,
@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
             program,
             unary_writer_kernel,
             core,
-            {dst_l1_buffer.address(),
+            {dst_l1_buffer->address(),
             (std::uint32_t)l1_dst_noc_xy.x,
             (std::uint32_t)l1_dst_noc_xy.y,
             num_tiles});
