@@ -106,10 +106,10 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         SetRuntimeArgs(program, kernel_group->riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});
         SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
 
-        EnqueueWriteBuffer(cq, buf, inp, false);
+        EnqueueWriteBuffer(cq, std::ref(buf), inp, false);
         EnqueueProgram(cq, program, false);
 
-        EnqueueReadBuffer(cq, out, out_vec, true);
+        EnqueueReadBuffer(cq, std::ref(out), out_vec, true);
     }
 
     TT_FATAL(out_vec == inp);
