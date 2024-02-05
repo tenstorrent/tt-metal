@@ -117,12 +117,15 @@ class Tensor {
              std::cref(this->storage_), std::cref(this->shape_), std::cref(this->dtype_), std::cref(this->layout_));
      }
 
-        std::vector<uint32_t> host_page_ordering();
+     std::vector<uint32_t> host_page_ordering();
+
+     const ttnn::Shape ttnn_shape() const { return ttnn::Shape(this->shape_); }
+
     private:
-        Storage storage_;
-        Shape shape_;
-        DataType dtype_;
-        Layout layout_;
+     Storage storage_;
+     Shape shape_;
+     DataType dtype_;
+     Layout layout_;
 };
 
 
@@ -141,18 +144,7 @@ void memcpy(Tensor &dst, const Tensor &src);
 }  // namespace tt
 
 namespace ttnn {
-namespace types {
 
-struct Tensor {
-    const tt::tt_metal::Tensor value;
-    const ttnn::Shape shape;
-
-    explicit Tensor(tt::tt_metal::Tensor &&tensor) : value{tensor}, shape{ttnn::Shape(tensor.shape())} {}
-    explicit Tensor(const tt::tt_metal::Tensor &tensor) : value{tensor}, shape{ttnn::Shape(tensor.shape())} {}
-};
-
-}  // namespace types
-
-using types::Tensor;
+using Tensor = tt::tt_metal::Tensor;
 
 }  // namespace ttnn

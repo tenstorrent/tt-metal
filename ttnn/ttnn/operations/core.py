@@ -113,7 +113,7 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
     if input_tensor.shape == shape and list(input_tensor.shape) == list(shape):
         return input_tensor
 
-    def ttnn_reshape(tensor, shape):
+    def ttnn_reshape(tensor: ttnn.Tensor, shape: ttnn.Shape) -> ttnn.Tensor:
         ttl_input_tensor = tensor.value
         return ttnn.Tensor(ttl_input_tensor.reshape(shape.value))
 
@@ -311,8 +311,7 @@ def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch
 
     ttl_tensor = tensor.value
     tensor = ttnn.Tensor(ttl_tensor.reshape(tensor.shape.padded().value))
-
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(ttl_tensor)
+    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor.value)
 
 
 def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):

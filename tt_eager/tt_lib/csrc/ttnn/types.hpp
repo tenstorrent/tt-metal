@@ -60,6 +60,10 @@ void py_module(py::module& m_types) {
     PyShape.def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); });
     PyShape.def("padded", [](const Shape& self) { return self.padded(); });
 
+    struct Tensor {
+        tt::tt_metal::Tensor value;
+    };
+
     py::class_<Tensor>(m_types, "Tensor")
         .def(py::init<tt::tt_metal::Tensor>())
         .def_property_readonly("value", [](const Tensor& self) -> auto& { return self.value; })
