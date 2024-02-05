@@ -190,13 +190,15 @@ def unsqueeze_to_4D(tensor):
         raise RuntimeError("Tensor cannot have more than 4 dimensions!")
     num_missing_dims = 4 - len(tensor.shape)
     shape = tuple(tensor.shape)
-    full_shape = tuple(tensor.shape.padded())
+    padded_shape = tuple(tensor.shape.padded())
     shape = (1,) * num_missing_dims + shape
-    full_shape = (1,) * num_missing_dims + full_shape
-    return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
+    padded_shape = (1,) * num_missing_dims + padded_shape
+    return ttnn.reshape(tensor, shape=ttnn.Shape(shape, padded_shape))
 
 
-def squeeze(tensor):
+def squeeze(tensor, dim):
+    if dim != 0:
+        raise RuntimeError("Only dim=0 is supported for squeeze operation!")
     if len(tensor.shape) == 1:
         return tensor
     if len(tensor.shape) > 4:

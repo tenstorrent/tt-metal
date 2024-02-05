@@ -7,7 +7,6 @@ from typing import Tuple
 import tt_lib as ttl
 
 from ttnn.types import (
-    has_storage_type_of,
     DEVICE_STORAGE_TYPE,
     MemoryConfig,
     ShardStrategy,
@@ -16,6 +15,10 @@ from ttnn.types import (
     TensorMemoryLayout,
     BufferType,
 )
+
+
+def has_storage_type_of(tensor: "ttnn.Tensor", storage_type) -> bool:
+    return tensor.value.storage_type() == storage_type
 
 
 def is_sharded(tensor) -> bool:
