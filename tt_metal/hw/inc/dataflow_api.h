@@ -383,10 +383,10 @@ uint64_t get_dram_noc_addr(const uint32_t id, const uint32_t page_size, const ui
     uint32_t addr;
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
     bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
-    addr = mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), align(page_size, 32)) + bank_base_address + offset;
+    addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) * align(page_size, 32)) + bank_base_address + offset;
 #else
     bank_id = id & (NUM_DRAM_BANKS - 1);
-    addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, align(page_size, 32)) + bank_base_address + offset;
+    addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) * align(page_size, 32)) + bank_base_address + offset;
 #endif
 
     addr += bank_to_dram_offset[bank_id];
@@ -401,10 +401,10 @@ uint64_t get_l1_noc_addr(const uint32_t id, const uint32_t page_size, const uint
     uint32_t addr;
 #ifdef IS_NOT_POW2_NUM_L1_BANKS
     bank_id = umodsi3_const_divisor<NUM_L1_BANKS>(id);
-    addr = mulsi3(udivsi3_const_divisor<NUM_L1_BANKS>(id), align(page_size, 32)) + bank_base_address + offset;
+    addr = (udivsi3_const_divisor<NUM_L1_BANKS>(id) * align(page_size, 32)) + bank_base_address + offset;
 #else
     bank_id = id & (NUM_L1_BANKS - 1);
-    addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(page_size, 32)) + bank_base_address + offset;
+    addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) * align(page_size, 32)) + bank_base_address + offset;
 #endif
 
     addr += bank_to_l1_offset[bank_id];
@@ -435,10 +435,10 @@ struct InterleavedAddrGen {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             addr =
-                mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), align(this->page_size, 32)) + this->bank_base_address + offset;
+                (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) * align(this->page_size, 32)) + this->bank_base_address + offset;
 #else
             bank_id = id & (NUM_DRAM_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, align(this->page_size, 32)) + this->bank_base_address + offset;
+            addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) * align(this->page_size, 32)) + this->bank_base_address + offset;
 #endif
             addr += bank_to_dram_offset[bank_id];
             noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
@@ -446,10 +446,10 @@ struct InterleavedAddrGen {
 #ifdef IS_NOT_POW2_NUM_L1_BANKS
             bank_id = umodsi3_const_divisor<NUM_L1_BANKS>(id);
             addr =
-                mulsi3(udivsi3_const_divisor<NUM_L1_BANKS>(id), align(this->page_size, 32)) + this->bank_base_address + offset;
+                (udivsi3_const_divisor<NUM_L1_BANKS>(id) * align(this->page_size, 32)) + this->bank_base_address + offset;
 #else
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(this->page_size, 32)) + this->bank_base_address + offset;
+            addr = (id >> LOG_BASE_2_OF_NUM_L1_BANKS) * align(this->page_size, 32) + this->bank_base_address + offset;
 #endif
             addr += bank_to_l1_offset[bank_id];
             noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
