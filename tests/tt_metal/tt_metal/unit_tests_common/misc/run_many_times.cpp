@@ -17,6 +17,7 @@ void RunTest(Device *device) {
     std::set<CoreRange> core_ranges;
     //CoreCoord grid_size = device->logical_grid_size();
     CoreCoord grid_size = {1, 1};
+    log_info(LogTest, "Creating core range...");
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord core(x, y);
@@ -25,6 +26,7 @@ void RunTest(Device *device) {
     }
 
     // Kernels on brisc + ncrisc that just add two numbers
+    log_info(LogTest, "Creating kernels...");
     KernelHandle brisc_kid = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
@@ -45,6 +47,7 @@ void RunTest(Device *device) {
     );
 
     // Write runtime args
+    log_info(LogTest, "Writing args...");
     auto get_first_arg = [](Device *device, CoreCoord &core, uint32_t multiplier) {
         return (uint32_t) device->id() + (uint32_t) core.x * 10 * multiplier;
     };
@@ -66,6 +69,7 @@ void RunTest(Device *device) {
     }
 
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    log_info(LogTest, "Running program...");
     if (slow_dispatch) {
         // Slow dispatch uses LaunchProgram
         tt::tt_metal::detail::LaunchProgram(device, program);
@@ -77,6 +81,7 @@ void RunTest(Device *device) {
     }
 
     // Check results
+    log_info(LogTest, "Checking results...");
     for (auto &core_range : core_ranges) {
         CoreCoord core = core_range.start;
         std::vector<uint32_t> brisc_result;
@@ -134,9 +139,11 @@ TEST(CommonMiscTests, AllCoresStressTest) {
         }
 
         // Close all devices
+        log_info(LogTest, "Closing devices...");
         for (unsigned int id = 0; id < devices_.size(); id++) {
             tt::tt_metal::CloseDevice(devices_.at(id));
         }
+        log_info(LogTest, "Running iteration #{}", idx);
     }
 
 }
