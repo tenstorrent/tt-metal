@@ -419,17 +419,17 @@ class HWCommandQueue {
     detail::IssuedReadMap issued_reads;
     detail::thread_safe_map<uint32_t, detail::completion_wrap_mutex> issued_completion_wraps;
 
-    void enqueue_write_buffer(std::shared_ptr<const Buffer> buffer, const void* src, bool blocking);
 
-    void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
 
     Device* device;
 
     void copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel);
     void read_completion_queue();
     void enqueue_command(Command& command, bool blocking);
+    void enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* dst, bool blocking);
     void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking);
-    void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking);
+    void enqueue_write_buffer(std::shared_ptr<const Buffer> buffer, const void* src, bool blocking);
+    void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
     void enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
     void finish();
     void issue_wrap();
