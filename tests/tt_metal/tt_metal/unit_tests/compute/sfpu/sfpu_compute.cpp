@@ -123,11 +123,11 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         };
 
     auto input_dram_buffer = CreateBuffer(dram_config);
-    uint32_t input_dram_byte_address = input_dram_buffer.address();
-    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+    uint32_t input_dram_byte_address = input_dram_buffer->address();
+    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config);
-    uint32_t output_dram_byte_address = output_dram_buffer.address();
-    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
+    uint32_t output_dram_byte_address = output_dram_buffer->address();
+    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
