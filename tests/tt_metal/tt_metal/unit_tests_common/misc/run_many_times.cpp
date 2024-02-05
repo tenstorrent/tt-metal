@@ -73,6 +73,7 @@ void RunTest(Device *device) {
     try {
     if (slow_dispatch) {
         // Slow dispatch uses LaunchProgram
+        log_info(LogTest, "Slow dispatch...");
         tt::tt_metal::detail::LaunchProgram(device, program);
     } else {
         // Fast Dispatch uses the command queue

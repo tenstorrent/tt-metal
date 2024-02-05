@@ -417,6 +417,7 @@ namespace detail {
 
         std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
+        log_info(LogTest, "Starting cores...");
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
                 launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
@@ -426,9 +427,11 @@ namespace detail {
             }
         }
         // Wait for all cores to be done
+        log_info(LogTest, "Waiting for cores finish...");
         llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
 
         }//Profiler scope end
+        log_info(LogTest, "Program finished");
         DumpDeviceProfileResults(device, program);
     }
 
