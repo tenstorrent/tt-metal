@@ -20,7 +20,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
     // in1/inB - loaded to SrcA
 
     const bool reuse_a = ct_dim >= rt_dim;
-    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 16 : ((!reuse_a && unpB_partial_face) ? 14 : 10);
+    const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 16 : ((!reuse_a && unpB_partial_face) ? 16 : 10);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len/2;
 
     if (reuse_a) {
@@ -31,7 +31,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
             static_assert(kernel_broadcast_b<=1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled!");
             TT_REPLAY(0, replay_buf_prog_len, 0, 1);
             if (unpA_partial_face) {
-                TTI_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -49,7 +49,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
             }
             TTI_NOP;
             if (unpA_partial_face) {
-                TTI_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -75,6 +75,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
             static_assert(kernel_broadcast_a<=1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled!");
             TT_REPLAY(0, replay_buf_prog_len, 0, 1);
             if (unpB_partial_face) {
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -92,6 +93,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
             }    
             TTI_NOP;
             if (unpB_partial_face) {
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -250,6 +252,7 @@ inline void _llk_unpack_AB_matmul_(
                 TTI_NOP;
             #else
                 if (unpB_partial_face) {
+                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                     // Do face by face unpacking
                     TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
@@ -268,6 +271,7 @@ inline void _llk_unpack_AB_matmul_(
                     }
                     TTI_DMANOP;
                     if (unpB_partial_face) {
+                        TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                         // Do face by face unpacking
                         TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
@@ -284,7 +288,7 @@ inline void _llk_unpack_AB_matmul_(
             #else
                 if (unpA_partial_face) {
                     // Do face by face unpacking
-                    TTI_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
@@ -303,7 +307,7 @@ inline void _llk_unpack_AB_matmul_(
                     TTI_DMANOP;
                     if (unpA_partial_face) {
                         // Do face by face unpacking
-                        TTI_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
+                        TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
                         TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                         TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
