@@ -61,7 +61,9 @@ def get_my_pending_reviews(username, github_token):
     headers = {"Authorization": f"token {github_token}"}
     pending_reviews_urls = []
 
-    prs_url = f"https://api.github.com/search/issues?q=is:pr+review-requested:{username}&sort=created&order=desc"
+    prs_url = (
+        f"https://api.github.com/search/issues?q=is:pr+is:open+review-requested:{username}&sort=created&order=desc"
+    )
     prs_response = requests.get(prs_url, headers=headers)
     prs = prs_response.json().get("items", []) if prs_response.status_code == 200 else []
 
