@@ -1144,6 +1144,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
     detail::DispatchStateCheck(true);
     std::visit ( [&cq, blocking, trace](auto&& program) {
             using T = std::decay_t<decltype(program)>;
+            std::future<void> f;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
                 cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
                     TT_ASSERT(cq_id == 0, "EnqueueProgram only supported on first command queue on device for time being.");
@@ -1153,7 +1154,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                     detail::ValidateCircularBufferRegion(program, device);
 
                     device->hw_command_queue(cq_id).enqueue_program(program, trace, blocking);
-                } );
+                }, f);
             } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
                 cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
                     TT_ASSERT(cq_id == 0, "EnqueueProgram only supported on first command queue on device for time being.");
@@ -1162,8 +1163,9 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                     detail::ValidateCircularBufferRegion(*program, device);
 
                     device->hw_command_queue(cq_id).enqueue_program(*program, trace, blocking);
-                } );
+                }, f );
             }
+            f.wait();
         }, program);
 }
 
