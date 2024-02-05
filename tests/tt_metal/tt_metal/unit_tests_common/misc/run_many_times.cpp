@@ -80,7 +80,7 @@ void RunTest(Device *device) {
         EnqueueProgram(cq, program, false);
         Finish(cq);
     }
-    } catch (std::runtime_error& e) {
+    } catch (std::out_of_range& e) {
         const string error = string(e.what());
         log_info(tt::LogTest, "Caught exception: {}", error);
         EXPECT_TRUE(false);
