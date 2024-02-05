@@ -84,6 +84,7 @@ void RunTest(Device *device) {
     } catch (std::out_of_range& e) {
         const string error = string(e.what());
         log_info(tt::LogTest, "Caught exception: {}", error);
+        throw e;
         EXPECT_TRUE(false);
         return;
     }

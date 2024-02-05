@@ -458,11 +458,14 @@ namespace detail {
                 log_info(LogTest, "Configuring core {}...", logical_core.str());
                 KernelGroup *kernel_group = program.kernels_on_core(logical_core);
                 CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                log_info(LogTest, "Physical core is {}, configuring kernel group...", physical_core.str());
 
                 ConfigureKernelGroup(
                     program, kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+                log_info(LogTest, "Done configuring kernel group, configuring CBs...");
                 // TODO: add support for CB for ethernet cores
                 if (core_type == CoreType::WORKER) {
+                    log_info(LogTest, "Worker core...");
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     llrt::CircularBufferConfigVec circular_buffer_config_vec =
                         llrt::create_circular_buffer_config_vector();
@@ -487,6 +490,7 @@ namespace detail {
                     }
 
                     program.init_semaphores(*device, logical_core);
+                    log_info(LogTest, "Done configuring CBs...");
                 }
             }
         }
