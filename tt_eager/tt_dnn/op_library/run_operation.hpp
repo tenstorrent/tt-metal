@@ -17,6 +17,10 @@ namespace tt::tt_metal {
 
 namespace operation {
 
+// Temporary changes to allow multi-device ops to work with op profiler
+// Should be removed with new profiler + software queue changes
+extern bool skip_profile;
+extern std::map<chip_id_t, std::reference_wrapper<Program>> skipped_programs;
 
 template<typename ConcreteOperation>
 std::vector<Tensor> generic_create_output_tensors(
