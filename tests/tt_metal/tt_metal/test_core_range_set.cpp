@@ -82,9 +82,9 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
                                         };
 
     auto src_dram_buffer = CreateBuffer(dram_config);
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+    auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
 
-    std::map<CoreCoord, std::shared_ptr<tt_metal::Buffer>> core_to_l1_buffer;
+    std::map<CoreCoord, tt_metal::Buffer> core_to_l1_buffer;
     for (auto core_range : core_range_set.ranges()) {
         auto start = core_range.start;
         auto end = core_range.end;
@@ -164,7 +164,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     // Reader kernel on all cores reads from same location in DRAM
     std::vector<uint32_t> reader_rt_args = {
-        src_dram_buffer->address(),
+        src_dram_buffer.address(),
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,
         num_tiles
@@ -177,12 +177,12 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
             core,
             reader_rt_args);
 
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
-            {dst_l1_buffer->address(),
+            {dst_l1_buffer.address(),
             (std::uint32_t)l1_dst_noc_xy.x,
             (std::uint32_t)l1_dst_noc_xy.y,
             num_tiles});

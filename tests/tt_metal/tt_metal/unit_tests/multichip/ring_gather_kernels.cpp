@@ -333,7 +333,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
-    std::vector<std::shared_ptr<Buffer>> output_buffers;
+    std::vector<Buffer> output_buffers;
     output_buffers.reserve(sender_receivers.size());
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
@@ -374,8 +374,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(num_bytes_per_send >> 4),
                     uint32_t(device->ethernet_core_from_logical_core(eth_receiver_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_receiver_core).y),
-                    uint32_t(input_buffer->buffer_type() == BufferType::DRAM),
-                    uint32_t(output_buffers[i]->buffer_type() == BufferType::DRAM)}});
+                    uint32_t(input_buffer.buffer_type() == BufferType::DRAM),
+                    uint32_t(output_buffers[i].buffer_type() == BufferType::DRAM)}});
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -386,8 +386,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)cfg.size_bytes + 32,  // + 32 for idx
              (uint32_t)sender_receivers.size() - 1,
              (uint32_t)(i * cfg.num_pages),
-             (uint32_t)input_buffer->address(),
-             (uint32_t)output_buffers[i]->address(),
+             (uint32_t)input_buffer.address(),
+             (uint32_t)output_buffers[i].address(),
              (uint32_t)cfg.num_pages,
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});
@@ -408,7 +408,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
-                        output_buffers[i]->buffer_type() == BufferType::DRAM)}});  // probably want to use NOC_1 here
+                        output_buffers[i].buffer_type() == BufferType::DRAM)}});  // probably want to use NOC_1 here
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -417,7 +417,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             {(uint32_t)dst_eth_l1_byte_address,
              (uint32_t)cfg.size_bytes + 32,  // + 32 for idx
              (uint32_t)sender_receivers.size() - 1,
-             (uint32_t)output_buffers[i]->address(),
+             (uint32_t)output_buffers[i].address(),
              (uint32_t)cfg.num_pages,
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});

@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
                 };
 
                 auto l1_b0 = CreateBuffer(l1_config);
-                uint32_t l1_buffer_addr = l1_b0->address();
+                uint32_t l1_buffer_addr = l1_b0.address();
                 core_to_l1_address_map.insert({core, l1_buffer_addr});
 
                 std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(
@@ -76,8 +76,8 @@ int main(int argc, char **argv) {
                     .buffer_type = tt_metal::BufferType::DRAM
                 };
                 auto src_dram_buffer = CreateBuffer(dram_config);
-                uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-                auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+                uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+                auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
                 tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
                 auto l1_to_l1_kernel = tt_metal::CreateKernel(

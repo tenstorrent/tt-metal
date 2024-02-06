@@ -81,13 +81,13 @@ int main(int argc, char **argv) {
                                 };
 
         auto input_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src_addr = input_dram_buffer->address();
+        uint32_t dram_buffer_src_addr = input_dram_buffer.address();
 
         auto output_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_dst_addr = output_dram_buffer->address();
+        uint32_t dram_buffer_dst_addr = output_dram_buffer.address();
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateKernel(

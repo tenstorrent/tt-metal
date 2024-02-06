@@ -57,9 +57,9 @@ int main(int argc, char **argv) {
                                 .buffer_type = tt_metal::BufferType::DRAM
                                 };
         auto dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_addr = dram_buffer->address();
+        uint32_t dram_buffer_addr = dram_buffer.address();
 
-        auto dram_noc_xy = dram_buffer->noc_coordinates();
+        auto dram_noc_xy = dram_buffer.noc_coordinates();
 
         CoreCoord core_start = {0, 0};
         CoreCoord grid_size = device->logical_grid_size();

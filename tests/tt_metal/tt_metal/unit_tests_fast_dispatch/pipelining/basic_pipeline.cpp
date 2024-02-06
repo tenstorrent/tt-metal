@@ -79,6 +79,10 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
         auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
+    /// used only if IO data in DRAM
+    tt_metal::Buffer src_buffer;
+    tt_metal::Buffer dst_buffer;
+
     uint32_t src_address;
     CoreCoord src_noc_xy;
     uint32_t dst_address;
@@ -92,13 +96,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                     .buffer_type = buff_type
         };
 
-    auto src_buffer = CreateBuffer(buff_config);
-    auto dst_buffer = CreateBuffer(buff_config);
+    src_buffer = CreateBuffer(buff_config);
+    dst_buffer = CreateBuffer(buff_config);
 
-    src_address = src_buffer->address();
-    src_noc_xy = src_buffer->noc_coordinates();
-    dst_address = dst_buffer->address();
-    dst_noc_xy = dst_buffer->noc_coordinates();
+    src_address = src_buffer.address();
+    src_noc_xy = src_buffer.noc_coordinates();
+    dst_address = dst_buffer.address();
+    dst_noc_xy = dst_buffer.noc_coordinates();
 
     // create kernels
     vector<tt_metal::KernelHandle> receiver_kernels;
@@ -218,7 +222,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
 
-    log_info(LogTest, "Writing to device buffer->..");
+    log_info(LogTest, "Writing to device buffer...");
     tt_metal::detail::WriteToBuffer(src_buffer, src_vec);
     log_info(LogTest, "Writing to device buffer Done.");
 

@@ -63,13 +63,13 @@ int main(int argc, char **argv) {
                     .buffer_type = tt::tt_metal::BufferType::L1
         };
 
-        auto l1_buffer = CreateBuffer(l1_config);
+        Buffer l1_buffer = CreateBuffer(l1_config);
 
-        auto input_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
+        Buffer input_dram_buffer = CreateBuffer(dram_config);
+        const uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
+        Buffer output_dram_buffer = CreateBuffer(dram_config);
+        const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         /*
         * Create input data and runtime arguments, then execute
@@ -79,14 +79,14 @@ int main(int argc, char **argv) {
         EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
 
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(),
-            input_dram_buffer->address(),
-            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),
-            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().y),
-            output_dram_buffer->address(),
-            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().x),
-            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().y),
-            l1_buffer->size()
+            l1_buffer.address(),
+            input_dram_buffer.address(),
+            static_cast<uint32_t>(input_dram_buffer.noc_coordinates().x),
+            static_cast<uint32_t>(input_dram_buffer.noc_coordinates().y),
+            output_dram_buffer.address(),
+            static_cast<uint32_t>(output_dram_buffer.noc_coordinates().x),
+            static_cast<uint32_t>(output_dram_buffer.noc_coordinates().y),
+            l1_buffer.size()
         };
 
         SetRuntimeArgs(

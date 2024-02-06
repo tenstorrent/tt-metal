@@ -62,13 +62,13 @@ bool chip_to_chip_dram_buffer_transfer(
 
     // Create source buffer on sender device
     auto input_dram_buffer = CreateBuffer(sender_dram_config);
-    uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+    uint32_t input_dram_byte_address = input_dram_buffer.address();
+    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
 
     // Create dest buffer on receiver device
     auto output_dram_buffer = CreateBuffer(receiver_dram_config);
-    uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     log_info(
         tt::LogTest,
@@ -226,7 +226,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         sender_program,
         eth_sender_kernel,
         eth_sender_core,
-        {(uint32_t)input_buffer->address(),
+        {(uint32_t)input_buffer.address(),
          (uint32_t)cfg.page_size_bytes,
          (uint32_t)max_buffer,
          (uint32_t)num_loops,
@@ -259,7 +259,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         eth_receiver_kernel,
         eth_receiver_core,
         {
-            (uint32_t)output_buffer->address(),
+            (uint32_t)output_buffer.address(),
             (uint32_t)cfg.page_size_bytes,
             (uint32_t)max_buffer,
             (uint32_t)num_loops,

@@ -34,13 +34,13 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                             .buffer_type = tt_metal::BufferType::DRAM
                             };
     auto input_dram_buffer = CreateBuffer(dram_config);
-    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
+    uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
     auto output_dram_buffer = CreateBuffer(dram_config);
-    uint32_t output_dram_buffer_addr = output_dram_buffer->address();
+    uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     // A DRAM copy kernel, we'll feed it incorrect inputs to test sanitization.
     constexpr CoreCoord core = {0, 0}; // Run kernel on first core

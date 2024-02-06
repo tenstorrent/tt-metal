@@ -62,16 +62,16 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
                     .buffer_type = tt::tt_metal::BufferType::DRAM
         };
     auto input0_dram_buffer = CreateBuffer(dram_config);
-    uint32_t input0_dram_byte_address = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
+    uint32_t input0_dram_byte_address = input0_dram_buffer.address();
+    auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
 
     auto input1_dram_buffer = CreateBuffer(dram_config);
-    uint32_t input1_dram_byte_address = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
+    uint32_t input1_dram_byte_address = input1_dram_buffer.address();
+    auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
 
     auto output_dram_buffer = CreateBuffer(dram_config);
-    uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
         .set_page_size(0, test_config.tile_byte_size);

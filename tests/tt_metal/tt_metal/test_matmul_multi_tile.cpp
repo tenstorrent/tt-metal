@@ -151,10 +151,10 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
 
         auto dst_dram_buffer = CreateBuffer(dst_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
 
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * 2;
@@ -256,10 +256,10 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
 
 
         vector<uint32_t> reader_l1_args = {
-            src0_dram_buffer->address(),
+            src0_dram_buffer.address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            src1_dram_buffer->address(),
+            src1_dram_buffer.address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             K,
@@ -271,9 +271,9 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         };
 
         if (with_bias) {
-            auto dram_src2_noc_xy = src2_dram_buffer->noc_coordinates();
+            auto dram_src2_noc_xy = src2_dram_buffer.noc_coordinates();
             vector<uint32_t> bias_args = {
-                src2_dram_buffer->address(),
+                src2_dram_buffer.address(),
                 (std::uint32_t)dram_src2_noc_xy.x,
                 (std::uint32_t)dram_src2_noc_xy.y,
                 N,
@@ -295,7 +295,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             program,
             unary_writer_kernel,
             core,
-            {dst_dram_buffer->address(),
+            {dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});

@@ -199,9 +199,9 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
         };
 
     auto src_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+    uint32_t dram_buffer_src_addr = src_dram_buffer.address();
     auto dst_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -217,11 +217,11 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     auto [program, reader_kernel_id, writer_kernel_id] = create_program(device, single_tile_size, all_cores, compute_kernel_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
+        src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    compile_and_configure_program(device, program, src_vec, *src_dram_buffer);
+    compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
-    write_same_runtime_args_to_device(device, program, reader_kernel_id, writer_kernel_id, all_cores, num_tiles, *src_dram_buffer, *dst_dram_buffer);
+    write_same_runtime_args_to_device(device, program, reader_kernel_id, writer_kernel_id, all_cores, num_tiles, src_dram_buffer, dst_dram_buffer);
 
     tt_metal::detail::LaunchProgram(device, program);
 
@@ -233,8 +233,8 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     ////////////////////////////////////////////////////////////////////////////
     pass &= (src_vec == result_vec);
 
-    DeallocateBuffer(*src_dram_buffer);
-    DeallocateBuffer(*dst_dram_buffer);
+    DeallocateBuffer(src_dram_buffer);
+    DeallocateBuffer(dst_dram_buffer);
 
     return pass;
 }
@@ -265,13 +265,13 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
         };
 
     auto src_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+    uint32_t dram_buffer_src_addr = src_dram_buffer.address();
     auto dst_dram_buffer_1 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr_1 = dst_dram_buffer_1->address();
+    uint32_t dram_buffer_dst_addr_1 = dst_dram_buffer_1.address();
     auto dst_dram_buffer_2 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr_2 = dst_dram_buffer_2->address();
+    uint32_t dram_buffer_dst_addr_2 = dst_dram_buffer_2.address();
     auto dst_dram_buffer_3 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr_3 = dst_dram_buffer_3->address();
+    uint32_t dram_buffer_dst_addr_3 = dst_dram_buffer_3.address();
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -287,12 +287,12 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     auto [program, reader_kernel_id, writer_kernel_id] = create_program(device, single_tile_size, all_cores, compute_kernel_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
+        src_dram_buffer.size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    compile_and_configure_program(device, program, src_vec, *src_dram_buffer);
+    compile_and_configure_program(device, program, src_vec, src_dram_buffer);
 
     write_unique_writer_runtime_args_to_device(
-        device, program, reader_kernel_id, writer_kernel_id, all_cores, core_blocks, num_tiles, *src_dram_buffer, *dst_dram_buffer_1, *dst_dram_buffer_2, *dst_dram_buffer_3);
+        device, program, reader_kernel_id, writer_kernel_id, all_cores, core_blocks, num_tiles, src_dram_buffer, dst_dram_buffer_1, dst_dram_buffer_2, dst_dram_buffer_3);
 
     tt_metal::detail::LaunchProgram(device, program);
 
@@ -313,10 +313,10 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     pass &= (src_vec == result_vec_2);
     pass &= (src_vec == result_vec_3);
 
-    DeallocateBuffer(*src_dram_buffer);
-    DeallocateBuffer(*dst_dram_buffer_1);
-    DeallocateBuffer(*dst_dram_buffer_2);
-    DeallocateBuffer(*dst_dram_buffer_3);
+    DeallocateBuffer(src_dram_buffer);
+    DeallocateBuffer(dst_dram_buffer_1);
+    DeallocateBuffer(dst_dram_buffer_2);
+    DeallocateBuffer(dst_dram_buffer_3);
 
     return pass;
 }

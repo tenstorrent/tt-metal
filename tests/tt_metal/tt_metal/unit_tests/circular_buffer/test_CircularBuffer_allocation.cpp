@@ -125,8 +125,8 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
     CoreRangeSet cr_set({cr});
     std::vector<uint8_t> buffer_indices = {16, 24};
 
-    uint32_t expected_cb_addr = l1_buffer->address();
-    CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}}, *l1_buffer)
+    uint32_t expected_cb_addr = l1_buffer.address();
+    CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}}, l1_buffer)
         .set_page_size(buffer_indices[0], cb_config.page_size)
         .set_page_size(buffer_indices[1], cb_config.page_size);
     auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
@@ -163,12 +163,12 @@ TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     auto l1_buffer = CreateBuffer(buff_config);
 
     // L1 buffer is entirely in bank 0
-    auto core = l1_buffer->logical_core_from_bank_id(0);
+    auto core = l1_buffer.logical_core_from_bank_id(0);
     CoreRange cr = {.start = core, .end = core};
     CoreRangeSet cr_set({cr});
     initialize_program(program, cr_set);
 
-    uint32_t num_pages = (l1_buffer->address() - L1_UNRESERVED_BASE) / NUM_CIRCULAR_BUFFERS / page_size + 1;
+    uint32_t num_pages = (l1_buffer.address() - L1_UNRESERVED_BASE) / NUM_CIRCULAR_BUFFERS / page_size + 1;
     CBConfig cb_config = {.num_pages=num_pages};
     for (uint32_t buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
@@ -276,8 +276,8 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
 
     validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
     // Update address of the first CB
-    UpdateDynamicCircularBufferAddress(program, cb_ids[0], *l1_buffer);
-    golden_addresses_per_core[core0][0] = l1_buffer->address();
+    UpdateDynamicCircularBufferAddress(program, cb_ids[0], l1_buffer);
+    golden_addresses_per_core[core0][0] = l1_buffer.address();
     validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
 }
 }
@@ -412,9 +412,9 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
         reader_kernel,
         core,
         {
-            (uint32_t)src_dram_buffer->address(),
-            (uint32_t)src_dram_buffer->noc_coordinates().x,
-            (uint32_t)src_dram_buffer->noc_coordinates().y,
+            (uint32_t)src_dram_buffer.address(),
+            (uint32_t)src_dram_buffer.noc_coordinates().x,
+            (uint32_t)src_dram_buffer.noc_coordinates().y,
             (uint32_t)num_tiles,
         });
     SetRuntimeArgs(
@@ -422,9 +422,9 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
         writer_kernel,
         core,
         {
-            (uint32_t)dst_dram_buffer->address(),
-            (uint32_t)dst_dram_buffer->noc_coordinates().x,
-            (uint32_t)dst_dram_buffer->noc_coordinates().y,
+            (uint32_t)dst_dram_buffer.address(),
+            (uint32_t)dst_dram_buffer.noc_coordinates().x,
+            (uint32_t)dst_dram_buffer.noc_coordinates().y,
             (uint32_t)num_tiles,
         });
 
@@ -444,7 +444,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     EXPECT_EQ(src_vec, input_cb_data);
 
     // update cb address
-    UpdateDynamicCircularBufferAddress(program, cb_src0, *global_cb_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_src0, global_cb_buffer);
 
     // zero out dst buffer
     std::vector<uint32_t> zero_vec = create_constant_vector_of_bfloat16(buffer_size, 0);
@@ -458,7 +458,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     EXPECT_EQ(src_vec, second_result_vec);
 
     std::vector<uint32_t> second_cb_data;
-    detail::ReadFromDeviceL1(this->devices_.at(id), core, global_cb_buffer->address(), buffer_size, second_cb_data);
+    detail::ReadFromDeviceL1(this->devices_.at(id), core, global_cb_buffer.address(), buffer_size, second_cb_data);
     EXPECT_EQ(src_vec, second_cb_data);
 }
 }

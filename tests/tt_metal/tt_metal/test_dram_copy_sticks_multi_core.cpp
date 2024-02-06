@@ -66,11 +66,11 @@ int main(int argc, char **argv) {
                                         };
 
         auto src_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        assert(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0);
-        uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
+        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
+        assert(src_dram_buffer.size() % (num_cores_r * num_cores_c) == 0);
+        uint32_t per_core_l1_size = src_dram_buffer.size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
                                         .buffer_type = tt_metal::BufferType::L1
                                         };
                 auto l1_b0 = CreateBuffer(l1_config);
-                core_to_l1_addr[core] = l1_b0->address();
+                core_to_l1_addr[core] = l1_b0.address();
             }
         }
         auto unary_reader_kernel = tt_metal::CreateKernel(

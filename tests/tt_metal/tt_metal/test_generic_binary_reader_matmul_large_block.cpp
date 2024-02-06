@@ -188,9 +188,9 @@ int main(int argc, char **argv) {
         auto src1_dram_buffer = CreateBuffer(weights_config);
         auto dst_dram_buffer = CreateBuffer(dst_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * in0_block_w * 2;
@@ -246,13 +246,13 @@ int main(int argc, char **argv) {
                     };
 
         auto source_addresses_in_l1 = CreateBuffer(l1_config);
-        auto source_addresses_in_l1_addr = source_addresses_in_l1->address();
+        auto source_addresses_in_l1_addr = source_addresses_in_l1.address();
 
         std::vector<uint32_t> generic_binary_reader_args {
-            src0_dram_buffer->address(),
+            src0_dram_buffer.address(),
             (uint32_t)dram_src0_noc_xy.x,
             (uint32_t)dram_src0_noc_xy.y,
-            src1_dram_buffer->address(),
+            src1_dram_buffer.address(),
             (uint32_t)dram_src1_noc_xy.x,
             (uint32_t)dram_src1_noc_xy.y,
             (uint32_t)source_addresses.size(),
@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         std::vector<uint32_t> writer_rt_args{
-            dst_dram_buffer->address(),
+            dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             (std::uint32_t)out_subblock_h, // num tiles per sub block m

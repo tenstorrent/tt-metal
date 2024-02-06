@@ -157,14 +157,14 @@ bool single_tile_matmul(tt_metal::Device* device) {
 
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config);
-    const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
+    const uint32_t in0_dram_addr = input0_dram_buffer.address();
+    auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer = CreateBuffer(dram_config);
-    const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
+    const uint32_t in1_dram_addr = input1_dram_buffer.address();
+    auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config);
-    const uint32_t out_dram_addr = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    const uint32_t out_dram_addr = output_dram_buffer.address();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config = tt_metal::CircularBufferConfig(byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(in0_cb_index, byte_size);
@@ -305,14 +305,14 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
 
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
-    const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
+    const uint32_t in0_dram_addr = input0_dram_buffer.address();
+    auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer = CreateBuffer(dram_config_1);
-    const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
+    const uint32_t in1_dram_addr = input1_dram_buffer.address();
+    auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config_out);
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-    const uint32_t out_dram_addr = output_dram_buffer->address();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
+    const uint32_t out_dram_addr = output_dram_buffer.address();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config = tt_metal::CircularBufferConfig(in0_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(in0_cb_index, cb_page_size);
@@ -467,15 +467,15 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
 
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
-    const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
+    const uint32_t in0_dram_addr = input0_dram_buffer.address();
+    auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer = CreateBuffer(dram_config_1);
-    const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
+    const uint32_t in1_dram_addr = input1_dram_buffer.address();
+    auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config_out);
-    const uint32_t out_dram_addr = output_dram_buffer->address();
+    const uint32_t out_dram_addr = output_dram_buffer.address();
 
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config = tt_metal::CircularBufferConfig(in0_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(in0_cb_index, cb_page_size);

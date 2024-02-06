@@ -128,7 +128,7 @@ inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> t
     return pass;
 }
 
-inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, std::shared_ptr<Buffer> buffer) {
+inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, Buffer &buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int tile_size_bytes = 32 * 32 * 2;
