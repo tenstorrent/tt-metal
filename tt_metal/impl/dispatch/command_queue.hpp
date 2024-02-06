@@ -481,6 +481,11 @@ class CommandQueue
             return id_;
         }
 
+        void reset() {
+            std::lock_guard<std::mutex> lk(mutex_);
+            if (last_.has_value()) last_.value().reset();
+        }
+
     private:
         std::mutex mutex_;
         std::optional<tf::AsyncTask> last_;

@@ -1174,6 +1174,7 @@ void Finish(CommandQueue& cq) {
         device->hw_command_queue(cq_id).finish();
     }, f);
     f.wait();
+    cq.reset();
 }
 
 
