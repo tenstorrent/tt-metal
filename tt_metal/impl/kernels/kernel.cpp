@@ -320,8 +320,10 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
+    log_info(LogTest, "Getting vals...:");
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
+    log_info(LogTest, "Getting binary...");
     ll_api::memory binary_mem = this->binaries(device_id).at(0);
 
     int riscv_id;
@@ -337,6 +339,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         default:
             TT_THROW("Unsupported data movement processor!");
     }
+    log_info(LogTest, "riscv id is {}, testing binary...", riscv_id);
 
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
     return pass;
