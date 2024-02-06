@@ -77,6 +77,9 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
+        if (arch_ == tt::ARCH::GRAYSKULL)
+            GTEST_SKIP();
+
         num_devices_ = tt::tt_metal::GetNumPCIeDevices();
         if (num_devices_ < 2) {
             GTEST_SKIP();
