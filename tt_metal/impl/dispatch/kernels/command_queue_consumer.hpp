@@ -143,6 +143,7 @@ FORCE_INLINE void write_buffers(
 }
 
 // TODO (abhullar): Is the same as write_buffers but doesn't interact with completion queue APIs. Consider merging
+//  Andrews event support PR removed completion queue code from write_buffers so it can be used
 FORCE_INLINE void write_remote_buffers(
     db_cb_config_t* db_cb_config,
     const db_cb_config_t* remote_producer_db_cb_config,

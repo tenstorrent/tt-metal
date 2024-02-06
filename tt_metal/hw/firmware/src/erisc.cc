@@ -140,6 +140,11 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
             command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
 
+            if (num_buffer_transfers == 0) {
+                 // send cmd even if there is no data associated
+                internal_::send_fd_packets();
+            }
+
             for (uint32_t i = 0; i < num_buffer_transfers; i++) {
                 const uint32_t num_pages = command_ptr[2];
                 uint32_t num_pages_tunneled = 0;

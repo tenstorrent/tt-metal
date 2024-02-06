@@ -14,11 +14,11 @@ void setup_completion_queue_write_interface(const uint32_t completion_region_wr_
 }
 
 void kernel_main() {
-    bool db_buf_switch = false;
+    constexpr bool db_buf_switch = false; // DST router writes to first slot
 
     constexpr uint32_t host_completion_queue_write_ptr_addr = get_compile_time_arg_val(0);
     constexpr uint32_t completion_queue_start_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t completion_queue_size = get_compile_time_arg_val(2);
+    uint32_t completion_queue_size = get_compile_time_arg_val(2);
     constexpr uint32_t host_finish_addr = get_compile_time_arg_val(3);
     constexpr uint32_t cmd_base_address = get_compile_time_arg_val(4);
     constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(5);
@@ -52,8 +52,7 @@ void kernel_main() {
         completion_queue_push_back<completion_queue_start_addr, host_completion_queue_write_ptr_addr>(completion_data_size);
 
         // notify producer that it has completed a command
-        noc_semaphore_inc((uint64_t(producer_noc_encoding) << 32) | get_semaphore(0), 1);
-        db_buf_switch = not db_buf_switch;
+        noc_semaphore_inc((uint64_t(producer_noc_encoding) << 32) | eth_get_semaphore(0), 1);
         noc_async_write_barrier(); // Barrier for now
     }
 }
