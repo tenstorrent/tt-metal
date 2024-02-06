@@ -418,18 +418,18 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
-    auto activation_buffer = std::make_shared<Buffer>(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    Buffer activation_buffer(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, activations, M, K, activation_buffer);
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
-    auto weight_buffer = std::make_shared<Buffer>(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    Buffer weight_buffer(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, weights, K, N, weight_buffer);
     log_info(LogTest, "Copying inputs to dram complete");
 
-    auto out_buffer = std::make_shared<Buffer>(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
-    uint32_t out_dram_addr = out_buffer->address();
+    Buffer out_buffer(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
+    uint32_t out_dram_addr = out_buffer.address();
 
     log_info(LogTest, "Writing kernel runtime args to device");
     pass &= unit_tests_common::matmul::test_matmul_multi_core_X_dram::assign_runtime_args_to_program(
@@ -447,8 +447,8 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
         out_subblock_w,
         per_core_M,
         per_core_N,
-        activation_buffer->address(),
-        weight_buffer->address(),
+        activation_buffer.address(),
+        weight_buffer.address(),
         out_dram_addr);
     log_info(LogTest, "Writing kernel runtime args to device complete");
 

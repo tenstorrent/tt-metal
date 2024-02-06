@@ -331,7 +331,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
         padded_row_size_bytes,
         padded_row_size_bytes - unpadded_row_size_bytes,
         packed_pad_value,
-        dst_buffer_l1->address()
+        dst_buffer_l1.address()
     };
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

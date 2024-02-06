@@ -94,8 +94,8 @@ bool reader_kernel_no_send(
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_byte_address = input_dram_buffer->address();
-    auto dram_noc_xy = input_dram_buffer->noc_coordinates();
+    uint32_t dram_byte_address = input_dram_buffer.address();
+    auto dram_noc_xy = input_dram_buffer.noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
     log_debug(
         tt::LogTest,
@@ -164,8 +164,8 @@ bool writer_kernel_no_receive(
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto output_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_byte_address = output_dram_buffer->address();
-    auto dram_noc_xy = output_dram_buffer->noc_coordinates();
+    uint32_t dram_byte_address = output_dram_buffer.address();
+    auto dram_noc_xy = output_dram_buffer.noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
     log_debug(
         tt::LogTest,
@@ -348,13 +348,13 @@ bool chip_to_chip_dram_buffer_transfer(
 
     // Create source buffer on sender device
     auto input_dram_buffer = CreateBuffer(sender_dram_config);
-    uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+    uint32_t input_dram_byte_address = input_dram_buffer.address();
+    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
 
     // Create dest buffer on receiver device
     auto output_dram_buffer = CreateBuffer(receiver_dram_config);
-    uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
+    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
@@ -498,7 +498,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         sender_program,
         eth_sender_kernel,
         eth_sender_core,
-        {(uint32_t)input_buffer->address(),
+        {(uint32_t)input_buffer.address(),
          (uint32_t)cfg.page_size_bytes,
          (uint32_t)max_buffer,
          (uint32_t)num_loops,
@@ -531,7 +531,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         eth_receiver_kernel,
         eth_receiver_core,
         {
-            (uint32_t)output_buffer->address(),
+            (uint32_t)output_buffer.address(),
             (uint32_t)cfg.page_size_bytes,
             (uint32_t)max_buffer,
             (uint32_t)num_loops,

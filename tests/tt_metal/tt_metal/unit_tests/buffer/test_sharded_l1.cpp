@@ -83,7 +83,7 @@ bool l1_buffer_read_write(Device* device, const L1Config& test_config) {
 
     }
 
-    auto buffer = CreateBuffer(config);
+    Buffer buffer = CreateBuffer(config);
 
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, test_config.size_bytes / sizeof(uint32_t));

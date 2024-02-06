@@ -57,11 +57,12 @@ int main(int argc, char **argv) {
                     .buffer_type = tt_metal::BufferType::DRAM
         };
 
-        std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
-        std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+        Buffer src0_dram_buffer = CreateBuffer(dram_config);
+        const uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+
+        Buffer dst_dram_buffer = CreateBuffer(dram_config);
+        const uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         /*
          * Use circular buffers to set input and output buffers that the
@@ -139,9 +140,9 @@ int main(int argc, char **argv) {
             unary_reader_kernel_id,
             core,
             {
-                src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                src0_dram_buffer.address(),
+                static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().y),
                 num_tiles,
             }
         );
@@ -151,9 +152,9 @@ int main(int argc, char **argv) {
             unary_writer_kernel_id,
             core,
             {
-                dst_dram_buffer->address(),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+                dst_dram_buffer.address(),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
                 num_tiles
             }
         );

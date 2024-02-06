@@ -1376,11 +1376,11 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
     ZoneScoped;
     tt_metal::detail::DispatchStateCheck(true);
     TT_FATAL(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
-    Buffer & b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? *(std::get< std::shared_ptr<Buffer> > ( buffer )) :
-                                                                            std::get<std::reference_wrapper<Buffer>>(buffer).get();
+    std::reference_wrapper<Buffer> b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? std::ref (*(std::get< std::shared_ptr<Buffer> > ( buffer ))) :
+                                                                                                 std::ref ( std::get<std::reference_wrapper<Buffer>>(buffer) ) ;
     // Only resizing here to keep with the original implementation. Notice how in the void*
     // version of this API, I assume the user mallocs themselves
-    dst.resize(b.page_size() * b.num_pages() / sizeof(uint32_t));
+    dst.resize(b.get().page_size() * b.get().num_pages() / sizeof(uint32_t));
     cq.enqueue_read_buffer(b, dst.data(), blocking);
 }
 
@@ -1389,8 +1389,8 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
     ZoneScoped;
     tt_metal::detail::DispatchStateCheck(true);
 
-    Buffer & b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? *(std::get< std::shared_ptr<Buffer> > ( buffer )) :
-                                                                            std::get<std::reference_wrapper<Buffer>>(buffer).get();
+    std::reference_wrapper<Buffer> b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? std::ref (*(std::get< std::shared_ptr<Buffer> > ( buffer ))) :
+                                                                                                 std::ref ( std::get<std::reference_wrapper<Buffer>>(buffer) ) ;
     cq.enqueue_write_buffer(b, src.data(), blocking);
 }
 
@@ -1398,16 +1398,16 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
     ZoneScoped;
     tt_metal::detail::DispatchStateCheck(true);
 
-    Buffer & b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? *(std::get< std::shared_ptr<Buffer> > ( buffer )) :
-                                                                            std::get<std::reference_wrapper<Buffer>>(buffer).get();
+    std::reference_wrapper<Buffer> b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? std::ref (*(std::get< std::shared_ptr<Buffer> > ( buffer ))) :
+                                                                                                 std::ref ( std::get<std::reference_wrapper<Buffer>>(buffer) ) ;
     cq.enqueue_read_buffer(b, dst, blocking);
 }
 
 void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, const void* src, bool blocking){
     ZoneScoped;
     tt_metal::detail::DispatchStateCheck(true);
-    Buffer & b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? *(std::get< std::shared_ptr<Buffer> > ( buffer )) :
-                                                                            std::get<std::reference_wrapper<Buffer>>(buffer).get();
+    std::reference_wrapper<Buffer> b = std::holds_alternative<std::shared_ptr<Buffer>>(buffer) ? std::ref (*(std::get< std::shared_ptr<Buffer> > ( buffer ))) :
+                                                                                                 std::ref ( std::get<std::reference_wrapper<Buffer>>(buffer) ) ;
 
     cq.enqueue_write_buffer(b, src, blocking);
 

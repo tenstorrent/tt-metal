@@ -21,7 +21,7 @@ public:
             Finish(cq);
         }
     }
-    void WriteBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t> &src_vec){
+    void WriteBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &in_buffer, std::vector<uint32_t> &src_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
@@ -29,7 +29,7 @@ public:
             EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
         }
     }
-    void ReadBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> out_buffer, std::vector<uint32_t> &dst_vec){
+    void ReadBuffer(tt::tt_metal::Device* device, tt::tt_metal::Buffer &out_buffer, std::vector<uint32_t> &dst_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
         } else {

@@ -101,12 +101,12 @@ void matmul_single_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat1
                     .buffer_type = tt_metal::BufferType::DRAM
         };
 
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config_A);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config_B);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config_C);
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    Buffer src0_dram_buffer = CreateBuffer(dram_config_A);
+    Buffer src1_dram_buffer = CreateBuffer(dram_config_B);
+    Buffer dst_dram_buffer = CreateBuffer(dram_config_C);
+    uint32_t src0_addr = src0_dram_buffer.address();
+    uint32_t src1_addr = src1_dram_buffer.address();
+    uint32_t dst_addr = dst_dram_buffer.address();
 
     /*
     * Config of Circular Buffer in the device L1
@@ -132,11 +132,11 @@ void matmul_single_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat1
     /*
     * Compile time arguments
     */
-    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     /*

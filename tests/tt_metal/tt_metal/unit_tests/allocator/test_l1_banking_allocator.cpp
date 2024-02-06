@@ -56,7 +56,7 @@ TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
         };
 
     EXPECT_ANY_THROW(
-        auto buffer = tt::tt_metal::CreateBuffer(l1_config);
+        tt::tt_metal::Buffer buffer = tt::tt_metal::CreateBuffer(l1_config);
     );
 
     tt::tt_metal::CloseDevice(device);

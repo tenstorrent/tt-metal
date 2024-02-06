@@ -52,12 +52,12 @@ int main(int argc, char **argv) {
                                         };
 
         auto src_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
         auto dst_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         int num_cbs = 1; // works at the moment
         assert(num_tiles % num_cbs == 0);
