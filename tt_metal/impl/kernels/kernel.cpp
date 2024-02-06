@@ -260,11 +260,13 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions& build_opt
 }
 
 void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries) {
+    log_info(LogTest, "Adding binary with {} mems to device id {}", binaries.size(), device_id);
     if (this->binaries_.find(device_id) != this->binaries_.end()) {
         TT_ASSERT(this->binaries_.at(device_id) == binaries);
     } else {
         this->binaries_[device_id] = std::move(binaries);
     }
+    log_info(LogTest, "this->binaries_ now has {} elements", this->binaries_.size());
 }
 
 void DataMovementKernel::read_binaries(Device *device) {
@@ -277,7 +279,7 @@ void DataMovementKernel::read_binaries(Device *device) {
     const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::DATA_MOVEMENT, riscv_id);
     ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
     this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, riscv_id);
-    log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
+    log_info(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
     this->set_binaries(device->id(), std::move(binaries));

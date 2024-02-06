@@ -613,11 +613,13 @@ void Program::compile( Device * device )
         f.wait();
 
     for (Kernel * kernel : kernels_) {
+        log_info(LogTest, "read_binaries for kernel {}...", kernel->name());
         events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
     }
 
     for (auto & f : events)
         f.wait();
+    log_info(LogTest, "All kernels binaries read");
 
     this->construct_core_range_set_for_worker_cores();
 
