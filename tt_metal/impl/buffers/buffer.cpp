@@ -276,7 +276,7 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
         default:
             TT_ASSERT(false && "Unsupported buffer type!");
     }
-    return CoreCoord{0, 0};
+    return CoreCoord{.x=0, .y=0};
 }
 
 CoreCoord Buffer::noc_coordinates() const {

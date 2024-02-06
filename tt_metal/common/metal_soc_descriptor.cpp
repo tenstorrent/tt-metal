@@ -90,8 +90,8 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
         this->worker_grid_size.str()
     );
     CoreCoord physical_tensix_core({
-            static_cast<size_t>(this->worker_log_to_physical_routing_x.at(logical_coord.x)),
-            static_cast<size_t>(this->worker_log_to_physical_routing_y.at(logical_coord.y)),
+            .x = static_cast<size_t>(this->worker_log_to_physical_routing_x.at(logical_coord.x)),
+            .y = static_cast<size_t>(this->worker_log_to_physical_routing_y.at(logical_coord.y)),
     });
     return physical_tensix_core;
 }
@@ -167,7 +167,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
 // UMD expects virtual NOC coordinates for worker cores
 tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
-    CoreCoord physical_coord({physical_cxy.x, physical_cxy.y});
+    CoreCoord physical_coord({.x = physical_cxy.x, .y = physical_cxy.y});
     const CoreDescriptor& core_desc = this->physical_cores.at(physical_coord);
     CoreCoord virtual_coord = physical_coord;
     if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
@@ -281,7 +281,7 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     this->physical_ethernet_cores = this->ethernet_cores;
     for (int i = 0; i < this->physical_ethernet_cores.size(); i++) {
-        CoreCoord core = {0, static_cast<size_t>(i)};
+        CoreCoord core = {.x = 0, .y = static_cast<size_t>(i)};
         this->logical_eth_core_to_chan_map.insert({core, i});
         this->chan_to_logical_eth_core_map.insert({i, core});
         this->logical_ethernet_cores.emplace_back(core);

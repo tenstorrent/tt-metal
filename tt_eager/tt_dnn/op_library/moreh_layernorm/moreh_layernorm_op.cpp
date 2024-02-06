@@ -168,7 +168,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto NCHt = N * C * Ht;
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {core_grid.x_, num_cores_y};
+    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
 
     // core_group_2 works more.
     // If number of working cores is 108 and NCHt is 110,
