@@ -7,24 +7,23 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
 
 
 class TtLlamaMLP(nn.Module):
     def __init__(
         self,
-        devices,
+        device,
         state_dict,
         base_url,
         layer_num,
         hidden_size: int,
         model_config,
+        tt_cache_path,
     ):
         super().__init__()
 
         self.state_dict = state_dict
-        self.devices = devices
-        self.num_devices = len(devices)
+        self.device = device
         self.hidden_size = hidden_size
         self.model_config = model_config
 
@@ -34,82 +33,152 @@ class TtLlamaMLP(nn.Module):
         w2_str = f"{layer_name}.feed_forward.w2.weight"
         w3_str = f"{layer_name}.feed_forward.w3.weight"
 
-        self.w1_list = []
-        self.w3_list = []
-        self.w2_list = []
+        # if (
+        #     tt_cache_path / f"{dense_h_to_4h_str}_{self.model_config['DENSE_H_TO_4H_MM_WEIGHTS_DTYPE'].name}.bin"
+        # ).exists():
+        #     self.dense_h_to_4h_weights = tt_lib.tensor.load_tensor(
+        #         str(
+        #             tt_cache_path
+        #             / f"{dense_h_to_4h_str}_{self.model_config['DENSE_H_TO_4H_MM_WEIGHTS_DTYPE'].name}.bin"
+        #         )
+        #     ).to(device, self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"])
+        # else:
+        #     self.dense_h_to_4h_weights = torch2tt_tensor(
+        #         torch.transpose(
+        #             self.state_dict[dense_h_to_4h_str],
+        #             -2,
+        #             -1,
+        #         ),
+        #         self.device,
+        #         tt_memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
+        #         tt_dtype=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"],
+        #     )
+        #     tt_lib.tensor.dump_tensor(
+        #         str(
+        #             tt_cache_path
+        #             / f"{dense_h_to_4h_str}_{self.model_config['DENSE_H_TO_4H_MM_WEIGHTS_DTYPE'].name}.bin"
+        #         ),
+        #         self.dense_h_to_4h_weights.cpu(),
+        #     )
 
-        H = 8 * 1024
-        PADDED_H4 = 32 * 1024
-        H4 = 28 * 1024
-        padded_w1 = torch.zeros(H, PADDED_H4)
-        padded_w3 = torch.zeros(H, PADDED_H4)
-        padded_w2 = torch.zeros(PADDED_H4, H)
-        padded_w1[:, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-        padded_w3[:, :H4] = self.state_dict[w3_str].transpose(-2, -1)
-        padded_w2[:H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+        # if (
+        #     tt_cache_path / f"{dense_4h_to_h_str}_{self.model_config['DENSE_4H_TO_H_MM_WEIGHTS_DTYPE'].name}.bin"
+        # ).exists():
+        #     self.dense_4h_to_h_weights = tt_lib.tensor.load_tensor(
+        #         str(
+        #             tt_cache_path
+        #             / f"{dense_4h_to_h_str}_{self.model_config['DENSE_4H_TO_H_MM_WEIGHTS_DTYPE'].name}.bin"
+        #         )
+        #     ).to(device, self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"])
+        # else:
+        #     self.dense_4h_to_h_weights = torch2tt_tensor(
+        #         torch.transpose(
+        #             self.state_dict[dense_4h_to_h_str],
+        #             -2,
+        #             -1,
+        #         ),
+        #         self.device,
+        #         tt_memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
+        #         tt_dtype=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"],
+        #     )
+        #     tt_lib.tensor.dump_tensor(
+        #         str(
+        #             tt_cache_path
+        #             / f"{dense_4h_to_h_str}_{self.model_config['DENSE_4H_TO_H_MM_WEIGHTS_DTYPE'].name}.bin"
+        #         ),
+        #         self.dense_4h_to_h_weights.cpu(),
+        #     )
 
-        for i in range(self.num_devices):
-            w1 = torch2tt_tensor(
-                torch.chunk(
-                    padded_w1,
-                    self.num_devices,
-                    dim=-1,
-                )[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["FF1_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FF1_MM_WEIGHTS_DTYPE"],
-            )
-            w3 = torch2tt_tensor(
-                torch.chunk(
-                    padded_w3,
-                    self.num_devices,
-                    dim=-1,
-                )[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["FF2_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FF2_MM_WEIGHTS_DTYPE"],
-            )
-            w2 = torch2tt_tensor(
-                torch.chunk(
-                    padded_w2,
-                    self.num_devices,
-                    dim=-1,
-                )[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["FF3_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FF3_MM_WEIGHTS_DTYPE"],
-            )
+        """
+            self.w1 = ColumnParallelLinear(
+            dim,
+            hidden_dim,
+            bias=False,  # gather_output=False, init_method=lambda x: x
+        )
+        self.w2 = RowParallelLinear(
+            hidden_dim,
+            dim,
+            bias=False,  # input_is_parallel=True, init_method=lambda x: x
+        )
+        self.w3 = ColumnParallelLinear(
+            dim,
+            hidden_dim,
+            bias=False,  # gather_output=False, init_method=lambda x: x
+        )
 
-            self.w1_list.append(w1)
-            self.w3_list.append(w3)
-            self.w2_list.append(w2)
+    def forward(self, x):
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        """
 
-    def forward(self, xs):
-        w2_inputs = []
-        w2_outputs = []
-        for i in range(self.num_devices):
-            # w1_out = tt_lib.tensor.matmul(
-            w1_out = tt_lib.operations.primary.matmul_1d(
-                xs[i], self.w1_list[i], fp32_dest_acc_en=True, packer_l1_acc=True
-            )
-            w1_sigmoid = tt_lib.tensor.silu(w1_out)
+        self.w1 = torch2tt_tensor(
+            torch.transpose(
+                self.state_dict[w1_str],
+                -2,
+                -1,
+            ),
+            self.device,
+            # tt_memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
+            # tt_dtype=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"],
+        )
+        self.w3 = torch2tt_tensor(
+            torch.transpose(
+                self.state_dict[w3_str],
+                -2,
+                -1,
+            ),
+            self.device,
+            # tt_memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
+            # tt_dtype=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"],
+        )
+        self.w2 = torch2tt_tensor(
+            torch.transpose(
+                self.state_dict[w2_str],
+                -2,
+                -1,
+            ),
+            self.device,
+            # tt_memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
+            # tt_dtype=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"],
+        )
 
-            # w3_out = tt_lib.tensor.matmul(
-            w3_out = tt_lib.operations.primary.matmul_1d(
-                xs[i], self.w3_list[i], fp32_dest_acc_en=True, packer_l1_acc=True
-            )
+    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        # hidden_states = tt_lib.tensor.falcon_dense_h_to_4h_matmul(
+        #     x,
+        #     self.dense_h_to_4h_weights,
+        #     fused_activation=[tt_lib.tensor.FusibleActivation.GELU, True],
+        #     output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+        #     output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+        # )
+        # x.deallocate()
 
-            w2_in = tt_lib.tensor.mul(w1_sigmoid, w3_out)
-            w2_inputs.append(w2_in)
+        # hidden_states = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
+        #     hidden_states,
+        #     self.dense_4h_to_h_weights,
+        #     output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+        #     output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+        # )
 
-        w2_in_replicated = tt_all_gather_torch(w2_inputs, dim=-1)
+        w1_out = tt_lib.tensor.matmul(
+            x,
+            self.w1,
+            # output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+        )
+        w1_sigmoid = tt_lib.tensor.silu(w1_out)
 
-        for i in range(self.num_devices):
-            # w2_out = tt_lib.tensor.matmul(
-            w2_out = tt_lib.operations.primary.matmul_1d(
-                w2_in_replicated[i], self.w2_list[i], fp32_dest_acc_en=True, packer_l1_acc=True
-            )
+        w3_out = tt_lib.tensor.matmul(
+            x,
+            self.w3,
+            # output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+        )
 
-            w2_outputs.append(w2_out)
+        w2_in = tt_lib.tensor.mul(w1_sigmoid, w3_out)
+        w2_out = tt_lib.tensor.matmul(
+            w2_in,
+            self.w2,
+            # output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+        )
 
-        return w2_outputs
+        return w2_out
