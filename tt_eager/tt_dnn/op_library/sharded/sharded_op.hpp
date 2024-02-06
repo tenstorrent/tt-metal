@@ -71,7 +71,7 @@ inline Tensor interleaved_to_sharded(
     }
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreRangeSet grid = num_cores_to_corerange_set(num_cores, grid_size, row_wise);
-    auto shard_spec = ShardSpec{grid, shard_shape, shard_orientation};
+    auto shard_spec = ShardSpec{.shard_grid = grid, .shard_shape = shard_shape, .shard_orientation = shard_orientation};
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
     return operation::run(
                Sharded{
