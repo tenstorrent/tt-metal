@@ -5,15 +5,9 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-# import fairscale.nn.model_parallel.initialize as fs_init
 import torch
 import torch.nn.functional as F
 
-# from fairscale.nn.model_parallel.layers import (
-#     ColumnParallelLinear,
-#     ParallelEmbedding,
-#     RowParallelLinear,
-# )
 from torch.nn import Linear as ColumnParallelLinear
 from torch.nn import Embedding as ParallelEmbedding
 from torch.nn import Linear as RowParallelLinear
