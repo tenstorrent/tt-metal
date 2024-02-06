@@ -14,11 +14,11 @@ import ttnn
 def test_deallocate(device, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
 
     with pytest.raises(RuntimeError) as exception:
         ttnn.deallocate(input_tensor)
-    assert "Cannot deallocate tensor with borrowed storage!" in str(exception.value)
+    assert "ttnn.deallocate: Tensor must be on device!" in str(exception.value)
 
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = input_tensor + input_tensor

@@ -131,9 +131,11 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
     std::cout << write_to_string(print_layout, pretty_print);
 }
 
-Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const {
+Tensor Tensor::pad(const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) const {
     ZoneScoped;
-    TT_ASSERT(this->storage_type() == StorageType::OWNED or this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
+    TT_ASSERT(
+        this->storage_type() == StorageType::OWNED or
+        this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
 
     auto input_shape = this->shape();
@@ -343,6 +345,30 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
                                                             std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
                                                             );
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+}
+
+void* get_raw_host_data_ptr(const Tensor& tensor) {
+    const static std::unordered_map<DataType, std::function<void*(const Tensor&)>> dispatch_map = {
+        {DataType::BFLOAT16, &tensor_impl::get_raw_host_data_ptr<bfloat16>},
+        {DataType::FLOAT32, &tensor_impl::get_raw_host_data_ptr<float>},
+        {DataType::UINT32, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
+        {DataType::BFLOAT8_B, &tensor_impl::get_raw_host_data_ptr<uint32_t>},
+        {DataType::UINT16, &tensor_impl::get_raw_host_data_ptr<uint16_t>},
+    };
+    return dispatch_map.at(tensor.dtype())(tensor);
+}
+
+void memcpy(Tensor& dst, const Tensor& src) {
+    ZoneScoped;
+
+    const static std::unordered_map<DataType, std::function<void(Tensor&, const Tensor&)>> dispatch_map = {
+        {DataType::BFLOAT16, &tensor_impl::memcpy<bfloat16>},
+        {DataType::FLOAT32, &tensor_impl::memcpy<float>},
+        {DataType::UINT32, &tensor_impl::memcpy<uint32_t>},
+        {DataType::BFLOAT8_B, &tensor_impl::memcpy<uint32_t>},
+        {DataType::UINT16, &tensor_impl::memcpy<uint16_t>},
+    };
+    dispatch_map.at(dst.dtype())(dst, src);
 }
 
 }  // namespace tt_metal

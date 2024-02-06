@@ -45,6 +45,13 @@ std::vector<Tensor> unary_mul_bw(const Tensor& grad, const Tensor& input, float 
 
 std::vector<Tensor> _unary_pow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon()*10.0f;
+    TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
+    if ( std::abs(exponent) < ZERO_THRESHOLD ) {
+        grad_tensor.emplace_back( zeros_like( input, output_mem_config) );
+        return grad_tensor;
+    }
+
     Tensor power_input = power(input, exponent - 1, output_mem_config);
 
     Tensor result = mul_unary(power_input, exponent, output_mem_config);
@@ -129,7 +136,7 @@ std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& input, const Memo
     std::vector<Tensor> grad_tensor;
     Tensor sqrt_result = sqrt(input, output_mem_config);
     Tensor result = mul(grad, recip(mul_unary(sqrt_result, 2.0, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    Tensor t_nan  = full_like(input, std::nanf(""), output_mem_config);
+    float t_nan  = std::nanf("");
     result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -142,8 +149,8 @@ std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor scalar_t = full_like(input, scalar, output_mem_config);
-    Tensor result = mul(grad, recip(scalar_t, output_mem_config), std::nullopt, output_mem_config);
+    float inv_scalar = 1.0f/scalar;
+    Tensor result = mul_unary(grad, inv_scalar, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -228,10 +235,9 @@ std::vector<Tensor> addcdiv_bw(const Tensor& grad, const Tensor& input, const Te
 
 std::vector<Tensor> _where_bw(const Tensor& grad, const Tensor& condition, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_zero = zeros_like(grad, output_mem_config);
-    Tensor grad_a = where(condition, grad, t_zero, output_mem_config);
+    Tensor grad_a = where(condition, grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = where(condition, t_zero, grad, output_mem_config);
+    Tensor grad_b = where(condition, 0.0f, grad, output_mem_config);
     grad_tensor.emplace_back(grad_b);
 
     return grad_tensor;
@@ -436,9 +442,9 @@ std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const Mem
     std::vector<Tensor> grad_tensor;
     Tensor rsqrt_result = power(rsqrt(input, true, output_mem_config), 3, output_mem_config);
     Tensor result = mul_unary(mul(grad, rsqrt_result, std::nullopt, output_mem_config) , -0.5, output_mem_config);
-    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    float t_inf = std::numeric_limits<float>::infinity();
     result = where(eqz(input, output_mem_config), t_inf, result, output_mem_config);
-    Tensor t_nan  = full_like(input, std::nanf(""), output_mem_config);
+    float t_nan  = std::nanf("");
     result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -452,8 +458,8 @@ std::vector<Tensor> rsqrt_bw(const Tensor& grad, const Tensor& input, const Memo
 std::vector<Tensor> _clamp_bw(const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config)
 {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = gte(input, full_like(input, min, output_mem_config), std::nullopt, output_mem_config);
-    Tensor maxT = lte(input, full_like(input, max, output_mem_config), std::nullopt, output_mem_config);
+    Tensor minT = gte_unary(input, min, output_mem_config);
+    Tensor maxT = lte_unary(input, max, output_mem_config);
     Tensor result = logical_and(minT, maxT, std::nullopt, output_mem_config);
     result = mul(grad, result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -468,7 +474,7 @@ std::vector<Tensor> clamp_bw(const Tensor& grad, const Tensor& input, float min,
 std::vector<Tensor> _clamp_min_bw(const Tensor& grad, const Tensor& input, float min, const MemoryConfig& output_mem_config)
 {
     std::vector<Tensor> grad_tensor;
-    Tensor minT = gte(input, full_like(input, min, output_mem_config), std::nullopt, output_mem_config);
+    Tensor minT = gte_unary(input, min, output_mem_config);
     Tensor result = mul(grad, minT, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -482,7 +488,7 @@ std::vector<Tensor> clamp_min_bw(const Tensor& grad, const Tensor& input, float 
 std::vector<Tensor> _clamp_max_bw(const Tensor& grad, const Tensor& input, float max, const MemoryConfig& output_mem_config)
 {
     std::vector<Tensor> grad_tensor;
-    Tensor maxT = lte(input, full_like(input, max, output_mem_config), std::nullopt, output_mem_config);
+    Tensor maxT = lte_unary(input, max, output_mem_config);
     Tensor result = mul(grad, maxT, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;

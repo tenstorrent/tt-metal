@@ -20,17 +20,23 @@ def bert_attention(
 
     query = hidden_states @ parameters.self.query.weight
     query = query + parameters.self.query.bias
+    query = ttnn.to_layout(query, layout=ttnn.ROW_MAJOR_LAYOUT)
     query = ttnn.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+    query = ttnn.to_layout(query, layout=ttnn.TILE_LAYOUT)
     query = ttnn.permute(query, (0, 2, 1, 3))
 
     key = hidden_states @ parameters.self.key.weight
     key = key + parameters.self.key.bias
+    key = ttnn.to_layout(key, layout=ttnn.ROW_MAJOR_LAYOUT)
     key = ttnn.reshape(key, (batch_size, sequence_size, num_heads, head_size))
+    key = ttnn.to_layout(key, layout=ttnn.TILE_LAYOUT)
     key = ttnn.permute(key, (0, 2, 3, 1))
 
     value = hidden_states @ parameters.self.value.weight
     value = value + parameters.self.value.bias
+    value = ttnn.to_layout(value, layout=ttnn.ROW_MAJOR_LAYOUT)
     value = ttnn.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+    value = ttnn.to_layout(value, layout=ttnn.TILE_LAYOUT)
     value = ttnn.permute(value, (0, 2, 1, 3))
 
     attention_scores = query @ key
@@ -42,7 +48,9 @@ def bert_attention(
 
     context_layer = attention_probs @ value
     context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
+    context_layer = ttnn.to_layout(context_layer, ttnn.ROW_MAJOR_LAYOUT)
     context_layer = ttnn.reshape(context_layer, (batch_size, sequence_size, hidden_size))
+    context_layer = ttnn.to_layout(context_layer, ttnn.TILE_LAYOUT)
 
     self_output = context_layer
     self_output = self_output @ parameters.output.dense.weight
@@ -206,20 +214,23 @@ def preprocess_inputs(
 ):
     import torch
 
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32)
-    input_ids = ttnn.to_device(input_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    token_type_ids = ttnn.from_torch(token_type_ids, dtype=ttnn.uint32)
-    token_type_ids = ttnn.to_device(token_type_ids, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    token_type_ids = ttnn.from_torch(
+        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     if attention_mask is not None:
         attention_mask = torch.zeros(input_ids.shape, dtype=torch.bfloat16)
         attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
 
         attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 31))
-        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-        attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT)
-        attention_mask = ttnn.to_device(attention_mask, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attention_mask = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     return input_ids, token_type_ids, attention_mask
 

@@ -90,6 +90,31 @@ inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const
 
 namespace detail {
 
+std::map<chip_id_t, Device *> CreateDevices(
+    std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
+    std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
+    for (const auto &device_id : device_ids) {
+        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        if (active_devices.find(mmio_device_id) == active_devices.end()) {
+            for (const auto &mmio_controlled_device_id :
+                 tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
+                active_devices.insert(
+                    {mmio_controlled_device_id, CreateDevice(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap)});
+            }
+        }
+    }
+    // TODO: need to only enable routing for used mmio chips
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    return active_devices;
+}
+
+void CloseDevices(std::map<chip_id_t, Device *> devices) {
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+    for (const auto &[device_id, dev] : devices) {
+        CloseDevice(dev);
+    }
+}
+
     void print_page(uint32_t dev_page_id, CoreCoord core, uint32_t host_page_id, CoreCoord noc_coordinates, uint32_t l1_address, uint32_t bank_id, std::vector<uint32_t> page){
         std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
         std::cout << "host_page_index " << host_page_id << std::endl;
@@ -561,17 +586,17 @@ KernelHandle CreateKernel(Program &program, const std::string &file_name, const 
     return std::visit( [&](auto&& cfg) -> KernelHandle
                         {
                             CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-                            Kernel * kernel;
+                            std::shared_ptr<Kernel> kernel;
                             using T = std::decay_t<decltype(cfg)>;
                             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                                 detail::CheckDataMovementConfig(program, file_name, core_ranges);
-                                kernel = new DataMovementKernel(file_name, core_ranges, cfg);
+                                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                                kernel = new ComputeKernel(file_name, core_ranges, cfg);
+                                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
                             }
                             else if constexpr (std::is_same_v<T, experimental::EthernetConfig>) {
-                                kernel = new EthernetKernel(file_name, core_ranges, cfg);
+                                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
                             }
                             return detail::AddKernel(program, kernel);
                         },

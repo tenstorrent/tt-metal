@@ -29,7 +29,7 @@ namespace tt::tt_metal::detail {
         auto task = std::make_shared<std::packaged_task<return_type()>>(
             std::bind(std::forward<F>(func), std::forward<Args>(args)...));
 
-        std::future<return_type> res = task->get_future();
+        std::shared_future<return_type> res( std::move( task->get_future() ) );
         GetExecutor().silent_async( [task] {  (*task)(); });
 
         return res;

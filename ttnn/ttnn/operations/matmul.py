@@ -8,8 +8,7 @@ from typing import Optional, Tuple
 
 import tt_lib as ttl
 
-import ttnn.core as ttnn
-from ttnn.decorators import decorate_operation
+import ttnn
 
 
 def _shape_is_broadcastable(input_shape_a, input_shape_b):
@@ -35,6 +34,27 @@ def _shape_is_broadcastable(input_shape_a, input_shape_b):
     return all(x == y or (x == 1 and y != 1) or (x != 1 and y == 1) for x, y in zip(batch_shape_a, batch_shape_b))
 
 
+def _matmul_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
 def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_tensor_a = ttnn.from_device(input_tensor_a)
     input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
@@ -47,7 +67,9 @@ def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_)
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@decorate_operation(torch_function=_torch_matmul)
+@ttnn.register_operation(
+    name="ttnn.matmul", validate_input_tensors=_matmul_validate_input_tensors, torch_function=_torch_matmul
+)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -189,39 +211,42 @@ def matmul(
         batch_size = math.prod(batch_shape_a)
         is_batched = math.prod(batch_shape_b) > 1
 
+        input_tensor_a_memory_config = ttnn.get_memory_config(input_tensor_a)
+        input_tensor_b_memory_config = ttnn.get_memory_config(input_tensor_b)
+
         if is_batched:
-            if (not input_tensor_a.is_sharded()) and (not input_tensor_b.is_sharded()):
+            if (not ttnn.is_sharded(input_tensor_a)) and (not ttnn.is_sharded(input_tensor_b)):
                 per_core_M = int(math.ceil((m_size / ttnn.TILE_SIZE)))
                 per_core_N = int(math.ceil((n_size / ttnn.TILE_SIZE)))
                 in0_block_w = 1  # TODO(arakhmati): Can it be more than 1 without running out of memory?
-            elif input_tensor_a.is_sharded():
-                if input_tensor_a.memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            elif ttnn.is_sharded(input_tensor_a):
+                if input_tensor_a_memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
                     raise TypeError("Cannot be width sharded")
-                shard_shape = input_tensor_a.memory_config.shard_spec.shape
+                shard_shape = input_tensor_a_memory_config.shard_spec.shape
                 N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
                 per_core_M = shard_shape[0] // ttnn.TILE_SIZE
                 per_core_N = N
                 in0_block_w = shard_shape[1] // ttnn.TILE_SIZE
-            elif input_tensor_b.is_sharded():
-                if input_tensor_b.memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            elif ttnn.is_sharded(input_tensor_b):
+                if input_tensor_b_memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
                     raise TypeError("Cannot be width sharded")
-                shard_shape = input_tensor_b.memory_config.shard_spec.shape
+                shard_shape = input_tensor_b_memory_config.shard_spec.shape
                 per_core_M = int(math.ceil((m_size / ttnn.TILE_SIZE)))
                 per_core_N = shard_shape[1] // ttnn.TILE_SIZE
                 in0_block_w = 1
         else:
-            if not input_tensor_a.is_sharded():
+            if not ttnn.is_sharded(input_tensor_a):
                 per_core_M = int(math.ceil(((batch_size * m_size) / ttnn.TILE_SIZE) / core_grid[0]))
                 per_core_N = int(math.ceil(n_size / ttnn.TILE_SIZE / core_grid[1]))
                 in0_block_w = 4  # TODO(arakhmati): What is a good starting point?
                 while (k_size // ttnn.TILE_SIZE) % in0_block_w != 0:
                     in0_block_w -= 1
             else:
-                if not input_tensor_a.memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+                if not input_tensor_a_memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
                     raise TypeError("Must be block sharded")
                 K = input_tensor_a.shape[-1] // ttnn.TILE_SIZE
                 N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
-                shard_shape = input_tensor_a.memory_config.shard_spec.shape
+                shard_shape = input_tensor_a_memory_config.shard_spec.shape
                 per_core_M = shard_shape[0] // ttnn.TILE_SIZE
                 per_core_N = (N * shard_shape[1]) // (K * ttnn.TILE_SIZE)
                 in0_block_w = 1
@@ -339,6 +364,40 @@ def matmul(
     return output_tensor
 
 
+ttnn.Tensor.__matmul__ = matmul
+
+
+def _linear_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, bias=None, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        bias,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+
+
 def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias=None, activation=None, **_):
     import torch
 
@@ -370,10 +429,9 @@ def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, b
     return output_tensor
 
 
-ttnn.Tensor.__matmul__ = matmul
-
-
-@decorate_operation(torch_function=_torch_linear)
+@ttnn.register_operation(
+    name="ttnn.linear", validate_input_tensors=_linear_validate_input_tensors, torch_function=_torch_linear
+)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -417,17 +475,6 @@ def linear(
     output_shape_list.append(input_shape_b[-1])
     padded_output_shape_list.append(input_shape_b.padded()[-1])
     output_shape = ttnn.Shape(output_shape_list, padded_output_shape_list)
-
-    if not isinstance(input_tensor_a, ttnn.Tensor):
-        raise RuntimeError("Expected first argument to be a ttnn.Tensor")
-    if not isinstance(input_tensor_b, ttnn.Tensor):
-        raise RuntimeError("Expected second argument to be a ttnn.Tensor")
-
-    if input_tensor_a.value.storage_type() != ttl.tensor.StorageType.DEVICE:
-        raise RuntimeError("input_tensor_a must be on device!")
-
-    if input_tensor_b.value.storage_type() != ttl.tensor.StorageType.DEVICE:
-        raise RuntimeError("input_tensor_b must be on device!")
 
     # The idea is to make the shapes "possibly" broadcastable.
     if len(input_tensor_a.shape) > 4:

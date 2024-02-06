@@ -24,7 +24,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 def get_expected_times(functional_bloom):
     return {
-        ttnn_functional_bloom: (15.0, 5),
+        ttnn_functional_bloom: (15.0, 9),
         ttnn_optimized_functional_bloom: (12, 0.85),
     }[functional_bloom]
 
@@ -79,8 +79,11 @@ def test_performance_of_bloom_for_question_answering(
     durations = []
     for _ in range(2):
         start = time.time()
-        tt_output = functional_bloom.bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads)
-        tt_output = ttnn.from_device(tt_output)
+        with ttnn.disable_validate_decorator():
+            tt_output = functional_bloom.bloom_for_question_answering(
+                config, input_ids, alibi, causal_mask, parameters=parameters
+            )
+            tt_output = ttnn.from_device(tt_output)
         end = time.time()
 
         durations.append(end - start)

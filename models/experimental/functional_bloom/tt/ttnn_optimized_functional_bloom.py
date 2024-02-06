@@ -271,8 +271,8 @@ def bloom(
     return hidden_states
 
 
-def bloom_for_causal_lm(input_ids, alibi, casual_mask, parameters, num_heads):
-    hidden_states = bloom(input_ids, alibi, casual_mask, parameters, num_heads)
+def bloom_for_causal_lm(config, input_ids, alibi, causal_mask, *, parameters):
+    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, config.n_head)
 
     # Unfortuntely we do not have the ability to handle large tensors yet. So running final matmul ising torch is a workaround.
     hidden_states = ttnn.from_device(hidden_states)
@@ -283,8 +283,8 @@ def bloom_for_causal_lm(input_ids, alibi, casual_mask, parameters, num_heads):
     return output
 
 
-def bloom_for_question_answering(input_ids, alibi, casual_mask, parameters, num_heads):
-    hidden_states = bloom(input_ids, alibi, casual_mask, parameters, num_heads)
+def bloom_for_question_answering(config, input_ids, alibi, casual_mask, *, parameters):
+    hidden_states = bloom(input_ids, alibi, casual_mask, parameters, config.n_head)
     hidden_states = ttnn.linear(
         hidden_states,
         parameters.qa_outputs.weight,

@@ -30,6 +30,13 @@ namespace tt::tt_metal{
             return fd;
         }
 
+        std::map<chip_id_t, Device *> CreateDevices(
+            std::vector<chip_id_t> device_ids,
+            const uint8_t num_hw_cqs = 1,
+            const std::vector<uint32_t> &l1_bank_remap = {});
+
+        void CloseDevices(std::map<chip_id_t, Device *> devices);
+
         /**
         * Copies data from a host buffer into the specified buffer
         *
@@ -230,13 +237,6 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx)
-        {
-            auto worker_core = device->worker_core_from_logical_core(core);
-            llrt::write_graph_interpreter_op_info_to_core(device->id(), worker_core, op_info, op_idx);
-            return true;
-        }
-
         inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
         {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -311,7 +311,7 @@ namespace tt::tt_metal{
         inline void ClearCommandQueueProgramCache(Device *device)
         {
             if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                ClearProgramCache(GetCommandQueue(device));
+                ClearProgramCache(device);
             }
         }
 
@@ -540,7 +540,12 @@ namespace tt::tt_metal{
                     if (device_id != device->id()) {
                         // This means the issue queue and completion queue interfaces that service a remote device are being set up
                         // the issue queue interface needs to send fast dispatch packets to the "src" ethernet core
-                        consumer_physical_core = device->ethernet_core_from_logical_core(*device->get_active_ethernet_cores().begin());
+                        CoreCoord logical_eth_router_src = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+                            issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
+                        consumer_physical_core = device->ethernet_core_from_logical_core(logical_eth_router_src);
+
+                        tt::Cluster::instance().configure_eth_core_for_dispatch_core(
+                            issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
                     }
 
                     std::map<string, string> producer_defines = {

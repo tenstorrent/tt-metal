@@ -5,7 +5,7 @@
 
 from typing import Optional
 
-import ttnn.core as ttnn
+import ttnn
 
 import tt_lib as ttl
 
@@ -42,25 +42,70 @@ def _torch_layer_norm(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-@ttnn.decorate_operation(torch_function=_torch_layer_norm)
+def _layer_norm_validate_input_tensors(
+    operation_name, input_tensor, *args, weight=None, bias=None, residual_input_tensor=None, **kwargs
+):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        weight,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        bias,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        residual_input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.layer_norm",
+    validate_input_tensors=_layer_norm_validate_input_tensors,
+    torch_function=_torch_layer_norm,
+)
 def layer_norm(
     input_tensor: ttnn.Tensor,
     *,
     epsilon: float = 1e-12,
-    residual_input_tensor: Optional[ttnn.Tensor] = None,
     weight: Optional[ttnn.Tensor] = None,
     bias: Optional[ttnn.Tensor] = None,
+    residual_input_tensor: Optional[ttnn.Tensor] = None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
-    layer_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
+    layer_norm(input_tensor: ttnn.Tensor, *, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Compute layer_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-        raise RuntimeError("layer_norm only supports device storage type")
 
     original_shape = input_tensor.shape
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
@@ -90,9 +135,34 @@ def layer_norm(
     return output_tensor
 
 
+def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        weight,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.rms_norm",
+    validate_input_tensors=_rms_norm_validate_input_tensors,
+)
 def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
     r"""
-    rms_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
+    rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor
 
     Compute rms_norm over :attr:`input_tensor`.
 
@@ -139,7 +209,43 @@ def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, w
     return torch.nn.functional.group_norm(input_tensor, num_groups, weight, bias, eps=epsilon)
 
 
-@ttnn.decorate_operation(torch_function=_torch_group_norm)
+def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weight=None, bias=None, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        weight,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        bias,
+        ranks=(1, 2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        is_optional=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.group_norm",
+    validate_input_tensors=_group_norm_validate_input_tensors,
+    torch_function=_torch_group_norm,
+)
 def group_norm(
     input_tensor: ttnn.Tensor,
     *,
@@ -149,15 +255,11 @@ def group_norm(
     bias: Optional[ttnn.Tensor] = None,
 ) -> ttnn.Tensor:
     r"""
-    group_norm(input_tensor: ttnn.Tensor) -> ttnn.Tensor
+    group_norm(input_tensor: ttnn.Tensor, *, num_groups: int, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
 
     Compute group_norm over :attr:`input_tensor`.
 
     """
-
-    if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-        raise RuntimeError("group_norm expects input tensor to be on device!")
-
     output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
     return ttnn.from_torch(output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device)
 

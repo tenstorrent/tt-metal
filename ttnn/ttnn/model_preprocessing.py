@@ -8,7 +8,6 @@ import shutil
 from typing import Optional, Union, Callable
 
 from loguru import logger
-import numpy as np
 import torch
 
 import ttnn
@@ -102,6 +101,8 @@ def default_preprocessor(model, name) -> ParameterDict:
         parameters[f"weight"] = preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
         if model.bias is not None:
             parameters[f"bias"] = preprocess_linear_bias(model.bias, dtype=ttnn.bfloat16)
+    elif isinstance(model, torch.nn.Conv2d):
+        raise RuntimeError("Parameters of Conv2d must be preprocessed using a custom preprocessor")
     elif isinstance(model, torch.nn.LayerNorm):
         parameters[f"weight"] = preprocess_layernorm_parameter(model.weight, dtype=ttnn.bfloat16)
         parameters[f"bias"] = preprocess_layernorm_parameter(model.bias, dtype=ttnn.bfloat16)
@@ -135,20 +136,24 @@ def _preprocess_model_parameters(
         if custom_preprocessor_parameters:
             return make_parameter_dict(custom_preprocessor_parameters)
 
+    named_children = list(model.named_children())
+    named_parameters = list((name, parameter) for name, parameter in model.named_parameters() if "." not in name)
+
     if convert_to_ttnn(model, name):
         default_preprocessor_parameters = default_preprocessor(model, name)
         if default_preprocessor_parameters:
+            if len(default_preprocessor_parameters) != len(named_children) + len(named_parameters):
+                raise RuntimeError(
+                    f"Not all children or parameters were converted using default_preprocessor_parameters!"
+                )
             return make_parameter_dict(default_preprocessor_parameters)
 
-    named_children = list(model.named_children())
     if not named_children:
         if isinstance(model, torch.nn.Linear):
             parameters = {"weight": model.weight.T.contiguous()}
             if model.bias is not None:
                 parameters["bias"] = model.bias
             return make_parameter_dict(parameters)
-        elif isinstance(model, torch.nn.Conv2d):
-            raise RuntimeError("Transpose conv weights?")
         return make_parameter_dict(dict(model.named_parameters()))
 
     parameters = {}
@@ -159,6 +164,17 @@ def _preprocess_model_parameters(
             custom_preprocessor=custom_preprocessor,
             name=f"{name}.{child_name}" if name else child_name,
         )
+
+    for parameter_name, parameter in named_parameters:
+        dtype = {
+            torch.int16: ttnn.uint16,
+            torch.int32: ttnn.uint32,
+            torch.int64: ttnn.uint32,
+            torch.bfloat16: ttnn.bfloat16,
+            torch.float32: ttnn.bfloat16,
+            torch.float64: ttnn.bfloat16,
+        }[parameter.dtype]
+        parameters[parameter_name] = ttnn.from_torch(parameter, dtype=dtype)
 
     parameters = make_parameter_dict(parameters)
 

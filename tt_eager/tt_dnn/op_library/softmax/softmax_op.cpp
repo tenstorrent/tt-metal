@@ -34,12 +34,17 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
             auto& mask = optional_input_tensors.at(0).value();
             TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
             TT_FATAL(input_tensor.device() == mask.device());
-            if (mask.layout() == Layout::ROW_MAJOR) {
-                Shape expected_shape = {mask.shape()[0], 1, input_tensor.shape()[-1] / TILE_WIDTH, TILE_WIDTH};
-                TT_FATAL(mask.shape() == expected_shape);
-            }
-            for (uint32_t i = 1; i < input_tensor.shape().rank() - 2; i++) {
-                TT_FATAL(mask.shape()[i] == 1);
+            if (mask.is_sharded()) { // sharded mask
+                TT_FATAL(mask.layout() == Layout::TILE);
+                TT_FATAL(mask.shape() == input_tensor.shape());
+            } else {
+                if (mask.layout() == Layout::ROW_MAJOR) {
+                    Shape expected_shape = {mask.shape()[0], 1, input_tensor.shape()[-1] / TILE_WIDTH, TILE_WIDTH};
+                    TT_FATAL(mask.shape() == expected_shape);
+                }
+                for (uint32_t i = 1; i < input_tensor.shape().rank() - 2; i++) {
+                    TT_FATAL(mask.shape()[i] == 1);
+                }
             }
 
             std::visit(
@@ -53,21 +58,23 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                         std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>
                     ) {
                         const auto shape = input_tensor.shape();
-                        uint32_t M = shape[2] * shape[1];
-                        uint32_t K = shape[3] * shape[0];
-                        uint32_t Mt = M / TILE_WIDTH;
-                        uint32_t Kt = K / TILE_WIDTH;
+                        uint32_t M = input_tensor.volume() / shape[-1];
+                        uint32_t K = shape[-1];
                         // block
                         uint32_t block_w = program_config.block_w * TILE_WIDTH;
-                        uint32_t block_h = program_config.block_h * TILE_WIDTH;
+                        uint32_t block_h = program_config.block_h * TILE_HEIGHT;
                         uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
+                        // grid
+                        auto num_cores_c = program_config.compute_with_storage_grid_size.x;
+                        auto num_cores_r = program_config.compute_with_storage_grid_size.y;
                         // check dims
                         TT_FATAL(program_config.block_w % program_config.subblock_w == 0, "block_w must be divisible by subblock_w.");
-                        TT_FATAL(M % TILE_WIDTH == 0, "M must be divisible by tile width.");
+                        TT_FATAL(M % TILE_HEIGHT == 0, "M must be divisible by tile height.");
                         TT_FATAL(K % TILE_WIDTH == 0, "K must be divisible by tile width.");
-                        TT_FATAL(Kt / program_config.compute_with_storage_grid_size.x == program_config.block_w, "block_w must equal to K / num_cores_c.");
-                        TT_FATAL(Mt / program_config.compute_with_storage_grid_size.y == program_config.block_h, "block_h must equal to M / num_cores_r.");
+                        TT_FATAL(M * K / (block_w * block_h) == num_cores_r * num_cores_c, "number of shards must equal to number of cores");
                         TT_FATAL(this->inplace);
+                        // check sharding dim
+                        TT_FATAL(block_w == shape[3], "shard width must equal to input tensor shape[3]!");
                     }
                 },
                 this->program_config

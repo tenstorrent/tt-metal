@@ -107,8 +107,9 @@ class Cluster {
     uint64_t get_pcie_base_addr_from_device(chip_id_t chip_id) const;
 
     // Ethernet cluster api
-    // Returns set of connected chip ids
-    std::unordered_set<chip_id_t> get_ethernet_connected_chip_ids(chip_id_t chip_id) const;
+    // Returns map of connected chip ids to active ethernet cores
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+        chip_id_t chip_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id) const;
@@ -118,6 +119,35 @@ class Cluster {
 
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+
+    // Returns a ethernet sockets between local chip and remote chip
+    // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
+    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const;
+
+    // Converts logical ethernet core coord to physical ethernet core coord
+    CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
+
+    // Configures routing mapping of ethernet cores
+    void initialize_routing_info_for_ethernet_cores();
+
+    // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
+    // Returns logical eth core that communicates with specified dispatch core
+    tt_cxy_pair get_eth_core_for_dispatch_core(
+        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    // Writes router config to corresponding eth core
+    void configure_eth_core_for_dispatch_core(
+        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
+    // cluster. When using multiple devices in a cluster, this should be the flow:
+    //       CreateDevice(0)
+    //       CreateDevice(1)
+    //       set_internal_routing_info_for_ethernet_cores(true);
+    //       set_internal_routing_info_for_ethernet_cores(false);
+    //       CloseDevice(0)
+    //       CloseDevice(1)
+    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const;
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
@@ -153,6 +183,7 @@ class Cluster {
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
     void configure_static_tlbs(chip_id_t mmio_device_id) const;
 
+    void initialize_ethernet_sockets();
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -183,6 +214,9 @@ class Cluster {
     //          1 -> 0
     //          3 -> 1
     std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
+
+    // Mapping of each devices' ethernet routing mode
+    std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, routing_info_t>> device_eth_routing_info_;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE
@@ -224,6 +258,8 @@ class Cluster {
         REQUEST_ROUTING_CMD_QUEUE_BASE,
         RESPONSE_ROUTING_CMD_QUEUE_BASE,
         CMD_BUF_PTR_MASK};
+
+    std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };
 
 }  // namespace tt

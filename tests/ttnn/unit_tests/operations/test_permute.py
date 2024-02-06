@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("w", [64])
 def test_permute(device, h, w):
     torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
@@ -28,7 +28,7 @@ def test_permute(device, h, w):
 
 
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("w", [64])
 def test_transpose(device, h, w):
     torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -44,7 +44,7 @@ def test_transpose(device, h, w):
 
 
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("w", [64])
 def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w):
     torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -90,3 +90,17 @@ def test_permute_for_specific_case(device, b, s, h, w):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+def test_add_after_permute(device):
+    torch_a = torch.randn(2, 1280, 8, 8)
+    torch_b = torch.randn(1, 1, 2, 1280)
+    torch_b_permuted = torch.permute(torch_b, (2, 3, 0, 1))
+    torch_output = torch_a + torch_b_permuted
+
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    b = ttnn.permute(b, (2, 3, 0, 1))
+    output = a + b
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output, 0.9999)

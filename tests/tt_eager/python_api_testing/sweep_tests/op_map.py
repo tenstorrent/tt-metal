@@ -24,6 +24,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.clone,
         "pytorch_op": pytorch_ops.clone,
     },
+    "typecast": {
+        "tt_lib_op": tt_lib_ops.typecast,
+        "pytorch_op": pytorch_ops.typecast,
+    },
     "copy": {
         "tt_lib_op": tt_lib_ops.copy,
         "pytorch_op": pytorch_ops.copy,
@@ -1003,5 +1007,57 @@ op_map = {
     "ttnn-layernorm_noweights": {
         "tt_lib_op": ttnn_ops.layernorm_noweights,
         "pytorch_op": pytorch_ops.ttnn_layernorm_noweights,
+    },
+    "abs-bw": {
+        "tt_lib_op": tt_lib_ops.abs_bw,
+        "pytorch_op": pytorch_ops.abs_bw,
+    },
+    "sqrt-bw": {
+        "tt_lib_op": tt_lib_ops.sqrt_bw,
+        "pytorch_op": pytorch_ops.sqrt_bw,
+    },
+    "relu-bw": {
+        "tt_lib_op": tt_lib_ops.relu_bw,
+        "pytorch_op": pytorch_ops.relu_bw,
+    },
+    "neg-bw": {
+        "tt_lib_op": tt_lib_ops.relu_bw,
+        "pytorch_op": pytorch_ops.relu_bw,
+    },
+    "log-bw": {
+        "tt_lib_op": tt_lib_ops.log_bw,
+        "pytorch_op": pytorch_ops.log_bw,
+    },
+    "gt-bw": {
+        "tt_lib_op": tt_lib_ops.gt_bw,
+        "pytorch_op": pytorch_ops.gt_bw,
+    },
+    "lt-bw": {
+        "tt_lib_op": tt_lib_ops.gt_bw,
+        "pytorch_op": pytorch_ops.gt_bw,
+    },
+    "ne-bw": {
+        "tt_lib_op": tt_lib_ops.ne_bw,
+        "pytorch_op": pytorch_ops.ne_bw,
+    },
+    "rsub-bw": {
+        "tt_lib_op": tt_lib_ops.rsub_bw,
+        "pytorch_op": pytorch_ops.rsub_bw,
+    },
+    "binary-le-bw": {
+        "tt_lib_op": tt_lib_ops.binary_le_bw,
+        "pytorch_op": pytorch_ops.binary_le_bw,
+    },
+    "clamp-max-bw": {
+        "tt_lib_op": tt_lib_ops.clamp_max_bw,
+        "pytorch_op": pytorch_ops.clamp_max_bw,
+    },
+    "clamp-min-bw": {
+        "tt_lib_op": tt_lib_ops.clamp_min_bw,
+        "pytorch_op": pytorch_ops.clamp_min_bw,
+    },
+    "clamp-bw": {
+        "tt_lib_op": tt_lib_ops.clamp_bw,
+        "pytorch_op": pytorch_ops.clamp_bw,
     },
 }

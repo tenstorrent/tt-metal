@@ -40,32 +40,30 @@ template<typename T>
 Buffer<T> get_as(Tensor& tensor) {
     validate_datatype<T>(tensor);
     return std::visit(
-        [&] (auto&& storage) {
+        [](auto&& storage) -> Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return get_as<T>(storage.buffer);
             } else {
-                TT_THROW("Must be a BorrowedStorage");
+                TT_THROW("Tensor must have BorrowedStorage");
             }
         },
-        tensor.storage()
-    );
+        tensor.storage());
 }
 
 template<typename T>
 const Buffer<T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
     return std::visit(
-        [] (auto&& storage) {
+        [](auto&& storage) -> Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return get_as<T>(storage.buffer);
             } else {
-                TT_THROW("Must be an BorrowedStorage");
+                TT_THROW("Tensor must have BorrowedStorage");
             }
         },
-        tensor.storage()
-    );
+        tensor.storage());
 }
 
 }  // namespace borrowed_buffer

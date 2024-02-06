@@ -45,7 +45,7 @@ bool ActiveDevices::activate_device(chip_id_t id) {
     } else if (this->active_devices_[id] == ActiveState::ACTIVE) {
         TT_THROW("Cannot re-initialize device {}, must first call close()", id);
     } else {
-        already_initialized = true;
+        already_initialized = (this->active_devices_[id] == ActiveState::INACTIVE) ? true : false;
     }
     this->active_devices_[id] = ActiveState::ACTIVE;
 
@@ -66,7 +66,9 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    this->clear_l1_state();
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
 #ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
@@ -171,6 +173,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+        llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
     } else {
         llrt::program_brisc_startup_addr(this->id(), phys_core);
         for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
@@ -221,7 +224,6 @@ void Device::initialize_and_launch_firmware() {
     }
 
     // Load erisc app base FW to eth cores
-    // TODO: we can optimize and split send/receive FD modes to two FWs
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         this->initialize_firmware(phys_eth_core, &launch_msg);
@@ -257,7 +259,8 @@ void Device::clear_l1_state() {
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
         std::vector<uint32_t> init_erisc_info_vec(
-            eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
+            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE) / sizeof(uint32_t),
+            0);
 
         llrt::write_hex_vec_to_core(
             this->id(), physical_core, init_erisc_info_vec, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
@@ -347,7 +350,9 @@ bool Device::close() {
         }
     }
 
-    this->clear_l1_state();
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 
@@ -405,8 +410,7 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
 }
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
+    return tt::Cluster::instance().ethernet_core_from_logical_core(id_, logical_core);
 }
 
 std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {

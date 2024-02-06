@@ -161,6 +161,8 @@ struct CoreRange {
     std::string str() const { return "[" + start.str() + " - " + end.str() + "]"; }
 
     size_t size() const { return (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1); }
+
+    CoreCoord grid_size() const { return {this->end.x - this->start.x + 1, this->end.y - this->start.y + 1}; }
 };
 
 constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) { return a.start == b.start && a.end == b.end; }

@@ -55,7 +55,7 @@ def test_bloom_for_question_answering(device, use_program_cache, ttnn_model, bat
     )
 
     # Run twice to measure the time with and without the program cache
-    tt_output = ttnn_model.bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads)
+    tt_output = ttnn_model.bloom_for_question_answering(config, input_ids, alibi, causal_mask, parameters=parameters)
 
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)

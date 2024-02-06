@@ -281,7 +281,7 @@ constexpr auto div_unary_sfpu = make_eltwise_asymmetric_binop_unary_with_param<U
 
 inline Tensor exp(
     const Tensor& input_tensor,
-    bool fast_and_approx = false,
+    bool fast_and_approx,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::EXP>{}(input_tensor, fast_and_approx, output_mem_config);
 }
@@ -362,6 +362,31 @@ Tensor div_unary(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor div_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// relops with unary argument
+Tensor lte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor lte_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor gte_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor gte_unary(
+    float value,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor eq_unary(
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor eq_unary(
     float value,
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

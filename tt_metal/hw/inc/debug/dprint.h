@@ -182,7 +182,7 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
         // buffer is full - wait for the host reader to flush+update rpos
         while (*dp.rpos() < *dp.wpos()) {
 #if defined(COMPILE_FOR_ERISC)
-            risc_context_switch();
+            internal_::risc_context_switch();
 #endif
             ; // wait for host to catch up to wpos with it's rpos
         }
@@ -250,4 +250,3 @@ template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
 
 #include "dprint_tile.h"
-#include "dprint_core_xy.h"

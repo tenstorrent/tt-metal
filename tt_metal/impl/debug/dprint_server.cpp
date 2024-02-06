@@ -118,11 +118,12 @@ private:
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
 
-    // A map to from {core coord x, y, hart index} to the signal code it's waiting for.
-    std::map<tuple<uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
+    // A map to from {device id, core coord x, y, hart index} to the signal code it's waiting for.
+    std::map<tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
     // Keep a separate set of raised signal codes so that multiple harts can wait for the same
     // signal.
     std::set<uint32_t> raised_signals_;
+    std::mutex raise_wait_lock_; // A lock for these two objects since both server and main access.
 
     // A map from Device -> Core Range, which is used to determine which cores on which devices
     // to scan for print data. Also a lock for editing it.
@@ -265,12 +266,16 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
     // or whether any cores are waiting for a signal to be raised.
     // TODO(dma): once we have access to the device is there a way we can poll the device to
     // check whether more print data is coming?
+    size_t num_harts_waiting = 0;
     do {
         // No need to await if the server was killed already due to a hang.
         if (server_killed_due_to_hang_)
             break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    } while (hart_waiting_on_signal_.size() > 0 || new_data_last_iter_);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        raise_wait_lock_.lock();
+        num_harts_waiting = hart_waiting_on_signal_.size();
+        raise_wait_lock_.unlock();
+    } while (num_harts_waiting > 0 || new_data_last_iter_);
 } // WaitForPrintsFinished
 
 void DebugPrintServerContext::AttachDevice(Device* device) {
@@ -368,7 +373,9 @@ void DebugPrintServerContext::ClearLogFile() {
 } // ClearLogFile
 
 void DebugPrintServerContext::ClearSignals() {
+    raise_wait_lock_.lock();
     raised_signals_.clear();
+    raise_wait_lock_.unlock();
 } // ClearSignals
 
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
@@ -397,7 +404,8 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     ostream& stream = (mute_print_server_)? null_stream : *stream_;
 
     // Check whether this hart is currently waiting on a WAIT to be fulfilled.
-    tuple<uint32_t, uint32_t, uint32_t> hart_key {core.x, core.y, hart_id};
+    tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+    raise_wait_lock_.lock();
     if (hart_waiting_on_signal_.count(hart_key) > 0) {
         // Check if the signal the hart is wairint for has been raised.
         uint32_t wait_signal = hart_waiting_on_signal_[hart_key];
@@ -422,14 +430,17 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     to_string(wait_signal) + "\n";
                 stream << error_str << flush;
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
+                raise_wait_lock_.unlock();
+                TT_THROW(error_str);
                 server_killed_due_to_hang_ = true;
-                return false;
             }
 
             // Since it's still waiting, return false here since no data was read.
+            raise_wait_lock_.unlock();
             return false;
         }
     }
+    raise_wait_lock_.unlock();
 
     if (rpos < wpos) {
         // Now read the entire buffer
@@ -524,7 +535,9 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DEBUG_PRINT_TYPEID_RAISE:
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
                     // Add this newly raised signals to the set of raised signals.
+                    raise_wait_lock_.lock();
                     raised_signals_.insert(sigval);
+                    raise_wait_lock_.unlock();
                     //stream << "\nRaised signal=" << sigval << endl;
                     TT_ASSERT(sz == 4);
                 break;
@@ -533,10 +546,12 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
                     // Given that we break immediately on a wait, this core should never be waiting
                     // on multiple signals at the same time.
-                    tuple<uint32_t, uint32_t, uint32_t> hart_key {core.x, core.y, hart_id};
+                    tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+                    raise_wait_lock_.lock();
                     TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
                     // Set that this hart is waiting on this signal, and then stop reading for now.
                     hart_waiting_on_signal_[hart_key] = sigval;
+                    raise_wait_lock_.unlock();
                     break_due_to_wait = true;
                     //stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
                     TT_ASSERT(sz == 4);
@@ -593,7 +608,10 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         if (stop_print_server_) {
             // If the stop signal was received, exit the print server thread, but wait for any
             // existing prints to be wrapped up first.
-            if (hart_waiting_on_signal_.size() == 0 && !new_data_last_iter_)
+            raise_wait_lock_.lock();
+            size_t num_harts_waiting = hart_waiting_on_signal_.size();
+            raise_wait_lock_.unlock();
+            if (num_harts_waiting == 0 && !new_data_last_iter_)
                 break;
         }
 
@@ -614,12 +632,25 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
                         if (!CheckInitMagicCleared(chip_id, core, hart_index))
                             continue;
 
-                        new_data_this_iter |= PeekOneHartNonBlocking(
-                            chip_id,
-                            core,
-                            hart_index,
-                            new_data_this_iter
-                        );
+                        try {
+                            new_data_this_iter |= PeekOneHartNonBlocking(
+                                chip_id,
+                                core,
+                                hart_index,
+                                new_data_this_iter
+                            );
+                        } catch (std::runtime_error& e) {
+                            // Depending on if test mode is enabled, catch and stop server, or
+                            // re-throw the exception.
+                            if (tt::llrt::OptionsG.get_test_mode_enabled()) {
+                                server_killed_due_to_hang_ = true;
+                                return; // Stop the print loop
+                            } else {
+                                // Re-throw for instant exit
+                                throw e;
+                            }
+
+                        }
 
                         // If this read detected a print hang, stop processing prints.
                         if (server_killed_due_to_hang_)

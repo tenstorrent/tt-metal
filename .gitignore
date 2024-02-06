@@ -106,3 +106,5 @@ src/firmware/riscv/targets/erisc/src/api/
 src/firmware/riscv/targets/erisc/src/eth_routing.cpp
 src/firmware/riscv/targets/erisc/src/eth_routing_v2.cpp
 .ipynb_checkpoints/
+
+.envrc

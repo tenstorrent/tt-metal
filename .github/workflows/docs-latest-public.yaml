@@ -1,4 +1,4 @@
-name: Deploy latest docs to GitHub pages
+name: Docs - Build latest docs and deploy to GitHub pages on main
 
 on:
   push:
@@ -6,12 +6,17 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
 
 concurrency:
-  group: "pages"
+  # Note that people may spam the post-commit pipeline on their branch, and
+  # we have this docs pipeline in the post-commit pipeline, then people
+  # would have to wait until the previous one fully completes. That may be
+  # ok because each post-commit pipeline definitely takes more than 30 min
+  group: "pages-${{ github.ref }}"
   cancel-in-progress: false
 
 jobs:
@@ -40,12 +45,21 @@ jobs:
         run: |
           export TT_METAL_HOME=$(pwd)
           make build
-      - name: Activate and build docs
+      - name: Activate docs environment and build docs
         run: |
           export PYTHONPATH=$(pwd)
           source build/python_env/bin/activate
           cd docs/
           make html
+      - name: Build additional ttnn sweeps docs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          export PYTHONPATH=$(pwd)
+          source build/python_env/bin/activate
+          cd docs/
+          make ttnn_sweeps/check_directory
+          make ttnn_sweeps
       - name: Prepare artifact - move output
         run: |
           mkdir gh_pages
@@ -61,5 +75,6 @@ jobs:
         with:
           path: "gh_pages"
       - name: Deploy to GitHub Pages
+        if: ${{ github.ref == 'refs/heads/main' }}
         id: deployment
         uses: actions/deploy-pages@v2

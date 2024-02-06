@@ -28,7 +28,7 @@ def run_single_pytorch_test(
     env="",
     plot_func=None,
 ):
-    assert test_name in op_map.keys()
+    assert test_name in op_map
 
     default_env_dict = {}
     # Get env variables from CLI

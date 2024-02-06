@@ -17,8 +17,7 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_function(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -67,3 +66,39 @@ def test_silu(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log, torch.log)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sin(device, h, w):
+    run_unary_test(device, h, w, ttnn.sin, torch.sin)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asin(device, h, w):
+    run_unary_test(device, h, w, ttnn.asin, torch.asin, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_cos(device, h, w):
+    run_unary_test(device, h, w, ttnn.cos, torch.cos, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_acos(device, h, w):
+    run_unary_test(device, h, w, ttnn.acos, torch.acos, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_tan(device, h, w):
+    run_unary_test(device, h, w, ttnn.tan, torch.tan)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_atan(device, h, w):
+    run_unary_test(device, h, w, ttnn.atan, torch.atan)

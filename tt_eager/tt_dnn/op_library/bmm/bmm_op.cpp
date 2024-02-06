@@ -303,11 +303,18 @@ void Matmul::validate(const std::vector<Tensor>& input_tensors, const std::vecto
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    auto output_shape = input_tensor_a.shape();
-    output_shape[-1] = input_tensor_b.shape()[-1];
-    return {output_shape};
+    const auto input_shape_a = input_tensors.at(0).shape();
+    const auto input_shape_b = input_tensors.at(1).shape();
+
+    auto output_shape = input_shape_a;
+    output_shape[-1] = input_shape_b[-1];
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    for (auto index = 0; index < input_shape_a.rank() - 1; index++) {
+        dimensions_pads.push_back(input_shape_a.padding()[index]);
+    }
+    dimensions_pads.push_back(input_shape_b.padding()[input_shape_b.rank() - 1]);
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
+    return {Shape(output_shape, padding)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -749,11 +756,18 @@ void Matmul::validate(
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    Shape output_shape = input_tensor_a.shape();
-    output_shape[-1] = input_tensor_b.shape()[-1];
-    return {output_shape};
+    const auto input_shape_a = input_tensors.at(0).shape();
+    const auto input_shape_b = input_tensors.at(1).shape();
+
+    auto output_shape = input_shape_a;
+    output_shape[-1] = input_shape_b[-1];
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    for (auto index = 0; index < input_shape_a.rank() - 1; index++) {
+        dimensions_pads.push_back(input_shape_a.padding()[index]);
+    }
+    dimensions_pads.push_back(input_shape_b.padding()[input_shape_b.rank() - 1]);
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
+    return {Shape(output_shape, padding)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

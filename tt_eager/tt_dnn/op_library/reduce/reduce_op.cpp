@@ -246,8 +246,10 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
         out_shape[1] = 1;
 
         auto formatted_input_tensor = input_tensor;
+        float pad_value = (OpKind == ReduceOpMath::MAX) ? -std::numeric_limits<float>::infinity() : (OpKind == ReduceOpMath::MIN) ? std::numeric_limits<float>::infinity() : 0;
+
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
         Tensor output = transpose(formatted_input_tensor, 1, -2, output_mem_config);
         output = reduce_on_dim<OpKind>(output, 2, output_mem_config);

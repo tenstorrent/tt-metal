@@ -374,9 +374,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // log_info(LogTest, "out dtype {}", in0_cb_data_format);
 
     // tensor shape
+    const auto shard_orient = input_tensor.shard_spec().value().orientation;
     const auto shape = input_tensor.shape();
-    uint32_t M = shape[2] * shape[1];
-    uint32_t K = shape[3] * shape[0];
+    uint32_t M = shape[2] * shape[0];
+    uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
     // block
@@ -412,7 +413,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in2_CB_size = 1 * scale_tile_size;
     // attention mask
-    uint32_t in3_CB_size = causal_mask ? block_wt * mask_tile_size * 2 : block_wt * mask_tile_size;
+    uint32_t in3_CB_size;
+    if (causal_mask) {
+        in3_CB_size = mask.value().is_sharded() ? block_wt * block_ht * mask_tile_size : block_wt * mask_tile_size * 2;
+    } else {
+        in3_CB_size = block_wt * mask_tile_size;
+    }
     // cb_exps - keeps exps in CB in L1 to avoid recomputing
     uint32_t im0_CB_size = block_wt * im_tile_size;
     // 1/sum(exp(x))
@@ -469,6 +475,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     }
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
+        if (mask.value().is_sharded())
+            softmax_defines["SHARDED_CAUSAL_MASK"] =  "1";
     }
     auto reader_kernels_id = CreateKernel(
         program,
@@ -519,9 +527,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
             .set_page_size(CB::c_in2, scale_tile_size);
         cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
         // in3 attn mask
-        auto c_in3_config = CircularBufferConfig(in3_CB_size, {{CB::c_in3, mask_cb_data_format}})
-            .set_page_size(CB::c_in3, mask_tile_size);
-        cb_in3_id = CreateCircularBuffer( program, all_device_cores, c_in3_config);
+        if (mask.value().is_sharded()) {
+            auto mask_buffer = mask.value().buffer();
+            auto c_in3_config = CircularBufferConfig(in3_CB_size, {{CB::c_in3, mask_cb_data_format}})
+                .set_page_size(CB::c_in3, mask_tile_size).set_globally_allocated_address(*mask_buffer);
+            cb_in3_id = CreateCircularBuffer( program, all_device_cores, c_in3_config);
+        } else {
+            auto c_in3_config = CircularBufferConfig(in3_CB_size, {{CB::c_in3, mask_cb_data_format}})
+                .set_page_size(CB::c_in3, mask_tile_size);
+            cb_in3_id = CreateCircularBuffer( program, all_device_cores, c_in3_config);
+        }
     }
     // out
     auto c_out0_config = CircularBufferConfig(out_CB_size, {{CB::c_out0, out0_cb_data_format}})
@@ -539,8 +554,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // Runtime Args
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
     union { float f; uint32_t u; } s; s.f = scale.value_or(1.0f); // scale for fused scale-mask-softmax
+    uint32_t mask_start_tile_id = 0;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        uint32_t mask_start_tile_id = 0;
+
+        if (shard_orient == ShardOrientation::COL_MAJOR) {
+            mask_start_tile_id = 0;
+        }
+
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
@@ -552,15 +572,23 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
             reader_args.push_back(mask_start_tile_id);
             tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
-            if (mask.has_value()) {
-                if (causal_mask) {
-                    mask_start_tile_id += mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
-                } else {
-                    mask_start_tile_id += use_row_major_kernel ? mask.value().shape()[-2] : mask.value().shape()[-1] / TILE_WIDTH;
+            if (shard_orient == ShardOrientation::COL_MAJOR) {
+                if (mask.has_value()) {
+                    if (causal_mask) {
+                        mask_start_tile_id += mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                    } else {
+                        mask_start_tile_id += use_row_major_kernel ? mask.value().shape()[-2] : mask.value().shape()[-1] / TILE_WIDTH;
+                    }
+                }
+            } else if (core_idx_x == num_cores_c - 1) {
+                if (mask.has_value()) {
+                    if (causal_mask) {
+                        mask_start_tile_id += mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                    } else {
+                        mask_start_tile_id += use_row_major_kernel ? mask.value().shape()[-2] : mask.value().shape()[-1] / TILE_WIDTH;
+                    }
                 }
             }
-
-
         }
     }
 

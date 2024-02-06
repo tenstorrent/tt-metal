@@ -145,8 +145,7 @@ void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg)
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
     if (static_cast<bool>(msg->enable_erisc)) {
-        llrt::write_hex_vec_to_core(chip, core, {123}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-        launch_erisc_app_fw_on_core(chip, core);
+        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     } else {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
@@ -188,20 +187,6 @@ void set_config_for_circular_buffer(
 
 void write_circular_buffer_config_vector_to_core(chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
     write_hex_vec_to_core(chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
-}
-
-void write_graph_interpreter_op_info_to_core(chip_id_t chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
-    vector<uint32_t> op_info_vec = {
-        op_info.op_code,
-        op_info.cb_in0_id,
-        op_info.cb_in1_id,
-        op_info.cb_out_id,
-        op_info.pop0,
-        op_info.pop1,
-        op_info.unary};
-    uint32_t offset = op_info_vec.size() * sizeof(uint32_t) * op_idx;
-
-    write_hex_vec_to_core(chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
@@ -287,7 +272,7 @@ namespace internal_ {
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
     if (is_ethernet_core(core, chip_id)) {
         const auto &readback_vec =
-            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG, sizeof(uint32_t));
+            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE, sizeof(uint32_t));
         return (readback_vec[0] == 0);
     } else {
         std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {

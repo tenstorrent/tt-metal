@@ -7,6 +7,7 @@ import pytest
 import pathlib
 
 import torch
+import numpy as np
 
 import tt_lib as ttl
 
@@ -34,11 +35,19 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
     if dtype in {torch.int16, torch.int32}:
-        torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
+        torch_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
     else:
         torch_tensor = torch.rand(shape, dtype=dtype)
 
     tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype)
+    if tt_dtype in {
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.FLOAT32,
+        ttl.tensor.DataType.UINT32,
+        ttl.tensor.DataType.UINT16,
+    }:
+        assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
+
     if tt_dtype in {
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.DataType.BFLOAT8_B,
@@ -54,6 +63,55 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
 
     passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
+    assert passing
+
+
+tt_dtype_to_np_dtype = {
+    ttl.tensor.DataType.UINT16: np.int16,
+    ttl.tensor.DataType.UINT32: np.int32,
+    ttl.tensor.DataType.FLOAT32: np.float32,
+    ttl.tensor.DataType.BFLOAT16: np.float32,
+    ttl.tensor.DataType.BFLOAT8_B: np.float32,
+}
+
+
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+@pytest.mark.parametrize(
+    "tt_dtype",
+    [
+        ttl.tensor.DataType.UINT32,
+        ttl.tensor.DataType.UINT16,
+        ttl.tensor.DataType.FLOAT32,
+        # ttl.tensor.DataType.BFLOAT16,
+    ],
+)
+def test_tensor_conversion_between_torch_and_np(shape, tt_dtype, device):
+    dtype = tt_dtype_to_np_dtype[tt_dtype]
+
+    if dtype in {np.int16, np.int32}:
+        np_tensor = np.random.randint(np.iinfo(dtype).min, np.iinfo(dtype).max, shape, dtype=dtype)
+    else:
+        np_tensor = np.random.random(shape).astype(dtype=dtype)
+
+    tt_tensor = ttl.tensor.Tensor(np_tensor, tt_dtype)
+    if tt_dtype in {ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.UINT16}:
+        assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
+
+    if tt_dtype in {
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.UINT32,
+        ttl.tensor.DataType.UINT16,
+    }:
+        tt_tensor = tt_tensor.to(device)
+        tt_tensor = tt_tensor.cpu()
+
+    np_tensor_after_round_trip = tt_tensor.to_numpy()
+
+    assert np_tensor.dtype == np_tensor_after_round_trip.dtype
+    assert np_tensor.shape == np_tensor_after_round_trip.shape
+
+    passing = np.allclose(np_tensor, np_tensor_after_round_trip)
     assert passing
 
 

@@ -73,6 +73,7 @@ void kernel_main() {
     constexpr uint32_t conv_act_size_c_bytes                = get_compile_time_arg_val(7);
     constexpr uint32_t coalesced_read_bytes                 = get_compile_time_arg_val(8);
     constexpr uint32_t window_outer_offset                  = get_compile_time_arg_val(9);
+    constexpr uint32_t act_block_w_extra_align_bytes       = get_compile_time_arg_val(10);
 
 
     constexpr uint32_t cb_id_act_second_reader = 7;
@@ -181,11 +182,11 @@ void kernel_main() {
 
                             act_l1_offset = reader_offset + (reader_idx_1 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                            l1_write_addr_act += coalesced_read_bytes;
+                            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
                             act_l1_offset = reader_offset + (reader_idx_2 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                            l1_write_addr_act += coalesced_read_bytes;
+                            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
                             reader_idx++;
                         }
@@ -272,11 +273,11 @@ void kernel_main() {
 
                             act_l1_offset = reader_offset + (reader_idx_1 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                            l1_write_addr_act += coalesced_read_bytes;
+                            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
                             act_l1_offset = reader_offset + (reader_idx_2 * conv_act_size_c_bytes);
                             noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                            l1_write_addr_act += coalesced_read_bytes;
+                            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
                             reader_idx++;
                         }

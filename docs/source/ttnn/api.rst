@@ -54,6 +54,12 @@ Pointwise Unary
    ttnn/silu
    ttnn/softmax
    ttnn/tanh
+   ttnn/sin
+   ttnn/cos
+   ttnn/tan
+   ttnn/asin
+   ttnn/acos
+   ttnn/atan
 
 Pointwise Binary
 ================

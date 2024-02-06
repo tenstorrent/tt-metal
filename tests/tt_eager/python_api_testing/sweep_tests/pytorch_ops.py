@@ -34,6 +34,10 @@ def clone(x, *args, **kwargs):
     return torch.clone(x)
 
 
+def typecast(x, pt_input_dtype, pt_output_dtype, *args, **kwargs):
+    return x.to(pt_input_dtype[0]).to(pt_output_dtype[0])
+
+
 def move(x, *args, **kwargs):
     return x
 
@@ -1154,3 +1158,162 @@ def ttnn_layernorm_noweights(x, *args, **kwargs):
     w = x.shape[1]
     torch_output_tensor = torch.nn.functional.layer_norm(x, normalized_shape=[w])
     return torch_output_tensor
+
+
+def abs_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.abs(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def sqrt_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.sqrt(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def relu_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.relu(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def neg_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.neg(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def gt_bw(x, *args, **kwargs):
+    grad_data = x
+
+    pyt_y = torch.zeros_like(grad_data)
+
+    golden_tensor = pyt_y
+
+    return golden_tensor
+
+
+def lt_bw(x, *args, **kwargs):
+    grad_data = x
+
+    pyt_y = torch.zeros_like(grad_data)
+
+    golden_tensor = pyt_y
+
+    return golden_tensor
+
+
+def ne_bw(x, *args, **kwargs):
+    grad_data = x
+
+    pyt_y = torch.zeros_like(grad_data)
+
+    golden_tensor = pyt_y
+
+    return golden_tensor
+
+
+def rsub_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+    pyt_y = torch.rsub(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def binary_le_bw(x, y, *args, **kwargs):
+    grad_data = x
+
+    pyt_y = torch.zeros_like(grad_data)
+
+    golden_tensor = pyt_y
+
+    return golden_tensor
+
+
+def clamp_max_bw(x, y, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.clamp(in_data, max=scalar)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def clamp_min_bw(x, y, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.clamp(in_data, min=scalar)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def clamp_bw(x, y, scalar, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    if scalar >= 0:
+        max = scalar
+        min = -scalar
+    else:
+        max = -scalar
+        min = scalar
+
+    in_data.retain_grad()
+    pyt_y = torch.clamp(in_data, min=min, max=max)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad

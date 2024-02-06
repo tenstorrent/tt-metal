@@ -6,14 +6,15 @@ import pathlib
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
-from ttnn.core import (
+from ttnn.types import (
     TILE_SIZE,
     Device,
     DataType,
+    uint16,
     uint32,
-    float32,
-    bfloat16,
     bfloat8_b,
+    bfloat16,
+    float32,
     MemoryConfig,
     MathFidelity,
     DRAM_MEMORY_CONFIG,
@@ -21,7 +22,6 @@ from ttnn.core import (
     ShardStrategy,
     ShardOrientation,
     DEFAULT_SHARD_ORIENTATION,
-    create_sharded_memory_config,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -29,6 +29,27 @@ from ttnn.core import (
     DEVICE_STORAGE_TYPE,
     Shape,
     Tensor,
+)
+
+from ttnn.core import (
+    has_storage_type_of,
+    has_padding,
+    is_sharded,
+    get_memory_config,
+    create_sharded_memory_config,
+)
+
+from ttnn.validation import validate_input_tensor
+
+from ttnn.decorators import register_operation
+
+from ttnn.device import open, close
+
+from ttnn.program_cache import (
+    enable_program_cache,
+)
+
+from ttnn.operations.core import (
     from_torch,
     to_torch,
     to_device,
@@ -40,13 +61,8 @@ from ttnn.core import (
     reallocate,
     load_tensor,
     dump_tensor,
-    has_storage_type_of,
-)
-
-from ttnn.device import open, close
-
-from ttnn.program_cache import (
-    enable_program_cache,
+    unsqueeze_to_4D,
+    squeeze,
 )
 
 from ttnn.operations.matmul import (
@@ -80,6 +96,12 @@ from ttnn.operations.unary import (
     relu,
     silu,
     log,
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
 )
 
 from ttnn.operations.binary import (
@@ -99,4 +121,9 @@ from ttnn.operations.normalization import (
 
 from ttnn.operations import transformer
 from ttnn.operations.conv import Conv2D
-from ttnn.operations.max_pool import MaxPool2D
+from ttnn.operations.pooling import (
+    MaxPool2D,
+    average_pool2d,
+)
+
+from ttnn.decorators import disable_validate_decorator

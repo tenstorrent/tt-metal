@@ -28,26 +28,11 @@ RunTimeOptions::RunTimeOptions() {
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
-    watcher_enabled = false;
-    watcher_interval_ms = 0;
-    const char *watcher_enable_str = getenv("TT_METAL_WATCHER");
-    if (watcher_enable_str != nullptr) {
-        int sleep_val = 0;
-        sscanf(watcher_enable_str, "%d", &sleep_val);
-        if (strstr(watcher_enable_str, "ms") == nullptr) {
-            sleep_val *= 1000;
-        }
-        watcher_enabled = true;
-        watcher_interval_ms = sleep_val;
-    }
-
-    watcher_dump_all = false;
-    const char *watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
-    if (watcher_dump_all_str != nullptr) {
-        watcher_dump_all = true;
-    }
-
+    ParseWatcherEnv();
     ParseDPrintEnv();
+
+    // Test mode has no env var, default is disabled
+    test_mode_enabled = false;
 
     profiler_enabled = false;
 #if defined(PROFILER)
@@ -59,6 +44,13 @@ RunTimeOptions::RunTimeOptions() {
     TT_FATAL(!(get_dprint_enabled() && get_profiler_enabled()), "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
+
+    clear_l1 = true;
+    const char *clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
+    if (clear_l1_enabled_str != nullptr) {
+        if (clear_l1_enabled_str[0] == '0') clear_l1 = false;
+        if (clear_l1_enabled_str[0] == '1') clear_l1 = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() {
@@ -67,6 +59,26 @@ const std::string& RunTimeOptions::get_root_dir() {
     }
 
     return root_dir;
+}
+
+void RunTimeOptions::ParseWatcherEnv() {
+    watcher_interval_ms = 0;
+    const char *watcher_enable_str = getenv("TT_METAL_WATCHER");
+    watcher_enabled = (watcher_enable_str != nullptr);
+    if (watcher_enabled) {
+        int sleep_val = 0;
+        sscanf(watcher_enable_str, "%d", &sleep_val);
+        if (strstr(watcher_enable_str, "ms") == nullptr) {
+            sleep_val *= 1000;
+        }
+        watcher_interval_ms = sleep_val;
+    }
+
+    const char *watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
+    watcher_dump_all = (watcher_dump_all_str != nullptr);
+
+    const char *watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
+    watcher_append = (watcher_append_str != nullptr);
 }
 
 void RunTimeOptions::ParseDPrintEnv() {
@@ -81,7 +93,7 @@ void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
     vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
-    if (str == "all") {
+    if (str != nullptr && strcmp(str, "all") == 0) {
         dprint_all_cores = true;
         return;
     }

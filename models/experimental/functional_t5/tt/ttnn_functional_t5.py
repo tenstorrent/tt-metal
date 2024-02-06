@@ -96,17 +96,21 @@ def t5_attention(
 
     def shape(states, head_size, is_key=False):
         """projection"""
+        states = ttnn.to_layout(states, layout=ttnn.ROW_MAJOR_LAYOUT)
         states = ttnn.reshape(states, (batch_size, seq_length, config.num_heads, head_size))
         if is_key:
             states = ttnn.permute(states, (0, 2, 3, 1))
         else:
             states = ttnn.permute(states, (0, 2, 1, 3))
+        states = ttnn.to_layout(states, ttnn.TILE_LAYOUT)
         return states
 
     def unshape(states, hidden_size):
         """reshape"""
         states = ttnn.permute(states, (0, 2, 1, 3))
+        states = ttnn.to_layout(states, ttnn.ROW_MAJOR_LAYOUT)
         states = ttnn.reshape(states, (batch_size, seq_length, hidden_size))
+        states = ttnn.to_layout(states, ttnn.TILE_LAYOUT)
         return states
 
     def project(hidden_states, weight, is_key=False):
@@ -223,7 +227,7 @@ def t5_stack(
 ):
     input_shape = tuple(input_ids.shape)
 
-    hidden_states = ttnn.embedding(input_ids, shared_embedding_weight)
+    hidden_states = ttnn.embedding(input_ids, shared_embedding_weight, layout=ttnn.TILE_LAYOUT)
 
     attention_mask = create_attention_mask(
         input_shape, config.num_heads, input_ids.device, is_decoder=encoder_hidden_states is not None
