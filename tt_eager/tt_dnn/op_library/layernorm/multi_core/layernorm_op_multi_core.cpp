@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
     uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
+    tt::DataFormat inb_data_format;
     uint32_t inb_single_tile_size = 0;
     if (b) {
         inb_data_format = tt_metal::datatype_to_dataformat_converter(b.value().dtype());
