@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <math.h>
 
 #include "tt_dnn/op_library/upsample/upsample_op.hpp"
