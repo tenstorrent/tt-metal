@@ -1101,7 +1101,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
     TT_FATAL(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
     std::visit ( [&cq, dst, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
-        std::future<void> f;
+        std::shared_future<void> f;
         std::optional<std::reference_wrapper<tf::AsyncTask>> t;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer> > ) {
             t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
@@ -1119,7 +1119,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
     detail::DispatchStateCheck(true);
     std::visit ( [&cq, src, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
-        std::future<void> f;
+        std::shared_future<void> f;
         std::optional<std::reference_wrapper<tf::AsyncTask>> t;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> ) {
             t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
@@ -1143,7 +1143,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
     detail::DispatchStateCheck(true);
     std::visit ( [&cq, blocking, trace](auto&& program) {
             using T = std::decay_t<decltype(program)>;
-            std::future<void> f;
+            std::shared_future<void> f;
             std::optional<std::reference_wrapper<tf::AsyncTask>> t;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
                 t = cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
@@ -1169,7 +1169,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
 
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
-    std::future<void> f;
+    std::shared_future<void> f;
     cq.submit( [device = cq.device(), cq_id = cq.id()] {
         device->hw_command_queue(cq_id).finish();
     }, f);
@@ -1219,7 +1219,7 @@ namespace detail {
 void EnqueueRestart(CommandQueue& cq) {
     ZoneScoped;
     detail::DispatchStateCheck(true);
-    std::future<void> f;
+    std::shared_future<void> f;
     auto& t = cq.submit( [device = cq.device(), cq_id = cq.id()] {
         device->hw_command_queue(cq_id).restart();
     }, f);
