@@ -17,3 +17,4 @@ Hint: Be sure to always run the cells from top to bottom as the order of the cel
    tutorials/add.rst
    tutorials/matmul.rst
    tutorials/multihead-attention.rst
+   tutorials/ttnn-tracer.rst

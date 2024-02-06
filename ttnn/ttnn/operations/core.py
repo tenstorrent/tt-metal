@@ -371,9 +371,7 @@ def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs)
     )
 
 
-ttnn.register_operation(name="ttnn.from_device", validate_input_tensors=_from_device_validate_input_tensors)
-
-
+@ttnn.register_operation(name="ttnn.from_device", validate_input_tensors=_from_device_validate_input_tensors)
 def from_device(tensor):
     """
     _from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
