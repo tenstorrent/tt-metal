@@ -232,6 +232,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             bufs.push_back(CreateBuffer(dram_config));
         } catch (const std::exception& e) {
             tt::log_info("Deallocating on iteration {}", i);
+            bufs.clear();
             start = i;
             bufs = {CreateBuffer(dram_config)};
         }
