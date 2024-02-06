@@ -90,12 +90,12 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
             program,
             "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(compile_time_args));
+            tt_metal::ReaderDataMovementConfig{.compile_args = compile_time_args});
         writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig(compile_time_args));
+            tt_metal::WriterDataMovementConfig{.compile_args = compile_time_args});
     } else {
         std::vector<uint32_t> reader_compile_time_args = {
             // interleaved accessor args
@@ -114,13 +114,13 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
             program,
             "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
     }
 
 

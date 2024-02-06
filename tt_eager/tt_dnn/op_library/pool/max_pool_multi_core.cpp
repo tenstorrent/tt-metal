@@ -398,7 +398,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             0,                  // right_in_stick_end,
                                             0,                  // my_core
                                             };
-    auto reader_config = ReaderDataMovementConfig(reader_ct_args);
+    auto reader_config = ReaderDataMovementConfig{.compile_args = reader_ct_args};
     std::string reader_kernel_fname;
     if (input.memory_config().is_sharded()) {
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
@@ -418,7 +418,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         writer_defines["SHARDED_OUT"] = "1";
     }
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
-    auto writer_config = WriterDataMovementConfig(writer_ct_args, writer_defines);
+    auto writer_config = WriterDataMovementConfig{.compile_args = writer_ct_args, .defines = writer_defines};
     std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                         writer_kernel_fname,

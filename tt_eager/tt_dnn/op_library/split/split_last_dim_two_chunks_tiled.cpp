@@ -198,13 +198,15 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         program,
         "tt_eager/tt_dnn/op_library/split/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-	tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig{
+            .compile_args = reader_compile_time_args});
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/split/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{
+            .compile_args = writer_compile_time_args});
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

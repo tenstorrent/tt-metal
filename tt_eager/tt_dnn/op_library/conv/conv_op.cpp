@@ -555,17 +555,17 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         program,
         reader_kernel,
         core,
-        ReaderDataMovementConfig(
-            reader_compile_time_args,
-            reader_defines));
+        ReaderDataMovementConfig{
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
 
     auto writer_id = CreateKernel(
         program,
         writer_kernel,
         core,
-        WriterDataMovementConfig(
-            writer_compile_time_args,
-            all_defines));
+        WriterDataMovementConfig{
+            .compile_args = writer_compile_time_args,
+            .defines = all_defines});
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
@@ -1293,7 +1293,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         program,
         writer_kernel,
         core,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
