@@ -581,6 +581,7 @@ void Program::compile( Device * device )
 
     // compile all kernels in parallel
     for (Kernel * kernel : kernels_) {
+        log_info(LogTest, "compile kernel {}...", kernel->name());
         events.emplace_back ( detail::async ( [kernel, device, this] {
             ZoneScoped;
 
@@ -606,6 +607,7 @@ void Program::compile( Device * device )
             }
 
             kernel->set_binary_path(build_options.path);
+                    log_info(LogTest, "compile finished for kernel {}...", kernel->name());
         } ) );
     }
 
@@ -614,7 +616,8 @@ void Program::compile( Device * device )
 
     for (Kernel * kernel : kernels_) {
         log_info(LogTest, "read_binaries for kernel {}...", kernel->name());
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
+        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device);
+                    log_info(LogTest, "read_binaries finished for kernel {}...", kernel->name());}));
     }
 
     for (auto & f : events)

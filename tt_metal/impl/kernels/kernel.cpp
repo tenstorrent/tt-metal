@@ -270,6 +270,7 @@ void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&bin
 }
 
 void DataMovementKernel::read_binaries(Device *device) {
+    log_info(LogTest, "Called DMK::read_binaries on kernel {}...", this->name());
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
 
@@ -286,6 +287,7 @@ void DataMovementKernel::read_binaries(Device *device) {
 }
 
 void EthernetKernel::read_binaries(Device *device) {
+    log_info(LogTest, "Called EK::read_binaries on kernel {}...", this->name());
    // untested
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
@@ -297,6 +299,7 @@ void EthernetKernel::read_binaries(Device *device) {
 }
 
 void ComputeKernel::read_binaries(Device *device) {
+    log_info(LogTest, "Called CK::read_binaries on kernel {}...", this->name());
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
