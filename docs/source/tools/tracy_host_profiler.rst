@@ -19,7 +19,8 @@ Mac users can use brew to install tracy. On your terminal run:
 
 ..  code-block:: sh
 
-    wget -P ~/ https://raw.githubusercontent.com/Homebrew/homebrew-core/52ec9be8d6fbef66888abe0fbdb96f8b4f4e4e0c/Formula/t/tracy.rb
+    brew uninstall tracy #Remove any old version of tracy
+    wget -P ~/ https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
     brew install ~/tracy.rb
     rm ~/tracy.rb
 
@@ -27,7 +28,7 @@ Once installed run tracy GUI with:
 
 ..  code-block:: sh
 
-    TRACY_DPI_SCALE=1.0 tracy
+    tracy
 
 The application will start showing a window similar to the image below.
 
