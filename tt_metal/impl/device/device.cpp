@@ -45,7 +45,7 @@ bool ActiveDevices::activate_device(chip_id_t id) {
     } else if (this->active_devices_[id] == ActiveState::ACTIVE) {
         TT_THROW("Cannot re-initialize device {}, must first call close()", id);
     } else {
-        already_initialized = true;
+        already_initialized = (this->active_devices_[id] == ActiveState::INACTIVE) ? true : false;
     }
     this->active_devices_[id] = ActiveState::ACTIVE;
 
@@ -66,7 +66,9 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    this->clear_l1_state();
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
 #ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
@@ -348,7 +350,9 @@ bool Device::close() {
         }
     }
 
-    this->clear_l1_state();
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 

@@ -29,10 +29,10 @@ from ttnn.types import (
     DEVICE_STORAGE_TYPE,
     Shape,
     Tensor,
-    has_storage_type_of,
 )
 
 from ttnn.core import (
+    has_storage_type_of,
     has_padding,
     is_sharded,
     get_memory_config,

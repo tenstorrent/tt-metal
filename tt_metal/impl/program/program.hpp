@@ -24,7 +24,7 @@ namespace tt_metal {
 // Fwd declares
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel ( Program & program, Kernel * kernel);
+    KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel);
     Kernel *GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
 }
@@ -131,7 +131,7 @@ class Program {
 
     uint64_t id; // Need to make non-const due to move constructor
     static std::atomic<uint64_t> program_counter;
-    std::vector<Kernel*> kernels_;
+    std::vector< std::shared_ptr<Kernel> > kernels_;
     CoreCoord grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
@@ -155,12 +155,12 @@ class Program {
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, Kernel *kernel);
+    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel);
     friend Kernel *detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
-    KernelHandle add_kernel(Kernel *kernel);
-    Kernel *get_kernel(KernelHandle kernel_id) const;
+    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel);
+    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
@@ -170,7 +170,7 @@ class Program {
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device) const;
 
-    void set_cb_data_fmt( Device *device, Kernel *kernel, JitBuildOptions& build_options) const;
+    void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups();
 };

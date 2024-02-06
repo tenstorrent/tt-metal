@@ -140,16 +140,15 @@ def add(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
     *,
-    alpha: Union[int, float] = 1,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
-    add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, alpha: Union[int, float]=1, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
+    add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
 
-    Adds :attr:`input_tensor_b`, scaled by :attr:`alpha`, to :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
+    Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
     .. math::
-        \mathrm{{input\_tensor\_a}}_i + \mathrm{{alpha}} \times \mathrm{{input\_tensor\_b}}_i
+        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
 
     Supports broadcasting.
 
@@ -158,110 +157,22 @@ def add(
         * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
     Keyword args:
-        :attr:`alpha` (Number): the multiplier for :attr:`input_tensor_b`.
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
 
     Example::
 
         >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
         >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.add(tensor1, tensor2, alpha=2)
+        >>> output = ttnn.add(tensor1, tensor2)
         >>> print(output)
-        ttnn.Tensor([ 1, 4], dtype=bfloat16 )
+        ttnn.Tensor([ 1, 3], dtype=bfloat16 )
 
     """
-
-    if not isinstance(input_tensor_a, ttnn.Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
-
     # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-    if (
-        isinstance(input_tensor_a, ttnn.Tensor)
-        and isinstance(input_tensor_b, ttnn.Tensor)
-        and math.prod(input_tensor_a.shape) < math.prod(input_tensor_b.shape)
-    ):
+    if isinstance(input_tensor_b, ttnn.Tensor) and math.prod(input_tensor_a.shape) < math.prod(input_tensor_b.shape):
         input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
 
-    original_shape = input_tensor_a.shape
-    input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-    ttl_input_tensor_a = input_tensor_a.value
-
-    if not ttnn.has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
-        raise RuntimeError("input_tensor_a must be on device!")
-
-    if _is_scalar(input_tensor_b):
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.add_unary(
-                ttl_input_tensor_a,
-                input_tensor_b * alpha,
-                output_mem_config=memory_config,
-            )
-        )
-        return ttnn.reshape(output_tensor, original_shape)
-    elif isinstance(input_tensor_b, ttnn.Tensor):
-        input_shape_b = input_tensor_b.shape
-
-        if len(input_shape_b) == 1:
-            height_b = 1
-            (width_b,) = input_shape_b
-        else:
-            *_, height_b, width_b = input_shape_b
-
-        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-        ttl_input_tensor_b = input_tensor_b.value
-        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
-            raise RuntimeError("input_tensor_a must be on device!")
-    else:
-        raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
-
-    ttl_input_tensor_b = input_tensor_b.value
-    if alpha != 1:
-        ttl_input_tensor_b = ttl.tensor.mul_unary(
-            ttl_input_tensor_b,
-            alpha,
-            output_mem_config=memory_config,
-        )
-
-    if height_b == 1 and width_b == 1:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.HW,
-                output_mem_config=memory_config,
-            )
-        )
-    elif height_b == 1:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
-                output_mem_config=memory_config,
-            )
-        )
-    elif width_b == 1:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.W,
-                output_mem_config=memory_config,
-            )
-        )
-    else:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.add(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                output_mem_config=memory_config,
-            )
-        )
-
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-    return output_tensor
+    return ttl.ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
 
 
 def _sub_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):

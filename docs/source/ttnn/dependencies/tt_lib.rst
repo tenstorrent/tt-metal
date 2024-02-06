@@ -73,6 +73,23 @@ And below, is an example of how to declare a new on-host operation with all of t
         }
     };
 
+If an operation is expected to leverage optional output tensors, please use instead the validate_with_output_tensors
+and create_output_tensors with the additional parameter for the output_tensors.
+
+.. code-block::
+
+    struct <NewOperation> {
+        void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+
+        static constexpr auto attribute_names = std::make_tuple();
+        const auto attribute_values() const {
+            return std::make_tuple();
+        }
+    };
+
+
 Profiler
 ----------------------------
 

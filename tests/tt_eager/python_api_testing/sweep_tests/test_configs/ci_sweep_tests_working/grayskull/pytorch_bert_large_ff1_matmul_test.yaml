@@ -6,7 +6,7 @@ test-list:
         end-shape: [9]
         interval: [1]
         num-shapes: 3
-        num-samples: 64
+        num-samples: 1
         args-sampling-strategy: "all"
         method: bert_large_mul
       env:

@@ -9,8 +9,8 @@ from ttnn.types import (
     Layout,
     DEVICE_STORAGE_TYPE,
     Tensor,
-    has_storage_type_of,
 )
+from ttnn.core import has_storage_type_of
 
 
 def validate_input_tensor(

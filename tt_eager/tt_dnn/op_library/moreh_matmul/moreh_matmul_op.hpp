@@ -35,14 +35,15 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t output_start_tile_id);
 
 struct MorehMatmul {
+    const MemoryConfig output_mem_config;
     bool transpose_input;
     bool transpose_other;
     uint32_t input_start_tile_id = 0;
     uint32_t other_start_tile_id = 0;
     uint32_t output_start_tile_id = 0;
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     static constexpr auto attribute_names =

@@ -30,41 +30,11 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other) {
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-void MorehMatmul::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& other_tensor = input_tensors.at(1);
-    TT_ASSERT(
-        (input_tensor.layout() == Layout::TILE && other_tensor.layout() == Layout::TILE),
-        "Inputs to matmul must be tilized");
-
-    TT_ASSERT(
-        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
-        "Unsupported data format");
-    TT_ASSERT(
-        input_tensor.storage_type() == StorageType::DEVICE and other_tensor.storage_type() == StorageType::DEVICE,
-        "Operands to matmul need to be on device!");
-    TT_ASSERT(input_tensor.device() == other_tensor.device(), "Operands to matmul need to be on the same device!");
-    TT_ASSERT(
-        input_tensor.buffer() != nullptr and other_tensor.buffer() != nullptr,
-        "Operands to matmul need to be allocated in buffers on device!");
-}
-
-std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    // inplace
-    return {};
-}
-
-std::vector<Tensor> MorehMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // inplace
-    return {};
-}
-
 operation::ProgramWithCallbacks MorehMatmul::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);
-    // inplace
-    const auto& output_tensor = input_tensors.at(2);
+    const auto& output_tensor = output_tensors.at(0);
     // TODO: add optimized matmul
     return moreh_matmul_multi_core(
         input_tensor,
@@ -115,30 +85,71 @@ inline Shape compute_output_shape(
     return {Shape(output_shape, padding)};
 }
 
-inline Tensor create_output_tensor(
-    const Tensor& input_tensor, const Shape& output_shape, const MemoryConfig& mem_config) {
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-    return create_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), mem_config);
+// Must be provided in the case where an optional output tensor was not provided
+std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {compute_output_shape(input_tensors.at(0).shape(), input_tensors.at(1).shape(), this->transpose_input, this->transpose_other)};
+}
+
+std::vector<Tensor> MorehMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
+    const auto& output_shapes = this->compute_output_shapes(input_tensors);
+    const auto& output_shape = output_shapes.at(0);
+
+    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).dtype(), Layout::TILE, this->output_mem_config)};
+}
+
+void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& other_tensor = input_tensors.at(1);
+    TT_ASSERT(
+        (input_tensor.layout() == Layout::TILE && other_tensor.layout() == Layout::TILE),
+        "Inputs to matmul must be tilized");
+
+    TT_ASSERT(
+        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
+        "Unsupported data format");
+    TT_ASSERT(
+        input_tensor.storage_type() == StorageType::DEVICE and other_tensor.storage_type() == StorageType::DEVICE,
+        "Operands to matmul need to be on device!");
+    TT_ASSERT(input_tensor.device() == other_tensor.device(), "Operands to matmul need to be on the same device!");
+    TT_ASSERT(
+        input_tensor.buffer() != nullptr and other_tensor.buffer() != nullptr,
+        "Operands to matmul need to be allocated in buffers on device!");
+
+
+    if(output_tensors.empty() || !output_tensors.at(0).has_value()){
+        // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
+        return;
+    }
+    const auto& input_shape = input_tensor.shape();
+    const auto& other_shape = other_tensor.shape();
+    const auto output_shape_required = compute_output_shape(input_shape, other_shape, this->transpose_input, this->transpose_other);
+    const auto& actual_shape = output_tensors.at(0).value().shape();
+    bool shape_ok = output_shape_required.rank() == actual_shape.rank();
+    for(size_t i=0; i < std::min(actual_shape.rank(),output_shape_required.rank()) ; i++){
+        shape_ok &= output_shape_required[i] <= actual_shape[i];
+    }
+    TT_ASSERT(shape_ok, fmt::format("The input tensors need a shape of {}, however the output tensor is only {}",output_shape_required,  actual_shape));
 }
 
 Tensor moreh_matmul_(
     const Tensor& input_tensor,
     const Tensor& other_tensor,
-    std::optional<std::reference_wrapper<const Tensor>> output_tensor,
+    std::optional<Tensor> output_tensor,
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {
-    moreh_matmul_validate(input_tensor, other_tensor, transpose_input, transpose_other);
 
     const auto& input_shape = input_tensor.shape();
     const auto& other_shape = other_tensor.shape();
     const auto& output_shape = compute_output_shape(input_shape, other_shape, transpose_input, transpose_other);
-    auto output_tensor_select =
-        (output_tensor) ? (output_tensor->get()) : (create_output_tensor(input_tensor, output_shape, mem_config));
 
     uint32_t input_other2MtKt = input_shape[1] * input_shape[2] * input_shape[3];
     uint32_t other_other2KtNt = other_shape[1] * other_shape[2] * other_shape[3];
     uint32_t output_other2MtNt = output_shape[1] * output_shape[2] * output_shape[3];
+
     for (uint32_t b1 = 0; b1 < output_shape[0]; ++b1) {
         uint32_t input_other1_index = (b1 >= input_shape[0]) ? (0) : (b1);
         uint32_t other_other1_index = (b1 >= other_shape[0]) ? (0) : (b1);
@@ -147,17 +158,20 @@ Tensor moreh_matmul_(
         uint32_t other_start_tile_id = other_other1_index * other_other2KtNt / TILE_HW;
         uint32_t output_start_tile_id = b1 * output_other2MtNt / TILE_HW;
 
-        operation::run(
+        output_tensor = operation::run(
             MorehMatmul{
+                .output_mem_config = mem_config,
                 .transpose_input = transpose_input,
                 .transpose_other = transpose_other,
                 .input_start_tile_id = input_start_tile_id,
                 .other_start_tile_id = other_start_tile_id,
                 .output_start_tile_id = output_start_tile_id},
-            {input_tensor, other_tensor, output_tensor_select});
+            {input_tensor, other_tensor}, {}, {output_tensor}).at(0);
+
+
     }
 
-    return output_tensor_select;
+    return output_tensor.value();
 }
 
 Tensor moreh_matmul(

@@ -25,7 +25,7 @@ namespace tt::tt_metal {
 namespace{
     std::atomic<bool> enable_persistent_kernel_cache = false;
 
-    void GenerateBinaries(Device *device, JitBuildOptions& build_options, Kernel *kernel) {
+    void GenerateBinaries(Device *device, JitBuildOptions& build_options, std::shared_ptr<Kernel> kernel) {
         ZoneScoped;
         const std::string tracyPrefix = "GenerateBinaries_";
         ZoneName( (tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
@@ -43,7 +43,7 @@ namespace{
     #endif
 
     size_t KernelCompileHash(
-        Kernel *kernel, JitBuildOptions &build_options, const chip_id_t &device_id) {
+        const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, const chip_id_t &device_id) {
         // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
         // This can be removed with https://github.com/tenstorrent-metal/tt-metal/issues/3381
 
@@ -95,9 +95,10 @@ auto Program::semaphores_on_core(const CoreCoord &core) const {
 
 std::atomic<uint64_t> Program::program_counter = 0;
 
-Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false) {}
+Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false) {
+}
 
-KernelHandle Program::add_kernel(Kernel *kernel) {
+KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel) {
     this->invalidate_compile();
     KernelHandle id = kernels_.size();
     kernels_.push_back(kernel);
@@ -106,7 +107,7 @@ KernelHandle Program::add_kernel(Kernel *kernel) {
     return id;
 }
 
-Kernel *Program::get_kernel(KernelHandle kernel_id) const {
+std::shared_ptr<Kernel> Program::get_kernel(KernelHandle kernel_id) const {
     //TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
     return this->kernels_.at(kernel_id);
 }
@@ -144,13 +145,13 @@ KernelGroup::KernelGroup(
     }
 
     if (ncrisc_id) {
-        const Kernel *kernel = program.get_kernel(ncrisc_id.value());
+        const auto kernel = program.get_kernel(ncrisc_id.value());
         // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
         // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
         this->launch_msg.enable_ncrisc = true;
         this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
         this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
-        this->launch_msg.ncrisc_watcher_kernel_id = program.get_kernel(ncrisc_id.value())->get_watcher_kernel_id();
+        this->launch_msg.ncrisc_watcher_kernel_id = kernel->get_watcher_kernel_id();
     } else {
         this->launch_msg.ncrisc_watcher_kernel_id = 0;
         this->launch_msg.enable_ncrisc = false;
@@ -203,8 +204,7 @@ struct KernelGroupInt {
     std::optional<KernelHandle> erisc_id = std::nullopt;
 
     bool operator==(const KernelGroupInt& b) const;
-    void update(Kernel* kernel, size_t kernel_idx) {
-        RISCV riscv_processor = kernel->processor();
+    void update(RISCV riscv_processor, size_t kernel_idx) {
         switch (riscv_processor) {
         case RISCV::BRISC:
             this->brisc_id = static_cast<KernelHandle>(kernel_idx);
@@ -241,7 +241,7 @@ void Program::update_kernel_groups() {
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(),
                           std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_ = {0, 0};
-        for (Kernel * kernel : kernels_) {
+        for (auto kernel : kernels_) {
             for (auto core : kernel->logical_cores()) {
                 if (core.x > grid_extent_.x) grid_extent_.x = core.x;
                 if (core.y > grid_extent_.y) grid_extent_.y = core.y;
@@ -256,11 +256,11 @@ void Program::update_kernel_groups() {
         std::vector<KernelGroupInt> grid;
         grid.resize(grid_extent_.x * grid_extent_.y);
         for (size_t kidx = 0; kidx < this->num_kernels(); kidx++) {
-            Kernel * kernel = kernels_[kidx];
+            auto kernel = kernels_[kidx];
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_.x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(kernel, kidx);
+                grid[core_index].update(kernel->processor(), kidx);
             }
         }
 
@@ -323,7 +323,7 @@ std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
     for (const auto &[core_type, cores_of_type] : this->logical_cores()) {
         for (const auto &core : cores_of_type) {
-            for (Kernel * kernel : kernels_) {
+            for (auto kernel : kernels_) {
                 if ( kernel->get_kernel_core_type() !=  core_type ) continue;
                 auto cores = kernel->logical_cores();
                 if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
@@ -513,7 +513,7 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
     std::unordered_map<CoreType, std::vector<CoreCoord>> cores_in_program;
     std::unordered_map<CoreType, std::set<CoreCoord>> unique_cores;
-    for (Kernel * kernel : kernels_){
+    for (auto kernel : kernels_){
         const auto &core_type = kernel->get_kernel_core_type();
         if (cores_in_program.find(core_type) == cores_in_program.end()) {
             cores_in_program.insert({core_type, {}});
@@ -534,7 +534,7 @@ std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() co
 
 void Program::construct_core_range_set_for_worker_cores() {
     bool found_kernels = false;
-    for (Kernel * kernel : kernels_){
+    for (auto kernel : kernels_){
         this->worker_crs_ = this->worker_crs_.merge ( kernel->core_range_set() );
         found_kernels = true;
     }
@@ -542,9 +542,9 @@ void Program::construct_core_range_set_for_worker_cores() {
 }
 
 void Program::set_cb_data_fmt(
-    Device *device, Kernel *kernel, JitBuildOptions &build_options) const {
+    Device *device, const std::vector<CoreRange> & crs, JitBuildOptions &build_options) const {
     ZoneScoped;
-    for (auto logical_cr : kernel->logical_coreranges()) {
+    for (auto logical_cr : crs) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (auto circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
@@ -576,17 +576,17 @@ void Program::compile( Device * device )
     detail::ProfileTTMetalScope profile_this =
         detail::ProfileTTMetalScope(std::string("CompileProgram ") + std::to_string(device->id()));
     bool profile_kernel = getDeviceProfilerState();
-    std::vector<std::future<void>> events;
+    std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
 
     // compile all kernels in parallel
-    for (Kernel * kernel : kernels_) {
+    for (auto kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device, this] {
             ZoneScoped;
 
             JitBuildOptions build_options(device->build_env());
             kernel->set_build_options(build_options);
-            this->set_cb_data_fmt(device, kernel, build_options);
+            this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 
             auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
             std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
@@ -612,7 +612,7 @@ void Program::compile( Device * device )
     for (auto & f : events)
         f.wait();
 
-    for (Kernel * kernel : kernels_) {
+    for (auto kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
     }
 
@@ -631,8 +631,5 @@ void Program::compile( Device * device )
 }
 
 Program::~Program() {
-    for (Kernel * kernel : kernels_) {
-        delete kernel;
-    }
 }
 }  // namespace tt::tt_metal

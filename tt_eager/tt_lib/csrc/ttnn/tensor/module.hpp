@@ -61,7 +61,7 @@ struct Shape {
     bool operator==(const Shape& other) const { return this->value == other.value; }
 };
 
-std::ostream& operator<<(std::ostream& os, const Shape& self) {
+inline std::ostream& operator<<(std::ostream& os, const Shape& self) {
     os << "ttnn.Shape([";
     const auto shape = self.value.without_padding();
     const auto& padding = self.value.padding();

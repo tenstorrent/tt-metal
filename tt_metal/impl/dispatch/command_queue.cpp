@@ -22,6 +22,37 @@ namespace tt::tt_metal {
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
+namespace {
+
+    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer(const chip_id_t chip_id) {
+        static map<chip_id_t, map<uint64_t, unique_ptr<Buffer>>> chip_to_program_to_buffer;
+        if (chip_to_program_to_buffer.count(chip_id)) {
+            return chip_to_program_to_buffer[chip_id];
+        }
+        map<uint64_t, unique_ptr<Buffer>> dummy;
+        chip_to_program_to_buffer.emplace(chip_id, std::move(dummy));
+        return chip_to_program_to_buffer[chip_id];
+    }
+
+    map<uint64_t, ProgramMap>& program_to_dev_map(const chip_id_t chip_id) {
+        static map<chip_id_t, map<uint64_t, ProgramMap>> chip_to_program_to_dev_map;
+        if (chip_to_program_to_dev_map.count(chip_id)) {
+            return chip_to_program_to_dev_map[chip_id];
+        }
+        map<uint64_t, ProgramMap> dummy;
+        chip_to_program_to_dev_map.emplace(chip_id, std::move(dummy));
+        return chip_to_program_to_dev_map[chip_id];
+    };
+}
+
+namespace detail{
+    void ClearProgramCache(Device * device) {
+        detail::DispatchStateCheck(true);
+        program_to_buffer(device->id()).clear();
+        program_to_dev_map(device->id()).clear();
+    }
+}
+
 uint32_t get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 }
@@ -1204,7 +1235,7 @@ void CommandQueue::enqueue_program(Program& program, std::optional<std::referenc
     // data to land in DRAM first
     bool stall = false;
     // No shared cache so far, can come at a later time
-    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer = this->program_to_buffer(this->device->id());
+    map<uint64_t, unique_ptr<Buffer>>& program_to_buffer = ::program_to_buffer(this->device->id());
     if (not program_to_buffer.count(program_id)) {
         stall = true;
         ProgramMap program_to_device_map = ConstructProgramMap(this->device, program);
@@ -1221,13 +1252,13 @@ void CommandQueue::enqueue_program(Program& program, std::optional<std::referenc
 
         this->enqueue_write_buffer(*program_to_buffer.at(program_id), program_pages.data(), false);
 
-        map<uint64_t, ProgramMap>& program_to_dev_map = this->program_to_dev_map(device->id());
+        map<uint64_t, ProgramMap>& program_to_dev_map = ::program_to_dev_map(device->id());
         program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
     }
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram for channel {}", this->id);
 
-    uint32_t host_data_num_pages = this->program_to_dev_map(this->device->id()).at(program_id).runtime_arg_page_transfers.size() + this->program_to_dev_map(this->device->id()).at(program_id).cb_config_page_transfers.size();
+    uint32_t host_data_num_pages = ::program_to_dev_map(this->device->id()).at(program_id).runtime_arg_page_transfers.size() + ::program_to_dev_map(this->device->id()).at(program_id).cb_config_page_transfers.size();
 
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
@@ -1242,8 +1273,8 @@ void CommandQueue::enqueue_program(Program& program, std::optional<std::referenc
     EnqueueProgramCommand command(
         this->id,
         this->device,
-        *this->program_to_buffer(this->device->id()).at(program_id),
-        this->program_to_dev_map(this->device->id()).at(program_id),
+        *::program_to_buffer(this->device->id()).at(program_id),
+        ::program_to_dev_map(this->device->id()).at(program_id),
         this->manager,
         program,
         stall,
@@ -1388,12 +1419,6 @@ void Finish(CommandQueue& cq) {
     ZoneScoped;
     tt_metal::detail::DispatchStateCheck(true);
     cq.finish();
-}
-
-void ClearProgramCache(CommandQueue& cq) {
-    detail::DispatchStateCheck(true);
-    cq.program_to_buffer(cq.device->id()).clear();
-    cq.program_to_dev_map(cq.device->id()).clear();
 }
 
 Trace BeginTrace(CommandQueue& command_queue) {

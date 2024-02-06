@@ -8,15 +8,15 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#include "llk_math_reduce_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
 #endif
 
-#include "debug/dprint.h"
-
-
 namespace ckernel {
+
+
 
 /**
  * Initialize the tilize operation. To be called once at beginning of a kernel.
@@ -27,15 +27,37 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
-    PACK(( llk_pack_init() ));
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
+    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>(ocb) ));
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated(icb) ));
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
+
+#if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
+/**
+ * Initialize the tilize operation. To be called once at beginning of a kernel.
+ */
+ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb = 16)
+{
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_setup_operands() ));
+    UNPACK(( llk_unpack_tilizeA_B_hw_configure_disaggregated(icb0, icb1_scaler) ));
+    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1_scaler, block) ));
+
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>() ));
+
+    PACK(( llk_pack_init(ocb) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
+    PACK(( llk_setup_outputs() ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>(ocb) ));
+    #endif
+}
+#endif
 
 /**
  * Re-initialize for the tilize operation. This can be called after a full init.
@@ -44,6 +66,18 @@ ALWI void tilize_init_short(uint32_t icb, uint32_t block)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
+}
+
+ALWI void tilize_init_unpack(uint32_t icb, uint32_t block)
+{
+    UNPACK(( llk_unpack_tilize_init(icb, block) ));
+}
+
+ALWI void tilizeA_B_init_unpack(uint32_t icb0, uint32_t icb1, uint32_t block)
+{
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1, block) ));
+    #endif
 }
 
 /**
@@ -76,6 +110,18 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
         MATH(( llk_math_dest_section_done<SYNC>() ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
+}
+
+ALWI void unpack_tilize_block(uint32_t icb, uint32_t block)
+{
+    UNPACK(( llk_unpack_tilize_block(icb, block) ));
+}
+
+ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b)
+{
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b) ));
+    #endif
 }
 
 /**

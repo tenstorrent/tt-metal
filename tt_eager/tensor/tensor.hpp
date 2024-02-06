@@ -4,19 +4,19 @@
 
 #pragma once
 
-#include <vector>
 #include <array>
 #include <random>
 #include <tuple>
+#include <variant>
+#include <vector>
 
-#include "tensor/types.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "common/test_tiles.hpp"
-#include "common/tt_backend_api_types.hpp"
 #include "common/bfloat16.hpp"
 #include "common/bfloat8.hpp"
-
+#include "common/test_tiles.hpp"
+#include "common/tt_backend_api_types.hpp"
+#include "tensor/types.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
@@ -139,3 +139,20 @@ void memcpy(Tensor &dst, const Tensor &src);
 }  // namespace tt_metal
 
 }  // namespace tt
+
+namespace ttnn {
+namespace types {
+
+struct Tensor {
+    const tt::tt_metal::Tensor value;
+    const ttnn::Shape shape;
+
+    explicit Tensor(tt::tt_metal::Tensor &&tensor) : value{tensor}, shape{ttnn::Shape(tensor.shape())} {}
+    explicit Tensor(const tt::tt_metal::Tensor &tensor) : value{tensor}, shape{ttnn::Shape(tensor.shape())} {}
+};
+
+}  // namespace types
+
+using types::Tensor;
+
+}  // namespace ttnn
