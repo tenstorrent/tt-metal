@@ -1102,12 +1102,15 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
     std::visit ( [&cq, dst, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
         std::future<void> f;
+        std::optional<std::reference_wrapper<tf::AsyncTask>> t;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer> > ) {
-            cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
+            t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
                 device->hw_command_queue(cq_id).enqueue_read_buffer(b, dst, blocking);
             }, f );
         }
         f.wait();
+        if (t.has_value()) t.value().get().reset();
+
     }, buffer);
 }
 
@@ -1117,12 +1120,20 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
     std::visit ( [&cq, src, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
         std::future<void> f;
-        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> ||  std::is_same_v<T, std::shared_ptr<Buffer> > ) {
-            cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
+        std::optional<std::reference_wrapper<tf::AsyncTask>> t;
+        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> ) {
+            t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
                 device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
             }, f );
         }
+        else if constexpr ( std::is_same_v<T, std::shared_ptr<Buffer>> ) {
+            t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
+                device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
+            }, f );
+
+       }
        f.wait();
+       if (t.has_value()) t.value().get().reset();
     }, buffer);
 }
 
@@ -1133,8 +1144,9 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
     std::visit ( [&cq, blocking, trace](auto&& program) {
             using T = std::decay_t<decltype(program)>;
             std::future<void> f;
+            std::optional<std::reference_wrapper<tf::AsyncTask>> t;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
-                cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
+                t = cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
                     TT_ASSERT(cq_id == 0, "EnqueueProgram only supported on first command queue on device for time being.");
                     detail::CompileProgram(device, program);
                     program.get().allocate_circular_buffers();
@@ -1142,7 +1154,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                     device->hw_command_queue(cq_id).enqueue_program(program, trace, blocking);
                 }, f);
             } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
-                cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
+                t = cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
                     TT_ASSERT(cq_id == 0, "EnqueueProgram only supported on first command queue on device for time being.");
                     detail::CompileProgram(device, *program);
                     program->allocate_circular_buffers();
@@ -1151,6 +1163,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                 }, f );
             }
             f.wait();
+            if (t.has_value()) t.value().get().reset();
         }, program);
 }
 
@@ -1206,10 +1219,11 @@ void EnqueueRestart(CommandQueue& cq) {
     ZoneScoped;
     detail::DispatchStateCheck(true);
     std::future<void> f;
-    cq.submit( [device = cq.device(), cq_id = cq.id()] {
+    auto& t = cq.submit( [device = cq.device(), cq_id = cq.id()] {
         device->hw_command_queue(cq_id).restart();
     }, f);
     f.get();
+    t.reset();
 }
 
 }
