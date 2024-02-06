@@ -272,18 +272,26 @@ void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&bin
 void DataMovementKernel::read_binaries(Device *device) {
     log_info(LogTest, "Called DMK::read_binaries on kernel {}...", this->name());
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
+    log_info(LogTest, "    1");
     std::vector<ll_api::memory> binaries;
+    log_info(LogTest, "    2");
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
     // TODO(pgk): consolidate read_binaries where possible
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    log_info(LogTest, "    3");
     const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::DATA_MOVEMENT, riscv_id);
+    log_info(LogTest, "    4");
     ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
+    log_info(LogTest, "    5");
     this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, riscv_id);
-    log_info(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
+    log_info(LogTest, "    6");
+    log_info(LogTest, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
+    log_info(LogTest, "    7");
     this->set_binaries(device->id(), std::move(binaries));
+    log_info(LogTest, "    8");
 }
 
 void EthernetKernel::read_binaries(Device *device) {
