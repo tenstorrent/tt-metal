@@ -112,11 +112,18 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " +
         "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " +
         "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " + // TODO(fixme)
-        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/common/inc " + // TODO(fixme) datamovement fw shouldn't read this
-        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/llk_lib " +
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " +
         "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io ";
 
+
+    if(this->arch_name_ == "grayskull") {
+        this->includes_ += "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/common/inc "; // TODO(fixme) datamovement fw shouldn't read this
+        this->includes_ += "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+    } else {
+        //Remove once wormhole b0 path is also added to third_party
+        this->includes_ += "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/common/inc "; // TODO(fixme) datamovement fw shouldn't read this
+        this->includes_ += "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/llk_lib ";
+    }
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 }
@@ -239,13 +246,19 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
 
     this->includes_ = env_.includes_ +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " +
-        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/llk_lib " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
         "-I" + env_.root_ + "tt_metal/third_party/sfpi/include " +
         "-I" + env_.root_ + "tt_metal/hw/firmware/src ";
+
+    if(env.arch_name_ == "grayskull") {
+        this->includes_ += "-I" + env_.root_ + "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
+    } else {
+        //Remove once wormhole b0 path is also added to third_party
+        this->includes_ += "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/llk_lib ";
+    }
 
     this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
     if (this->is_fw_) {
