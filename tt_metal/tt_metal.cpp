@@ -39,7 +39,11 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_grou
     log_info(LogTest, "3");
     if (kernel_group->riscv0_id.has_value()) {
         log_info(LogTest, "c");
-        detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
+        log_info(LogTest, "Getting kernel...");
+        auto k = detail::GetKernel(program, kernel_group->riscv0_id.value());
+        log_info(LogTest, "Configuring...");
+        k->configure(device, logical_core);
+        log_info(LogTest, "Done...");
     }
     log_info(LogTest, "4");
     if (kernel_group->erisc_id.has_value()) {
