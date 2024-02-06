@@ -14,7 +14,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_mop_config_() {
+inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces) {
 #if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
@@ -28,16 +28,10 @@ inline void _llk_unpack_reduce_mop_config_() {
     static constexpr uint unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        true,  // src B
-        true,  // halo - just used for 4 unpacks
-        unpack_zerosrca,
-        unpack_srca,
-        TT_OP_NOP,
-        TT_OP_NOP,
-        0,
-        unpack_srcb,
-        0);
+    const uint32_t outerloop = num_faces;
+    constexpr uint32_t innerloop = 1;
+    ckernel_template tmp(outerloop, innerloop, unpack_zerosrca, unpack_srca);
+    tmp.set_start_op(unpack_srcb);
     tmp.program(instrn_buffer);
 }
 
@@ -62,7 +56,7 @@ inline void _llk_unpack_reduce_hw_configure_(const std::uint32_t unpA_src_format
 }
 
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0) {
+inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t num_faces = 4) {
 
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
@@ -70,7 +64,7 @@ inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_trans
 
     TTI_SETADCXX(0b11, FACE_R_DIM*FACE_C_DIM-1, 0x0);
 
-    _llk_unpack_reduce_mop_config_<type, dim>();
+    _llk_unpack_reduce_mop_config_<type, dim>(num_faces);
 }
 
 template <PoolType type, ReduceDim dim>
@@ -98,7 +92,7 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
     }
 
     // Run MOP
-    mop_run(0, 4);
+    ckernel::ckernel_template::run(instrn_buffer);
 
     // Restore face height
     TTI_SETADCXX(p_setadc::UNP1, FACE_R_DIM*FACE_C_DIM-1, 0x0);

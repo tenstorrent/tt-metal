@@ -142,10 +142,18 @@ inline void _llk_pack_reduce_hw_configure_(const std::uint32_t pack_src_format, 
             pack_edge_offset.f.tile_row_set_select_pack1 = 1;
             pack_edge_offset.f.tile_row_set_select_pack2 = 1;
             pack_edge_offset.f.tile_row_set_select_pack3 = 1;
-            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x11111111; // each packer packs 1x32 row
+            if (narrow_tile) {
+                cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x55555555; // each packer packs 1x16 row
+            } else {
+                cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x11111111; // each packer packs 1x32 row
+            }    
         } else {
             pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            if (narrow_tile) {
+                pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+            } else {
+                pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            }
             cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x55555555; // each packer packs 1x16 row
         }
         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
