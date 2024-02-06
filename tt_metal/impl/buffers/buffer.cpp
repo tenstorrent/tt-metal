@@ -8,7 +8,6 @@
 #include "tt_metal/common/math.hpp"
 #include "common/assert.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "llrt/llrt.hpp"
 
@@ -201,7 +200,6 @@ Buffer::Buffer(const Buffer &other)
 }
 
 Buffer &Buffer::operator=(const Buffer &other) {
-    ZoneScoped;
     if (this != &other) {
         this->device_ = other.device_;
         this->size_ = other.size_;
@@ -236,7 +234,6 @@ Buffer &Buffer::operator=(Buffer &&other) {
 }
 
 void Buffer::allocate() {
-    ZoneScoped;
     TT_ASSERT(this->device_ != nullptr);
     // L1 buffers are allocated top down!
     bool bottom_up = this->buffer_type_ == BufferType::DRAM;

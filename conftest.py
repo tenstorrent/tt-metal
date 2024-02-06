@@ -260,7 +260,6 @@ def device(device_init_destroy):
     yield device
     ttl.device.ClearCommandQueueProgramCache(device)
     ttl.device.DeallocateBuffers(device)
-    ttl.device.DumpDeviceProfiler(device)
 
 
 @pytest.fixture(autouse=True)

@@ -85,24 +85,6 @@ void DeviceProfiler::readRiscProfilerResults(
             PROFILER_L1_CONTROL_BUFFER_SIZE);
 
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
-
-        //std::cout << worker_core.x << "," << worker_core.y  << "," << coreFlatID << "," <<  output_dram_buffer.address() << std::endl
-            //<< control_buffer[kernel_profiler::NOC_X] << "," << control_buffer[kernel_profiler::NOC_Y]
-            //<< "," << control_buffer[kernel_profiler::FLAT_ID]
-            //<< "," << control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS]
-            //<< "," << control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_ER]<< std::endl;
-
-        //vector<std::uint32_t> profile_buffer_L1;
-        //profile_buffer_L1 = tt::llrt::read_hex_vec_from_core(
-                //device_id,
-                //worker_core,
-                //eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
-                //kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
-        //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS; i++)
-        //{
-             //std::cout << profile_buffer_L1[i] << ",";
-        //}
-        //std::cout << std::endl  << std::endl;
     }
 
 
@@ -117,24 +99,6 @@ void DeviceProfiler::readRiscProfilerResults(
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (bufferEndIndex > 0)
         {
-            //vector<std::uint32_t> profile_buffer_L1;
-            //profile_buffer_L1 = tt::llrt::read_hex_vec_from_core(
-                    //device_id,
-                    //worker_core,
-                    //eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER,
-                    //kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
-            //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS; i++)
-            //{
-                 //std::cout << profile_buffer_L1[i] << ",";
-            //}
-            //std::cout << std::endl;
-            //for (int i = kernel_profiler::ID_HH; i < kernel_profiler::CUSTOM_MARKERS + 3; i++)
-            //{
-                 //std::cout << profile_buffer[i] << ",";
-            //}
-            //std::cout << std::endl;
-
-            //return;
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
             {

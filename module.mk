@@ -22,8 +22,7 @@ CONFIG_CFLAGS += -O3 -flto
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
 CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG
 else ifeq ($(CONFIG), assert)
-CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG -fno-omit-frame-pointer
-CONFIG_LDFLAGS += -rdynamic
+CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG
 else ifeq ($(CONFIG), asan)
 CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG -fsanitize=address
 CONFIG_LDFLAGS += -fsanitize=address

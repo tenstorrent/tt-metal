@@ -244,7 +244,6 @@ void Device::initialize_and_launch_firmware() {
 }
 
 void Device::clear_l1_state() {
-    ZoneScoped;
     CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(this->l1_size_per_core() % sizeof(uint32_t) == 0);
     std::vector<uint32_t> zero_vec(this->l1_size_per_core() / sizeof(uint32_t), 0);

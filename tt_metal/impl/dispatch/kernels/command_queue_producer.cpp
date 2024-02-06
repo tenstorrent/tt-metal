@@ -112,7 +112,6 @@ void kernel_main() {
 
         kernel_profiler::mark_kernel_end();
         kernel_profiler::mark_fw_end();
-        kernel_profiler::finish();
         kernel_profiler::send_profiler_data_to_dram();
     }
 }
