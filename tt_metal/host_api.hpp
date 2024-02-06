@@ -233,7 +233,7 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vari
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                            | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                    |                                                                            | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector< vector<uint32_t> > &                | outer vector size must be equal to size of core_spec vector                | Yes      |
  */
@@ -247,7 +247,7 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vect
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
 std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
@@ -257,12 +257,12 @@ std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kerne
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                            | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|----------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                        | Yes      |
- * | buffer       | The device buffer we are reading from                                  | Buffer &                      |                                        | Yes      |
- * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &            |                                        | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          | Only blocking mode supported currently | Yes      |
+ * | Argument     | Description                                                            | Type                                | Valid Range                            | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                        | Yes      |
+ * | buffer       | The device buffer we are reading from                                  | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
+ * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &                  |                                        | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking);
 
@@ -271,12 +271,12 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                            | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|----------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                        | Yes      |
- * | buffer       | The device buffer we are reading from                                  | Buffer &                      |                                        | Yes      |
- * | dst          | The memory where the result will be stored                             | void*                         |                                        | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          | Only blocking mode supported currently | Yes      |
+ * | Argument     | Description                                                            | Type                                | Valid Range                            | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                        | Yes      |
+ * | buffer       | The device buffer we are reading from                                  | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
+ * | dst          | The memory where the result will be stored                             | void*                               |                                        | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, void* dst, bool blocking);
 
@@ -285,12 +285,12 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | buffer       | The device buffer we are writing to                                    | Buffer &                      |                                    | Yes      |
- * | src          | The vector we are writing to the device                                | vector<uint32_t> &            |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ * | Argument     | Description                                                            | Type                                | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                    | Yes      |
+ * | buffer       | The device buffer we are writing to                                    | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
+ * | src          | The vector we are writing to the device                                | vector<uint32_t> &                  |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
 void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& src, bool blocking);
 
@@ -299,12 +299,12 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | buffer       | The device buffer we are writing to                                    | Buffer &                      |                                    | Yes      |
- * | src          | The memory we are writing to the device                                | const void*                   |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ * | Argument     | Description                                                            | Type                                | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                      |                                    | Yes      |
+ * | buffer       | The device buffer we are writing to                                    | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
+ * | src          | The memory we are writing to the device                                | const void*                         |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
 void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, const void* src, bool blocking);
 
