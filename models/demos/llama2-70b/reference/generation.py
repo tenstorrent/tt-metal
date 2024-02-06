@@ -81,30 +81,36 @@ class Llama:
             and loads the pre-trained model and tokenizer.
 
         """
-        if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group("nccl")
-        if not model_parallel_is_initialized():
-            if model_parallel_size is None:
-                model_parallel_size = int(os.environ.get("WORLD_SIZE", 1))
-            initialize_model_parallel(model_parallel_size)
-
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(local_rank)
 
         # seed must be the same in all processes
         torch.manual_seed(seed)
 
-        if local_rank > 0:
-            sys.stdout = open(os.devnull, "w")
-
         start_time = time.time()
-        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-        assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-        assert model_parallel_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-        ckpt_path = checkpoints[get_model_parallel_rank()]
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        checkpoint = {}
+        if not skip_model_load:
+            checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+            assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+            print(f"Loading {len(checkpoints)} checkpoint files")
+            for ckpt in tqdm(checkpoints):
+                loaded_ckpt = torch.load(ckpt, map_location="cpu")
+                for (
+                    key,
+                    value,
+                ) in loaded_ckpt.items():
+                    if key in checkpoint:
+                        checkpoint[key] += [value]
+                    else:
+                        checkpoint[key] = [value]
+
+            # concat checkpoint values
+            for key, value in checkpoint.items():
+                if len(value) == 1 or "norm" in key:
+                    checkpoint[key] = value[0]
+                else:
+                    # cat_dim is index of the smallest dimension in value[0].shape
+                    cat_dim = torch.argmin(torch.tensor(value[0].shape))
+                    checkpoint[key] = torch.cat(value, dim=cat_dim)
+
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 
