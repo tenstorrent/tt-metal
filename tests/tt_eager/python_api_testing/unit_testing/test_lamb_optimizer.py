@@ -5,9 +5,7 @@
 import torch
 import pytest
 import tt_lib
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
     lamb_optimizer_kernel,
 )
@@ -28,9 +26,10 @@ from loguru import logger
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize("weight_decay", [0.01])
 def test_lamb_kernel(input_shapes, beta1, beta2, step_size, eps, weight_decay, device):
-    torch.manual_seed(0)
     param_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
-    grad_data, exp_avg_data, exp_avg_sq_data = param_data, param_data, param_data
+    grad_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
+    exp_avg_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
+    exp_avg_sq_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
 
     param = (
         tt_lib.tensor.Tensor(param_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
@@ -79,14 +78,15 @@ def test_lamb_kernel(input_shapes, beta1, beta2, step_size, eps, weight_decay, d
         weight_decay=weight_decay,
     )
 
-    comp_pass_a, _ = comparison_funcs.comp_pcc(exp_avg_out, tt_output_tensor_a, 0.99)
-    _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(exp_avg_out, tt_output_tensor_a)
+    rtol = atol = 0.1
+    comp_pass_a, _ = comp_pcc(exp_avg_out, tt_output_tensor_a, 0.99)
+    _, comp_out_a = comp_allclose_and_pcc(exp_avg_out, tt_output_tensor_a, pcc=0.999, rtol=rtol, atol=atol)
 
-    comp_pass_b, _ = comparison_funcs.comp_pcc(exp_avg_sq_out, tt_output_tensor_b, 0.99)
-    _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(exp_avg_sq_out, tt_output_tensor_b)
+    comp_pass_b, _ = comp_pcc(exp_avg_sq_out, tt_output_tensor_b, 0.99)
+    _, comp_out_b = comp_allclose_and_pcc(exp_avg_sq_out, tt_output_tensor_b, pcc=0.999, rtol=rtol, atol=atol)
 
-    comp_pass_c, _ = comparison_funcs.comp_pcc(param, tt_output_tensor_c, 0.99)
-    _, comp_out_c = comparison_funcs.comp_allclose_and_pcc(param, tt_output_tensor_c)
+    comp_pass_c, _ = comp_pcc(param, tt_output_tensor_c, 0.99)
+    _, comp_out_c = comp_allclose_and_pcc(param, tt_output_tensor_c, pcc=0.999, rtol=rtol, atol=atol)
 
     logger.info(comp_out_a)
     logger.info(comp_out_b)
