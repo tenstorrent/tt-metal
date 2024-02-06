@@ -144,7 +144,6 @@ class BUDAEagerBuild(build_ext):
 
         build_lib = self.build_lib
         full_lib_path = build_lib + "/" + filename
-        os.makedirs(os.path.dirname(full_lib_path))
 
         src = BUDAEagerBuildConstants.BUDA_EAGER_SO_SRC_LOCATION
         self.copy_file(src, full_lib_path)
