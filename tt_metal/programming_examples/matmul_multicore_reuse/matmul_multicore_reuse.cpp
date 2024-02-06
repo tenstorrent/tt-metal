@@ -185,12 +185,12 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
 
 
 
-    Buffer src0_dram_buffer = CreateBuffer(dram_config_A);
-    Buffer src1_dram_buffer = CreateBuffer(dram_config_B);
-    Buffer dst_dram_buffer = CreateBuffer(dram_config_C);
-    uint32_t src0_addr = src0_dram_buffer.address();
-    uint32_t src1_addr = src1_dram_buffer.address();
-    uint32_t dst_addr = dst_dram_buffer.address();
+    auto src0_dram_buffer = CreateBuffer(dram_config_A);
+    auto src1_dram_buffer = CreateBuffer(dram_config_B);
+    auto dst_dram_buffer = CreateBuffer(dram_config_C);
+    uint32_t src0_addr = src0_dram_buffer->address();
+    uint32_t src1_addr = src1_dram_buffer->address();
+    uint32_t dst_addr = dst_dram_buffer->address();
 
     /*
     * Config of Circular Buffer in the device L1
@@ -220,11 +220,11 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
     /*
     * Compile time arguments
     */
-    bool src0_is_dram = src0_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     //std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) output_cb_index, (uint32_t)dst_is_dram};
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
@@ -264,7 +264,7 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
 
             // Write runtime args to device
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)  src0_dram_buffer.address(), // in0_tensor_addr
+                (std::uint32_t)  src0_dram_buffer->address(), // in0_tensor_addr
                 (std::uint32_t)  Kt * per_core_M * output_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
                 (std::uint32_t)  Kt, // in0_tensor_stride_h
@@ -274,7 +274,7 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
                 (std::uint32_t)  per_core_M, // in0_block_h
                 (std::uint32_t)  in0_block_w * per_core_M, //in0_block_num_tiles
 
-                (std::uint32_t)  src1_dram_buffer.address(), // in1_tensor_addr
+                (std::uint32_t)  src1_dram_buffer->address(), // in1_tensor_addr
                 (std::uint32_t)  per_core_N * output_idx_x, //in1_tensor_start_tile_id
                 (std::uint32_t)  1, // in1_tensor_stride_w
                 (std::uint32_t)  Nt, // in1_tensor_stride_h
@@ -293,7 +293,7 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t) dst_dram_buffer.address(), // out_buffer_addr
+                (std::uint32_t) dst_dram_buffer->address(), // out_buffer_addr
                 (std::uint32_t) output_idx_x * per_core_N + output_idx_y * per_core_M * Nt, // out_tensor_start_tile_id
                 (std::uint32_t) 1, // out_tensor_stride_w
                 (std::uint32_t) Nt,  // out_tensor_stride_h

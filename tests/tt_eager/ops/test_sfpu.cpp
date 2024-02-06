@@ -90,12 +90,12 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
                                         };
 
         auto src_dram_buffer = CreateBuffer(buff_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(buff_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader

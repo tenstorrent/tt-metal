@@ -62,9 +62,9 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
 
     uint32_t num_input_tiles = 2 * M;
 
-    auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-    auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -76,7 +76,7 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
         .set_page_size(src1_cb_index, single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    tt_metal::Buffer src2_dram_buffer;
+    std::shared_ptr<tt_metal::Buffer> src2_dram_buffer;
     if (cfg.with_bias) { // with_bias only when M, N, or K > 1
         tt_metal::InterleavedBufferConfig bias_config{
                     .device=device,
@@ -107,10 +107,10 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         reader_l1_args = {
-            src0_dram_buffer.address(),
+            src0_dram_buffer->address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            src1_dram_buffer.address(),
+            src1_dram_buffer->address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             (std::uint32_t)K,
@@ -127,10 +127,10 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         reader_l1_args = {
-            src0_dram_buffer.address(),
+            src0_dram_buffer->address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            src1_dram_buffer.address(),
+            src1_dram_buffer->address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             1,
@@ -167,9 +167,9 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
         vector<uint32_t> bias(N * 512, 0);
         fixture->WriteBuffer(device, src2_dram_buffer, bias);
 
-        auto dram_src2_noc_xy = src2_dram_buffer.noc_coordinates();
+        auto dram_src2_noc_xy = src2_dram_buffer->noc_coordinates();
         vector<uint32_t> bias_args = {
-            src2_dram_buffer.address(),
+            src2_dram_buffer->address(),
             (std::uint32_t)dram_src2_noc_xy.x,
             (std::uint32_t)dram_src2_noc_xy.y,
             (std::uint32_t)N,
@@ -191,7 +191,7 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
         program,
         unary_writer_kernel,
         core,
-        {dst_dram_buffer.address(),
+        {dst_dram_buffer->address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,
         num_tiles}); // this is M * N in the multi_tile case !!
@@ -210,12 +210,12 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
     }else {
         pass &= (tensor.get_values() == result_flat_layout); // src1 is all 0's
     }
-    DeallocateBuffer(src0_dram_buffer);
-    DeallocateBuffer(src1_dram_buffer);
+    DeallocateBuffer(*src0_dram_buffer);
+    DeallocateBuffer(*src1_dram_buffer);
     if (cfg.with_bias) {
-        DeallocateBuffer(src2_dram_buffer);
+        DeallocateBuffer(*src2_dram_buffer);
     }
-    DeallocateBuffer(dst_dram_buffer);
+    DeallocateBuffer(*dst_dram_buffer);
     return pass;
 }
 } // namespace unit_tests_common::matmul::test_matmul_X_tile

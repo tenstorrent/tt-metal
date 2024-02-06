@@ -56,12 +56,12 @@ int main(int argc, char **argv) {
                                         .buffer_type = tt_metal::BufferType::DRAM
                                         };
         auto src_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 1;

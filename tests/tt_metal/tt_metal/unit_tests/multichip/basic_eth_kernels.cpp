@@ -62,8 +62,8 @@ bool reader_kernel_no_send(
         };
 
     auto input_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_byte_address = input_dram_buffer.address();
-    auto dram_noc_xy = input_dram_buffer.noc_coordinates();
+    uint32_t dram_byte_address = input_dram_buffer->address();
+    auto dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
     log_debug(
         tt::LogTest,
@@ -133,8 +133,8 @@ bool writer_kernel_no_receive(
         };
 
     auto output_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_byte_address = output_dram_buffer.address();
-    auto dram_noc_xy = output_dram_buffer.noc_coordinates();
+    uint32_t dram_byte_address = output_dram_buffer->address();
+    auto dram_noc_xy = output_dram_buffer->noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
     log_debug(
         tt::LogTest,

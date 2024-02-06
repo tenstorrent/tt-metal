@@ -1071,16 +1071,16 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     auto act_address_map_dram_buffer = CreateBuffer(act_config);
     auto weight_address_map_dram_buffer = CreateBuffer(weight_config);
-    uint32_t act_address_map_dram_addr = act_address_map_dram_buffer.address();
+    uint32_t act_address_map_dram_addr = act_address_map_dram_buffer->address();
     // DRAM to L1 writes should 32B aligned
     assert(act_address_map_dram_addr%32 == 0);
-    auto act_address_map_dram_noc_xy = act_address_map_dram_buffer.noc_coordinates();
+    auto act_address_map_dram_noc_xy = act_address_map_dram_buffer->noc_coordinates();
     uint32_t act_address_map_dram_noc_x = act_address_map_dram_noc_xy.x;
     uint32_t act_address_map_dram_noc_y = act_address_map_dram_noc_xy.y;
-    uint32_t weight_address_map_dram_addr = weight_address_map_dram_buffer.address();
+    uint32_t weight_address_map_dram_addr = weight_address_map_dram_buffer->address();
     // DRAM to L1 writes should 32B aligned
     assert(weight_address_map_dram_addr%32 == 0);
-    auto weight_address_map_dram_noc_xy = weight_address_map_dram_buffer.noc_coordinates();
+    auto weight_address_map_dram_noc_xy = weight_address_map_dram_buffer->noc_coordinates();
     uint32_t weight_address_map_dram_noc_x = weight_address_map_dram_noc_xy.x;
     uint32_t weight_address_map_dram_noc_y = weight_address_map_dram_noc_xy.y;
 
@@ -1117,7 +1117,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         };
 
     auto scratch_pad_for_address_map_l1_buffer = CreateBuffer(scratchpad_l1_config);
-    uint32_t scratch_pad_for_address_map_l1_address = scratch_pad_for_address_map_l1_buffer.address();
+    uint32_t scratch_pad_for_address_map_l1_address = scratch_pad_for_address_map_l1_buffer->address();
     // DRAM to L1 writes should 32B aligned
     assert(scratch_pad_for_address_map_l1_address%32 == 0);
     // Create address map metadata buffers in L1
@@ -1131,7 +1131,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
                     .buffer_type = tt_metal::BufferType::L1
         };
     auto act_address_map_metadata_l1_buffer = CreateBuffer(act_l1_config);
-    uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer.address();
+    uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer->address();
     auto weight_address_map_metadata_l1_b0_size = weight_address_map_metadata.size() * sizeof(uint32_t);
 
     tt_metal::InterleavedBufferConfig weight_l1_config{
@@ -1143,7 +1143,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
 
     auto weight_address_map_metadata_l1_buffer = CreateBuffer(weight_l1_config);
-    uint32_t weight_address_map_metadata_l1_address = weight_address_map_metadata_l1_buffer.address();
+    uint32_t weight_address_map_metadata_l1_address = weight_address_map_metadata_l1_buffer->address();
 
     // out
     uint32_t out_dram_addr = dst_dram_buffer->address();

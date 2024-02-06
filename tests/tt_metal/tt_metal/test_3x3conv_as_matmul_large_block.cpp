@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         // The source addresses are addresses for convolution activation in DRAM
         // It is used by the generic reader kernel. The source addresses are arranged in the order of tiles.
         // The dram read size is fixed to 16 elements which is one row of face within a tile .
-        // The kernel determines the L1 address as it writes to contingous locations in L1 buffer.
+        // The kernel determines the L1 address as it writes to contingous locations in L1 buffer->
 
         // vector to be copied to DRAM
         auto src_vec = tensor_p.get_values();
@@ -160,15 +160,15 @@ int main(int argc, char **argv) {
                                         .buffer_type = tt_metal::BufferType::DRAM
                                         };
         auto src0_dram_buffer = CreateBuffer(src0_config);
-        uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
         auto src1_dram_buffer = CreateBuffer(src1_config);
-        uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
+        uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(dst_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t cb0_index = 0;
         uint32_t num_cb0_tiles = M * in0_block_w * 2;

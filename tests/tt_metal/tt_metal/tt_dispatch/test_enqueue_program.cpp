@@ -34,13 +34,13 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         };
 
     auto src0_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+    uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
     auto dst_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
 
-    auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

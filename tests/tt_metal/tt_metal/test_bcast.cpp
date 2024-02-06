@@ -123,11 +123,11 @@ int main(int argc, char **argv) {
                                         };
 
         auto src0_dram_buffer = CreateBuffer(buff_config);
-        uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(buff_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
-        auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t num_buffer_tiles = 2;
@@ -213,8 +213,8 @@ int main(int argc, char **argv) {
                                         };
 
         auto src1_dram_buffer = CreateBuffer(src1_config);
-        uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
-        auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
+        uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
+        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
         bool src0_is_dram = true;

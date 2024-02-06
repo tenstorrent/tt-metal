@@ -48,13 +48,13 @@ bool dram_single_core_db (CommonFixture* fixture, tt_metal::Device *device){
                             };
 
     auto input_dram_buffer = CreateBuffer(dram_config);
-    uint32_t input_dram_buffer_addr = input_dram_buffer.address();
+    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
     auto output_dram_buffer = CreateBuffer(dram_config);
-    uint32_t output_dram_buffer_addr = output_dram_buffer.address();
+    uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
+    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     auto dram_copy_kernel = tt_metal::CreateKernel(
         program,
@@ -101,13 +101,13 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
                             .buffer_type = tt_metal::BufferType::DRAM
                             };
     auto input_dram_buffer = tt_metal::CreateBuffer(dram_config);
-    uint32_t input_dram_buffer_addr = input_dram_buffer.address();
+    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
-    uint32_t output_dram_buffer_addr = output_dram_buffer.address();
+    uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
+    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
     log_info(tt::LogVerif, "Creating kernel");
     // Create the kernel
     auto dram_kernel = tt_metal::CreateKernel(
