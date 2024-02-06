@@ -24,5 +24,5 @@ test-list:
         out-buffer-type: ["DRAM"]
       output-file: fill_ones_rm_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        TT_METAL_SLOW_DISPATCH_MODE: [""]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
