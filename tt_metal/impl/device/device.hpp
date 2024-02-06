@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
 
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
