@@ -6,7 +6,6 @@
 
 #include <vector>
 #include <cstdlib>
-#include <functional>
 #include "common/core_coord.h"
 #include "hostdevcommon/common_values.hpp"
 #include "dev_mem_map.h"
