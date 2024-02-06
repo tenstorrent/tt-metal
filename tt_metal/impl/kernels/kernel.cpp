@@ -113,6 +113,12 @@ uint8_t ComputeKernel::expected_num_binaries() const {
 
 std::vector<ll_api::memory> const &Kernel::binaries(chip_id_t device_id) const {
     int expected_num_binaries = this->expected_num_binaries();
+    log_info(LogTest, "Searching binaries_ for device id: {}", device_id);
+    if (this->binaries_.find(device_id) != this->binaries_.end())
+        log_info(LogTest, "Found!");
+    else
+        log_info(LogTest, "Not Found!");
+    log_info(LogTest, "expected_num_binaries={}", expected_num_binaries);
     if (this->binaries_.find(device_id) != this->binaries_.end() and this->binaries_.at(device_id).size() != expected_num_binaries) {
         TT_THROW("Expected " + std::to_string(expected_num_binaries) + " binaries but have "
                     + std::to_string(this->binaries_.at(device_id).size()) + " for kernel " + this->name());
@@ -327,6 +333,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     log_info(LogTest, "Binaries are as follows:");
     for (auto &id_and_mems : this->binaries_)
         log_info(LogTest, "    Device id {} has {} mems...", id_and_mems.first, id_and_mems.second.size());
+    log_info(LogTest, "Binaries end");
     auto bins = this->binaries(device_id);
     log_info(LogTest, "Binary has {} mems...", bins.size());
     ll_api::memory binary_mem = bins.at(0);
