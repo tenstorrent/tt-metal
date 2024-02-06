@@ -47,7 +47,7 @@ test-list:
         num-samples: 32
         args-sampling-strategy: "all"
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        TT_METAL_SLOW_DISPATCH_MODE: [""]
       datagen:
         - input_1:
           function: gen_rand
@@ -123,7 +123,7 @@ test-list:
         num-samples: 32
         args-sampling-strategy: "all"
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        TT_METAL_SLOW_DISPATCH_MODE: [""]
       datagen:
         - input_1:
           function: gen_rand

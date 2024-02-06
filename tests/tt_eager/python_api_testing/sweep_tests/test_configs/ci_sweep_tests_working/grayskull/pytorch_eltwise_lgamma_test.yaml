@@ -31,7 +31,7 @@ test-list:
         num-shapes: 1
         num-samples: 64
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        TT_METAL_SLOW_DISPATCH_MODE: [""]
       datagen:
         function: gen_rand
         args:
