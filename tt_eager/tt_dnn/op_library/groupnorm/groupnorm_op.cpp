@@ -277,8 +277,8 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t start_core_y = 0;
 
     CoreRange all_cores{
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
     // create a vector of cores, in either RM or CM
     std::vector<CoreCoord> core_coords;
     for (int i=0; i < num_cores_r * num_cores_c; ++i) {

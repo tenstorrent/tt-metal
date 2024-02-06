@@ -809,10 +809,10 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     CoreRangeSet all_cores({});
                     ShardOrientation shard_orientation;
                     if (program_config.transpose_mcast) {
-                        all_cores = CoreRangeSet({CoreRange{{0, 0}, {num_blocks_y - 1, num_blocks_x - 1}}});
+                        all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_blocks_y - 1, num_blocks_x - 1}}});
                         shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
-                        all_cores = CoreRangeSet({CoreRange{{0, 0}, {num_blocks_x - 1, num_blocks_y - 1}}});
+                        all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_blocks_x - 1, num_blocks_y - 1}}});
                         shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=shard_orientation};

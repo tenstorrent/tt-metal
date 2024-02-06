@@ -270,7 +270,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     assert(num_blocks_output_w == num_blocks_weight_w);
     tt_metal::Program program = tt_metal::CreateProgram();
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
-    //CoreRange core = {{0, 0}, {0, 0}};
+    //CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
     DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
@@ -461,7 +461,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         debug_cores.push_back({core_x_i+1, core_y_i+1});
     }
 
-    CoreRange all_cores = {CoreCoord(0, 0), CoreCoord(num_cores_x - 1, num_cores_y - 1)};
+    CoreRange all_cores = {.start = CoreCoord(0, 0), .end = CoreCoord(num_cores_x - 1, num_cores_y - 1)};
     assert(total_active_num_cores >= num_cores_x);
     uint32_t num_active_cores_x = num_cores_x;
     uint32_t num_active_cores_y_with_full_x = total_active_num_cores / num_cores_x;
@@ -472,16 +472,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     // cout << "Core range 1 - (0,0) to (" << num_active_cores_x - 1 << "," << num_active_cores_y_with_full_x - 1 << ")" << endl;
 
     std::set<CoreRange> all_active_cores_set;
-    all_active_cores_set.insert((CoreRange) {CoreCoord(0, 0), CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)});
+    all_active_cores_set.insert((CoreRange) {.start = CoreCoord(0, 0), .end = CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)});
     if (num_active_cores_x_last_y > 0) {
-        all_active_cores_set.insert((CoreRange) {CoreCoord(0, num_active_cores_y_with_full_x), CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)});
+        all_active_cores_set.insert((CoreRange) {.start = CoreCoord(0, num_active_cores_y_with_full_x), .end = CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)});
         // cout << "Core range 2 - (0," << num_active_cores_y_with_full_x << ") to (" << num_active_cores_x_last_y - 1 << "," << num_active_cores_y_with_full_x << ")" << endl;
     }
     CoreRangeSet all_active_cores(all_active_cores_set);
     std::set<CoreRange> noop_cores_set;
     if (total_noop_cores > 0) {
         assert(total_noop_cores == (num_cores_x - num_active_cores_x_last_y));
-        noop_cores_set.insert((CoreRange) {CoreCoord(num_active_cores_x_last_y, num_active_cores_y_with_full_x), CoreCoord(num_cores_x - 1, num_active_cores_y_with_full_x)});
+        noop_cores_set.insert((CoreRange) {.start = CoreCoord(num_active_cores_x_last_y, num_active_cores_y_with_full_x), .end = CoreCoord(num_cores_x - 1, num_active_cores_y_with_full_x)});
         // cout << "Noop core range - (" << num_active_cores_x_last_y << "," << num_active_cores_y_with_full_x << ") to (" << num_cores_x - 1 << "," << num_active_cores_y_with_full_x << ")" << endl;
 
     }
@@ -496,7 +496,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    CoreRange mcast_sender_cores{top_left_core, top_left_core}; // If single core, this kernel doesn't do mcasting
+    CoreRange mcast_sender_cores{.start=top_left_core, .end=top_left_core}; // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores{{}};
     uint32_t weights_mcast_sender_semaphore;
     uint32_t weights_mcast_receiver_semaphore;
@@ -505,8 +505,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     std::vector<uint32_t> act_mcast_noc_y;
     // 2D mcast
     if (weight_width_sliced) {
-        mcast_sender_cores = {top_left_core, CoreCoord(0, num_cores_y - 1)};
-        mcast_receiver_cores = {{{CoreCoord(1, 0), bottom_right_core}}};
+        mcast_sender_cores = {.start=top_left_core, .end=CoreCoord(0, num_cores_y - 1)};
+        mcast_receiver_cores = {{{.start=CoreCoord(1, 0), .end=bottom_right_core}}};
         weights_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
         weights_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // 1D mcast
@@ -514,9 +514,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         if (total_num_cores > 1) {
             std::set<CoreRange> mcast_receiver_set;
             if (num_cores_x > 1) {
-                mcast_receiver_set.insert({CoreCoord(1, 0), CoreCoord(num_cores_x - 1, 0)});
+                mcast_receiver_set.insert({.start=CoreCoord(1, 0), .end=CoreCoord(num_cores_x - 1, 0)});
             } if (num_cores_y > 1) {
-                mcast_receiver_set.insert({CoreCoord(0, 1), bottom_right_core});
+                mcast_receiver_set.insert({.start=CoreCoord(0, 1), .end=bottom_right_core});
             }
             mcast_receiver_cores = mcast_receiver_set;
             weights_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -786,7 +786,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         uint32_t core_x_i = core_i % num_cores_x;
         uint32_t core_y_i = core_i / num_cores_x;
         // cout << "core_x_i=" << core_x_i << ", core_y_i=" << core_y_i << endl;
-        CoreRange core = {CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i)};
+        CoreRange core = {.start = CoreCoord(core_x_i, core_y_i), .end = CoreCoord(core_x_i, core_y_i)};
         bool noop_core = false;
         for (const auto & noop_core_range : noop_cores.ranges()) {
             if (noop_core_range.contains(core)) {

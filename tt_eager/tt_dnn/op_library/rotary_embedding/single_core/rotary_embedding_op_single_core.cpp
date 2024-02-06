@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(
     const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx) {
     Program program{};
 
-    CoreRangeSet core({CoreRange{{0, 0}, {0, 0}}});
+    CoreRangeSet core({CoreRange{.start = {0, 0}, .end = {0, 0}}});
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);

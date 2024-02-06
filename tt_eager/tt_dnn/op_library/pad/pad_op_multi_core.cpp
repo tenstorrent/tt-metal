@@ -114,8 +114,8 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
     std::set<CoreRange> all_cores;
     std::set<CoreRange> core_range;
 
-    all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)});
-    core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)});
+    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
+    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
 
     return std::make_tuple(ncores, ncores_h, ncores_w, all_cores, core_range, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h);
 }

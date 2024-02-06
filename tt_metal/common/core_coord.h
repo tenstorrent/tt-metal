@@ -374,7 +374,7 @@ class CoreRangeSet {
         min_y = std::min ( min_y, cr.start.y );
         max_y = std::max ( max_y, cr.end.y);
       }
-      return {{min_x, min_y},{max_x, max_y}};
+      return {.start = {.x = min_x, .y = min_y}, .end ={ .x = max_x, .y = max_y} };
     }
 
   private:

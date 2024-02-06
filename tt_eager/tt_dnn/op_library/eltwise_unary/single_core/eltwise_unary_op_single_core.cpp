@@ -17,7 +17,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain) {
     Program program{};
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
