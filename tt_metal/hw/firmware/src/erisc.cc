@@ -80,7 +80,6 @@ void __attribute__((section("code_l1"))) router_init() {
 }
 
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
-    kernel_profiler::init_profiler();
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();
@@ -105,6 +104,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         if (erisc_info->launch_user_kernel == 1) {
+            kernel_profiler::init_profiler();
             kernel_profiler::mark_time(CC_MAIN_START);
             kernel_init();
             kernel_profiler::mark_time(CC_MAIN_END);
@@ -155,5 +155,4 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         }
     }
     internal_::disable_erisc_app();
-    kernel_profiler::mark_time(CC_MAIN_END);
 }
