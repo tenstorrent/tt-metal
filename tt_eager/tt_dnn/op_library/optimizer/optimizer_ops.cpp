@@ -55,9 +55,9 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     Tensor trust_ratio = where(gtz(weight_norm, output_mem_config), where(gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
 
     Tensor param = sub(data, mul(adam_step, mul_unary(trust_ratio_mid, step_size, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    output_tensor.emplace_back(param);
     output_tensor.emplace_back(exp_avg_out);
     output_tensor.emplace_back(exp_avg_sq_out);
+    output_tensor.emplace_back(param);
 
     return output_tensor;
 }
