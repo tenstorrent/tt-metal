@@ -46,7 +46,6 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
 
         case 2:
             ncores_h = 1;
-            ncores_per_batch_h = 1;
             nbatch_per_core_h = 1;
             ntiles_per_core_h = 1;
             switch (ntiles_h) {
