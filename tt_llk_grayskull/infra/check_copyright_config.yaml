@@ -1,0 +1,23 @@
+DEFAULT:
+  perform_check: yes
+
+  # what licenses (or license expressions) are allowed for files in this section
+  # when setting this option in a section, you need to list all the allowed licenses
+  allowed_licenses:
+    - Apache-2.0
+  license_for_new_files: Apache-2.0  # license to be used when inserting a new copyright notice
+  new_notice_c: |  # notice for new C, CPP, H, HPP and LD files
+    // SPDX-FileCopyrightText: © {years} Tenstorrent Inc.
+    //
+    // SPDX-License-Identifier: {license}
+
+  # comment lines matching:
+  # SPDX-FileCopyrightText: year[-year] Espressif Systems
+  # or
+  # SPDX-FileContributor: year[-year] Espressif Systems
+  # are replaced with this template prefixed with the correct comment notation (# or // or *) and SPDX- notation
+  espressif_copyright: '© {years} Tenstorrent Inc.'
+  include:
+    - "*.cpp"
+    - "*.cc"
+    - "*.h"
