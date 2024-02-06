@@ -39,12 +39,43 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
         volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
-        uint32_t finish = header->finish;
+        uint32_t buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(uint32_t));
+        volatile tt_l1_ptr uint32_t *buffer_transfer_command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
+        uint32_t is_program = header->is_program_buffer;
+        uint32_t data_size = header->data_size;
+        const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
+        bool reading_buffer = (!is_program) & (data_size > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
         uint32_t completion_data_size = header->completion_data_size;
         completion_queue_reserve_back(completion_data_size);
         write_event(uint32_t(&header->event));
 
+        uint32_t wrap = header->wrap;
+        if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
+            cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
+            cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
+            notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
+            noc_async_write_barrier(); // Barrier for now
+        } else if (reading_buffer) {
+            db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
+            const db_cb_config_t* eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
+            uint32_t num_buffer_transfers = header->num_buffer_transfers;
+            bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
+            uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
+            uint32_t producer_consumer_transfer_num_pages = header->consumer_router_transfer_num_pages;
+            write_buffers<host_completion_queue_write_ptr_addr>(
+                db_cb_config,
+                eth_db_cb_config,
+                command_ptr,
+                completion_queue_start_addr,
+                num_buffer_transfers,
+                is_sharded,
+                sharded_buffer_num_cores,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages);
+        }
+
+        uint32_t finish = header->finish;
         if (finish) {
             notify_host_complete<host_finish_addr>();
         }

@@ -35,9 +35,10 @@ void kernel_main() {
         volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
         volatile tt_l1_ptr uint32_t *buffer_transfer_command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
         uint32_t is_program = header->is_program_buffer;
+        uint32_t data_size = header->data_size;
 
         const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
-        bool reading_buffer = (!is_program) & ((BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
+        bool reading_buffer = (!is_program) & (data_size > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
         tt_l1_ptr db_cb_config_t *db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
         const tt_l1_ptr db_cb_config_t *remote_producer_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
