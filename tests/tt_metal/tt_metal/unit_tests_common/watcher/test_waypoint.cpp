@@ -69,12 +69,12 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         .page_size = sizeof(uint32_t),
         .buffer_type = tt_metal::BufferType::L1
     };
-    Buffer l1_buffer = CreateBuffer(l1_config);
+    auto l1_buffer = CreateBuffer(l1_config);
 
     // Write runtime args
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            const std::vector<uint32_t> args = { delay_cycles, l1_buffer.address() };
+            const std::vector<uint32_t> args = { delay_cycles, l1_buffer->address() };
             SetRuntimeArgs(
                 program,
                 brisc_kid,

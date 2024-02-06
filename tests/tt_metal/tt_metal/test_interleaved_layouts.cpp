@@ -57,7 +57,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
 
 
         auto sticks_buffer = CreateBuffer(sticks_config);
-        uint32_t dram_buffer_src_addr = sticks_buffer.address();
+        uint32_t dram_buffer_src_addr = sticks_buffer->address();
 
         tt_metal::detail::WriteToBuffer(sticks_buffer, src_vec);
 
@@ -126,12 +126,12 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
                     };
 
         auto src_dram_buffer = CreateBuffer(src_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
         auto dst_dram_buffer = CreateBuffer(dst_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -221,7 +221,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 
-        DeallocateBuffer(dst_dram_buffer);
+        DeallocateBuffer(*dst_dram_buffer);
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
@@ -299,12 +299,12 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
                     .buffer_type = tt_metal::BufferType::DRAM
                     };
         auto src_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
         auto dst_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
@@ -475,8 +475,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
                     };
 
 
-    tt_metal::Buffer src;
-    tt_metal::Buffer dst;
+    std::shared_ptr<tt_metal::Buffer> src, dst;
     if constexpr (src_is_in_l1) {
         TT_FATAL((buffer_size % num_l1_banks) == 0);
 
@@ -489,7 +488,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             program,
             unary_reader_kernel,
             core,
-            {src.address(), 0, 0, num_pages});
+            {src->address(), 0, 0, num_pages});
 
     } else {
         TT_FATAL((buffer_size % num_dram_banks) == 0);
@@ -503,7 +502,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             program,
             unary_reader_kernel,
             core,
-            {src.address(), 0, 0, num_pages});
+            {src->address(), 0, 0, num_pages});
     }
 
     std::vector<uint32_t> readback_buffer;
@@ -514,7 +513,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             program,
             unary_writer_kernel,
             core,
-            {dst.address(), 0, 0, num_pages});
+            {dst->address(), 0, 0, num_pages});
 
 
 
@@ -531,7 +530,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             program,
             unary_writer_kernel,
             core,
-            {dst.address(), 0, 0, num_pages});
+            {dst->address(), 0, 0, num_pages});
 
 
 

@@ -232,6 +232,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         }
     }
 
+    void WriteToBuffer( std::shared_ptr<const Buffer> buffer, const std::vector<uint32_t> &host_buffer){
+        WriteToBuffer ( *buffer, host_buffer );
+    }
+
     void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
@@ -372,6 +376,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         }
     }
 
+    void ReadFromBuffer(std::shared_ptr<const Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order)
+    {
+        ReadFromBuffer(*buffer, host_buffer, shard_order);
+    }
 
     void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
         Device *device = buffer.device();
@@ -666,18 +674,18 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 }
 
 
-Buffer CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> &config)
+std::shared_ptr<Buffer> CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> &config)
 {
     if  (std::holds_alternative<InterleavedBufferConfig>(config)) {
         auto buff_config = std::get<InterleavedBufferConfig>(config);
-        return Buffer(
+        return std::make_shared<Buffer> (
                     buff_config.device, buff_config.size, buff_config.page_size,
                     buff_config.buffer_type, buff_config.buffer_layout
                     );
     }
     else {
         auto buff_config = std::get<ShardedBufferConfig>(config);
-        return Buffer(
+        return std::make_shared<Buffer>(
                         buff_config.device, buff_config.size, buff_config.page_size,
                         buff_config.buffer_type, buff_config.buffer_layout, buff_config.shard_parameters
                     );

@@ -188,13 +188,13 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 /**
 *  Allocates a DRAM or L1 buffer on device
 *
-*  Return value: Buffer
+*  Return value: std::shared_ptr<Buffer>
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
 *  | config          | config for buffer                       | BufferConfig             |             | Yes      |
 */
-Buffer CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> & config);
+std::shared_ptr<Buffer> CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> & config);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
