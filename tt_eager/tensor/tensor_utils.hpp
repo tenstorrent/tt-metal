@@ -23,7 +23,11 @@ namespace tt_metal {
 
     template<typename T>
     static std::size_t compute_volume(const T& shape) {
-        return std::accumulate(std::begin(shape), std::end(shape), 1, std::multiplies<uint32_t>());
+        auto volume = 1;
+        for (auto index = 0; index < shape.rank(); index++) {
+            volume *= shape[index];
+        }
+        return volume;
     }
 
     template<typename T>

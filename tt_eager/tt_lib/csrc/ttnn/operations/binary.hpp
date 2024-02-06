@@ -18,11 +18,11 @@ static const auto L1_MEMORY_CONFIG = tt::tt_metal::MemoryConfig{
     .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
 
 ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    return ttnn::Tensor(tensor.value.reshape(shape.value()));
+    return ttnn::Tensor(tensor.reshape(shape.value()));
 }
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    const auto& tensor_shape = tensor.shape;
+    const auto tensor_shape = tensor.ttnn_shape();
     const auto rank = tensor_shape.rank();
     if (rank == 4) {
         return tensor;
@@ -41,11 +41,21 @@ namespace binary {
 void py_module(py::module& m_binary) {
     m_binary.def(
         "add",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
+        [](const ttnn::Tensor& input_tensor_a_arg,
+           const ttnn::Tensor& input_tensor_b_arg,
            const tt::tt_metal::MemoryConfig& memory_config) {
-            const auto& original_shape = input_tensor_a.shape;
-            const auto& input_shape_b = input_tensor_b.shape;
+            auto&& [input_tensor_a, input_tensor_b] = [](const auto& input_tensor_a_arg,
+                                                         const auto& input_tensor_b_arg) {
+                // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
+                if (tt::tt_metal::compute_volume(input_tensor_a_arg.ttnn_shape()) <
+                    tt::tt_metal::compute_volume(input_tensor_b_arg.ttnn_shape())) {
+                    return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
+                    }
+                return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
+            }(input_tensor_a_arg, input_tensor_b_arg);
+
+            const auto original_shape = input_tensor_a.ttnn_shape();
+            const auto input_shape_b = input_tensor_b.ttnn_shape();
 
             std::size_t height_b{};
             std::size_t width_b{};
@@ -60,9 +70,6 @@ void py_module(py::module& m_binary) {
             auto input_tensor_a_4D = ttnn::unsqueeze_to_4D(input_tensor_a);
             auto input_tensor_b_4D = ttnn::unsqueeze_to_4D(input_tensor_b);
 
-            const auto& ttl_input_tensor_a = input_tensor_a_4D.value;
-            const auto& ttl_input_tensor_b = input_tensor_b_4D.value;
-
             if (height_b == 1 or width_b == 1) {
                 tt::tt_metal::BcastOpDim bcast_op_dim;
                 if (height_b == 1 and width_b == 1) {
@@ -74,18 +81,11 @@ void py_module(py::module& m_binary) {
                 } else {
                     TT_THROW("Invalid broadcasting dimensions");
                 }
-                auto ttl_output = tt::tt_metal::bcast(
-                    ttl_input_tensor_a,
-                    ttl_input_tensor_b,
-                    tt::tt_metal::BcastOpMath::ADD,
-                    bcast_op_dim,
-                    memory_config);
-                auto output = ttnn::Tensor(ttl_output);
+                auto output = tt::tt_metal::bcast(
+                    input_tensor_a_4D, input_tensor_b_4D, tt::tt_metal::BcastOpMath::ADD, bcast_op_dim, memory_config);
                 return ttnn::reshape(output, original_shape);
             } else {
-                auto ttl_output =
-                    tt::tt_metal::add(ttl_input_tensor_a, ttl_input_tensor_b, std::nullopt, memory_config);
-                auto output = ttnn::Tensor(ttl_output);
+                auto output = tt::tt_metal::add(input_tensor_a_4D, input_tensor_b_4D, std::nullopt, memory_config);
                 return ttnn::reshape(output, original_shape);
             }
         },
@@ -101,13 +101,11 @@ void py_module(py::module& m_binary) {
         [](const ttnn::Tensor& input_tensor_a,
            const float input_tensor_b,
            const tt::tt_metal::MemoryConfig& memory_config) {
-            const auto& original_shape = input_tensor_a.shape;
+            const auto original_shape = input_tensor_a.ttnn_shape();
 
             auto input_tensor_a_4D = ttnn::unsqueeze_to_4D(input_tensor_a);
-            const auto& ttl_input_tensor_a = input_tensor_a_4D.value;
 
-            auto ttl_output = tt::tt_metal::add_unary(ttl_input_tensor_a, input_tensor_b, memory_config);
-            auto output = ttnn::Tensor(ttl_output);
+            auto output = tt::tt_metal::add_unary(input_tensor_a_4D, input_tensor_b, memory_config);
             return ttnn::reshape(output, original_shape);
         },
         py::arg("input_tensor_a"),

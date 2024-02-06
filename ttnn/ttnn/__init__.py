@@ -78,6 +78,7 @@ from ttnn.operations.others import (
     softmax,
     # reduction operations
     mean,
+    upsample,
 )
 
 from ttnn.operations.data_movement import (
