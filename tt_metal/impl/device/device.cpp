@@ -267,13 +267,256 @@ void Device::clear_l1_state() {
     }
 }
 
+// TODO (abhullar): Refactor this with #2593 to allow each target fast dispatch (FD) device to program their associated FD cores regardless of whether they are on the target device or not.
+// Currently we have to program FD cores for the remote device when initializing the MMIO device because completion queue cores are on MMIO device
+//  and we don't have handle on MMIO device when initializing the remote device
+void Device::compile_command_queue_programs() {
+    ZoneScoped;
+    unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
+
+    // Currently we only double buffer commands in tensix cores
+    const uint32_t num_tensix_command_slots = 2;
+    const uint32_t num_eth_command_slots = 1;
+
+    uint32_t cmd_start_tensix = get_command_start_l1_address(false);
+    uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
+    uint32_t producer_data_buffer_size_tensix = get_producer_data_buffer_size(false);
+    uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size(false);
+
+    uint32_t cmd_start_eth = get_command_start_l1_address(true);
+    uint32_t producer_data_buffer_size_eth = get_producer_data_buffer_size(true);
+    uint32_t consumer_data_buffer_size_eth = get_consumer_data_buffer_size(true);
+
+    if (this->is_mmio_capable()) {
+        for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
+            // TODO (abhullar): allow for multiple cqs on remote device, atm device initialization asserts one cq for the remote device
+            uint8_t num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+            uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), channel) / num_hw_cqs;
+
+            for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(device_id, channel, cq_id);
+                tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
+
+                TT_ASSERT(issue_q_reader_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
+                    "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_reader_location.chip, completion_q_writer_location.chip, this->id());
+
+                CoreCoord issue_q_logical_core(issue_q_reader_location.x, issue_q_reader_location.y);
+                CoreCoord completion_q_logical_core(completion_q_writer_location.x, completion_q_writer_location.y);
+                CoreCoord issue_q_physical_core = get_physical_core_coordinate(issue_q_reader_location, CoreType::WORKER);
+                CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, CoreType::WORKER);
+
+                CoreCoord consumer_physical_core = completion_q_physical_core;
+                if (device_id != this->id()) {
+                    // This means the issue queue and completion queue interfaces that service a remote device are being set up
+                    // the issue queue interface needs to send fast dispatch packets to the "src" ethernet core
+                    CoreCoord logical_eth_router_src = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+                        issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
+                    consumer_physical_core = this->ethernet_core_from_logical_core(logical_eth_router_src);
+
+                    tt::Cluster::instance().configure_eth_core_for_dispatch_core(
+                        issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
+                }
+
+                std::map<string, string> producer_defines = {
+                    {"DISPATCH_KERNEL", "1"},
+                    {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
+                    {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
+                };
+                std::map<string, string> consumer_defines = {
+                    {"DISPATCH_KERNEL", "1"},
+                    {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
+                    {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
+                };
+
+                // Address in sysmem for CQ to write back its read ptr to
+                uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t issue_queue_start_addr = CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
+
+                uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
+                std::vector<uint32_t> producer_compile_args = {
+                    host_issue_queue_read_ptr_addr,
+                    issue_queue_start_addr,
+                    issue_queue_size,
+                    cmd_start_tensix,
+                    data_section_addr_tensix,
+                    producer_data_buffer_size_tensix,
+                    consumer_cmd_base_addr,
+                    consumer_data_buff_size};
+
+                uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
+                uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+                std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr, consumer_cmd_base_addr, consumer_data_buff_size};
+
+                std::string issue_q_reader_kernel = (device_id == this->id()) ? "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp" : "tt_metal/impl/dispatch/kernels/remote_issue_queue_reader.cpp";
+
+                tt::tt_metal::CreateKernel(
+                    *command_queue_program_ptr,
+                    issue_q_reader_kernel,
+                    issue_q_logical_core,
+                    tt::tt_metal::DataMovementConfig {
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt::tt_metal::NOC::RISCV_0_default,
+                        .compile_args = producer_compile_args,
+                        .defines = producer_defines});
+
+                uint32_t num_command_slots = (device_id == this->id()) ? num_tensix_command_slots : num_eth_command_slots;
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_logical_core, num_command_slots);
+
+                // Currently remote device dispatch completion queue interface has not been brought up
+                // This will be updated with https://github.com/tenstorrent-metal/tt-metal/issues/3949
+                if (device_id == this->id()) {
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
+                        completion_q_logical_core,
+                        tt::tt_metal::DataMovementConfig {
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = consumer_compile_args,
+                            .defines = consumer_defines});
+
+                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, completion_q_logical_core, 0);
+                }
+            }
+        }
+    } else {
+        TT_ASSERT(this->num_hw_cqs() == 1, "Currently can only support one command queue for remote device");
+
+        uint8_t num_hw_cqs = this->num_hw_cqs();
+        const uint8_t cq_id = 0;
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
+        uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+
+        tt_cxy_pair remote_processor_location = dispatch_core_manager::get(num_hw_cqs).remote_processor_core(this->id(), channel, cq_id);
+        tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(this->id(), channel, cq_id);
+        tt_cxy_pair remote_signaller_location = dispatch_core_manager::get(num_hw_cqs).remote_signaller_core(this->id(), channel, cq_id);
+        CoreCoord remote_processor_logical_core(remote_processor_location.x, remote_processor_location.y);
+        CoreCoord dispatch_logical_core(dispatch_location.x, dispatch_location.y);
+        CoreCoord remote_signaller_logical_core(remote_signaller_location.x, remote_signaller_location.y);
+        CoreCoord remote_processor_physical_core = get_physical_core_coordinate(remote_processor_location, CoreType::WORKER);
+        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, CoreType::WORKER);
+        CoreCoord remote_signaller_physical_core = get_physical_core_coordinate(remote_signaller_location, CoreType::WORKER);
+
+        CoreCoord logical_eth_router_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+            remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
+        CoreCoord physical_eth_router_dst = this->ethernet_core_from_logical_core(logical_eth_router_dst);
+        // TODO (abhullar / aliu): there is no API to configure ethernet semaphores used for FD so manually write initial semaphore value
+        uint32_t dst_router_sem_value = num_eth_command_slots;
+        tt::Cluster::instance().write_core(&dst_router_sem_value, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_dst), eth_l1_mem::address_map::SEMAPHORE_BASE);
+        tt::Cluster::instance().configure_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
+
+        std::vector<uint32_t> processor_compile_args = {
+            cmd_start_tensix,
+            data_section_addr_tensix,
+            producer_data_buffer_size_tensix,
+            cmd_start_eth,
+            producer_data_buffer_size_eth,
+            cmd_start_tensix,
+            consumer_data_buffer_size_tensix,
+        };
+
+        std::map<string, string> processor_defines = {
+            {"DISPATCH_KERNEL", "1"},
+            {"PRODUCER_NOC_X", std::to_string(physical_eth_router_dst.x)},
+            {"PRODUCER_NOC_Y", std::to_string(physical_eth_router_dst.y)},
+            {"DISPATCHER_NOC_X", std::to_string(dispatch_physical_core.x)},
+            {"DISPATCHER_NOC_Y", std::to_string(dispatch_physical_core.y)},
+        };
+
+        tt::tt_metal::CreateKernel(
+            *command_queue_program_ptr,
+            "tt_metal/impl/dispatch/kernels/remote_command_processor.cpp",
+            remote_processor_logical_core,
+            tt::tt_metal::DataMovementConfig {
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = processor_compile_args,
+                .defines = processor_defines});
+
+        // first semaphore is between ethernet router and the processor core to signal whether processor can receive commands
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_logical_core, 0);
+        // second semaphore is between processor and dispatcher to detect whether dispatcher can accept commands
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_logical_core, num_tensix_command_slots);
+    }
+    detail::CompileProgram(this, *command_queue_program_ptr);
+    this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+}
+
+// Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
+void Device::configure_command_queue_programs() {
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
+
+    std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
+    const uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
+    const uint32_t cq_size = hugepage_size / this->num_hw_cqs();
+
+    TT_ASSERT(this->command_queue_programs.size() == 1);
+    Program& command_queue_program = *this->command_queue_programs[0];
+
+    for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+        // Reset the host manager's pointer for this command queue
+        this->manager->reset(cq_id);
+
+        pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->manager->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+
+        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, mmio_device_id, channel);
+    }
+
+    if (this->is_mmio_capable()) {
+        for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
+            uint8_t curr_num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
+            uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+            uint32_t curr_cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), curr_channel) / curr_num_hw_cqs;
+
+            for (uint8_t cq_id = 0; cq_id < curr_num_hw_cqs; cq_id++) {
+                tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(curr_num_hw_cqs).issue_queue_reader_core(device_id, curr_channel, cq_id);
+                tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(curr_num_hw_cqs).completion_queue_writer_core(device_id, curr_channel, cq_id);
+
+                TT_ASSERT(issue_q_reader_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
+                    "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_reader_location.chip, completion_q_writer_location.chip, this->id());
+
+                CoreCoord issue_q_logical_core(issue_q_reader_location.x, issue_q_reader_location.y);
+                CoreCoord completion_q_logical_core(completion_q_writer_location.x, completion_q_writer_location.y);
+
+                // Re-start the pointers
+                uint32_t issue_queue_start_addr = CQ_START + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
+                uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
+                uint32_t issue_queue_start_addr_16B = issue_queue_start_addr >> 4;
+                vector<uint32_t> issue_queue_read_ptr = {issue_queue_start_addr_16B};
+                detail::WriteToDeviceL1(this, issue_q_logical_core, CQ_ISSUE_READ_PTR, issue_queue_read_ptr);
+                detail::WriteToDeviceL1(this, issue_q_logical_core, CQ_ISSUE_WRITE_PTR, issue_queue_read_ptr);
+
+                // Currently remote device dispatch completion queue interface has not been brought up
+                // This will be updated with https://github.com/tenstorrent-metal/tt-metal/issues/3949
+                if (device_id == this->id()) {
+                    uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
+                    uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
+                    vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+                    detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
+                    detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+                }
+            }
+        }
+    }
+    detail::ConfigureDeviceWithProgram(this, command_queue_program);
+    tt::Cluster::instance().l1_barrier(this->id());
+}
+
 void Device::initialize_command_queue() {
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     this->manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
-    detail::CompileCommandQueuePrograms(this, this->command_queue_programs);
+    this->compile_command_queue_programs();
     TT_ASSERT(this->command_queue_programs.size() == 1);
-    detail::CommandQueueInit(this);
+    this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
