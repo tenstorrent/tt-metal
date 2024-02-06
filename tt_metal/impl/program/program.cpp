@@ -1048,14 +1048,14 @@ void Program::compile( Device * device )
     }
 
     for (auto & f : events)
-        f.wait();
+        f.get();
 
     for (auto kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
     }
 
     for (auto & f : events)
-        f.wait();
+        f.get();
 
     this->construct_core_range_set_for_worker_cores();
 
