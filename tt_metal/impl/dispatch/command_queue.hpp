@@ -461,15 +461,17 @@ class CommandQueue
         ~CommandQueue() {}
 
         template < class F >
-        void submit ( F && func, std::reference_wrapper< std::future< void > > event ){
+        auto& submit ( F && func, std::reference_wrapper< std::future< void > > event ){
             std::lock_guard<std::mutex> lk(mutex_);
             std::tie(last_, event.get()) = last_.has_value() ? detail::GetExecutor().dependent_async ( func, last_.value()) : detail::GetExecutor().dependent_async ( func );
+            return last_.value();
         }
 
         template < class F >
-        void submit ( F && func){
+        auto& submit ( F && func){
             std::lock_guard<std::mutex> lk(mutex_);
             last_ = last_.has_value() ? detail::GetExecutor().silent_dependent_async((func), last_.value()) : detail::GetExecutor().silent_dependent_async( func );
+            return last_.value();
         }
 
         Device* device() const {
