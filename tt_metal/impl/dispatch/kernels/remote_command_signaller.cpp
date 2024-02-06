@@ -20,9 +20,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tx_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));  // Should be num command slots in the eth router
 
-    uint32_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
-    uint32_t signaller_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
-    uint32_t eth_consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y));
+    uint32_t producer_noc_encoding = uint32_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
+    uint32_t signaller_noc_encoding = uint32_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
+    uint32_t eth_consumer_noc_encoding = uint32_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y));
 
     bool db_rx_buf_switch = false;
     constexpr bool tx_buf_switch = false; //TODO: toggle db buf switch when adding double buffering on eth core
@@ -52,7 +52,7 @@ void kernel_main() {
 
         relay_command<cmd_base_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(tx_buf_switch, ((uint64_t)eth_consumer_noc_encoding << 32));
 
-        update_producer_consumer_sync_semaphores(((uint64_t)signaller_noc_encoding << 32), ((uint64_t)eth_consumer_noc_encoding << 32), tx_semaphore_addr, get_semaphore(0));
+        update_producer_consumer_sync_semaphores(((uint64_t)signaller_noc_encoding << 32), ((uint64_t)eth_consumer_noc_encoding << 32), tx_semaphore_addr, eth_get_semaphore(0));
 
         if (reading_buffer) {
             tt_l1_ptr db_cb_config_t *db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
@@ -93,7 +93,7 @@ void kernel_main() {
         }
 
         // Notify to dispatcher that is has completed a command
-        noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | get_semaphore(0), 1);
+        noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | get_semaphore(1), 1);
         noc_async_write_barrier(); // Barrier for now
         db_rx_buf_switch = not db_rx_buf_switch;
     }

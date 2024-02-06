@@ -16,12 +16,12 @@ void kernel_main() {
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
-    uint32_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
-    uint32_t processor_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
-    uint32_t dispatcher_noc_encoding = uint64_t(NOC_XY_ENCODING(DISPATCHER_NOC_X, DISPATCHER_NOC_Y));
+    uint32_t producer_noc_encoding = uint32_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
+    uint32_t processor_noc_encoding = uint32_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
+    uint32_t dispatcher_noc_encoding = uint32_t(NOC_XY_ENCODING(DISPATCHER_NOC_X, DISPATCHER_NOC_Y));
 
     volatile tt_l1_ptr uint32_t* rx_semaphore_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 1 by host
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 0 by host
     volatile tt_l1_ptr uint32_t* db_tx_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));  // Should be num command slots by in the dispatcher
 
@@ -82,7 +82,7 @@ void kernel_main() {
             producer_consumer_transfer_num_pages);
 
         // Notify producer ethernet router that it has completed transferring a command
-        noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | get_semaphore(0), 1);
+        noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | eth_get_semaphore(0), 1);
         noc_async_write_barrier(); // Barrier for now
 
         db_tx_buf_switch = not db_tx_buf_switch;
