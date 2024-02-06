@@ -184,6 +184,10 @@ def register_operation(*, name, validate_input_tensors, torch_function=None):
                 decorated_function = validate_decorator(decorated_function)
             if ENABLE_DEBUG_DECORATOR:
                 decorated_function = debug_decorator(decorated_function)
+
+            if ttnn.tracer.ENABLE_TRACER:
+                decorated_function = ttnn.tracer.trace_ttnn_operation(name, decorated_function)
+
             output = decorated_function(*function_args, **function_kwargs)
             return output
 
