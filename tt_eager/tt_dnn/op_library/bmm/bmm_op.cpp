@@ -790,7 +790,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, true);
-                    ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, ShardOrientation::ROW_MAJOR};
+                    ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
@@ -815,7 +815,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         all_cores = CoreRangeSet({CoreRange{{0, 0}, {num_blocks_x - 1, num_blocks_y - 1}}});
                         shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
-                    ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, shard_orientation};
+                    ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
@@ -839,7 +839,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     }
 
                     CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, shard_orientation==ShardOrientation::ROW_MAJOR);
-                    ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, shard_orientation};
+                    ShardSpec shard_spec = ShardSpec{.grid=all_cores, .shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .orientation=shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
