@@ -52,7 +52,10 @@ std::vector<Tensor> _unary_pow_bw(const Tensor& grad, const Tensor& input, float
         return grad_tensor;
     }
 
-    Tensor power_input = power(input, exponent - 1, output_mem_config);
+    Tensor power_input = power(input, fabs(exponent - 1.0f), output_mem_config);
+    if ( exponent < 1.0f ) {
+        power_input = recip(power_input,output_mem_config);
+    }
 
     Tensor result = mul_unary(power_input, exponent, output_mem_config);
     Tensor final_result = mul(result, grad, std::nullopt, output_mem_config);

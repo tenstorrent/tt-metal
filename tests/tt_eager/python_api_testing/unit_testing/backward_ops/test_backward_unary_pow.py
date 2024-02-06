@@ -61,17 +61,20 @@ def test_fw_exponent(input_shapes, exponent, device):
     ),
 )
 @pytest.mark.parametrize(
-    "exponent",
+    "exponent_and_pcc",
     [
-        0.0,
-        1.0,
-        2.0,
-        5.0,
+        (0.0, 0.99),
+        (1.0, 0.99),
+        (2.0, 0.99),
+        (5.0, 0.99),
+        (2.5, 0.60),
+        (0.5, 0.89),
     ],
 )
-def test_bw_unary_pow(input_shapes, exponent, device):
+def test_bw_unary_pow(input_shapes, exponent_and_pcc, device):
+    exponent, pcc = exponent_and_pcc
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device, True)
 
     tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
 
@@ -83,5 +86,5 @@ def test_bw_unary_pow(input_shapes, exponent, device):
 
     golden_tensor = [in_data.grad]
 
-    status = compare_results(tt_output_tensor_on_device, golden_tensor)
+    status = compare_results(tt_output_tensor_on_device, golden_tensor, pcc=pcc)
     assert status
