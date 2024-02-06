@@ -521,7 +521,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         program,
         "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_writer_kernel.cpp",
         core_range,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
         input_cb_index,

@@ -127,13 +127,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_transformer_attn_matmul.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
         (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init

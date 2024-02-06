@@ -205,14 +205,14 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines)
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines}
     );
 
     auto writer_kernels_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args)
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args}
     );
 
     vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value() };

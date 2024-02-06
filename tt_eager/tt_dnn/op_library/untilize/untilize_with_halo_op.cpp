@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        ReaderDataMovementConfig{reader_ct_args});
+        ReaderDataMovementConfig{.compile_args = reader_ct_args});
 
     /** writer
      */
@@ -285,7 +285,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_s2.cpp",
         all_cores,
-        WriterDataMovementConfig{writer_ct_args});
+        WriterDataMovementConfig{.compile_args = writer_ct_args});
 
     /** compute
      */
@@ -298,7 +298,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
-        ComputeConfig{.compile_args=compute_args});
+        ComputeConfig{
+            .compile_args = compute_args});
 
     // 1D distribution of blocks across all cores
     uint32_t ncores_full = ncores;
@@ -896,7 +897,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        ReaderDataMovementConfig{reader_ct_args});
+        ReaderDataMovementConfig{.compile_args = reader_ct_args});
 
     /** writer
      */
@@ -916,7 +917,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo.cpp",
         all_cores,
-        WriterDataMovementConfig{writer_ct_args});
+        WriterDataMovementConfig{.compile_args = writer_ct_args});
 
     /** compute
      */
@@ -929,7 +930,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
-        ComputeConfig{.compile_args=compute_args});
+        ComputeConfig{
+            .compile_args = compute_args});
 
     // 1D distribution of blocks across all cores
     // cliff core not yet supported

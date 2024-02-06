@@ -100,12 +100,12 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;

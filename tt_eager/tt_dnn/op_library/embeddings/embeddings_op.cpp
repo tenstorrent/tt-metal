@@ -154,9 +154,9 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-             embedding_defines));
+        tt_metal::ReaderDataMovementConfig{
+            .compile_args = embedding_compile_time_args,
+            .defines = embedding_defines});
 
     if (num_blocks_per_core_group_1 > 0) {
         vector<uint32_t> compute_args_1 = {
@@ -189,8 +189,8 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{
+            .compile_args = writer_compile_time_args});
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -390,9 +390,9 @@ operation::ProgramWithCallbacks embeddings_rm(
         program,
         "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-            embedding_defines));
+        tt_metal::ReaderDataMovementConfig{
+            .compile_args = embedding_compile_time_args,
+            .defines = embedding_defines});
 
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
     uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)log2(output_page_size) : 0;
@@ -407,7 +407,7 @@ operation::ProgramWithCallbacks embeddings_rm(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;

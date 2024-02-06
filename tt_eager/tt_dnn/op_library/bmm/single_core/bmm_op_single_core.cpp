@@ -72,13 +72,13 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/writer_bmm_interleaved.cpp",
         core,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
         B, // B

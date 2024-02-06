@@ -179,13 +179,13 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
         program,
         "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args_vec});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args_vec});
 
     auto all_runtime_args = get_unpad_runtime_args_rm(a, output, output_tensor_start,
                                                     num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2,
@@ -409,13 +409,13 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
         program,
         "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
 
 
