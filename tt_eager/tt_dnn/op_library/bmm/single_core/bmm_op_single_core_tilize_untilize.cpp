@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     Program program{};
 
-    CoreRange core_range { core, core };
+    CoreRange core_range { .start = core, .end = core };
 
     Buffer *dst_dram_buffer = out.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");

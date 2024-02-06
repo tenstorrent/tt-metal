@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
 
     tt_metal::Device *device = any.device();
     tt_metal::Program program = tt_metal::CreateProgram();
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(any.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);

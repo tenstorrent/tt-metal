@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks MorehArange::create_program(
 Tensor moreh_arange(float start, float end, float step, const Tensor &any, const MemoryConfig &output_mem_config) {
     auto device = any.device();
     auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores = {{0, 0}, {grid_coord.x - 1, grid_coord.y - 1}};
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
     return operation::run(
                MorehArange{
@@ -167,7 +167,7 @@ Tensor moreh_arange(float start, float end, float step, const Tensor &any, const
 Tensor moreh_arange_inplace(Tensor &input_tensor, float start, float end, float step) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores = {{0, 0}, {grid_coord.x - 1, grid_coord.y - 1}};
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
     operation::run(
         MorehArange{

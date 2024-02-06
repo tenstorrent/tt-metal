@@ -44,7 +44,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -202,7 +202,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -322,7 +322,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);

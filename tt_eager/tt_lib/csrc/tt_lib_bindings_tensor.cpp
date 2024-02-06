@@ -255,7 +255,7 @@ void TensorModule(py::module &m_tensor) {
         .def(
             py::init<>(
                 [](const CoreCoord &start, const CoreCoord & end ) {
-                    return CoreRange{start, end};
+                    return CoreRange{.start=start, .end=end};
                 }
             )
         )

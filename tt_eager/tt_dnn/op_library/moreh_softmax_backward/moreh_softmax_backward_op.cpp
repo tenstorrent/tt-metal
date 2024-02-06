@@ -135,7 +135,7 @@ Tensor moreh_softmax_backward(
     const MemoryConfig& output_mem_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores = {{0, 0}, {grid_coord.x - 1, grid_coord.y - 1}};
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
     return operation::run(
                MorehSoftmaxBackward{
@@ -157,7 +157,7 @@ Tensor moreh_softmin_backward(
     const MemoryConfig& output_mem_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
-    const CoreRange all_cores = {{0, 0}, {grid_coord.x - 1, grid_coord.y - 1}};
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
     return operation::run(
                MorehSoftmaxBackward{
