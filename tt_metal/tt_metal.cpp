@@ -26,18 +26,27 @@ namespace tt_metal {
 namespace {
 
 void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    log_info(LogTest, "1");
     if (kernel_group->compute_id.has_value()) {
+        log_info(LogTest, "a");
         detail::GetKernel(program, kernel_group->compute_id.value())->configure(device, logical_core);
     }
+    log_info(LogTest, "2");
     if (kernel_group->riscv1_id.has_value()) {
+        log_info(LogTest, "b");
         detail::GetKernel(program, kernel_group->riscv1_id.value())->configure(device, logical_core);
     }
+    log_info(LogTest, "3");
     if (kernel_group->riscv0_id.has_value()) {
+        log_info(LogTest, "c");
         detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
     }
+    log_info(LogTest, "4");
     if (kernel_group->erisc_id.has_value()) {
+        log_info(LogTest, "d");
         detail::GetKernel(program, kernel_group->erisc_id.value())->configure(device, logical_core);
     }
+    log_info(LogTest, "5");
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
