@@ -31,7 +31,7 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/riscv_draft/add_two_ints.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
