@@ -467,23 +467,30 @@ def _torch_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_
 )
 def upsample(
     input_tensor: ttnn.Tensor,
-    scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float, float]],
+    scale_factor: Union[float, Tuple[float, float]],
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     """
-    upsample(input_tensor: ttnn.Tensor, scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float, float]) -> ttnn.Tensor
+    upsample(input_tensor: ttnn.Tensor, scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float], Tuple[float, float, float, float]]) -> ttnn.Tensor
     """
 
     scale_h, scale_w = 1, 1
     if isinstance(scale_factor, float):
-        scale_h = 1
+        scale_h = scale_factor
         scale_w = scale_factor
-    elif len(scale_factor) == 2:
-        scale_h, scale_w = scale_factor
-    elif len(scale_factor) == 4:
-        scale_h, scale_w = scale_factor[1], scale_factor[2]
-    else:
-        RuntimeError("Invalid scale factor")
+    elif isinstance(scale_factor, tuple):
+        if len(scale_factor) == 2:
+            scale_w, scale_c = scale_factor
+            assert scale_c == 1, "scale_c should be 1"
+        elif len(scale_factor) == 3:
+            scale_h, scale_w, scale_c = scale_factor
+            assert scale_c == 1, "scale_c should be 1"
+        elif len(scale_factor) == 4:
+            scale_n, scale_h, scale_w, scale_c = scale_factor
+            assert scale_n == 1, "scale_n should be 1"
+            assert scale_c == 1, "scale_c should be 1"
+        else:
+            RuntimeError("Invalid scale factor")
 
     ttl_input_tensor = input_tensor.value
     output_tensor = ttl.tensor.upsample(ttl_input_tensor, int(scale_h), int(scale_w), output_mem_config=memory_config)

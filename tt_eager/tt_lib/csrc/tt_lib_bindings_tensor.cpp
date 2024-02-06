@@ -567,7 +567,7 @@ void TensorModule(py::module &m_tensor) {
         py::arg("scale_factor_h").noconvert(),
         py::arg("scale_factor_w").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("use_multicore") = false , R"doc(
+        R"doc(
         UpSample 2D
         It operates on tensors whose that have channels as the last dimension
 
