@@ -607,7 +607,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         const std::vector<Tensor>& output_tensors
     ) {
         auto in0_buffer = input_tensors.at(0).buffer();
-        auto &mask_tensor = optional_input_tensors.at(0);
+        auto mask_tensor = optional_input_tensors.at(0);
         auto out_buffer = output_tensors.size() == 1 ? output_tensors.at(0).buffer() : in0_buffer;
 
         UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
