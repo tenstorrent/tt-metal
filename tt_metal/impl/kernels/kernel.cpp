@@ -324,6 +324,9 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     log_info(LogTest, "Getting binary...");
+    log_info(LogTest, "Binaries are as follows:");
+    for (auto &id_and_mems : this->binaries_)
+        log_info(LogTest, "    Device id {} has {} mems...", id_and_mems.first, id_and_mems.second.size());
     auto bins = this->binaries(device_id);
     log_info(LogTest, "Binary has {} mems...", bins.size());
     ll_api::memory binary_mem = bins.at(0);
