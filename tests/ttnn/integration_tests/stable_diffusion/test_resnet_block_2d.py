@@ -87,7 +87,6 @@ def test_resnet_block_2d_256x256(
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
     ttnn_output = resnetBlock2D(
         input,
         temb=temb,
@@ -100,6 +99,7 @@ def test_resnet_block_2d_256x256(
         output_scale_factor=output_scale_factor,
         parameters=parameters,
         device=device,
+        convs_on_device=False,
     )
     ttnn_output = ttnn_to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
@@ -170,7 +170,7 @@ def test_resnet_block_2d_512x512(
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+    reader_patterns_cache = {}
     ttnn_output = resnetBlock2D(
         input,
         temb=temb,
@@ -183,6 +183,7 @@ def test_resnet_block_2d_512x512(
         output_scale_factor=output_scale_factor,
         parameters=parameters,
         device=device,
+        reader_patterns_cache=reader_patterns_cache,
     )
     ttnn_output = ttnn_to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

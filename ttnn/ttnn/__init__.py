@@ -79,6 +79,7 @@ from ttnn.operations.others import (
     # reduction operations
     mean,
     upsample,
+    unpad,
 )
 
 from ttnn.operations.data_movement import (

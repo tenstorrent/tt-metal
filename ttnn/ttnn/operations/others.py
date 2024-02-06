@@ -134,6 +134,18 @@ def _unpad_from_tile_validate_input_tensors(operation_name, input_tensor, *args,
     )
 
 
+def _unpad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
 @ttnn.register_operation(
     name="ttnn.unpad_from_tile",
     validate_input_tensors=_unpad_from_tile_validate_input_tensors,
@@ -186,6 +198,37 @@ def unpad_from_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         return output_tensor
 
     return ttl.tensor.decorate_external_operation(ttnn_unpad, function_name="ttnn.unpad_from_tile")(input_tensor)
+
+
+@ttnn.register_operation(name="ttnn.unpad", validate_input_tensors=_unpad_validate_input_tensors)
+def unpad(input_tensor: ttnn.Tensor, output_tensor_start: Tuple[int], output_tensor_end: Tuple[int]) -> ttnn.Tensor:
+    r"""
+    unpad(input_tensor: ttnn.Tensor) -> ttnn.Tensor
+
+    Unpad :attr:`input_tensor`.
+
+    Args:
+        * :attr:`input_tensor`: the input tensor off of device
+        * :attr:`output_tensor_start`: start coordinate of chunk within input tensor
+        * :attr:`output_tensor_end`: end coordinate of chunk within input tensor
+
+    Example::
+
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16)), device)
+        >>> tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+        >>> tensor = ttnn.from_device(tensor)
+        >>> output = ttnn.unpad(tensor, (0,0,0,0), (0,0,31,31))
+        >>> print(output.shape)
+
+    """
+    return ttnn.Tensor(
+        ttl.tensor.unpad(
+            input_tensor.value,
+            output_tensor_start,
+            output_tensor_end,
+            output_mem_config=input_tensor.value.memory_config(),
+        )
+    )
 
 
 def _torch_embedding(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):
