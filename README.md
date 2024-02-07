@@ -196,14 +196,14 @@ developer dependencies if you are a developer.
 ``<VERSION_NUMBER>`` is the release version you will be using. Otherwise, you can use ``main`` to get the latest development source.
 
 ```
-git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
+git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
 cd tt-metal
 ```
 
 For example, if you are trying to use version `v0.35.0`, you can execute:
 
 ```
-git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.35.0
+git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.35.0
 cd tt-metal
 ```
 
