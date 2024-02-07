@@ -674,6 +674,7 @@ CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const Core
 
 void Cluster::initialize_routing_info_for_ethernet_cores() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
@@ -717,6 +718,8 @@ void Cluster::initialize_routing_info_for_ethernet_cores() {
                                 .fd_buffer_msgs_sent = 0};
                             if (devices.find(connected_chip_id) != devices.end()) {
                                 // only setup fd tunneling for devices grouped with same mmio device
+                                // The following configs need to be written to device with
+                                // configure_eth_core_for_dispatch_core
                                 if (set_src) {
                                     routing_config_local.routing_mode = EthRouterMode::FD_SRC;
                                     this->device_eth_routing_info_.at(chip_id).insert({eth_core, routing_config_local});
@@ -734,13 +737,19 @@ void Cluster::initialize_routing_info_for_ethernet_cores() {
                             } else {
                                 routing_config_local.routing_mode = EthRouterMode::SD;
                                 this->device_eth_routing_info_.at(chip_id).insert({eth_core, routing_config_local});
+                                tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                                write_core(
+                                    (void *)&routing_config_local,
+                                    sizeof(routing_info_t),
+                                    eth_phys_core,
+                                    routing_info_addr,
+                                    false);
                             }
                         }
                     }
                 }
             } else {
                 // Slow dispatch mode
-                const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {
