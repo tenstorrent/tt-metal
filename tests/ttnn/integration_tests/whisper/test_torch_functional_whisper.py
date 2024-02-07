@@ -37,7 +37,7 @@ def test_whisper_attention(model_name, batch_size, sequence_size, use_key_value_
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-        prefix="encoder_attn" if use_key_value_states else "",
+        prefix="encoder_attn." if use_key_value_states else "",
     )
 
     attention_mask = None

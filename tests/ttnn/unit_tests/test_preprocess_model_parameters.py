@@ -97,7 +97,7 @@ def test_conv(
         model_name="conv",  # Name to use for the cache
         initialize_model=lambda: torch_conv,
         custom_preprocessor=custom_preprocessor,
-        prefix="conv",  # prefix is not needed if you have an actual CNN model. Just use the names of the torch.nn.Conv2d variables
+        prefix="conv.",  # prefix is not needed if you have an actual CNN model. Just use the names of the torch.nn.Conv2d variables
     )
     assert len(parameters) == 2
 

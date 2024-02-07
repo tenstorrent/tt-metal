@@ -125,7 +125,7 @@ def _preprocess_model_parameters(
                     child,
                     convert_to_ttnn=convert_to_ttnn,
                     custom_preprocessor=custom_preprocessor,
-                    name=f"{name}.{index}" if name else f"{index}",
+                    name=f"{name}{index}" if name else f"{index}",
                 )
                 for index, child in enumerate(model.children())
             ]
@@ -162,7 +162,7 @@ def _preprocess_model_parameters(
             child,
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
-            name=f"{name}.{child_name}" if name else child_name,
+            name=f"{name}{child_name}" if name else child_name,
         )
 
     for parameter_name, parameter in named_parameters:

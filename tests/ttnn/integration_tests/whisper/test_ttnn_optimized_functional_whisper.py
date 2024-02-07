@@ -49,7 +49,7 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-        prefix="encoder_attn" if use_key_value_states else "",
+        prefix="encoder_attn." if use_key_value_states else "",
     )
 
     torch_attention_mask = None
@@ -67,7 +67,7 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
         convert_to_ttnn=lambda *_: True,
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
-        prefix="encoder_attn" if use_key_value_states else "",
+        prefix="encoder_attn." if use_key_value_states else "",
     )
     attention_mask = None
     output = ttnn_model.whisper_attention(
@@ -154,7 +154,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.custom_preprocessor,
-        prefix="encoder",
+        prefix="encoder.",
         device=device,
     )
 
@@ -276,7 +276,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
-        prefix="decoder",
+        prefix="decoder.",
     )
     ttnn_decoder_input_ids = ttnn.from_torch(decoder_input_ids, dtype=ttnn.bfloat16)
     ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, device)

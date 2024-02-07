@@ -182,7 +182,7 @@ def test_t5_layer_cross_attention(device, model_name, batch_size, sequence_size)
         initialize_model=lambda: model,
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,
-        prefix="EncDecAttention",
+        prefix="EncDecAttention.",
     )
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
