@@ -43,6 +43,52 @@ SPECIAL_TAGS = [B_INST, E_INST, "<<SYS>>", "<</SYS>>"]
 UNSAFE_ERROR = "Error: special tags are not allowed as part of the prompt."
 
 
+def load_chunked_checkpoints(checkpoints, n_layers):
+    checkpoint = {}
+    print(f"Loading {len(checkpoints)} checkpoint files")
+    for ckpt in tqdm(checkpoints):
+        # Layer range is in the file name, like layers_start-end.pth
+        layer_range = ckpt.stem.split("_")[1]
+        start_layer, end_layer = map(int, layer_range.split("-"))
+        if start_layer > n_layers:
+            continue
+
+        loaded_ckpt = torch.load(ckpt, map_location="cpu")
+        checkpoint.update(loaded_ckpt)
+    return checkpoint
+
+
+def load_sharded_checkpionts(checkpoints, n_layers):
+    checkpoint = {}
+    print(f"Loading {len(checkpoints)} checkpoint files")
+    for ckpt in tqdm(checkpoints):
+        loaded_ckpt = torch.load(ckpt, map_location="cpu")
+        for (
+            key,
+            value,
+        ) in loaded_ckpt.items():
+            if "layers." in key:
+                layer_num = int(key.split("layers.")[1].split(".")[0])
+                if layer_num >= n_layers:
+                    continue
+            if key in checkpoint:
+                checkpoint[key] += [value]
+            else:
+                checkpoint[key] = [value]
+        del loaded_ckpt
+
+    # concat checkpoint values
+    for key, value in checkpoint.items():
+        if len(value) == 1 or "norm" in key:
+            checkpoint[key] = value[0]
+        else:
+            # cat_dim is index of the smallest dimension in value[0].shape
+            cat_dim = torch.argmin(torch.tensor(value[0].shape))
+            checkpoint[key] = torch.cat(value, dim=cat_dim)
+
+    return checkpoint
+
+
 class Llama:
     @staticmethod
     def build(
@@ -93,31 +139,12 @@ class Llama:
         if not skip_model_load:
             checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
             assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-            print(f"Loading {len(checkpoints)} checkpoint files")
-            for ckpt in tqdm(checkpoints):
-                loaded_ckpt = torch.load(ckpt, map_location="cpu")
-                for (
-                    key,
-                    value,
-                ) in loaded_ckpt.items():
-                    if "layers." in key:
-                        layer_num = int(key.split("layers.")[1].split(".")[0])
-                        if layer_num >= n_layers:
-                            continue
-                    if key in checkpoint:
-                        checkpoint[key] += [value]
-                    else:
-                        checkpoint[key] = [value]
-                del loaded_ckpt
 
-            # concat checkpoint values
-            for key, value in checkpoint.items():
-                if len(value) == 1 or "norm" in key:
-                    checkpoint[key] = value[0]
-                else:
-                    # cat_dim is index of the smallest dimension in value[0].shape
-                    cat_dim = torch.argmin(torch.tensor(value[0].shape))
-                    checkpoint[key] = torch.cat(value, dim=cat_dim)
+            is_chunked = "layers_" in str(checkpoints[0])
+            if is_chunked:
+                checkpoint = load_chunked_checkpoints(checkpoints, n_layers)
+            else:
+                checkpoint = load_sharded_checkpionts(checkpoints, n_layers)
 
         model_args: ModelArgs = ModelArgs(
             max_seq_len=max_seq_len,
