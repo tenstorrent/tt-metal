@@ -189,9 +189,12 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 config_size = len(config_list_uint16)
                 if config_size == 0:
                     # return dummy tensor
-                    return ttl.tensor.Tensor(
-                        [0, 0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, device
+                    output = ttl.tensor.Tensor(
+                        [0, 0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR
                     )
+                    if device is not None:
+                        output = output.to(device)
+                    return output
                 assert config_size % 2 == 0  ## each config is a tuple of (start, size)
                 assert config_size % num_cores_nhw == 0
 
@@ -219,9 +222,9 @@ class TTPyUntilizeWithHalo(TTPyOp):
                     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
                 )
 
-                tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16).to(
-                    device, height_sharded_mem_config
-                )
+                tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16)
+
+                tt_tensor = tt_tensor.to(device, height_sharded_mem_config) if device is not None else tt_tensor
                 # ttl.device.DumpDeviceMemoryState(device)
 
                 ## validate
