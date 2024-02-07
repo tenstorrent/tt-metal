@@ -350,3 +350,21 @@ def attention_softmax(
     t2 = ttnn.transformer.attention_softmax(t0, head_size=scalar, attention_mask=t1)
 
     return ttnn_tensor_to_torch(t2, output_mem_config)
+
+def rmsnorm(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
+
+    t2 = ttnn.rms_norm(t0, t1)
+
+    return ttnn_tensor_to_torch(t2, output_mem_config)

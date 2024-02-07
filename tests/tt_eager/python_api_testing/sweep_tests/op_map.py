@@ -1068,4 +1068,8 @@ op_map = {
         "tt_lib_op": ttnn_ops.attention_softmax,
         "pytorch_op": pytorch_ops.attention_softmax,
     },
+    "ttnn-rmsnorm": {
+        "tt_lib_op": ttnn_ops.rmsnorm,
+        "pytorch_op": pytorch_ops.ttnn_rmsnorm,
+    },    
 }
