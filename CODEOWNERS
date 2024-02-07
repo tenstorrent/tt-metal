@@ -111,6 +111,7 @@ models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 functional_*/ @eyonland @arakhmati
 
 # docs
+docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @muthutt
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @DrJessop @pgkeller @tt-rkim
