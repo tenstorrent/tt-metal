@@ -1,10 +1,10 @@
 .. _TT-LIB:
 
 TT-LIB
-******
+######
 
 Overview
-========
+***********
 
 The ``tt_lib`` Python module is a
 unified Python interface to the Tensor library located within ``tt_eager``. This library currently only supports 4 dimensional tensors with shape ``[W, Z, Y, X]``, in ROW_MAJOR layout, and with BFLOAT16 data type.
@@ -19,12 +19,16 @@ to TT Accelerator device. To use this functionality, you must call `tt_lib.devic
 as the default device that will be used to execute operations on tensors that are on host machine.
 
 Operation Infrastructure
-----------------------------
+========================
 
 TT-LIB has operation infrastructure which is used to launch, profile and cache operations generically.
 
 To add a new operation that can plug in to the infrastructure, all that's needed is a struct that implements methods needed by operation interface.
 Below, is an example of how to declare a new on-device operation with all of the methods required by the interface.
+
+
+New Device Operation
+--------------------
 
 .. code-block::
 
@@ -40,7 +44,8 @@ Below, is an example of how to declare a new on-device operation with all of the
         }
     };
 
-Or to add one with a member:
+New Device Operation with a member
+----------------------------------
 
 .. code-block::
 
@@ -58,6 +63,30 @@ Or to add one with a member:
         }
     };
 
+
+New Device Operation with optional output tensors
+-------------------------------------------------
+
+If an operation is expected to leverage optional output tensors, please use instead the validate_with_output_tensors
+and create_output_tensors with the additional parameter for the output_tensors.
+
+.. code-block::
+
+    struct <NewOperation> {
+        void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+        operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+
+        static constexpr auto attribute_names = std::make_tuple();
+        const auto attribute_values() const {
+            return std::make_tuple();
+        }
+    };
+
+New Host Operation
+------------------
+
 And below, is an example of how to declare a new on-host operation with all of the methods required by the interface.
 
 .. code-block::
@@ -73,25 +102,8 @@ And below, is an example of how to declare a new on-host operation with all of t
         }
     };
 
-If an operation is expected to leverage optional output tensors, please use instead the validate_with_output_tensors
-and create_output_tensors with the additional parameter for the output_tensors.
-
-.. code-block::
-
-    struct <NewOperation> {
-        void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-
-        static constexpr auto attribute_names = std::make_tuple();
-        const auto attribute_values() const {
-            return std::make_tuple();
-        }
-    };
-
-
 Profiler
-----------------------------
+========
 
 Profiler is supported out of the box for any op.
 
@@ -105,7 +117,7 @@ And there are 2 special methods that can be optionally implemented to set the pr
     };
 
 Fast Dispatch
--------------
+=============
 
 Fast dispatch allows programs/kernels to be enqueued to run, so host code does not have to wait for ops/programs to finish running.
 The enqueued programs run asynchronously to the host code.
@@ -119,7 +131,7 @@ or to perform only a wait, use:
 
 
 Program Caching
-----------------------------
+===============
 
 Program caching provides an ability for an operation to cache the program and simply reload it the next time the same operation is used.
 
@@ -183,7 +195,7 @@ In order for an op to be cachable, it needs to implement the following:
     };
 
 Logs
-----------------------------
+====
 To see logs related to operation infrastructure, use the following environment variables:
 
 .. code-block::
@@ -212,10 +224,10 @@ If `OPERATION_HISTORY_CSV=<csv_file_path>` environment variable is set, then the
 
 
 TT-LIB API through ``tt_lib``
-=============================
+*****************************
 
 Primary Operations
-------------------
+==================
 
 autofunction:: tt_lib.operations.primary.matmul
 
@@ -229,7 +241,7 @@ autofunction:: tt_lib.operations.primary.matmul
 
 
 Enums
------
+=====
 
 .. autoclass:: tt_lib.tensor.BcastOpMath
 
@@ -240,7 +252,7 @@ Enums
 .. autoclass:: tt_lib.tensor.ReduceOpDim
 
 Tensor elementwise operations
------------------------------
+=============================
 
 .. autofunction:: tt_lib.tensor.add
 
@@ -417,7 +429,7 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.polygamma
 
 Tensor relational operations
-----------------------------------
+============================
 .. autofunction:: tt_lib.tensor.gtz
 
 .. autofunction:: tt_lib.tensor.gez
@@ -443,20 +455,20 @@ Tensor relational operations
 .. autofunction:: tt_lib.tensor.ne
 
 Tensor ternary operations
--------------------------
+=========================
 .. autofunction:: tt_lib.tensor.where
 
 .. autofunction:: tt_lib.tensor.threshold
 
 Tensor matrix math operations
------------------------------
+=============================
 
 .. autofunction:: tt_lib.tensor.matmul
 
 .. autofunction:: tt_lib.tensor.bmm
 
 Tensor manipulation operations
-------------------------------
+-=============================
 
 These operations change the tensor shape in some way, giving it new dimensions
 but in general retaining the data.
@@ -488,7 +500,7 @@ but in general retaining the data.
 .. autofunction:: tt_lib.tensor.copy
 
 Tensor creation operations
---------------------------
+==========================
 
 .. autofunction:: tt_lib.tensor.arange
 
@@ -513,7 +525,7 @@ Tensor creation operations
 .. autofunction:: tt_lib.tensor.triu
 
 Broadcast and Reduce
---------------------
+====================
 
 .. autofunction:: tt_lib.tensor.bcast
 
@@ -534,7 +546,7 @@ Broadcast and Reduce
 .. autofunction:: tt_lib.tensor.rdiv
 
 Fallback Operations
-===================
+*******************
 
 These operations are currently not supported on TT accelerator device and will execute on host machine using Pytorch.
 
@@ -615,12 +627,12 @@ These operations are currently not supported on TT accelerator device and will e
 .. autoclass:: tt_lib.fallback_ops.torch_argmin
 
 Experimental Operations
-=======================
+***********************
 
 Operations in this section are experimental, don't have full support, and may behave in unexpected ways.
 
 Fused Operations from ``tt_lib`` Mini-Graph Library
----------------------------------------------------
+===================================================
 
 We have a variety of common operations that require fusion of multiple
 base operations together.
@@ -635,7 +647,7 @@ base operations together.
 
 
 Complex Operations
-------------------
+==================
  We use the following Tensor representation for complex tensors on device; we support complex tensor **x** as  N,H,W,C rank-4 tensor with last dim of size divisible by 64 to represent real and imaginary components
   * with indices [:,:,:,0:N/2] being real, and
   * with indices [:,:,:,N/2:N] being imaginary.
@@ -668,13 +680,13 @@ and then unary operations for,
 .. autofunction:: tt_lib.tensor.polar
 
 Complex Operations (Type 2)
----------------------------
+===========================
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
 operations; specifically this storage allows for compute without the cost of split-concat implicit in
 the Type 1 contiguous representations.
 
 Other Operations
-----------------
+================
 
 .. autofunction:: tt_lib.tensor.concat
 
@@ -771,7 +783,7 @@ Other Operations
 .. autofunction:: tt_lib.tensor.argmin
 
 Backward Operations
--------------------
+===================
 
 .. autofunction:: tt_lib.tensor.addalpha_bw
 
@@ -848,7 +860,7 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.binary_le_bw
 
 Loss Functions
---------------
+==============
 
 .. autofunction:: tt_lib.tensor.mseloss
 
