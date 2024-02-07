@@ -4,7 +4,9 @@
 
 import pathlib
 
-MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
+TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
+MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
+TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
 from tt_lib.ttnn import TTNN_ENABLE_LOGGING
 
