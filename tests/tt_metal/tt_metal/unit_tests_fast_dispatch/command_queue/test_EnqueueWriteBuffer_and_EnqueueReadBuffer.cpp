@@ -99,13 +99,13 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
     }
     return src;
 }
-
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
-    size_t buf_size = config.num_pages * config.page_size;
-    Buffer bufa(device, buf_size, config.page_size, config.buftype);
-    vector<uint32_t> src = generate_arange_vector(bufa.size());
     for (const bool use_void_star_api: {true, false}) {
+        size_t buf_size = config.num_pages * config.page_size;
+        Buffer bufa(device, buf_size, config.page_size, config.buftype);
+
+        vector<uint32_t> src = generate_arange_vector(bufa.size());
 
         if (use_void_star_api) {
             EnqueueWriteBuffer(cq, bufa, src.data(), false);
