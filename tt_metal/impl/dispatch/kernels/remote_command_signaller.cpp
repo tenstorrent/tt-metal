@@ -57,16 +57,17 @@ void kernel_main() {
         update_producer_consumer_sync_semaphores(((uint64_t)signaller_noc_encoding << 32), ((uint64_t)eth_consumer_noc_encoding << 32), tx_semaphore_addr, eth_get_semaphore(0));
 
         if (reading_buffer) {
-            tt_l1_ptr db_cb_config_t *db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
-            const tt_l1_ptr db_cb_config_t *dispatcher_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
-            const tt_l1_ptr db_cb_config_t *eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, tx_buf_switch);
+            tt_l1_ptr db_cb_config_t *rx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, true);
+            tt_l1_ptr db_cb_config_t *tx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+            const tt_l1_ptr db_cb_config_t *dispatcher_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+            const tt_l1_ptr db_cb_config_t *eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, false);
 
             uint32_t consumer_cb_num_pages = header->router_cb_num_pages;
             uint32_t page_size = header->page_size;
             uint32_t consumer_cb_size = header->router_cb_size;
 
             program_consumer_cb<cmd_base_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
-                db_cb_config,
+                tx_db_cb_config,
                 eth_db_cb_config,
                 tx_buf_switch,
                 ((uint64_t)eth_consumer_noc_encoding << 32),
@@ -78,7 +79,8 @@ void kernel_main() {
             uint32_t producer_cb_size = header->consumer_cb_size;
             uint32_t consumer_router_transfer_num_pages = header->consumer_router_transfer_num_pages;
             transfer(
-                db_cb_config,
+                rx_db_cb_config,
+                tx_db_cb_config,
                 dispatcher_db_cb_config,
                 eth_db_cb_config,
                 command_ptr,

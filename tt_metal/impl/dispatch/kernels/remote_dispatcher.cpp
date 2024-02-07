@@ -40,15 +40,15 @@ void kernel_main() {
         const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
         bool reading_buffer = (!is_program) & (num_pages > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
-        tt_l1_ptr db_cb_config_t *db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
-        const tt_l1_ptr db_cb_config_t *remote_producer_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
+        tt_l1_ptr db_cb_config_t *rx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, true);
+        const tt_l1_ptr db_cb_config_t *remote_producer_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, false);
 
         uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
         if (is_program) {
             uint32_t program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
             uint32_t num_workers = header->num_workers;  // If num_workers > 0, it means we are launching a program
             write_and_launch_program(
-                db_cb_config,
+                rx_db_cb_config,
                 remote_producer_db_cb_config,
                 program_transfer_start_addr,
                 num_pages,
@@ -60,7 +60,7 @@ void kernel_main() {
             uint32_t num_buffer_transfers = header->num_buffer_transfers;   // How many WriteBuffer commands we are running
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
             write_remote_buffers(
-                db_cb_config,
+                rx_db_cb_config,
                 remote_producer_db_cb_config,
                 buffer_transfer_command_ptr,
                 num_buffer_transfers,
@@ -71,32 +71,32 @@ void kernel_main() {
 
         // Relay command to remote signaller
         wait_consumer_space_available(db_tx_semaphore_addr);    // Check that there is space in the remote signaller
-        const tt_l1_ptr db_cb_config_t *signaller_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_tx_buf_switch); // CB between dispatcher and signaller
-        uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
-        uint32_t page_size = header->page_size;
-        uint32_t consumer_cb_size = header->consumer_cb_size;
-        program_consumer_cb<cmd_base_addr, data_buffer_size, signaller_cmd_base_addr, signaller_data_buffer_size>(
-            db_cb_config,
-            signaller_db_cb_config,
-            db_tx_buf_switch,
-            ((uint64_t)signaller_noc_encoding << 32),
-            consumer_cb_num_pages,
-            page_size,
-            consumer_cb_size);
         relay_command<signaller_cmd_base_addr, signaller_data_buffer_size>(command_start_addr, db_tx_buf_switch, ((uint64_t)signaller_noc_encoding << 32));
-
         update_producer_consumer_sync_semaphores(((uint64_t)dispatcher_noc_encoding << 32), ((uint64_t)signaller_noc_encoding << 32), db_tx_semaphore_addr, get_semaphore(1));
 
         if (reading_buffer) {
             // Command is requesting to read data back from device, need to read buffer data and transfer to the remote signaller
             // Use same API as prefetcher core to produce data for remote signaller, src buffer will either be in DRAM or L1
+            uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
+            uint32_t page_size = header->page_size;
+            uint32_t consumer_cb_size = header->consumer_cb_size;
+            uint32_t data_section_addr = command_start_addr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+            program_local_cb(data_section_addr, consumer_cb_num_pages, page_size, consumer_cb_size);
+            tt_l1_ptr db_cb_config_t *tx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+            const tt_l1_ptr db_cb_config_t *signaller_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, true); // CB between dispatcher and signaller
+            program_consumer_cb<cmd_base_addr, data_buffer_size, signaller_cmd_base_addr, signaller_data_buffer_size>(
+                tx_db_cb_config,
+                signaller_db_cb_config,
+                db_tx_buf_switch,
+                ((uint64_t)signaller_noc_encoding << 32),
+                consumer_cb_num_pages,
+                page_size,
+                consumer_cb_size);
+
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
             uint32_t is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
             uint32_t producer_router_transfer_num_pages = header->producer_router_transfer_num_pages;
-            uint32_t data_section_addr = command_start_addr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-            program_local_cb(data_section_addr, consumer_cb_num_pages, page_size, consumer_cb_size);
-
             produce<signaller_cmd_base_addr, signaller_data_buffer_size>(
                 command_ptr,
                 num_buffer_transfers,
@@ -107,7 +107,7 @@ void kernel_main() {
                 ((uint64_t)signaller_noc_encoding << 32),
                 producer_router_transfer_num_pages,
                 db_tx_buf_switch,
-                db_cb_config,
+                tx_db_cb_config,
                 signaller_db_cb_config
             );
         }
