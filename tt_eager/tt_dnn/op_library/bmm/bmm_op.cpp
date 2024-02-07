@@ -922,7 +922,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     input_tensor_a, input_tensor_b, output_tensor,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode,
+                    output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch
                 );
