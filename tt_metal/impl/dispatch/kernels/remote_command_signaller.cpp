@@ -15,16 +15,16 @@ void kernel_main() {
     constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(5);
     constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(6);
 
-    volatile tt_l1_ptr uint32_t* db_rx_semaphore_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 0 by host
-    volatile tt_l1_ptr uint32_t* tx_semaphore_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));  // Should be num command slots in the eth router
+    volatile tt_l1_ptr uint32_t* db_rx_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));  // Should be initialized to 0 by host
+    // Use semaphore 0 to sync with SRC eth since SRC eth acks connected producer core's semaphore 0 to indicate it is ready to receive next command
+    //  producers to SRC eth are: remote issue queue reader and remote command signaller
+    volatile tt_l1_ptr uint32_t* tx_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be num command slots in the eth router
 
     uint32_t producer_noc_encoding = uint32_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
     uint32_t signaller_noc_encoding = uint32_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
     uint32_t eth_consumer_noc_encoding = uint32_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y));
 
-    bool db_rx_buf_switch = false;
+    constexpr bool db_rx_buf_switch = false;
     constexpr bool tx_buf_switch = false; //TODO: toggle db buf switch when adding double buffering on eth core
     while (true) {
         // Wait for dispatcher to supply a command
@@ -40,10 +40,11 @@ void kernel_main() {
         uint32_t buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(uint32_t));
         volatile tt_l1_ptr uint32_t * buffer_transfer_command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
         uint32_t is_program = header->is_program_buffer;
-        uint32_t data_size = header->data_size;
+        uint32_t num_pages = header->num_pages;
         const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
-        bool reading_buffer = (!is_program) & (data_size > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
+        bool reading_buffer = (!is_program) & (num_pages > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
+        uint32_t num_buffer_transfers = header->num_buffer_transfers;
         if (!reading_buffer) {
             // Received this command just to signal that it finished
             // This is hacky(!) but here we clear out cmd metadata so ethernet routers and completion queue write interface do not expect incoming data
@@ -57,8 +58,8 @@ void kernel_main() {
 
         if (reading_buffer) {
             tt_l1_ptr db_cb_config_t *db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
-            const tt_l1_ptr db_cb_config_t *dispatcher_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, tx_buf_switch);
-            const tt_l1_ptr db_cb_config_t *eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
+            const tt_l1_ptr db_cb_config_t *dispatcher_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_rx_buf_switch);
+            const tt_l1_ptr db_cb_config_t *eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, tx_buf_switch);
 
             uint32_t consumer_cb_num_pages = header->router_cb_num_pages;
             uint32_t page_size = header->page_size;
@@ -73,7 +74,6 @@ void kernel_main() {
                 page_size,
                 consumer_cb_size);
 
-            uint32_t num_buffer_transfers = header->num_buffer_transfers;
             // Use consumer_cb_size_idx because this kernel is on the return path but device command sets up producer/consumer from fwd path pov
             uint32_t producer_cb_size = header->consumer_cb_size;
             uint32_t consumer_router_transfer_num_pages = header->consumer_router_transfer_num_pages;
@@ -96,6 +96,5 @@ void kernel_main() {
         // Notify to dispatcher that is has completed a command
         noc_semaphore_inc(((uint64_t)producer_noc_encoding << 32) | get_semaphore(1), 1);
         noc_async_write_barrier(); // Barrier for now
-        db_rx_buf_switch = not db_rx_buf_switch;
     }
 }

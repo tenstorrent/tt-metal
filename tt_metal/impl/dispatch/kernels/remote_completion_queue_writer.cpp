@@ -42,9 +42,9 @@ void kernel_main() {
         uint32_t buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(uint32_t));
         volatile tt_l1_ptr uint32_t *buffer_transfer_command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
         uint32_t is_program = header->is_program_buffer;
-        uint32_t data_size = header->data_size;
+        uint32_t num_pages = header->num_pages;
         const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
-        bool reading_buffer = (!is_program) & (data_size > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
+        bool reading_buffer = (!is_program) & (num_pages > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
         uint32_t completion_data_size = header->completion_data_size;
         completion_queue_reserve_back(completion_data_size);
