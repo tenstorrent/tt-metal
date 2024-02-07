@@ -18,26 +18,28 @@ namespace tt {
 namespace tt_metal {
 
 void SplitTiled::boiler_plate_asserts(const Tensor &a) const {
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_ASSERT(
+    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(a.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(
         a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
+    TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Split does not currently support sharding");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Split does not currently support sharding");
 }
 
 void SplitTiled::shape_asserts(const Tensor &a) const {
     int chunk_size = a.shape()[dim] / num_chunks;
-    TT_ASSERT(a.shape()[0] == 1, "Only batch 1 implemented");
-    TT_ASSERT(a.shape()[dim] % num_chunks == 0, "Incorrect shape on last dim");
-    TT_ASSERT(dim <= a.shape().rank() && dim >= 0, "Improper dims");
-    TT_ASSERT(a.shape().rank() == 4, "W,Z,Y,X tensor");
-    TT_ASSERT(a.layout() == Layout::TILE, "Currently only tile layout support");
-    TT_ASSERT((a.shape()[2] % TILE_HEIGHT == 0), "Shape not divisible by tile");
-    TT_ASSERT((a.shape()[3] % TILE_WIDTH == 0), "Shape not divisible by tile");
+    TT_FATAL(a.shape()[0] == 1, "Only batch 1 implemented");
+    TT_FATAL(a.shape()[dim] % num_chunks == 0, "Incorrect shape on last dim");
+    TT_FATAL(dim <= a.shape().rank() && dim >= 0, "Improper dims");
+    TT_FATAL(a.shape().rank() == 4, "W,Z,Y,X tensor");
+    TT_FATAL(a.layout() == Layout::TILE, "Currently only tile layout support");
+    TT_FATAL((a.shape()[2] % TILE_HEIGHT == 0), "Shape not divisible by tile");
+    TT_FATAL((a.shape()[3] % TILE_WIDTH == 0), "Shape not divisible by tile");
     if (dim == 3)
-        TT_ASSERT((chunk_size % TILE_WIDTH == 0), "Chunk not divisible by tile");
+        TT_FATAL((chunk_size % TILE_WIDTH == 0), "Chunk not divisible by tile");
     else if (dim == 2)
-        TT_ASSERT((chunk_size % TILE_HEIGHT == 0), "Chunk not divisible by tile");
+        TT_FATAL((chunk_size % TILE_HEIGHT == 0), "Chunk not divisible by tile");
 }
 
 inline bool is_dram(const Tensor &a) { return a.memory_config().buffer_type == BufferType::DRAM; }
@@ -61,7 +63,7 @@ void SplitTiled::validate(const std::vector<Tensor> &input_tensors) const {
     tt_metal::Buffer *in0_buffer = input_tensor.buffer();
     auto cb_data_format = get_data_format(input_tensor);
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
-    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
+    TT_FATAL(in0_buffer->size() % single_tile_size == 0);
     boiler_plate_asserts((const Tensor &)input_tensor);
     shape_asserts((const Tensor &)input_tensor);
 }

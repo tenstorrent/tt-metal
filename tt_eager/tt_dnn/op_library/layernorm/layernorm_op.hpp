@@ -59,37 +59,37 @@ struct RMSNorm {
 };
 
 inline Tensor layernorm(const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+    TT_FATAL(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
 
     if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        TT_ASSERT(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
+        TT_FATAL(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
     }
     if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        TT_ASSERT(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
+        TT_FATAL(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
     }
     return operation::run_with_autoformat(LayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0);
 }
 
 // computes layernorm(a+b)*gamma+beta
 inline Tensor add_layernorm(const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
-    TT_ASSERT(a.shape() == b.shape(), "Input shapes must be equal");
+    TT_FATAL(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+    TT_FATAL(a.shape() == b.shape(), "Input shapes must be equal");
     if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        TT_ASSERT(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
+        TT_FATAL(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
     }
     if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        TT_ASSERT(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
+        TT_FATAL(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
     }
     return operation::run_with_autoformat(LayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {b, gamma, beta}).at(0);
 }
 
 inline Tensor rmsnorm(const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+    TT_FATAL(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
     if (gamma.has_value()) {
-        TT_ASSERT(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
+        TT_FATAL(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
     }
     if (beta.has_value()) {
-        TT_ASSERT(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
+        TT_FATAL(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
     }
     return operation::run_with_autoformat(RMSNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0);
 }
