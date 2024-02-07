@@ -461,10 +461,10 @@ class CommandQueue
         ~CommandQueue() {}
 
         template < class F >
-        auto& submit ( F && func, std::reference_wrapper< std::shared_future< void > > event ){
+        tf::AsyncTask& submit ( F && func, std::reference_wrapper< std::shared_future< void > > event ){
             std::lock_guard<std::mutex> lk(mutex_);
-            std::tie(last_, event.get()) = last_.has_value() ? detail::GetExecutor().dependent_async ( func, last_.value()) : detail::GetExecutor().dependent_async ( func );
-            return last_.value();
+            std::tie(last_, event.get()) = last_.empty() ? detail::GetExecutor().dependent_async ( func ) : detail::GetExecutor().dependent_async ( func, last_);
+            return last_;
         }
 
         //WARNING: Exceptions thrown by sub-tasks are retieved via future; the silent versions don't return a future object, and therefore exceptions are lost
@@ -489,7 +489,7 @@ class CommandQueue
 
     private:
         std::mutex mutex_;
-        std::optional<tf::AsyncTask> last_;
+        tf::AsyncTask last_;
         uint32_t id_;
         Device * device_;
 };

@@ -1102,15 +1102,13 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
     std::visit ( [&cq, dst, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
         std::shared_future<void> f;
-        std::optional<std::reference_wrapper<tf::AsyncTask>> t;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer> > ) {
-            t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
+            auto &t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
                 device->hw_command_queue(cq_id).enqueue_read_buffer(b, dst, blocking);
             }, f );
+            f.get();
+            t.reset();
         }
-        f.get();
-        // if (t.has_value()) t.value().get().reset();
-
     }, buffer);
 }
 
@@ -1130,10 +1128,9 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
             t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
                 device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
             }, f );
-
        }
        f.get();
-    //    if (t.has_value()) t.value().get().reset();
+       if (t.has_value()) { t.value().get().reset(); }
     }, buffer);
 }
 
@@ -1163,7 +1160,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                 }, f );
             }
             f.get();
-            // if (t.has_value()) t.value().get().reset();
+            if (t.has_value()) { t.value().get().reset(); }
         }, program);
 }
 
