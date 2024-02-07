@@ -483,7 +483,7 @@ class CommandQueue
 
         void reset() {
             std::lock_guard<std::mutex> lk(mutex_);
-            if (last_.has_value()) last_.value().reset();
+            last_.reset();
         }
 
     private:
