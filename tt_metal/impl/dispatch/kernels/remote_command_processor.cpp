@@ -27,6 +27,12 @@ void kernel_main() {
 
     constexpr bool rx_buf_switch = false;   // atm only one slot to receive commands from ethernet
     constexpr bool db_tx_buf_switch = false;
+
+    db_cb_config_t *rx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, true);
+    db_cb_config_t *tx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+    const db_cb_config_t *eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, false);
+    const db_cb_config_t *dispatcher_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, true);
+
     while (true) {
         // Wait for ethernet router to supply a command
         db_acquire(rx_semaphore_addr, ((uint64_t)processor_noc_encoding << 32));
@@ -38,15 +44,11 @@ void kernel_main() {
 
         wait_consumer_space_available(db_tx_semaphore_addr); // Check that there is space in the dispatcher
 
-        db_cb_config_t *db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, rx_buf_switch);
-        const db_cb_config_t *eth_db_cb_config = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, rx_buf_switch);
-        const db_cb_config_t *dispatcher_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_tx_buf_switch);
-
         uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
         uint32_t page_size = header->page_size;
         uint32_t consumer_cb_size = header->consumer_cb_size;
         program_consumer_cb<cmd_base_addr, data_buffer_size, dispatcher_cmd_base_addr, dispatcher_data_buffer_size>(
-            db_cb_config,
+            tx_db_cb_config,
             dispatcher_db_cb_config,
             db_tx_buf_switch,
             ((uint64_t)dispatcher_noc_encoding << 32),
@@ -67,7 +69,8 @@ void kernel_main() {
         // producer_consumer_transfer_num_pages is the total number of data pages that were sent from the router
         uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
         transfer(
-            db_cb_config,
+            rx_db_cb_config,
+            tx_db_cb_config,
             eth_db_cb_config,
             dispatcher_db_cb_config,
             command_ptr,

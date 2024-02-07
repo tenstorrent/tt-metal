@@ -364,7 +364,8 @@ void produce_for_eth_src_router(
 }
 
 void transfer(
-    db_cb_config_t* db_cb_config,
+    db_cb_config_t* rx_db_cb_config,
+    db_cb_config_t* tx_db_cb_config,
     const db_cb_config_t* remote_producer_db_cb_config,
     const db_cb_config_t* remote_consumer_db_cb_config,
     volatile tt_l1_ptr uint32_t* command_ptr,
@@ -396,26 +397,26 @@ void transfer(
 
         while (num_transfers_completed != num_pages) {
             // Wait for data to be received in local CB
-            multicore_cb_wait_front(db_cb_config, num_to_transfer);
-            uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
+            multicore_cb_wait_front(rx_db_cb_config, num_to_transfer);
+            uint32_t src_addr = (tx_db_cb_config->rd_ptr_16B) << 4;
             // Transfer data to consumer CB
-            uint32_t dst_addr = (db_cb_config->wr_ptr_16B << 4);
+            uint32_t dst_addr = (tx_db_cb_config->wr_ptr_16B << 4);
             uint64_t dst_noc_addr = consumer_noc_encoding | dst_addr;
             noc_async_write(src_addr, dst_noc_addr, page_size * num_to_transfer);
-            multicore_cb_push_back(
-                db_cb_config,
+            multicore_cb_push_back( // this should be the other db config
+                tx_db_cb_config,
                 remote_consumer_db_cb_config,
                 consumer_noc_encoding,
                 l1_consumer_fifo_limit_16B,
                 num_to_transfer);
             noc_async_write_barrier();
             multicore_cb_pop_front(
-                db_cb_config,
+                rx_db_cb_config,
                 remote_producer_db_cb_config,
                 producer_noc_encoding,
                 l1_producer_fifo_limit_16B,
                 num_to_transfer,
-                db_cb_config->page_size_16B);
+                rx_db_cb_config->page_size_16B);
             num_transfers_completed += num_to_transfer;
             num_to_transfer = min(num_pages - num_transfers_completed, producer_consumer_transfer_num_pages);
         }

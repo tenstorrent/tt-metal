@@ -67,6 +67,43 @@ void eth_db_acquire(volatile uint32_t *semaphore, uint64_t noc_encoding) {
     }
 }
 
+template <uint32_t producer_cmd_base_addr, uint32_t producer_data_buffer_size, uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
+FORCE_INLINE
+void eth_program_consumer_cb(
+    db_cb_config_t* db_cb_config,
+    const db_cb_config_t* remote_db_cb_config,
+    bool db_buf_switch,
+    uint64_t consumer_noc_encoding,
+    uint32_t num_pages,
+    uint32_t page_size,
+    uint32_t cb_size) {
+    // This sets up multi-core CB where the writer is an eth core and consumer is tensix core
+    // The data is at different L1 addresses in the producer and consumer
+    //  but both producer and consumer use the read pointer to determine location of data in their local L1
+    // Producer uses the read pointer when sending to consumer and uses the write pointer to determine L1 address of data in consumer
+    // Consumer uses the read pointer to read in data
+    // To account for differences in data location, the consumer is sent cb config with the "correct" rd pointer from its POV
+    //  and after sending, producer sets it back to its local L1 address
+
+    uint32_t cb_start_producer_addr = get_db_buf_addr<producer_cmd_base_addr, producer_data_buffer_size>(db_buf_switch);
+    uint32_t cb_start_consumer_addr = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
+
+    db_cb_config->ack = 0;
+    db_cb_config->recv = 0;
+    db_cb_config->num_pages = num_pages;
+    db_cb_config->page_size_16B = page_size >> 4;
+    db_cb_config->total_size_16B = cb_size >> 4;
+    db_cb_config->rd_ptr_16B = cb_start_consumer_addr >> 4;    // first set the rd_ptr to value that conumer needs to see
+    db_cb_config->wr_ptr_16B = cb_start_consumer_addr >> 4;
+
+    noc_async_write(
+        (uint32_t)(db_cb_config), consumer_noc_encoding | (uint32_t)(remote_db_cb_config), sizeof(db_cb_config_t));
+    noc_async_write_barrier();  // barrier for now
+    // db cb config has been sent to consumer, now read address can be set to expected value for eth producer
+    db_cb_config->rd_ptr_16B = cb_start_producer_addr >> 4;
+    noc_async_write_barrier();  // barrier for now
+}
+
 void __attribute__((section("code_l1"))) risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
@@ -106,9 +143,9 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     static constexpr uint32_t data_buffer_size = MEM_ETH_SIZE - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE;
 
     bool db_buf_switch = false;
-    db_cb_config_t *eth_db_cb_config =
-        get_local_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
-    const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
+    db_cb_config_t *eth_db_cb_config = get_local_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, false);
+    const db_cb_config_t *remote_src_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+    const db_cb_config_t *remote_dst_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, true);
 
     uint32_t num_pages_transferred = 0;
 
@@ -154,7 +191,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                     // contains device command, maybe just send pages, and send cmd once at the start
                     internal_::send_fd_packets();
                     multicore_eth_cb_pop_front(
-                        eth_db_cb_config, remote_db_cb_config, ((uint64_t)relay_src_noc_encoding << 32), num_to_write);
+                        eth_db_cb_config, remote_src_db_cb_config, ((uint64_t)relay_src_noc_encoding << 32), num_to_write);
                     num_pages_tunneled += num_to_write;
                 }
             }
@@ -188,9 +225,9 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             // The consumer is the remote command processor which acts like a producer from the perspective of the dispatch core
             uint32_t consumer_cb_num_pages = header->producer_cb_num_pages;
             uint32_t consumer_cb_size = header->producer_cb_size;
-            program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
+            eth_program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
                 eth_db_cb_config,
-                remote_db_cb_config,
+                remote_dst_db_cb_config,
                 db_buf_switch,
                 ((uint64_t)relay_dst_noc_encoding << 32),
                 consumer_cb_num_pages,
@@ -218,7 +255,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                     (get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size) >> 4;
                 multicore_cb_push_back(
                     eth_db_cb_config,
-                    remote_db_cb_config,
+                    remote_dst_db_cb_config,
                     ((uint64_t)relay_dst_noc_encoding << 32),
                     l1_consumer_fifo_limit_16B,
                     num_pages_to_tx
