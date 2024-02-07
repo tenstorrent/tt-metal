@@ -270,12 +270,14 @@ void Reshape::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
-    TT_FATAL((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
     auto output_shape = infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume());
     TT_FATAL(input_tensor_a.volume() == output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3], "New shape volume must match old shape volume");
+
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Reshape does not currently support sharding");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Reshape does not currently support sharding");
 
     if (input_tensor_a.layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
@@ -337,7 +339,7 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
     if (input_tensor_a.layout() == Layout::ROW_MAJOR && ((compute_volume(output_shape) / output_shape[-1]) % TILE_HEIGHT != 0 || output_shape[-1] % TILE_WIDTH != 0 || input_tensor_a.shape()[-1] % TILE_WIDTH != 0 || (input_tensor_a.volume() / input_tensor_a.shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_ASSERT(input_tensor_a.dtype()==DataType::BFLOAT16);
+        TT_FATAL(input_tensor_a.dtype()==DataType::BFLOAT16);
         return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
     }
     return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, {input_tensor_a}).at(0);

@@ -89,6 +89,7 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     TT_FATAL(input_tensor_b.layout() == Layout::TILE);
     TT_FATAL(input_tensor_a.dtype() == input_tensor_b.dtype());
     TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED && input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED && this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Bcast does not currently support sharding");
 
     auto batch_size_a = input_shape_a[0];
     auto num_channels_a = input_shape_a[1];

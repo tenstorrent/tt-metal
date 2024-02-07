@@ -109,7 +109,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
 
 std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type, float param0, string idst) {
     std::pair<string, string> op_init_and_name;
-    TT_ASSERT( is_parametrized_type(op_type) && "operator should support one parameter" );
+    TT_FATAL( is_parametrized_type(op_type) && "operator should support one parameter" );
 
     switch (op_type) {
         case UnaryOpType::RELU_MAX: op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
@@ -258,7 +258,8 @@ void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
     TT_FATAL((input_tensor_a.layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Eltwise unary does not currently support sharding");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Eltwise unary does not currently support sharding");
 }
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

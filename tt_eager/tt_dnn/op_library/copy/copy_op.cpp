@@ -18,15 +18,18 @@ void Copy::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
         TT_FATAL(input_tensor_a.shape() == dst_tensor.shape());
         TT_FATAL(input_tensor_a.layout() == dst_tensor.layout());
         TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout);
+        TT_FATAL(dst_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
     }
     if (this->output_dtype != input_tensor_a.dtype()) {
         TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Only tile layout supports dtype conversion");
     }
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
 }
 
 std::vector<Shape> Copy::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

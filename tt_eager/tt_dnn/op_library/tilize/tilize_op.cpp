@@ -179,7 +179,7 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output
             log_warning("Perf warning: tilize with padding called on already tilized tensor of target shape.");
             return input_tensor_a;
         } else {
-            TT_ASSERT(false, "Cannot tilize and pad tensor that is already tilized");
+            TT_FATAL(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
     return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a}).at(0);
