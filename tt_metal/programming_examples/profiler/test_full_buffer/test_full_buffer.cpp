@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-        constexpr int device_loop_count = 5;
+        constexpr int device_loop_count = 10;
 
         RunCustomCycle(device, device_loop_count, USE_FAST_DISPATCH);
         tt_metal::detail::DumpDeviceProfileResults(device);

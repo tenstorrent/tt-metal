@@ -17,7 +17,6 @@ namespace NAMESPACE {
             {
                 asm("nop");
             }
-            kernel_profiler::mark_time(5);
         }
     }
 } // NAMESPACE
