@@ -467,12 +467,13 @@ class CommandQueue
             return last_.value();
         }
 
-        template < class F >
-        auto& submit ( F && func){
-            std::lock_guard<std::mutex> lk(mutex_);
-            last_ = last_.has_value() ? detail::GetExecutor().silent_dependent_async((func), last_.value()) : detail::GetExecutor().silent_dependent_async( func );
-            return last_.value();
-        }
+        //WARNING: Exceptions thrown by sub-tasks are retieved via future; the silent versions don't return a future object, and therefore exceptions are lost
+        // template < class F >
+        // auto& submit ( F && func){
+        //     std::lock_guard<std::mutex> lk(mutex_);
+        //     last_ = last_.has_value() ? detail::GetExecutor().silent_dependent_async((func), last_.value()) : detail::GetExecutor().silent_dependent_async( func );
+        //     return last_.value();
+        // }
 
         Device* device() const {
             return device_;

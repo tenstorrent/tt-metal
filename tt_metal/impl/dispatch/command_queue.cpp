@@ -1108,8 +1108,8 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
                 device->hw_command_queue(cq_id).enqueue_read_buffer(b, dst, blocking);
             }, f );
         }
-        f.wait();
-        if (t.has_value()) t.value().get().reset();
+        f.get();
+        // if (t.has_value()) t.value().get().reset();
 
     }, buffer);
 }
@@ -1132,8 +1132,8 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
             }, f );
 
        }
-       f.wait();
-       if (t.has_value()) t.value().get().reset();
+       f.get();
+    //    if (t.has_value()) t.value().get().reset();
     }, buffer);
 }
 
@@ -1162,8 +1162,8 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
                     device->hw_command_queue(cq_id).enqueue_program(*program, trace, blocking);
                 }, f );
             }
-            f.wait();
-            if (t.has_value()) t.value().get().reset();
+            f.get();
+            // if (t.has_value()) t.value().get().reset();
         }, program);
 }
 
@@ -1173,7 +1173,7 @@ void Finish(CommandQueue& cq) {
     cq.submit( [device = cq.device(), cq_id = cq.id()] {
         device->hw_command_queue(cq_id).finish();
     }, f);
-    f.wait();
+    f.get();
     cq.reset();
 }
 
