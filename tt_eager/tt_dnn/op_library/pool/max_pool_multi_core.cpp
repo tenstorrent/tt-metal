@@ -595,7 +595,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 }
 
 // this version uses distribution along height = N * H * W
-operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(const Tensor &input, const Tensor &reader_indices,
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const Tensor &input, const Tensor &reader_indices,
                                                                         Tensor& output,
                                                                         uint32_t in_n, uint32_t in_h, uint32_t in_w,
                                                                         uint32_t out_h, uint32_t out_w,
@@ -811,7 +811,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
                                             .compile_args = reader_ct_args};
-    std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
+    std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo.cpp");
     auto reader_kernel = CreateKernel(program,
                                         reader_kernel_fname,
                                         all_cores,
@@ -835,7 +835,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = writer_ct_args,
                                             .defines = writer_defines};
-    std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp");
+    std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                         writer_kernel_fname,
                                         all_cores,

@@ -52,7 +52,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
         def utwh_(activation):
             # print("sliding_window_op_params=", self.sliding_window_op_params)
-            return ttl.tensor.untilize_with_halo_v2(
+            return ttl.tensor.untilize_with_halo(
                 activation,
                 utwh_kernel_configs["local_pad_tensor"],
                 utwh_kernel_configs["ll_data_tensor"],

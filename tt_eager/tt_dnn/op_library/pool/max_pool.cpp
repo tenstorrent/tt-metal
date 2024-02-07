@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
         const auto& reader_indices = inputs.at(1);
         TT_FATAL(use_multicore_, "UTWHv2 only works with multicore option.");
         TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded for UTWHv2");
-        return {max_pool_2d_multi_core_sharded_with_halo_v2(
+        return {max_pool_2d_multi_core_sharded_with_halo(
                                     input, reader_indices,
                                     output,
                                     in_n_, in_h_, in_w_,

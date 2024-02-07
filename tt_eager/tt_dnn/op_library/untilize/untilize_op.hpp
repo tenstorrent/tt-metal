@@ -115,7 +115,7 @@ struct UntilizeWithHaloV2 {
             std::cref(out_mem_config_));
     }
 };
-Tensor untilize_with_halo_v2(const Tensor& input_tensor,
+Tensor untilize_with_halo(const Tensor& input_tensor,
                              const Tensor& local_pad_start_and_size,
                              const Tensor& ll_data_start_and_size,
                              const Tensor& l_data_start_and_size,

@@ -9,11 +9,15 @@ from loguru import logger
 
 import torch
 
-import tt_lib as ttl
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
+    TTPyMaxPool,
+    SlidingWindowOpParamsWithParallelConfig,
+)
 
+import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 
 
 def volume(shape):
@@ -23,9 +27,7 @@ def volume(shape):
     return vol
 
 
-@pytest.mark.skip(
-    "This version of untilize_with_halo_and_max_pool is deprecated. Please see untilize_with_halo_and_max_pool_v2, which replaces this."
-)
+@skip_for_wormhole_b0()
 ## max-pool params:
 ## kernel_h, kernel_w
 ## stride_h, stride_w
@@ -35,13 +37,12 @@ def volume(shape):
     "act_shape",  ## NCHW
     (
         (  ## Only resnet shapes supported for now in untilize with halo + maxpool
+            [1, 64, 64, 64],
             [1, 64, 112, 112],
             [4, 64, 112, 112],
             [8, 64, 112, 112],
             [16, 64, 112, 112],
-            # [2, 64, 64, 64],
-            # [8, 64, 64, 64],
-            # [8, 64, 128, 128],
+            [20, 64, 112, 112],
         )
     ),
 )
@@ -104,7 +105,6 @@ def test_run_max_pool(
         ttl.tensor.TensorMemoryLayout.INTERLEAVED,
         ttl.tensor.BufferType.DRAM if act_shape[0] > 8 else ttl.tensor.BufferType.L1,
     )
-
     assert out_mem_config.is_sharded() and in_mem_config.is_sharded()
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -120,7 +120,7 @@ def test_run_max_pool(
     #     for c in range(act_shape[1]):
     #         for h in range(act_shape[2]):
     #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c + torch.rand(1) * 0.15
+    #                 act[n, c, h, w] = 1 + n + h + w + c  ##+ torch.rand(1) * 0.15
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
@@ -133,29 +133,75 @@ def test_run_max_pool(
     act_padded = torch.nn.functional.pad(act_reshaped, act_padding, value=0xF7FF)
     assert act_shape_padded == act_padded.shape
 
-    ncores = 1
+    ncores_nhw = 1
     grid_size = (1, 1)
-    in_height = in_n * in_h * in_w
+    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))})
+    in_nhw = in_n * in_h * in_w
     out_nhw = in_n * out_h * out_w
     ## NOTE: these should match the max_pool op code for now. Hardcoded Resnet shapes only.
     if out_nhw == 1024:
-        ncores = 32
+        ncores_nhw = 32
         grid_size = (12, 3)
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 1)),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 2), ttl.tensor.CoreCoord(7, 2)),
+            }
+        )
     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
-        ncores = 64
-        grid_size = (8, 8)
-    elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088 or out_nhw == 50176:
+        ncores_nhw = 64
+        grid_size = (12, 6)
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 4)),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 5), ttl.tensor.CoreCoord(3, 5)),
+            }
+        )
+    elif (
+        out_nhw == 3136
+        or out_nhw == 6272
+        or out_nhw == 12544
+        or out_nhw == 25088
+        or out_nhw == 50176
+        or out_nhw == 62720
+    ):
         if is_wormhole_b0():
             pytest.skip("Unsupported grid size for WH")
-        ncores = 98
+        ncores_nhw = 98
         grid_size = (12, 9)
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 7)),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 8), ttl.tensor.CoreCoord(1, 8)),
+            }
+        )
     else:
         assert False
 
-    # ttl.device.EnableMemoryReports()
-    print(act_shape_padded)
+    sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        window_h=kernel_h,
+        window_w=kernel_w,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        num_cores_h=grid_size[1],
+        num_cores_w=grid_size[0],
+        num_cores_nhw=ncores_nhw,
+    )
+    pad_val = 0xF7FF
 
-    ttact_tilize = (
+    shard_spec = ttl.tensor.ShardSpec(
+        shard_grid, [in_nhw // ncores_nhw, act_padded.shape[-1]], ttl.tensor.ShardOrientation.ROW_MAJOR, False
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+    )
+
+    ttact_sharded = (
         ttl.tensor.Tensor(
             act_padded.flatten().tolist(),
             act_shape_padded,
@@ -163,51 +209,23 @@ def test_run_max_pool(
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device, interleaved_mem_config)
+        .to(device, sharded_mem_config)
     )
-    # ttact_tilize = ttl.tensor.reshape(ttact_tilize, 1, 1, in_height, in_c)
-
-    ttact_sharded = ttl.tensor.interleaved_to_sharded(
-        ttact_tilize,
-        grid_size,
-        [in_height // ncores, act_padded.shape[-1]],
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
-    )
-    # ttact_tilize.deallocate()
-    in_h = int(math.sqrt(act_shape_padded[-2]))
-    in_w = in_h
     assert in_h * in_w == act_shape_padded[-2]
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
-    out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xF7FF, in_n, in_h, in_w, 2, out_mem_config)
-    # out_untilize = ttl.tensor.untilize_with_halo_v2(
-    #     ttact_sharded, 0xF7FF, in_n, in_h, in_w, kernel_w, stride_w, pad_w, out_mem_config
-    # )
-    # ttl.device.DumpDeviceMemoryState(device)
-    ttact_sharded.deallocate()
 
-    out_padded = ttl.tensor.max_pool2d(
-        out_untilize,
-        in_n,
-        in_h,
-        in_w,
-        kernel_h,
-        kernel_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        out_mem_config,
-        nblocks,
-        True,
-    )
-    out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
+    max_pool_reader_patterns_cache = {}
+    max_pool = TTPyMaxPool(sliding_window_op_params, device, max_pool_reader_patterns_cache, pad_val=pad_val)
+
+    out_padded = max_pool(ttact_sharded)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
+    # Clear the cache maps
+    # halo_reader_patterns_cache.clear()
+    max_pool_reader_patterns_cache.clear()
+
     out_shape_padded = out_padded.shape()
-    out_pytorch_padded = out_padded.to_torch().reshape(out_shape_padded)  ## N, 1, HW, C
+    out_pytorch_padded = out_padded.to_torch().reshape(tuple(out_shape_padded))  ## N, 1, HW, C
     out_pytorch = out_pytorch_padded[:, :, :, :in_c]
     out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, 1, HW
 
@@ -227,10 +245,8 @@ def test_run_max_pool(
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")
 
-    # print(f'OUTPUT: {out_pytorch[0,:,:,:]}')
-    # print(f'GOLDEN: {golden_pytorch}')
-    # torch.save(out_pytorch, 'output.pt')
-    # torch.save(golden_pytorch, 'golden.pt')
+    # torch.save(out_pytorch, "output.pt")
+    # torch.save(golden_pytorch, "golden.pt")
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttl.tensor.DataType.BFLOAT8_B:
