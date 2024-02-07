@@ -22,9 +22,7 @@ def chunk_key(key, chunk_size):
     """
     Return the chunk number that a key should go into
     """
-    chunk_id = layer_num(key) // chunk_size
-    print(f'Key: {key} -> chunk_id: {chunk_id}')
-    return chunk_id
+    return layer_num(key) // chunk_size
 
 
 def repack(in_dir, out_dir, chunk_size):
