@@ -93,6 +93,11 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
         for (const auto& id : chip_ids) {
             devices_.push_back(reserved_devices_.at(id));
         }
+        // skip tests if no ethernet cores
+        const auto& eth_cores = devices_[0]->get_active_ethernet_cores();
+        if (eth_cores.size() == 0) {
+            GTEST_SKIP();
+        }
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
