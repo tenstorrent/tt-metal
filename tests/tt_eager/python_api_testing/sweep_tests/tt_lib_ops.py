@@ -767,9 +767,9 @@ def lamb_optimizer(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(x, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(x, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_tt_tensor(x, device, layout[3], input_mem_config[3], dtype[3])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
 
     t4 = ttl.tensor.lamb_optimizer(
         t0,

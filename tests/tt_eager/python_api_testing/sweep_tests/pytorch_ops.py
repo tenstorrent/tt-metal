@@ -746,7 +746,7 @@ def addalpha(x, y, *args, alpha, **kwargs):
 
 def lamb_optimizer(x, y, z, w, *args, beta1, beta2, step_size, eps, weight_decay, **kwargs):
     exp_avg_out, exp_avg_sq_out, param = lamb_optimizer_kernel.lamb_kernel(
-        x, x, x, x, beta1=beta1, beta2=beta2, step_size=step_size, eps=eps, weight_decay=weight_decay
+        x, y, z, w, beta1=beta1, beta2=beta2, step_size=step_size, eps=eps, weight_decay=weight_decay
     )
 
     return [exp_avg_out, exp_avg_sq_out, param]
