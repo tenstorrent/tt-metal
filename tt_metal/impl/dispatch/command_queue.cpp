@@ -1013,6 +1013,24 @@ void EnqueueTrace(Trace& trace, bool blocking) {
     }
 }
 
+void DeallocateBuffer ( CommandQueue &cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer ) {
+    detail::DispatchStateCheck(true);
+    std::visit ( [&cq](auto&& b) {
+        using T = std::decay_t<decltype(b)>;
+        std::optional<std::reference_wrapper<tf::AsyncTask>> t;
+        if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> ) {
+            cq.submit( [b] {
+                DeallocateBuffer(b);
+            } );
+        }
+        else if constexpr ( std::is_same_v<T, std::shared_ptr<Buffer>> ) {
+            cq.submit( [b] {
+                DeallocateBuffer(*b);
+            } );
+       }
+    }, buffer);
+}
+
 namespace detail {
 
 void EnqueueRestart(CommandQueue& cq) {

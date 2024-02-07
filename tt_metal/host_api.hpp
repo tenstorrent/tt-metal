@@ -207,6 +207,18 @@ std::shared_ptr<Buffer> CreateBuffer(const std::variant<InterleavedBufferConfig,
 */
 void DeallocateBuffer(Buffer &buffer);
 
+/**
+*  Enqueues a deallocate buffer operation from device by marking its memory as free.
+*
+*  Return value: void
+*
+*  | Argument | Description                             | Type                                | Valid Range | Required |
+*  |----------|-----------------------------------------|-------------------------------------|-------------|----------|
+*  | cq       | The command queue to queue operation in | CommandQueue &                      |             | Yes      |
+*  | buffer   | The buffer to deallocate from device    | Buffer & or std::shared_ptr<Buffer> |             | Yes      |
+*/
+void DeallocateBuffer(CommandQueue & cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer);
+
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
 // ==================================================
