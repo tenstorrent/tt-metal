@@ -81,6 +81,8 @@ Device-side profiler provides marker information for all RISCs and cores used in
     PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]
     0, 0, 0, NCRISC, 1, 161095200021778
     0, 0, 0, NCRISC, 2, 161095200021933
+    0, 0, 0, NCRISC, 3, 161095200026549
+    0, 0, 0, NCRISC, 4, 161095200026598
     0, 0, 0, NCRISC, 5, 161095200021976
     0, 0, 0, NCRISC, 5, 161095200022211
     0, 0, 0, NCRISC, 5, 161095200022443
@@ -91,12 +93,9 @@ Device-side profiler provides marker information for all RISCs and cores used in
     0, 0, 0, NCRISC, 5, 161095200023603
     0, 0, 0, NCRISC, 5, 161095200023835
     0, 0, 0, NCRISC, 5, 161095200024067
-    0, 0, 0, NCRISC, 5, 161095200024299
-    0, 0, 0, NCRISC, 5, 161095200024531
-    0, 0, 0, NCRISC, 3, 161095200026549
-    0, 0, 0, NCRISC, 4, 161095200026598
 
-ID numbers 1-4 mark default events that are always reported by the device profiler. You can see that additional to default markers, 12 more markers can be recorded on each RISC.
+ID numbers 1-4 mark default events that are always reported by the device profiler. You can see that additional to default markers, 10 more markers can be recorded on each RISC.
+Note that markers are not ordered by time.
 
 Default markers mark kernel and FW start and end events and are part of the tt_metal device infrastructure. In other words, kernels without any calls to ``kernel_profiler::mark_time(uint32_t timer_id)`` still report these markers.
 
@@ -134,7 +133,7 @@ In this example, stats on inner loop durations are:
 Limitations
 -----------
 
-* Each core has limited L1 buffer for recording device side markers. Space for only 16 total markers is reserved. 12 of the spots are for custom markers and 4 are for default markers. Flip-side of this limitation is that device-side profiling doesn't use L1 space available for kernels.
+* Each core has limited L1 buffer for recording device side markers. Space for only 14 total markers is reserved. 10 of the spots are for custom markers and 4 are for default markers. Flip-side of this limitation is that device-side profiling doesn't use L1 space available for kernels.
 
 * The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.
 

@@ -207,30 +207,26 @@ def print_stats(devicesData, setup):
                         print(f"{'Duration':>12} [cycles] = {stats['Max']:>10,.0f}")
                     print()
                     if setup.timerAnalysis[analysis]["across"] in ["risc", "core"]:
-                        for core_y in range(-3, 11):
+                        for core_y in range(-2, 12):
                             # Print row number
-                            if core_y > -1 and core_y < 5:
+                            if core_y > 0:
                                 print(f"{core_y:>2}|| ", end="")
-                            elif core_y > 5:
-                                print(f"{core_y-1:>2}|| ", end="")
                             else:
                                 print(f"{' ':>4} ", end="")
 
-                            for core_x in range(-1, 12):
-                                if core_x > -1:
-                                    if core_y == -3:
+                            for core_x in range(0, 13):
+                                if core_x > 0:
+                                    if core_y == -2:
                                         print(f"{core_x:>{numberWidth}}", end="")
-                                    elif core_y == -2:
-                                        print(f"{'=':=>{numberWidth}}", end="")
                                     elif core_y == -1:
-                                        if core_x in [0, 3, 6, 9]:
+                                        print(f"{'=':=>{numberWidth}}", end="")
+                                    elif core_y == 0:
+                                        if core_x in [1, 4, 7, 10]:
                                             print(f"{f'DRAM{int(core_x/3)}':>{numberWidth}}", end="")
                                         else:
                                             print(f"{'---':>{numberWidth}}", end="")
-                                    elif core_y != 5:
+                                    elif core_y != 6:
                                         core = (core_x, core_y)
-                                        if core_y > 5:
-                                            core = (core_x, core_y - 1)
                                         noCoreData = True
                                         if core in deviceData["cores"].keys():
                                             for risc, riscData in deviceData["cores"][core]["riscs"].items():
@@ -251,7 +247,7 @@ def print_stats(devicesData, setup):
                                         if noCoreData:
                                             print(f"{'X':>{numberWidth}}", end="")
                                     else:
-                                        if core_x in [0, 3, 6, 9]:
+                                        if core_x in [1, 4, 7, 10]:
                                             print(f"{f'DRAM{4 + int(core_x/3)}':>{numberWidth}}", end="")
                                         else:
                                             print(f"{'---':>{numberWidth}}", end="")
@@ -307,10 +303,10 @@ def import_device_profile_log(
                 devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
             elif lineCount > 1:
-                programID = -1
+                runID = -1
                 if len(row) == 7:
                     startCol = 1
-                    programID = int(row[0].strip())
+                    runID = int(row[0].strip())
                 else:
                     startCol = 0
                 chipID = int(row[startCol])
