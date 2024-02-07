@@ -90,3 +90,57 @@ def test_group_norm_with_tile_layout(device, h, w, num_groups):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("N", [1])
+@pytest.mark.parametrize("C", [32])
+@pytest.mark.parametrize("H", [32])
+@pytest.mark.parametrize("W", [32])
+@pytest.mark.parametrize("num_groups", [1])
+def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
+    torch.manual_seed(0)
+
+    grid_size = (1, 2)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand(C, dtype=torch.bfloat16)
+    torch_bias = torch.rand(C, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor,
+        num_groups,
+        torch_weight,
+        torch_bias,
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        grid_size,
+        [int(N * H * W / (grid_size[1] * grid_size[0])), int(C)],
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.COLUMN_MAJOR,
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        weight=weight,
+        bias=bias,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+    )
+
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)

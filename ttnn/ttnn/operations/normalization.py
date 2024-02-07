@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import ttnn
 
@@ -253,6 +253,9 @@ def group_norm(
     epsilon: float = 1e-12,
     weight: Optional[ttnn.Tensor] = None,
     bias: Optional[ttnn.Tensor] = None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+    core_grid: Optional[Tuple[int, int]] = None,
 ) -> ttnn.Tensor:
     r"""
     group_norm(input_tensor: ttnn.Tensor, *, num_groups: int, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
@@ -260,8 +263,49 @@ def group_norm(
     Compute group_norm over :attr:`input_tensor`.
 
     """
-    output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
-    return ttnn.from_torch(output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device)
+
+    if ttnn.is_sharded(input_tensor):
+        if input_tensor.shape.rank != 4:
+            raise TypeError("The input tensor rank must equal to 4")
+
+        if input_tensor.shape[-1] % int(num_groups * ttnn.TILE_SIZE) != 0:
+            raise TypeError("number of channels must be divisible by number of groups * tile size")
+
+        if ttnn.get_memory_config(input_tensor).memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            raise TypeError("Cannot be width sharded")
+
+        if (input_tensor.shape[0] * input_tensor.shape[1] * input_tensor.shape[2]) % ttnn.TILE_SIZE != 0:
+            raise TypeError("input tensor dim NHW must be divisible by tile size")
+
+        output_dtype = input_tensor.dtype if dtype is None else dtype
+
+        if weight is not None:
+            weight = ttnn.unsqueeze_to_4D(weight)
+
+        if bias is not None:
+            bias = ttnn.unsqueeze_to_4D(bias)
+
+        output_tensor = ttl.operations.primary.groupnorm(
+            input_tensor.value,
+            num_groups,
+            epsilon,
+            weight.value,
+            bias.value,
+            output_mem_config=memory_config,
+            program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                out_data_format=output_dtype,
+                inplace=False
+                if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
+                else True,
+            ),
+        )
+
+        return ttnn.Tensor(output_tensor)
+
+    else:
+        output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
+        return ttnn.from_torch(output, dtype=input_tensor.dtype, layout=input_tensor.layout, device=input_tensor.device)
 
 
 __all__ = []
