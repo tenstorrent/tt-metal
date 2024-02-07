@@ -83,10 +83,13 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 
     // We should be able to find the expected watcher error in the log as well.
     CoreCoord phys_core = device->worker_core_from_logical_core(core);
-    string expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x00019020,len=102400]";
+    string expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
     expected[7] = '0' + device->id();
     expected[18] = '0' + phys_core.x;
     expected[22] = '0' + phys_core.y;
+    string addr = fmt::format("{:08x}", output_dram_buffer_addr);
+    expected.replace(99, addr.length(), addr);
+
     EXPECT_TRUE(
         FileContainsAllStrings(
             fixture->log_file_name,
