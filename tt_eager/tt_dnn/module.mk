@@ -63,7 +63,6 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/untilize/multi_core/untilize_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/untilize/single_core/untilize_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/untilize/untilize_op.cpp \
-	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op.cpp \
 	tt_eager/tt_dnn/op_library/untilize/untilize_with_halo_op_v2.cpp \
 	tt_eager/tt_dnn/op_library/softmax/multi_core/softmax_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/softmax/softmax_op.cpp \

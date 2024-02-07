@@ -219,18 +219,6 @@ namespace tt::tt_metal::detail{
                 Untilizes input tiled data to row major format and constructs halo'd output shards.
             )doc");
 
-        m_tensor.def("untilize_with_halo", &untilize_with_halo,
-            py::arg("input").noconvert(),
-            py::arg("pad_val"),
-            py::arg("in_b").noconvert(),
-            py::arg("in_h").noconvert(),
-            py::arg("in_w").noconvert(),
-            py::arg("stride") = 1,
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            R"doc(
-                Untilizes input tiled data to row major format.
-            )doc");
-
         m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
             py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
