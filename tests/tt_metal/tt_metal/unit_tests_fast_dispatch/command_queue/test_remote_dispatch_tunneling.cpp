@@ -92,7 +92,19 @@ TEST_F(CommandQueueMultiDeviceFixture, TestCommandReachesRemoteDevice) {
     }
 }
 
-TEST_F(CommandQueueMultiDeviceFixture, TestSimpleEnqueueWriteRemoteBuffer) {
+TEST_F(CommandQueueMultiDeviceFixture, TestFinishDoesNotHang) {
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        auto device = devices_.at(id);
+        if (device->is_mmio_capable()) {
+            continue;
+        }
+
+        CommandQueue &remote_cq = detail::GetCommandQueue(device);
+        Finish(remote_cq);
+    }
+}
+
+TEST_F(CommandQueueMultiDeviceFixture, TestSimpleEnqueueWriteReadRemoteBuffer) {
     for (unsigned int id = 0; id < devices_.size(); id++) {
         auto device = devices_.at(id);
         if (device->is_mmio_capable()) {
@@ -110,7 +122,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestSimpleEnqueueWriteRemoteBuffer) {
         uint32_t num_pages = 2;
         uint32_t page_size = 2048;
         uint32_t buff_size = num_pages * page_size;
-        Buffer buffer(device, buff_size, page_size, BufferType::DRAM);
+        Buffer buffer(device, buff_size, page_size, BufferType::L1);
 
         std::vector<uint32_t> src(buff_size / sizeof(uint32_t), 0);
         for (uint32_t i = 0; i < src.size(); i++) {
@@ -119,15 +131,11 @@ TEST_F(CommandQueueMultiDeviceFixture, TestSimpleEnqueueWriteRemoteBuffer) {
 
         EnqueueWriteBuffer(remote_cq, buffer, src.data(), false);
 
-        sleep(1); // sleep because don't have finish signal yet
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        vector<uint32_t> readback;
+        readback.resize(buff_size / sizeof(uint32_t));
+        EnqueueReadBuffer(remote_cq, buffer, readback.data(), true);
 
-        std::vector<uint32_t> readback;
-        detail::ReadFromBuffer(buffer, readback);
         EXPECT_EQ(src, readback);
-
-        // how to know that the device is finished writing ... for now add a sleep?
-
     }
 }
 
