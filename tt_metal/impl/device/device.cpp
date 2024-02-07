@@ -458,7 +458,7 @@ void Device::compile_command_queue_programs() {
         // first semaphore is between ethernet router and the processor core to signal whether processor can receive commands
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, 0);
         // second semaphore is between processor and dispatcher to detect whether dispatcher can accept commands
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, num_tensix_command_slots);
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, num_eth_command_slots);
 
         std::vector<uint32_t> dispatcher_compile_args = {
             cmd_start_tensix, consumer_data_buffer_size_tensix, cmd_start_tensix, consumer_data_buffer_size_tensix};
@@ -484,7 +484,7 @@ void Device::compile_command_queue_programs() {
         // First semaphore is between processor and dispatcher to signal whether the latter can receive commands
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
         // second semaphore is between dispatcher and remote completion signaller to signal if the former can send data
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, num_tensix_command_slots);
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, num_eth_command_slots);
 
         std::vector<uint32_t> signaller_compile_args = {
             cmd_start_tensix,
@@ -515,10 +515,11 @@ void Device::compile_command_queue_programs() {
                 .defines = signaller_defines});
 
 
-        // First semaphore is between dispatcher and signaller to signal whether the latter can receive commands
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_signaller_location, 0);
-        // Second semaphore is between signaller and src eth router to signal if the former can send data
+        // First semaphore is between signaller and src eth router to signal if the former can send data
+        // Create this before the semaphore between remote dispatcher and signaller because eth SRC always acks producer dispatch core's semaphore 0
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_signaller_location, num_eth_command_slots);
+        // Second semaphore is between dispatcher and signaller to signal whether the latter can receive commands
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_signaller_location, 0);
     }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));

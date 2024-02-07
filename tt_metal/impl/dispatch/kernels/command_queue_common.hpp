@@ -7,8 +7,6 @@
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
-static constexpr uint32_t NUM_COMMAND_SLOTS = 2;
-
 #define ATTR_ALIGNL1 __attribute__((aligned(L1_ALIGNMENT)))
 struct db_cb_config_t {
     volatile uint32_t ack ATTR_ALIGNL1;

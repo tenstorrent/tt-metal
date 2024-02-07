@@ -27,9 +27,9 @@ void setup_issue_queue_read_interface(const uint32_t issue_region_rd_ptr, const 
     cq_read_interface.issue_fifo_rd_toggle = 0;
 }
 
-FORCE_INLINE
-void wait_consumer_idle(volatile tt_l1_ptr uint32_t* db_semaphore_addr) {
-    while (*db_semaphore_addr != NUM_COMMAND_SLOTS);
+template <uint32_t num_command_slots>
+FORCE_INLINE void wait_consumer_idle(volatile tt_l1_ptr uint32_t* db_semaphore_addr) {
+    while (*db_semaphore_addr != num_command_slots);
 }
 
 FORCE_INLINE
