@@ -20,7 +20,7 @@ def upsample2d(
     parameters,
     in_channels,
     out_channels,
-    scale_factor=2,
+    scale_factor=2.0,
 ):
     tt_out = upsample_nearest2d(input, scale_factor)
 
