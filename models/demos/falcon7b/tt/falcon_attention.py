@@ -293,7 +293,7 @@ class TtFalconAttention(nn.Module):
             attn_weights = tt_lib.operations.primary.transformers.attn_matmul(
                 query_layer,
                 key_layer_transposed,
-                compute_with_storage_grid_size=tt_lib.tensor.CoreCoord(12, 9),
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
                 output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
@@ -356,7 +356,7 @@ class TtFalconAttention(nn.Module):
             attn_output = tt_lib.operations.primary.transformers.attn_matmul(
                 attn_weights,
                 value_layer,
-                compute_with_storage_grid_size=tt_lib.tensor.CoreCoord(12, 9),
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
                 output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
