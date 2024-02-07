@@ -170,7 +170,7 @@ def add(
     """
     input_tensor_a = input_tensor_a.value
     input_tensor_b = input_tensor_b.value if isinstance(input_tensor_b, ttnn.Tensor) else input_tensor_b
-    output = ttl.ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
+    output = ttnn._ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
     return ttnn.Tensor(output)
 
 

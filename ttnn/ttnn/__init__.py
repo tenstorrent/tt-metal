@@ -8,7 +8,10 @@ TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
 MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
 TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
-from tt_lib.ttnn import TTNN_ENABLE_LOGGING
+import tt_lib as ttl
+import ttnn._ttnn
+
+from ttnn._ttnn import TTNN_ENABLE_LOGGING
 
 from ttnn.types import (
     TILE_SIZE,
@@ -132,6 +135,7 @@ from ttnn.operations.binary import (
     mul,
     multiply,
 )
+
 
 from ttnn.operations.relational import (
     gtz,
