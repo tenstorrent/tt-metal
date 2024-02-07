@@ -86,7 +86,6 @@ def _run_single_test(run, skip, is_expected_to_fail, permutation, *, device):
     finally:
         import tt_lib as ttl
 
-        ttl.device.ClearCommandQueueProgramCache(device)
         ttl.device.DeallocateBuffers(device)
     return status, message
 

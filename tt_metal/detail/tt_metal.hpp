@@ -308,13 +308,6 @@ namespace tt::tt_metal{
             device->deallocate_buffers();
         }
 
-        inline void ClearCommandQueueProgramCache(Device *device)
-        {
-            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                ClearProgramCache(device);
-            }
-        }
-
         inline void GenerateDeviceHeaders(Device *device,
                                           const std::string &path)
         {

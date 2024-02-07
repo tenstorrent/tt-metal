@@ -21,7 +21,6 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 def setup_host_and_device(func):
     def wrap(*args, device, **kwargs):
         output = func(*args, device=device, **kwargs)
-        ttl.device.ClearCommandQueueProgramCache(device)
         ttl.device.DeallocateBuffers(device)
         return output
 
