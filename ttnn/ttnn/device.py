@@ -57,4 +57,8 @@ def manage_device(*, device_id: int):
         close_device(device)
 
 
+def dump_device_memory_state(device):
+    ttl.device.DumpDeviceMemoryState(device)
+
+
 __all__ = []

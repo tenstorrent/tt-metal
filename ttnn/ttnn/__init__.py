@@ -52,7 +52,7 @@ from ttnn.types import (
     Tensor,
 )
 
-from ttnn.device import Device, open_device, close_device, manage_device
+from ttnn.device import Device, open_device, close_device, manage_device, dump_device_memory_state
 
 from ttnn.core import (
     has_storage_type_of,
@@ -93,6 +93,7 @@ from ttnn.operations.core import (
     dump_tensor,
     unsqueeze_to_4D,
     squeeze,
+    clone,
 )
 
 from ttnn.operations.matmul import (
@@ -158,7 +159,6 @@ from ttnn.operations.unary import (
     atanh,
     logical_not,
     logit,
-    clone,
     signbit,
 )
 

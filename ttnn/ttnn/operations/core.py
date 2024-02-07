@@ -655,7 +655,7 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 
 
 @ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
-def to_layout(tensor, layout: ttnn.Layout):
+def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 
@@ -709,13 +709,18 @@ def to_layout(tensor, layout: ttnn.Layout):
         else:
             return False
 
+    if dtype is not None and (not is_on_device or layout is not ttnn.TILE_LAYOUT):
+        raise RuntimeError(f"Unsupported datatype conversion to {dtype}")
+
     if not requires_padding_change(layout, tensor.shape):
         ttl_tensor = tensor.value
         if is_on_device:
             if layout == ttnn.ROW_MAJOR_LAYOUT:
                 return ttnn.Tensor(ttl.tensor.untilize(ttl_tensor))
             elif layout == ttnn.TILE_LAYOUT:
-                return ttnn.Tensor(ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config()))
+                return ttnn.Tensor(
+                    ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config(), output_dtype=dtype)
+                )
             else:
                 raise RuntimeError(f"Unsupported layout: {layout}")
         else:
@@ -789,10 +794,7 @@ def to_layout(tensor, layout: ttnn.Layout):
         if is_on_device:
             tensor = ttnn.Tensor(
                 ttl.tensor.tilize_with_val_padding(
-                    tensor.value,
-                    batch_sizes + [padded_height, padded_width],
-                    [0, 0, 0, 0],
-                    0,
+                    tensor.value, batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0, output_dtype=dtype
                 )
             )
         else:
@@ -811,6 +813,42 @@ def to_layout(tensor, layout: ttnn.Layout):
         return tensor
     else:
         raise RuntimeError(f"Unsupported output layout: {layout}")
+
+
+def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(1, 2, 3, 4, 5),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(name="ttnn.clone", validate_input_tensors=_clone_validate_input_tensors)
+def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
+    """
+    clone(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: DataType) -> ttnn.Tensor
+    Clones the tensor by copying it with the given `memory config`. Also, converts the dataype to `dtype`.
+    Note: clone does not change the layout of the tensor.
+    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
+    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
+    padded where the width and height become multiples of 32.
+    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
+
+    Args:
+        * :attr:`tensor`: the ttnn.Tensor
+        * :attr:`memory_config`: the `ttnn` memory config, DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
+        * :attr:`dtype`: the `ttnn` data type.
+
+    Example::
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16, layout=ttnn.TILE_LAYOUT)), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        >>> output = ttnn.clone(tensor, tnn.DRAM_MEMORY_CONFIG, tnn.bfloat8_b)
+    """
+    ttl_tensor = tensor.value
+    return ttnn.Tensor(ttl.tensor.clone(ttl_tensor, output_mem_config=memory_config, output_dtype=dtype))
 
 
 def _torch_identity(input_tensor):
