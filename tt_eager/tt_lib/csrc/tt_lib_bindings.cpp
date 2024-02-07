@@ -133,9 +133,6 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
-    m_device.def("ClearCommandQueueProgramCache", &detail::ClearCommandQueueProgramCache, R"doc(
-        Deallocate the program cache saved by the command queue
-    )doc");
 }
 
 void ProfilerModule(py::module &m_profiler) {

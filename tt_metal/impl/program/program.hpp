@@ -15,6 +15,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
+#include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
 namespace tt {
@@ -103,6 +104,12 @@ class Program {
     void allocate_circular_buffers();
 
    private:
+    ProgramDeviceMap program_device_map;
+
+    // The buffer that holds the kernel/binaries/etc for this program
+    std::unique_ptr<Buffer> buffer;
+
+    bool loaded_onto_device;
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
 
@@ -173,6 +180,9 @@ class Program {
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups();
+
+    friend class CommandQueue;
+    friend class EnqueueProgramCommand;
 };
 
 }  // namespace tt_metal
