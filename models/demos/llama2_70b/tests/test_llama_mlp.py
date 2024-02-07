@@ -45,7 +45,7 @@ def run_test_LlamaMLP_inference(
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data/llama-2-70b/"
+    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
 
     hugging_face_reference_model = Llama.build(ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1).model
