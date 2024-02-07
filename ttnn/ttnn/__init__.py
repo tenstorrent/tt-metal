@@ -4,6 +4,10 @@
 
 import pathlib
 
+import tt_lib
+
+import ttnn._ttnn
+
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
 from ttnn.types import (
@@ -113,6 +117,7 @@ from ttnn.operations.binary import (
     mul,
     multiply,
 )
+
 
 from ttnn.operations.relational import (
     gtz,

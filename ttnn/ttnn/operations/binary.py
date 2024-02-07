@@ -56,7 +56,10 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         return output_tensor
 
     binary_function.__name__ = f"ttnn.{name}"
-    binary_function.__doc__ = doc + binary_function.__doc__
+    if binary_function.__doc__ is not None:
+        binary_function.__doc__ = doc + binary_function.__doc__
+    else:
+        binary_function = doc
 
     setattr(THIS_MODULE, name, binary_function)
 
@@ -170,7 +173,7 @@ def add(
     """
     input_tensor_a = input_tensor_a.value
     input_tensor_b = input_tensor_b.value if isinstance(input_tensor_b, ttnn.Tensor) else input_tensor_b
-    output = ttl.ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
+    output = ttnn._ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
     return ttnn.Tensor(output)
 
 

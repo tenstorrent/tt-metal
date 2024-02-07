@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple
+from enum import Enum
 
 import tt_lib as ttl
+import ttnn
 
-from enum import Enum
 
 Device = ttl.device.Device
 
@@ -34,10 +34,10 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
 TILE_SIZE = 32
 
-Shape = ttl.ttnn.types.Shape
+Shape = ttnn._ttnn.types.Shape
 
 
-Tensor = ttl.ttnn.types.Tensor
+Tensor = ttnn._ttnn.types.Tensor
 
 
 class ShardStrategy(Enum):

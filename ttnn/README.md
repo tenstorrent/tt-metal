@@ -55,11 +55,11 @@ followed the instructions for [installing and building the software](https://git
     * The primary reason was because we needed a way to create a consolidated report per operation in the form of a csv file.  The idea was that each operation would get its own python file where all the test combinations are handled by a single run method.  Each permuation of the input combinations would become the header for the resulting csv which is then uploaded and reported on.
 * How do I run sweep tests with pytest?
     * To run all of the sweep tests for a given python operation file:
-        * pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>
-        * Example for matmul: pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul
+        * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>`
+        * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul`
     * To run just one sample combination for an operation:
-        * pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>[<operation>.py-<index-of-test-instance>]
-        * Example for matmul: pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]
+        * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>[<operation>.py-<index-of-test-instance>]`
+        * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]`
 * What if my device hangs?
     * Be sure that you have a clean build with the latest code update.  Updating code without rebuilding is often the source of the issue.
     * If you have a clean build, you can reset the board on the command line using the tt-smi command and the device id with: `tt-smi -tr 0` where 0 represents the device id.

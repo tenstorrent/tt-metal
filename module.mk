@@ -138,7 +138,9 @@ LIBS_TO_BUILD += \
 	tools \
 	tt_metal \
 	tracy \
-	tt_eager
+	tt_eager \
+	ttnn \
+	ttnn/setup_local_so
 
 # These must be in dependency order (enforces no circular deps)
 include $(UMD_HOME)/device/module.mk

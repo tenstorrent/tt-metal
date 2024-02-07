@@ -5,8 +5,11 @@
 #pragma once
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 namespace py = pybind11;
 
