@@ -53,10 +53,6 @@ void kernel_main() {
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t wrap = header->wrap;
 
-        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, false);
-        const db_cb_config_t* eth_db_cb_config =
-            get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, false);
-
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::ISSUE) {
             // Basically popfront without the extra conditional
             cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
@@ -64,6 +60,10 @@ void kernel_main() {
             notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
             continue;
         }
+
+        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+        const db_cb_config_t* eth_db_cb_config =
+            get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, false);
 
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
         wait_consumer_space_available(db_semaphore_addr);
