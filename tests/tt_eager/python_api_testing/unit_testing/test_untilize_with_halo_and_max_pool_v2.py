@@ -37,6 +37,7 @@ def volume(shape):
     "act_shape",  ## NCHW
     (
         (  ## Only resnet shapes supported for now in untilize with halo + maxpool
+            [1, 64, 64, 64],
             [1, 64, 112, 112],
             [4, 64, 112, 112],
             [8, 64, 112, 112],
@@ -119,7 +120,7 @@ def test_run_max_pool(
     #     for c in range(act_shape[1]):
     #         for h in range(act_shape[2]):
     #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c + torch.rand(1) * 0.15
+    #                 act[n, c, h, w] = 1 + n + h + w + c  ##+ torch.rand(1) * 0.15
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
@@ -209,7 +210,6 @@ def test_run_max_pool(
         )
         .to(ttl.tensor.Layout.TILE)
         .to(device, sharded_mem_config)
-        # .to(device, interleaved_mem_config)
     )
     assert in_h * in_w == act_shape_padded[-2]
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
@@ -245,10 +245,8 @@ def test_run_max_pool(
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")
 
-    # print(f'OUTPUT: {out_pytorch[0,:,:,:]}')
-    # print(f'GOLDEN: {golden_pytorch}')
-    # torch.save(out_pytorch, 'output.pt')
-    # torch.save(golden_pytorch, 'golden.pt')
+    # torch.save(out_pytorch, "output.pt")
+    # torch.save(golden_pytorch, "golden.pt")
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttl.tensor.DataType.BFLOAT8_B:

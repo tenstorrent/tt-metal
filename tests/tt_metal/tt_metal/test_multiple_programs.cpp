@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
 
 
 
-        write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
+        write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, *src0_dram_buffer, *src1_dram_buffer, *dst_dram_buffer);
 
         tt_metal::detail::LaunchProgram(device, program1);
 
@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
 
 
 
-        write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
+        write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, *src0_dram_buffer, *src1_dram_buffer, *dst_dram_buffer);
 
         tt_metal::detail::LaunchProgram(device, program2);
 

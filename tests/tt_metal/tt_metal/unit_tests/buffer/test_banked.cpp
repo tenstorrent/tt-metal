@@ -79,12 +79,12 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         };
 
 
-    Buffer input_buffer = CreateBuffer(in_config);
+    auto input_buffer = CreateBuffer(in_config);
 
-    Buffer output_buffer = CreateBuffer(out_config);
+    auto output_buffer = CreateBuffer(out_config);
 
-    tt::log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B] at noc coord {}", input_buffer.address(), input_buffer.size(), input_buffer.noc_coordinates().str());
-    tt::log_debug(tt::LogTest, "Output buffer: [address: {} B, size: {} B] at noc coord {}", output_buffer.address(), output_buffer.size(), output_buffer.noc_coordinates().str());
+    tt::log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B] at noc coord {}", input_buffer->address(), input_buffer->size(), input_buffer->noc_coordinates().str());
+    tt::log_debug(tt::LogTest, "Output buffer: [address: {} B, size: {} B] at noc coord {}", output_buffer->address(), output_buffer->size(), output_buffer->noc_coordinates().str());
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes);
     constexpr uint32_t num_pages_cb = 1;
@@ -99,36 +99,36 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         program,
         reader_kernel_name,
         cfg.logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = {cb_id, uint32_t(input_buffer.page_size()), (uint32_t)input_is_dram}});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
     auto writer_kernel = CreateKernel(
         program,
         writer_kernel_name,
         cfg.logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = {cb_id, uint32_t(output_buffer.page_size()), (uint32_t)output_is_dram}});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
 
     if (banked_reader) {
         reader_runtime_args = {
-            (uint32_t)input_buffer.address(),
+            (uint32_t)input_buffer->address(),
             (uint32_t)cfg.num_tiles
         };
     } else {
         reader_runtime_args = {
-            (uint32_t)input_buffer.address(),
-            (uint32_t)input_buffer.noc_coordinates().x,
-            (uint32_t)input_buffer.noc_coordinates().y,
+            (uint32_t)input_buffer->address(),
+            (uint32_t)input_buffer->noc_coordinates().x,
+            (uint32_t)input_buffer->noc_coordinates().y,
             (uint32_t)cfg.num_tiles,
         };
     }
     if (banked_writer) {
         writer_runtime_args = {
-            (uint32_t)output_buffer.address(),
+            (uint32_t)output_buffer->address(),
             (uint32_t)cfg.num_tiles
         };
     } else {
         writer_runtime_args = {
-            (uint32_t)output_buffer.address(),
-            (uint32_t)output_buffer.noc_coordinates().x,
-            (uint32_t)output_buffer.noc_coordinates().y,
+            (uint32_t)output_buffer->address(),
+            (uint32_t)output_buffer->noc_coordinates().x,
+            (uint32_t)output_buffer->noc_coordinates().y,
             (uint32_t)cfg.num_tiles,
         };
     }
@@ -203,7 +203,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {input0_cb_index, uint32_t(input_buffer.page_size()), (uint32_t)input_is_dram}});
+            .compile_args = {input0_cb_index, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
 
     auto writer_kernel = CreateKernel(
         program,
@@ -212,7 +212,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {output_cb_index, uint32_t(output_buffer.page_size()), (uint32_t)output_is_dram}});
+            .compile_args = {output_cb_index, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
 
     vector<uint32_t> compute_kernel_args = {
         uint(cfg.num_tiles)  // per_core_tile_cnt
@@ -240,7 +240,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
         reader_kernel,
         cfg.logical_core,
         {
-            (uint32_t)input_buffer.address(),
+            (uint32_t)input_buffer->address(),
             (uint32_t)cfg.num_tiles,
         }
     );
@@ -249,7 +249,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
         writer_kernel,
         cfg.logical_core,
         {
-            (uint32_t)output_buffer.address(),
+            (uint32_t)output_buffer->address(),
             (uint32_t)cfg.num_tiles,
         }
     );

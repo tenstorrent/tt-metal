@@ -216,7 +216,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count()));
     }
 
-    vector<Buffer> bufs;
+    vector< std::shared_ptr<Buffer> > bufs;
     uint32_t start = 0;
 
 
@@ -232,6 +232,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             bufs.push_back(CreateBuffer(dram_config));
         } catch (const std::exception& e) {
             tt::log_info("Deallocating on iteration {}", i);
+            bufs.clear();
             start = i;
             bufs = {CreateBuffer(dram_config)};
         }
@@ -243,7 +244,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     bool pass = true;
     vector<uint32_t> dst;
     uint32_t idx = start;
-    for (Buffer& buffer : bufs) {
+    for (auto buffer : bufs) {
         EnqueueReadBuffer(cq, buffer, dst, true);
         pass &= dst == unique_vectors[idx % unique_vectors.size()];
         idx++;

@@ -168,11 +168,10 @@ def add(
         ttnn.Tensor([ 1, 3], dtype=bfloat16 )
 
     """
-    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-    if isinstance(input_tensor_b, ttnn.Tensor) and math.prod(input_tensor_a.shape) < math.prod(input_tensor_b.shape):
-        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
-
-    return ttl.ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
+    input_tensor_a = input_tensor_a.value
+    input_tensor_b = input_tensor_b.value if isinstance(input_tensor_b, ttnn.Tensor) else input_tensor_b
+    output = ttl.ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
+    return ttnn.Tensor(output)
 
 
 def _sub_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):

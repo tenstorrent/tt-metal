@@ -7,36 +7,33 @@
 // #include "compute_kernel_api.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/pack_untilize.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
-    #include "debug_macros.h"
-
-    SliceRange srt = SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4};
-    SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-    SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-    SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+    #include "debug/dprint.h"
 
     inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-        PDPRINT("======");
-        for (int32_t r = 0; r < 32; ++ r) {
-            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-            PDPRINT((uint)r << TileSlice(cb_id, tile_id, sr, true, untilize));
+        UNPACK(( DPRINT << "======" << ENDL() ));
+        for (uint16_t r = 0; r < 32; ++ r) {
+            SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            UNPACK(( DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL() ));
         }
-        PDPRINT("++++++");
+        UNPACK(( DPRINT << "++++++" << ENDL() ));
     }
 
+
     inline void print_cb_details(uint32_t cb_id) {
-        PDPRINT("cb_id " << cb_id << ": { "
+        UNPACK(DPRINT("cb_id " << cb_id << ": { "
                 << "size: " << cb_interface[cb_id].fifo_size << ", "
                 << "limit: " << cb_interface[cb_id].fifo_limit << ", "
                 << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
                 << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
                 << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
                 << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
-                << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }");
+                << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }"));
     }
 #endif
 
@@ -61,7 +58,7 @@ inline void tilize(uint32_t out_nelems,
     tilize_uninit();
 }
 
-inline void reduce_h(uint32_t out_nelems,
+inline void reduce_h_orig(uint32_t out_nelems,
                      uint32_t in_cb_id,
                      uint32_t in_scalar_cb_id,
                      uint32_t in_ntiles_hw,
@@ -90,6 +87,59 @@ inline void reduce_h(uint32_t out_nelems,
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c>
+inline void reduce_h(uint32_t out_nelems,
+                     uint32_t in_cb_id,
+                     uint32_t in_scalar_cb_id,
+                     uint32_t in_ntiles_hwc,
+                     uint32_t out_ntiles_c,
+                     uint32_t out_cb_id) {
+    cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
+    reduce_init_delta_no_pack(in_cb_id, in_scalar_cb_id);
+    pack_untilize_dst_init_short<in_ntiles_c>();
+    cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
+    tile_regs_acquire();
+    for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
+        // add to accumulator all the in_ntiles_hw in a column of tiles
+        reduce_tile(PoolType::MAX, ReduceDim::REDUCE_COL, in_cb_id, in_scalar_cb_id, c_i, 0, c_i);
+    }
+    tile_regs_wait();
+    tile_regs_commit();
+    pack_untilize_dst<in_ntiles_c>(out_cb_id);
+    tile_regs_release();
+    pack_untilize_uninit();
+    cb_push_back(out_cb_id, out_ntiles_c * out_nelems);
+    cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
+}
+
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c, uint32_t out_ntiles_c, uint32_t out_nelems>
+inline void reduce_h_fused(
+    const uint32_t in_cb_id,
+    const uint32_t in_scalar_cb_id,
+    const uint32_t in_ntiles_hwc,
+    const uint32_t out_cb_id) {
+
+    constexpr uint32_t num_output_tiles = out_ntiles_c * out_nelems;
+    cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
+    tile_regs_acquire();
+    for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+        cb_wait_front(in_cb_id, 1);
+        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
+
+        for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
+            reduce_tile_math(in_ntiles_c*out_elem_i + c_i);
+        }
+        cb_pop_front(in_cb_id, 1);
+    }
+
+    tile_regs_wait();
+    tile_regs_commit();
+    pack_untilize_dst<num_output_tiles>(out_cb_id);  // <-- PACK
+    tile_regs_release();
+
+    cb_push_back(out_cb_id, out_ntiles_c * out_nelems);
+}
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -109,14 +159,19 @@ void MAIN {
     const uint32_t out_w_loop_count = get_compile_time_arg_val(9);
     const uint32_t nbatch = get_compile_time_arg_val(10);
     const uint32_t out_h_per_core = get_compile_time_arg_val(11);
+    const uint32_t num_output_tiles = out_ntiles_c * out_nelems;
 
-    tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
+    // tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
+    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
+    pack_untilize_dst_init_short<num_output_tiles>();
 
     #if DEBUG_PRINT == 1
-        print_cb_details(in_cb_id);
-        print_cb_details(in_scalar_cb_id);
+        print_full_tile(in_cb_id);
         print_cb_details(in_tiled_cb_id);
         print_cb_details(out_cb_id);
+        UNPACK(DPRINT << "nbatch = " << nbatch << ENDL());
+        UNPACK(DPRINT << "out_h_per_core = " << out_h_per_core << ENDL());
+        UNPACK(DPRINT << "out_w_loop_count = " << out_w_loop_count << ENDL());
     #endif
 
     cb_wait_front(in_scalar_cb_id, 1);
@@ -125,14 +180,12 @@ void MAIN {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++out_w_i) {
                 // NOTE: Assuming in_ntiles_hw < 8 for now.
                 // TODO: subblocking to support this.
-                // kernel_profiler::mark_time(11);
-                // UDPRINT('T' << out_w_i);
                 // tilize
-                tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
-                // UDPRINT('R' << out_w_i);
+                // tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
                 // Reduce H
-                reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
-                // kernel_profiler::mark_time(12);
+                // reduce_h_orig(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+                // reduce_h<in_ntiles_hw, in_ntiles_c>(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_ntiles_c, out_cb_id);
+                reduce_h_fused<in_ntiles_hw, in_ntiles_c, out_ntiles_c, out_nelems>(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
             }
         }
     }

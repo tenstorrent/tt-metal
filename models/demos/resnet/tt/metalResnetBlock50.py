@@ -1499,6 +1499,7 @@ class ResNet(nn.Module):
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
+                use_shallow_conv_variant=True,
             )
             self.first_conv_op_params = sliding_window_op_params
         else:

@@ -41,7 +41,7 @@ from ttnn.core import (
 
 from ttnn.validation import validate_input_tensor
 
-from ttnn.decorators import register_operation
+from ttnn.decorators import register_operation, disable_validate_decorator
 
 from ttnn.device import open, close
 
@@ -78,6 +78,7 @@ from ttnn.operations.others import (
     softmax,
     # reduction operations
     mean,
+    upsample,
 )
 
 from ttnn.operations.data_movement import (
@@ -113,6 +114,21 @@ from ttnn.operations.binary import (
     multiply,
 )
 
+from ttnn.operations.relational import (
+    gtz,
+    ltz,
+    gez,
+    lez,
+    nez,
+    eqz,
+    gt,
+    gte,
+    lt,
+    lte,
+    eq,
+    ne,
+)
+
 from ttnn.operations.normalization import (
     layer_norm,
     rms_norm,
@@ -126,4 +142,4 @@ from ttnn.operations.pooling import (
     average_pool2d,
 )
 
-from ttnn.decorators import disable_validate_decorator
+import ttnn.tracer

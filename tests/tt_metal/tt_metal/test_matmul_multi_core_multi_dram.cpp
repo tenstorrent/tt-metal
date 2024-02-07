@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Copying inputs to dram complete");
 
         Buffer out_buffer(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
-        uint32_t out_dram_addr = out_buffer.address();
+        uint32_t out_dram_addr = out_buffer->address();
 
         log_info(LogTest, "Writing kernel runtime args to device");
         pass &= assign_runtime_args_to_program(
@@ -437,8 +437,8 @@ int main(int argc, char **argv) {
             out_subblock_w,
             per_core_M,
             per_core_N,
-            activation_buffer.address(),
-            weight_buffer.address(),
+            activation_buffer->address(),
+            weight_buffer->address(),
             out_dram_addr);
         log_info(LogTest, "Writing kernel runtime args to device complete");
 

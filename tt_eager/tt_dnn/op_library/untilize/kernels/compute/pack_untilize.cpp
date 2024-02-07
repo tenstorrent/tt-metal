@@ -25,6 +25,6 @@ void MAIN {
         cb_pop_front(tt::CB::c_in0, per_core_block_tile_cnt);
     }
 
-    pack_untilize_uninit(tt::CB::c_in0);
+    pack_untilize_uninit();
 }
 }

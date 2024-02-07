@@ -6,30 +6,30 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
-SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
-SliceRange srt = SliceRange{ .h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 2, .ws = 1 };
+// SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
+// SliceRange srt = SliceRange{ .h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 2, .ws = 1 };
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     DPRINT << "======" << ENDL();
-//     for (int32_t r = 0; r < 32; ++ r) {
-//         SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 64, .ws = 2};
-//         DPRINT << (uint) r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL();
+// // inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+// //     DPRINT << "======" << ENDL();
+// //     for (int32_t r = 0; r < 32; ++ r) {
+// //         SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 64, .ws = 2};
+// //         DPRINT << (uint) r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL();
+// //     }
+// //     DPRINT << "++++++" << ENDL();
+// // }
+
+// inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+//     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+//     for (uint32_t page = 0; page < npages; ++ page) {
+//         DPRINT << start + page << ": ";
+//         for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+//             DPRINT << BF16(*ptr) << " ";
+//         }
+//         DPRINT << ENDL();
 //     }
-//     DPRINT << "++++++" << ENDL();
 // }
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++ page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -120,13 +120,10 @@ void kernel_main() {
         uint16_t top_left_local_index = reader_indices_ptr[counter];
         uint32_t h_multiples = 0;
         for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
-            for (uint32_t w = 0; w < window_w; ++ w) {
-                uint32_t stick_offset = top_left_local_index + (w + h_multiples);
-                uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
-                // noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
-                out_l1_write_addr += in_nbytes_c;
-            }
+            uint32_t stick_offset = top_left_local_index + h_multiples;
+            uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
+            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+            out_l1_write_addr += in_nbytes_c * window_w;
         }
         noc_async_read_barrier();
 

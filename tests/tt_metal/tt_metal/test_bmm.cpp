@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
                                         };
 
         auto src0_dram_buffer = CreateBuffer(src0_config);
-        uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
         tt_metal::InterleavedBufferConfig src1_config{
                                         .device=device,
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
                                         };
 
         auto src1_dram_buffer = CreateBuffer(src1_config);
-        uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
+        uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
 
         tt_metal::InterleavedBufferConfig dst_config{
                                         .device=device,
@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
                                         .buffer_type = tt_metal::BufferType::DRAM
                                         };
         auto dst_dram_buffer = CreateBuffer(dst_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 2;

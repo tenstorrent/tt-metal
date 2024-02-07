@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
                                         .buffer_type = tt_metal::BufferType::DRAM
                                         };
         auto input_dram_buffer = CreateBuffer(dram_config);
-        uint32_t input_dram_buffer_addr = input_dram_buffer.address();
+        uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
         tt_metal::InterleavedBufferConfig l1_config{
                                         .device=device,
@@ -91,9 +91,9 @@ int main(int argc, char **argv) {
                                         };
 
         auto l1_b0 = CreateBuffer(l1_config);
-        uint32_t l1_buffer_addr = l1_b0.address();
+        uint32_t l1_buffer_addr = l1_b0->address();
 
-        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
 
         auto dram_to_l1_copy_kernel = tt_metal::CreateKernel(
             program,

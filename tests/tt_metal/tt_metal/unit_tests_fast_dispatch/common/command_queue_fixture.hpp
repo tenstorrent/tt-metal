@@ -77,6 +77,9 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
+        if (arch_ == tt::ARCH::GRAYSKULL)
+            GTEST_SKIP();
+
         num_devices_ = tt::tt_metal::GetNumPCIeDevices();
         if (num_devices_ < 2) {
             GTEST_SKIP();
@@ -89,6 +92,11 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
         reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
         for (const auto& id : chip_ids) {
             devices_.push_back(reserved_devices_.at(id));
+        }
+        // skip tests if no ethernet cores
+        const auto& eth_cores = devices_[0]->get_active_ethernet_cores();
+        if (eth_cores.size() == 0) {
+            GTEST_SKIP();
         }
     }
 

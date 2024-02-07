@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
 
 
         auto input_dram_buffer = CreateBuffer(buff_config);
-        uint32_t dram_buffer_src_addr = input_dram_buffer.address();
+        uint32_t dram_buffer_src_addr = input_dram_buffer->address();
 
         // auto l1_b0_a = tt_metal::CreateL1Buffer(
         //     device, transient_buffer_size_bytes, loader_buffer_address1, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
@@ -101,8 +101,8 @@ int main(int argc, char **argv) {
 
         // auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 
-        auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
+        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
+        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateKernel(

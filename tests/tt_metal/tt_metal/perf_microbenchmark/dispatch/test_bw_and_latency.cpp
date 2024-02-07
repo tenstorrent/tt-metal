@@ -35,6 +35,7 @@ bool latency_g;
 bool lazy_g;
 bool time_just_finish_g;
 bool read_one_packet_g;
+bool page_size_as_runtime_arg_g; // useful particularly on GS multi-dram tests (multiply)
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -46,7 +47,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
         log_info(LogTest, "  -bs: batch size in K of data to xfer in one iteration (default {}K)", DEFAULT_BATCH_SIZE_K);
         log_info(LogTest, "  -p: page size (default {})", DEFAULT_PAGE_SIZE);
-        log_info(LogTest, "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, (default 0)");
+        log_info(LogTest, "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, 3:ALL_DRAMs (default 0:PCIe)");
         log_info(LogTest, "  -l: measure latency (default is bandwidth)");
         log_info(LogTest, "  -rx: X of core to issue read (default {})", 1);
         log_info(LogTest, "  -ry: Y of core to issue read (default {})", 0);
@@ -56,6 +57,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -o: use read_one_packet API.  restrices page size to 8K max (default {})", 0);
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
+        log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
         exit(0);
     }
 
@@ -72,6 +74,7 @@ void init(int argc, char **argv) {
     uint32_t size_bytes = test_args::get_command_option_uint32(input_args, "-bs", DEFAULT_BATCH_SIZE_K) * 1024;
     latency_g = test_args::has_command_option(input_args, "-l");
     page_size_g = test_args::get_command_option_uint32(input_args, "-p", DEFAULT_PAGE_SIZE);
+    page_size_as_runtime_arg_g = test_args::has_command_option(input_args, "-psrta");
     read_one_packet_g = test_args::has_command_option(input_args, "-o");
     if (read_one_packet_g && page_size_g > 8192) {
         log_info(LogTest, "Page size must be <= 8K for read_one_packet\n");
@@ -97,7 +100,8 @@ int main(int argc, char **argv) {
 
         string src_mem;
         uint32_t noc_addr_x, noc_addr_y;
-        uint64_t noc_mem_addr;
+        uint64_t noc_mem_addr = 0;
+        uint32_t dram_banked = 0;
         const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
         switch (source_mem_g) {
         case 0:
@@ -118,7 +122,6 @@ int main(int argc, char **argv) {
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
-                noc_mem_addr = 0;
             }
             break;
         case 2:
@@ -127,6 +130,14 @@ int main(int argc, char **argv) {
                 CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
+            }
+            break;
+        case 3:
+            {
+                src_mem = "FROM_ALL_DRAMS";
+                dram_banked = 1;
+                noc_addr_x = -1; // unused
+                noc_addr_y = -1; // unused
                 noc_mem_addr = 0;
             }
             break;
@@ -134,14 +145,17 @@ int main(int argc, char **argv) {
 
         std::map<string, string> defines = {
             {"ITERATIONS", std::to_string(iterations_g)},
-            {"PAGE_SIZE", std::to_string(page_size_g)},
             {"PAGE_COUNT", std::to_string(page_count_g)},
             {"LATENCY", std::to_string(latency_g)},
             {"NOC_ADDR_X", std::to_string(noc_addr_x)},
             {"NOC_ADDR_Y", std::to_string(noc_addr_y)},
             {"NOC_MEM_ADDR", std::to_string(noc_mem_addr)},
-            {"READ_ONE_PACKET", std::to_string(read_one_packet_g)}
+            {"READ_ONE_PACKET", std::to_string(read_one_packet_g)},
+            {"DRAM_BANKED", std::to_string(dram_banked)}
         };
+        if (!page_size_as_runtime_arg_g) {
+            defines.insert(pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
+        }
 
         tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
             .set_page_size(0, page_size_g);
@@ -152,13 +166,22 @@ int main(int argc, char **argv) {
                                           "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/bw_and_latency.cpp",
                                           worker_g,
                                           tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
+        if (page_size_as_runtime_arg_g) {
+            vector<uint32_t> args;
+            args.push_back(page_size_g);
+            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start, args);
+        }
 
         CoreCoord w = device->physical_core_from_logical_core(worker_g.start, CoreType::WORKER);
         log_info(LogTest, "Reader core: {}", w.str());
-        log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
+        if (source_mem_g == 3) {
+            log_info(LogTest, "Reading: {}", src_mem);
+        } else {
+            log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
+        }
         log_info(LogTest, "Using API: {}", read_one_packet_g ? "noc_async_read_one_packet" : "noc_async_read");
         log_info(LogTest, "Lazy: {}", lazy_g);
-        log_info(LogTest, "Page size: {}", page_size_g);
+        log_info(LogTest, "Page size ({}): {}", page_size_as_runtime_arg_g ? "runtime arg" : "compile time define", page_size_g);
         log_info(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
         log_info(LogTest, "Iterations: {}", iterations_g);
 
