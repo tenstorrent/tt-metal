@@ -39,12 +39,20 @@ config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
     (640, 640, 32, 32): {"act_block_h": 64},
     (640, 1920, 32, 32): {"act_block_h": 32},
+    (1280, 1920, 16, 16): {"act_block_h": 32},
     (1280, 1280, 32, 32): {"act_block_h": 32},
     (320, 960, 64, 64): {"act_block_h": 32},
+    (640, 960, 32, 32): {"act_block_h": 32},
     (320, 640, 64, 64): {"act_block_h": 32},
 }
 
-split_chunks = {(320, 960, 64, 64): 2, (640, 1920, 32, 32): 3}
+split_chunks = {
+    (320, 960, 64, 64): 2,
+    (640, 1920, 32, 32): 3,
+    (1280, 1920, 16, 16): 3,
+    (1280, 2560, 8, 8): 2,
+    (1280, 2560, 16, 16): 2,
+}
 
 
 def resnetBlock2D(
@@ -75,6 +83,7 @@ def resnetBlock2D(
 
     out_channels = in_channels if out_channels is None else out_channels
     hidden_states = input_tensor
+
     hidden_states = ttnn.group_norm(
         hidden_states, num_groups=groups, weight=parameters.norm1.weight, bias=parameters.norm1.bias, epsilon=eps
     )
@@ -184,6 +193,7 @@ def resnetBlock2D(
         hidden_states = ttnn.to_torch(hidden_states)
         hidden_states = torch.reshape(hidden_states, (batch_size, input_height, input_width, out_channels))
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
+        split_hidden_states = []
     else:
         parameters.conv1.weight = torch_to_tt_tensor_rm(parameters.conv1.weight, device, put_on_device=False)
         parameters.conv1.bias = torch_to_tt_tensor_rm(parameters.conv1.bias, device, put_on_device=False)
@@ -304,26 +314,78 @@ def resnetBlock2D(
         parameters.conv_shortcut.weight, parameters.conv_shortcut.bias = permute_conv_weights(
             parameters.conv_shortcut.weight, parameters.conv_shortcut.bias
         )
-        parameters.conv_shortcut.weight = torch_to_tt_tensor_rm(
-            parameters.conv_shortcut.weight, device, put_on_device=False
-        )
-        parameters.conv_shortcut.bias = torch_to_tt_tensor_rm(
-            parameters.conv_shortcut.bias, device, put_on_device=False
-        )
-        # Using fallback Conv2D as we face issue with ttnn.Conv2D
-        conv_shortcut = fallback_ops.Conv2d(
-            parameters.conv_shortcut.weight,
-            parameters.conv_shortcut.bias,
-            in_channels,
-            out_channels,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-        )
-        input_tensor = ttnn_to_torch(input_tensor)
-        input_tensor = torch_to_tt_tensor_rm(input_tensor, device)
-        input_tensor = conv_shortcut(input_tensor)
-        input_tensor = tt_to_torch_tensor(input_tensor)
+        if convs_on_device:
+            batch_size = input_tensor.shape[0]
+            input_height = input_tensor.shape[2]
+            input_width = input_tensor.shape[3]
+            parameters.conv_shortcut.bias = torch.reshape(parameters.conv_shortcut.bias, (1, 1, 1, out_channels))
+            tt_weight_tensor = ttnn.from_torch(parameters.conv_shortcut.weight, ttnn.float32)
+            tt_bias_tensor = ttnn.from_torch(parameters.conv_shortcut.bias, ttnn.float32)
+            conv_shortcut_config_override = {}
+            # if (out_channels, in_channels, input_height, input_width) in config_override:
+            #     conv2_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+            conv_shortcut = ttnn.Conv2D(
+                in_channels,
+                out_channels,
+                kernel_size=(1, 1),
+                stride=(1, 1),
+                padding=(0, 0),
+                dtype=ttnn.bfloat8_b,
+                device=device,
+                use_1d_systolic_array=False,
+                batch_size=batch_size,
+                input_height=input_height,
+                input_width=input_width,
+                reader_patterns_cache=reader_patterns_cache,
+                weight=tt_weight_tensor,
+                bias=tt_bias_tensor,
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                weights_dtype=ttnn.bfloat8_b,
+                conv_blocking_and_parallelization_config_override=conv_shortcut_config_override,
+                use_shallow_conv_variant=False,
+                enable_auto_formatting=True,
+            )
+
+            input_tensor = ttnn_to_torch(input_tensor)
+            input_tensor = input_tensor.permute((0, 2, 3, 1))
+            # Reshape 4d to 2d
+            input_tensor = torch.reshape(
+                input_tensor,
+                (1, 1, batch_size * input_height * input_width, in_channels),
+            )
+
+            input_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16)
+            input_tensor = ttnn.to_device(input_tensor, device)
+
+            input_tensor = ttnn.pad_to_tile(input_tensor)
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+            input_tensor = conv_shortcut(input_tensor)
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.from_device(input_tensor)
+            input_tensor = ttnn.to_torch(input_tensor)
+            input_tensor = torch.reshape(input_tensor, (batch_size, input_height, input_width, out_channels))
+            input_tensor = torch.permute(input_tensor, (0, 3, 1, 2))
+        else:
+            parameters.conv_shortcut.weight = torch_to_tt_tensor_rm(
+                parameters.conv_shortcut.weight, device, put_on_device=False
+            )
+            parameters.conv_shortcut.bias = torch_to_tt_tensor_rm(
+                parameters.conv_shortcut.bias, device, put_on_device=False
+            )
+            # Using fallback Conv2D as we face issue with ttnn.Conv2D
+            conv_shortcut = fallback_ops.Conv2d(
+                parameters.conv_shortcut.weight,
+                parameters.conv_shortcut.bias,
+                in_channels,
+                out_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+            )
+            input_tensor = ttnn_to_torch(input_tensor)
+            input_tensor = torch_to_tt_tensor_rm(input_tensor, device)
+            input_tensor = conv_shortcut(input_tensor)
+            input_tensor = tt_to_torch_tensor(input_tensor)
         input_tensor = torch_to_ttnn(input_tensor, device=device)
 
     output_sc_recip = 1 / output_scale_factor
