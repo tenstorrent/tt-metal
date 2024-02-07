@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-
-namespace py = pybind11;
+#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace ttnn {
 
@@ -17,11 +16,11 @@ static const auto DRAM_MEMORY_CONFIG = tt::tt_metal::MemoryConfig{
 static const auto L1_MEMORY_CONFIG = tt::tt_metal::MemoryConfig{
     .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
 
-ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     return ttnn::Tensor(tensor.reshape(shape.value()));
 }
 
-ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
+inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
     const auto tensor_shape = tensor.ttnn_shape();
     const auto rank = tensor_shape.rank();
     if (rank == 4) {
@@ -35,13 +34,10 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
     return ttnn::reshape(tensor, tensor_shape_4D);
 }
 
-namespace operations {
-namespace binary {
+namespace operations{
+namespace binary{
 
-void py_module(py::module& m_binary) {
-    m_binary.def(
-        "add",
-        [](const ttnn::Tensor& input_tensor_a_arg,
+inline ttnn::Tensor add(const ttnn::Tensor& input_tensor_a_arg,
            const ttnn::Tensor& input_tensor_b_arg,
            const tt::tt_metal::MemoryConfig& memory_config) {
             auto&& [input_tensor_a, input_tensor_b] = [](const auto& input_tensor_a_arg,
@@ -88,17 +84,9 @@ void py_module(py::module& m_binary) {
                 auto output = tt::tt_metal::add(input_tensor_a_4D, input_tensor_b_4D, std::nullopt, memory_config);
                 return ttnn::reshape(output, original_shape);
             }
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = DRAM_MEMORY_CONFIG
+        }
 
-    );
-
-    m_binary.def(
-        "add",
-        [](const ttnn::Tensor& input_tensor_a,
+inline ttnn::Tensor add(const ttnn::Tensor& input_tensor_a,
            const float input_tensor_b,
            const tt::tt_metal::MemoryConfig& memory_config) {
             const auto original_shape = input_tensor_a.ttnn_shape();
@@ -107,12 +95,7 @@ void py_module(py::module& m_binary) {
 
             auto output = tt::tt_metal::add_unary(input_tensor_a_4D, input_tensor_b, memory_config);
             return ttnn::reshape(output, original_shape);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = DRAM_MEMORY_CONFIG);
-}
+        }
 
 }  // namespace binary
 }  // namespace operations

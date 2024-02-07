@@ -10,51 +10,57 @@ import requests
 # See: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token
 
 
-def get_pending_reviewers(pull_numbers, github_token):
+def get_reviewers_and_pending_reviewers(pull_numbers, github_token):
     owner = "tenstorrent-metal"
     repo = "tt-metal"
     headers = {"Authorization": f"token {github_token}"}
-    pending_reviewers = set()
+    reviewers_info = {}
 
     for pull_number in pull_numbers:
         requested_reviewers_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"
         reviews_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/reviews"
 
         requested_reviewers_response = requests.get(requested_reviewers_url, headers=headers)
-        requested_reviewers = (
-            {reviewer["login"] for reviewer in requested_reviewers_response.json().get("users", [])}
-            if requested_reviewers_response.status_code == 200
-            else set()
-        )
-
-        reviews_response = requests.get(reviews_url, headers=headers)
-        reviews = reviews_response.json() if reviews_response.status_code == 200 else []
-
-        if any(review["state"] == "APPROVED" for review in reviews):
+        if requested_reviewers_response.status_code == 200:
+            reviewers = {reviewer["login"] for reviewer in requested_reviewers_response.json().get("users", [])}
+        else:
+            print(
+                f"Unable to find Requested Reviews for PR {pull_number}: HTTP {requested_reviewers_response.status_code} -> {requested_reviewers_response.text}"
+            )
             continue
 
-        pending_reviewers.update(requested_reviewers - {review["user"]["login"] for review in reviews})
-
-    return pending_reviewers
-
-
-def get_reviewers(pull_numbers, github_token):
-    owner = "tenstorrent-metal"
-    repo = "tt-metal"
-    reviewers = set()
-    headers = {"Authorization": f"token {github_token}"}
-
-    for pull_number in pull_numbers:
-        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            for reviewer in data["users"]:
-                reviewers.add(reviewer["login"])
+        reviews_response = requests.get(reviews_url, headers=headers)
+        if reviews_response.status_code == 200:
+            reviews = reviews_response.json()
         else:
-            print(f"Failed to get reviewers for PR {pull_number}: {response.status_code}")
+            print(
+                f"Unable to find Reviews for PR {pull_number}: HTTP {reviews_response.status_code} -> {requested_reviewers_response.text}"
+            )
+            continue
 
-    return list(reviewers)
+        pr_details_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}"
+        pr_details_response = requests.get(pr_details_url, headers=headers)
+        if pr_details_response.status_code == 200:
+            pr_data = pr_details_response.json()
+            base_branch = pr_data.get("base", {}).get("ref", "")
+            state = pr_data.get("state")
+            mergeable = pr_data.get("mergeable")
+        else:
+            print(f"Unable to find details for PR {pull_number}: HTTP {pr_details_response.status_code}")
+            continue
+
+        pending_reviewers = reviewers - {
+            review["user"]["login"] for review in reviews if review["state"] in ["APPROVED", "CHANGES_REQUESTED"]
+        }
+
+        reviewers_info[pull_number] = {
+            "reviewers": reviewers,
+            "pending_reviewers": pending_reviewers,
+            "state": state,
+            "mergeable": mergeable,
+        }
+
+    return reviewers_info
 
 
 def get_my_pending_reviews(username, github_token):
@@ -106,11 +112,12 @@ def main():
         print("You forget to provide the --token")
 
     if issues != None:
-        reviewers = get_reviewers(issues, token)
-        print("Reviewers:", reviewers)
+        reviewers_info = get_reviewers_and_pending_reviewers(issues, token)
 
-        pending_reviewers = get_pending_reviewers(issues, token)
-        print("Pending Reviewers:", pending_reviewers)
+        for pr, info in reviewers_info.items():
+            print(
+                f"PR {pr} - Reviewers: {info['reviewers']}, State: {info['state']}, Pending Reviewers: {info['pending_reviewers']}, Mergeable: {info['mergeable']}"
+            )
 
     elif username != None:
         pending_reviews = get_my_pending_reviews(username, token)
