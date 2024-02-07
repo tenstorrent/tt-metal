@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt_metal;
 operation::ProgramWithCallbacks create_program(
     tt_metal::Device *device,
-    MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode,
+    MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -34,9 +34,14 @@ operation::ProgramWithCallbacks create_program(
 
     tt_metal::Program program{};
 
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
+    tt::DataFormat interm0_data_format = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
+    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+
     tt_metal::Buffer* in0_buffer = in0.buffer();
     tt_metal::Buffer* in1_buffer = in1.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
@@ -66,6 +71,7 @@ operation::ProgramWithCallbacks create_program(
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
+    uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
 
     // Compute kernel compile time args
@@ -196,15 +202,24 @@ operation::ProgramWithCallbacks create_program(
         out_subblock_h, // out_subblock_h
         out_subblock_w, // out_subblock_w
         out_subblock_num_tiles, // out_subblock_num_tiles
-        num_blocks_per_core_group_1 // batch
+        num_blocks_per_core_group_1, // batch
+        out_block_tiles
     };
+
+    std::map<string, string> mm_kernel_defines;
+    if (packer_l1_acc) {
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args_group_1}
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_1, .defines = mm_kernel_defines}
     );
     if(!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
@@ -222,13 +237,14 @@ operation::ProgramWithCallbacks create_program(
             out_subblock_h, // out_subblock_h
             out_subblock_w, // out_subblock_w
             out_subblock_num_tiles, // out_subblock_num_tiles
-            num_blocks_per_core_group_2 // batch
+            num_blocks_per_core_group_2, // batch
+            out_block_tiles
         };
         auto mm_kernel_group_2_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args_group_2}
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_2, .defines = mm_kernel_defines}
         );
     }
 
@@ -251,13 +267,41 @@ operation::ProgramWithCallbacks create_program(
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
-        {output_cb_index, output_data_format},
-        {interm0_cb_index, output_data_format}
-    };
-    tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-		.set_page_size(output_cb_index, output_single_tile_size)
-        .set_page_size(interm0_cb_index, output_single_tile_size);
+    tt_metal::CircularBufferConfig interm0_cb_config = tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
+    tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
+
+    if (interm0_data_format != output_data_format) {
+        // output
+        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
+            {output_cb_index, output_data_format},
+        };
+        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+            .set_page_size(output_cb_index, output_single_tile_size);
+        // interm0
+        std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec {
+            {interm0_cb_index, interm0_data_format},
+        };
+        interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
+            .set_page_size(interm0_cb_index, interm0_single_tile_size);
+
+        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+    } else {
+        // share buffer
+        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
+            {output_cb_index, output_data_format},
+            {interm0_cb_index, interm0_data_format}
+        };
+        output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+            .set_page_size(output_cb_index, output_single_tile_size)
+            .set_page_size(interm0_cb_index, interm0_single_tile_size);
+    }
+    // std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
+    //     {output_cb_index, output_data_format},
+    //     {interm0_cb_index, output_data_format}
+    // };
+    // tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+	// 	.set_page_size(output_cb_index, output_single_tile_size)
+    //     .set_page_size(interm0_cb_index, output_single_tile_size);
     if (output_is_sharded) {
         output_cb_config = output_cb_config.set_globally_allocated_address(*out_buffer);
     }
@@ -421,7 +465,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     // Pass in a and b shapes instead
 
@@ -451,6 +495,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
 
     if (fp32_dest_acc_en) {
         TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+    }
+
+    if (device->arch() == ARCH::GRAYSKULL) {
+        TT_ASSERT(fp32_dest_acc_en == false && "GraySkull does not support fp32 accumulation mode");
+        TT_ASSERT(packer_l1_acc == false && "GraySkull does not support packer L1 accumulation");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -486,7 +535,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     return reuse_optimized_helpers::create_program(
         device,
-        math_fidelity, fp32_dest_acc_en, math_approx_mode,
+        math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
         core_range,
         B, Mt, Nt, Kt,
         bcast_batch,
@@ -500,7 +549,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
 
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b,  Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b,  Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -508,7 +557,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, 
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
     */
-    return matmul_multi_core_reuse_optimized_(a, b, output, bcast_batch, compute_with_storage_grid_size, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return matmul_multi_core_reuse_optimized_(a, b, output, bcast_batch, compute_with_storage_grid_size, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

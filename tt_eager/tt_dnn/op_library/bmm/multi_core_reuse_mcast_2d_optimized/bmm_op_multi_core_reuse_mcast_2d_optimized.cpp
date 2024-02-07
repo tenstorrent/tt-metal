@@ -41,7 +41,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t num_blocks = K / in0_block_w;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc ? tt::DataFormat::Float16_b : output_data_format;
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
+    tt::DataFormat interm0_data_format = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -328,6 +329,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (packer_l1_acc) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
+    if (fp32_dest_acc_en) {
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
     // if (in0_is_sharded) {
     //     mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     // }
@@ -418,7 +422,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     // bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        device->arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
+        "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_defines}
     );
@@ -886,6 +890,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
 
     if (fp32_dest_acc_en) {
         TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+    }
+
+    if (device->arch() == ARCH::GRAYSKULL) {
+        TT_ASSERT(fp32_dest_acc_en == false && "GraySkull does not support fp32 accumulation mode");
+        TT_ASSERT(packer_l1_acc == false && "GraySkull does not support packer L1 accumulation");
     }
 
     ////////////////////////////////////////////////////////////////////////////
