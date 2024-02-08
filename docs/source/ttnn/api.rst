@@ -91,6 +91,31 @@ Pointwise Relational
    ttnn/eq
    ttnn/ne
 
+Activation
+==========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/clip
+   ttnn/elu
+   ttnn/hardshrink
+   ttnn/hardswish
+   ttnn/hardtanh
+   ttnn/heaviside
+   ttnn/leaky_relu
+   ttnn/log_sigmoid
+   ttnn/mish
+   ttnn/prelu
+   ttnn/relu_max
+   ttnn/relu_min
+   ttnn/relu6
+   ttnn/sigmoid
+   ttnn/sign
+   ttnn/softshrink
+   ttnn/softsign
+   ttnn/swish
+
 Reduction
 =========
 

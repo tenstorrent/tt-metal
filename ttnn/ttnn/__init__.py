@@ -129,6 +129,27 @@ from ttnn.operations.relational import (
     ne,
 )
 
+from ttnn.operations.activation import (
+    clip,
+    elu,
+    hardshrink,
+    hardswish,
+    hardtanh,
+    heaviside,
+    leaky_relu,
+    log_sigmoid,
+    mish,
+    prelu,
+    relu_max,
+    relu_min,
+    relu6,
+    sigmoid,
+    sign,
+    softshrink,
+    softsign,
+    swish,
+)
+
 from ttnn.operations.normalization import (
     layer_norm,
     rms_norm,
