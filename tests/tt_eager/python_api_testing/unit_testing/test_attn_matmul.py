@@ -109,24 +109,27 @@ def test_attn_matmul_with_program_cache(in0_dtype, in1_dtype, out_dtype, device,
 )
 @pytest.mark.parametrize(
     "batch, K, seq_len, q_heads, kv_heads",
-    ((32, 64, 128, 16, 1), (32, 64, 128, 32, 2)),
+    (
+        (32, 64, 512 + 96, 32, 2),
+        (32, 1024 + 32, 64, 32, 2),
+        (32, 64, 128, 16, 1),
+    ),
 )
 def test_group_attn_matmul(
     batch, K, seq_len, q_heads, kv_heads, in0_sharded, in1_sharded, output_sharded, shard_orientation, device
 ):
-    # NOTE: For interleaved kv_heads, batch 64, 96, etc... should be supported
     torch.manual_seed(0)
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
     )
 
-    # NOTE: Mixed precision is supported as well
-    in0_dtype = ttl.tensor.DataType.BFLOAT16
-    in1_dtype = ttl.tensor.DataType.BFLOAT16
-    output_dtype = ttl.tensor.DataType.BFLOAT16
+    # NOTE: Mixed precision is supported as well; but might not have enough space for larger seq_len with BFLOAT16
+    in0_dtype = ttl.tensor.DataType.BFLOAT8_B
+    in1_dtype = ttl.tensor.DataType.BFLOAT8_B
+    output_dtype = ttl.tensor.DataType.BFLOAT8_B
 
     q_len = 1
     input_shape_a = [q_len, q_heads, batch, K]
@@ -200,15 +203,15 @@ def test_group_attn_matmul_with_program_cache(in0_dtype, in1_dtype, output_dtype
     compute_grid_size = device.compute_with_storage_grid_size()
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
     )
 
     shard_orientation = ttl.tensor.ShardOrientation.COL_MAJOR  # Only used if sharded
 
     q_len = 1
-    batch = 32 if sharded else 64
+    batch = 32
     num_cache_entries = 0  # Only track cache entries of group_attn_matmul
-    for K, seq_len, q_heads, kv_heads in ((96, 64, 10, 2), (64, 128, 50, 5)):
+    for K, seq_len, q_heads, kv_heads in ((96, 512 + 64, 10, 2), (64, 128, 50, 5)):
         input_shape_a = [q_len, q_heads, batch, K]
         input_shape_b = [batch, kv_heads, K, seq_len]
 

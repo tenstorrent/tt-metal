@@ -259,6 +259,7 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
     TT_FATAL((ashape[1] % bshape[1] == 0), "Number of q_heads must be divisible by kv_heads!");
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
+    TT_FATAL((bshape[0] == 32), "Only batch 32 is supported for group attention matmul!");
 
     const auto num_cores_used = std::max(ashape[1], TILE_HEIGHT);  // Need at least 32 cores for mcasting KV heads
     TT_FATAL((num_cores_used <= this->compute_with_storage_grid_size.x * this->compute_with_storage_grid_size.y), "Compute grid size is too small for group attention matmul! For now, we require at most 1 q_heads per core.");
@@ -270,16 +271,15 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_a.shard_spec().value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
         auto shard_shape = input_tensor_a.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] == input_tensor_a.shape()[2]);
-        TT_FATAL(shard_shape[1] == input_tensor_a.shape()[3]);
+        TT_FATAL(shard_shape[0] == ashape[2]);
+        TT_FATAL(shard_shape[1] == ashape[3]);
     }
     if (input_tensor_b.is_sharded()) {
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_b.shard_spec().value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
         auto shard_shape = input_tensor_b.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] == input_tensor_b.shape()[1] * input_tensor_b.shape()[2]);
-        TT_FATAL(shard_shape[1] == input_tensor_b.shape()[3]);
-        TT_FATAL(input_tensor_b.shape()[0] == 32, "Only batch 32 is supported for KV sharded!");
+        TT_FATAL(shard_shape[0] == bshape[1] * bshape[2]);
+        TT_FATAL(shard_shape[1] == bshape[3]);
     }
     if (this->output_mem_config.is_sharded()) {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
