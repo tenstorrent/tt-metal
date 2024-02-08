@@ -346,6 +346,94 @@ def get_model_config(model_config_str):
             fused_activation=None,
             mcast_in0=True,
         )
+
+        model_config["QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    256,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config["WQ_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=1,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        model_config["WK_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        model_config["WK_MM_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    32,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        model_config["WQ_MM_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    256,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
         model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
