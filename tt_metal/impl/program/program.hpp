@@ -181,7 +181,7 @@ class Program {
 
     void update_kernel_groups();
 
-    friend class CommandQueue;
+    friend class HWCommandQueue;
     friend class EnqueueProgramCommand;
 };
 

@@ -219,17 +219,13 @@ std::vector<Tensor> run_device_operation(
     std::visit(
         [&operation, &input_tensors, &optional_input_tensors](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
-
-            if (!operation::skip_profile) {
-                auto do_profile = op_profiler::get_profiler_flag();
-                if (do_profile) {
-                    detail::setup_profiler(operation, input_tensors, program);
-                }
-            }
             using T = std::decay_t<decltype(program)>;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
-                if (do_profile) {
-                    detail::setup_profiler(operation, input_tensors, program);
+                if (!operation::skip_profile) {
+                    auto do_profile = op_profiler::get_profiler_flag();
+                    if (do_profile) {
+                        detail::setup_profiler(operation, input_tensors, program);
+                    }
                 }
                 if (USE_FAST_DISPATCH) {
 #ifndef TTNN_ENABLE_LOGGING
@@ -246,15 +242,16 @@ std::vector<Tensor> run_device_operation(
                         operation.get_type_name(),
                         elapsed_seconds);
 #endif
-                if (!operation::skip_profile) {
-                    // Only need to dump device data when in dispatch mode
-                    // LaunchKernel automatically dumps device data
-                    op_profiler::dump_device_profiler_results(device, program);
+                    if (!operation::skip_profile) {
+                        // Only need to dump device data when in dispatch mode
+                        // LaunchKernel automatically dumps device data
+                        op_profiler::dump_device_profiler_results(device, program);
+                    } else {
+                        operation::skipped_programs.emplace(device->id(), std::ref(program));
+                    }
                 } else {
-                    operation::skipped_programs.emplace(device->id(), std::ref(program));
+                    ::detail::LaunchProgram(device, program);
                 }
-            } else {
-                ::detail::LaunchProgram(device, program);
             }
         },
         program );

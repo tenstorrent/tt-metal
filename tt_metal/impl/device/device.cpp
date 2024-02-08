@@ -465,10 +465,10 @@ void Device::configure_command_queue_programs() {
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         // Reset the host manager's pointer for this command queue
-        this->manager->reset(cq_id);
+        this->sysmem_manager_->reset(cq_id);
 
         pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->manager->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, mmio_device_id, channel);
     }
@@ -517,8 +517,10 @@ void Device::initialize_command_queue() {
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
+    sw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
+        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
     }
 
     this->compile_command_queue_programs();
