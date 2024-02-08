@@ -12,7 +12,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
 )
 
 
-class Conv2D:
+class Conv2d:
     def __init__(
         self,
         in_channels: int,
