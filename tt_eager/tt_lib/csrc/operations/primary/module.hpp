@@ -13,6 +13,10 @@
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
+#include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
+#include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
@@ -404,6 +408,51 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_clip_grad_norm operation.
+    )doc");
+
+    m_primary.def(
+        "moreh_bmm",
+        &moreh_bmm,
+        py::arg("input").noconvert(),
+        py::arg("mat2").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_bmm operation.
+    )doc");
+    m_primary.def(
+        "moreh_bmm_backward",
+        &moreh_bmm_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("mat2").noconvert(),
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("mat2_grad").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_bmm_backward operation.
+    )doc");
+    m_primary.def(
+        "moreh_linear",
+        &moreh_linear,
+        py::arg("input").noconvert(),
+        py::arg("weight").noconvert(),
+        py::arg("bias").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_linear operation.
+    )doc");
+    m_primary.def(
+        "moreh_linear_backward",
+        &moreh_linear_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("weight").noconvert(),
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("weight_grad").noconvert() = std::nullopt,
+        py::arg("bias_grad").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_linear_backward operation.
     )doc");
 
     // moreh_matmul
