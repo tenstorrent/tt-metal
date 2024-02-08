@@ -528,7 +528,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     const uint32_t producer_cb_size = producer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
-    bool cmd_consumer_on_ethernet = not device->is_mmio_capable();
+    constexpr bool cmd_consumer_on_ethernet = false;
     const uint32_t consumer_cb_num_pages =
         (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / DeviceCommand::PROGRAM_PAGE_SIZE);
     const uint32_t consumer_cb_size = consumer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
@@ -537,6 +537,16 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     command.set_consumer_cb_size(consumer_cb_size);
     command.set_producer_cb_num_pages(producer_cb_num_pages);
     command.set_consumer_cb_num_pages(consumer_cb_num_pages);
+
+    bool route_through_ethernet = not device->is_mmio_capable();
+    if (route_through_ethernet) {
+        uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / DeviceCommand::PROGRAM_PAGE_SIZE;
+        const uint32_t router_cb_size = router_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
+        command.set_router_cb_size(router_cb_size);
+        command.set_router_cb_num_pages(router_cb_num_pages);
+        command.set_producer_router_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
+        command.set_consumer_router_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
+    }
 
     // Should only ever be set if we are
     // enqueueing a program immediately
@@ -547,6 +557,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 
     // This needs to be quite small, since programs are small
     command.set_producer_consumer_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
+    command.set_producer_router_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
+    command.set_consumer_router_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
     command.set_event(this->event);
 
     return command;
