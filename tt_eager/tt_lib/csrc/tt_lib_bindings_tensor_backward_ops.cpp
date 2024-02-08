@@ -647,5 +647,32 @@ namespace tt::tt_metal::detail{
                 "input", "Tensor add is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
+
+    m_tensor.def("atan2_bw", &tt::tt_metal::atan2_bw,
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs backward operations for atan2 of ``input`` and ``other`` tensors with given ``grad``.
+
+            Input tensors must have BFLOAT16 data type.
+
+            Output tensors will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+
+                "input", "Tensor atan2 is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "other", "Tensor atan2 is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def("hypot_bw", &tt::tt_metal::hypot_bw,
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs backward operations for hypotenuse of ``input`` and ``other`` tensors with given ``grad``.
+                "input", "First input tensor ", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "other", "Second input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
     }
 }

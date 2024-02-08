@@ -61,6 +61,8 @@ struct ShardSpec {
 
 };
 
+bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
+bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);
 
 struct ShardSpecBuffer {
     ShardSpec tensor_shard_spec;

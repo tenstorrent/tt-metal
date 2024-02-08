@@ -18,6 +18,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
 
 namespace tt::tt_metal::detail{
 
@@ -484,17 +485,23 @@ namespace tt::tt_metal::detail{
        )doc");
 
         // Sharding ops
-        m_tensor.def("interleaved_to_sharded", &interleaved_to_sharded,
-            py::arg("input"), py::arg("grid_size"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
+        m_tensor.def("interleaved_to_sharded", py::overload_cast<const Tensor&, const std::variant<CoreCoord, CoreRangeSet>,  std::array<uint32_t, 2>, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded),
+            py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from interleaved to sharded memory layout)doc"
         );
-        m_tensor.def("interleaved_to_sharded_core_range_set", &interleaved_to_sharded_core_range_set,
-            py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
+        m_tensor.def("interleaved_to_sharded", py::overload_cast<const Tensor&, const MemoryConfig &, const std::optional<const DataType>>(&interleaved_to_sharded),
+            py::arg("input"), py::arg("sharded_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from interleaved to sharded memory layout)doc"
         );
         m_tensor.def("sharded_to_interleaved", &sharded_to_interleaved,
             py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
+        );
+
+        // Multi-Device ops
+        m_tensor.def("all_gather", &all_gather,
+            py::arg("input_tensors"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            R"doc(Performs all gather on a list of tensors that form one tensor that is distributed across devices. The output is a list of a tensor which has been duplciated across the input devices.)doc"
         );
     }
 

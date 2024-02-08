@@ -859,6 +859,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_le_bw
 
+.. autofunction:: tt_lib.tensor.atan2_bw
+
+.. autofunction:: tt_lib.tensor.hypot_bw
+
 Loss Functions
 ==============
 

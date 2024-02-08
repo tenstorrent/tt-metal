@@ -150,7 +150,6 @@ class Device {
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
 
     std::unique_ptr<SystemMemoryManager> manager;
-    vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
 
     // Set of logical dispatch core coordinates
 
@@ -184,6 +183,8 @@ class Device {
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
     void initialize_and_launch_firmware();
     void initialize_command_queue();
+    void compile_command_queue_programs();
+    void configure_command_queue_programs();
     void clear_l1_state();
 
     std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
@@ -212,6 +213,8 @@ class Device {
     std::set<CoreCoord> ethernet_cores_;
 
     const uint8_t num_hw_cqs_;
+
+    vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
 };
 
 }  // namespace tt_metal

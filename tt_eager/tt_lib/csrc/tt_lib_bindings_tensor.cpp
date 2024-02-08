@@ -241,7 +241,7 @@ void TensorModule(py::module &m_tensor) {
         )
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
-        .def_readonly("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
+        .def_readwrite("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
 
@@ -294,9 +294,12 @@ void TensorModule(py::module &m_tensor) {
                 }
             )
         )
-        .def_readonly("shape", &ShardSpec::shape, "Shape of shard.")
-        .def_readonly("grid", &ShardSpec::grid, "Grid to layout shards.")
-        .def_readonly("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
+        .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
+        .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
+        .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
+        .def("num_cores", &ShardSpec::num_cores, "Number of cores")
+        .def(py::self == py::self)
+        .def(py::self != py::self)
         ;
 
 

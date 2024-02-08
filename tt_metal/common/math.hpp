@@ -20,7 +20,7 @@ inline uint32_t round_up(uint32_t a, uint32_t b) {
     return b*div_up(a, b);
 }
 
-inline std::uint32_t round_down(std::uint32_t a, std::uint32_t b) {
+inline constexpr std::uint32_t round_down(std::uint32_t a, std::uint32_t b) {
     return  a / b * b;
 }
 

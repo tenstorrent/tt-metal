@@ -232,7 +232,6 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
     assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "shard_orient",
     [ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.ShardOrientation.ROW_MAJOR],
@@ -270,7 +269,7 @@ def test_softmax_with_sharded_mask(device, in_dtype, cb_dtype, in0_mem_config, s
     attention_mask = (attention_mask > 0.5).float()
     attention_mask = torch.where(attention_mask == 1, torch.tensor(0.0), torch.tensor(-float("inf")))
     attention_mask_t = torch2tt_tensor(
-        attention_mask, device, tt_memory_config=in0_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+        attention_mask, device, tt_memory_config=in0_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
     )
     attention_mask_t_shard = ttl.tensor.interleaved_to_sharded(
         attention_mask_t,

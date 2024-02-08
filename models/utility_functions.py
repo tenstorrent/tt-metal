@@ -175,7 +175,7 @@ def torch2tt_tensor(
     return tt_tensor
 
 
-def tt2torch_tensor(tt_tensor, tt_host=None):
+def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)

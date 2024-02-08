@@ -19,6 +19,9 @@
 
 namespace tt::tt_metal::operation {
 
+bool skip_profile = false;
+std::map<chip_id_t, std::reference_wrapper<Program>> skipped_programs;
+
 bool is_logging_enabled() {
     bool enabled = false;
     if (std::getenv("TT_METAL_LOGGER_TYPES") != nullptr and std::getenv("TT_METAL_LOGGER_LEVEL") != nullptr) {
@@ -155,8 +158,10 @@ std::vector<Tensor> run_device_operation(
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
     ZoneScoped;
     ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
-
-    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
+    std::unique_ptr<op_profiler::OpProfileScope> profile_scope;
+    if (!operation::skip_profile) {
+        profile_scope = std::make_unique<op_profiler::OpProfileScope>(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
+    }
 
     std::function<std::variant<Program, std::reference_wrapper<Program>>(
         const DeviceOperation&,
@@ -215,9 +220,11 @@ std::vector<Tensor> run_device_operation(
         [&operation, &input_tensors, &optional_input_tensors](auto& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
 
-            auto do_profile = op_profiler::get_profiler_flag();
-            if (do_profile) {
-                detail::setup_profiler(operation, input_tensors, program);
+            if (!operation::skip_profile) {
+                auto do_profile = op_profiler::get_profiler_flag();
+                if (do_profile) {
+                    detail::setup_profiler(operation, input_tensors, program);
+                }
             }
 
             if (USE_FAST_DISPATCH) {
@@ -235,17 +242,22 @@ std::vector<Tensor> run_device_operation(
                     operation.get_type_name(),
                     elapsed_seconds);
 #endif
-                // Only need to dump device data when in dispatch mode
-                // LaunchKernel automatically dumps device data
-                op_profiler::dump_device_profiler_results(device, program);
+                if (!operation::skip_profile) {
+                    // Only need to dump device data when in dispatch mode
+                    // LaunchKernel automatically dumps device data
+                    op_profiler::dump_device_profiler_results(device, program);
+                } else {
+                    operation::skipped_programs.emplace(device->id(), std::ref(program));
+                }
             } else {
                 ::detail::LaunchProgram(device, program);
             }
         },
         program);
 
-    op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
-
+    if (!operation::skip_profile) {
+        op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
+    }
     return output_tensors;
 }
 }  // namespace detail

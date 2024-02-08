@@ -40,7 +40,7 @@ bool is_moreh_softmax_h_small_available(const Tensor &tensor) {
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
+operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
     auto shape = input.shape();
@@ -90,8 +90,12 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tenso
         program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) compute_defines["SOFTMAX"] = "1";
     else compute_defines["SOFTMIN"] = "1";
+
+    if (op == MorehSoftmaxOp::LOGSOFTMAX) {
+        compute_defines["LOG"] = "1";
+    }
 
     // create compute kernel
     CreateComputeKernel(
@@ -143,11 +147,10 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tenso
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
-        TT_ASSERT(input_buffers.size() == 1);
-        TT_ASSERT(output_buffers.size() == 1);
+        TT_ASSERT(input_buffers.size() == 2);
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_buffer = input_buffers.at(1);
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};

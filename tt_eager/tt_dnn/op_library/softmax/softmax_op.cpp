@@ -161,9 +161,12 @@ const operation::Hash Softmax::compute_program_hash(
     return operation::hash_operation<Softmax>(
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
+        input_tensors.at(0).device()->id(),
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
                                                  : std::nullopt,
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
+                                                 : std::nullopt,
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().device()->id()}
                                                  : std::nullopt,
         this->output_mem_config);
 }

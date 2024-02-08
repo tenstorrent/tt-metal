@@ -47,7 +47,7 @@ def run_test_FalconMLP_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -59,9 +59,7 @@ def run_test_FalconMLP_inference(
     base_url = "transformer.h"
 
     # PyTorch output --------------------------------------------------------------------
-    pytorch_FalconMLP_model = PytorchFalconMLPModel(
-        hugging_face_reference_model, layer_num
-    )
+    pytorch_FalconMLP_model = PytorchFalconMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
 
     # TT hardware execution -------------------------------------------------------------

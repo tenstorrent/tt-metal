@@ -24,25 +24,28 @@ enum class MorehSoftmaxOpParallelizationStrategy {
     LARGE_C = 5,
 };
 
-enum class MorehSoftmaxOp { SOFTMAX = 0, SOFTMIN = 1 };
+enum class MorehSoftmaxOp {
+    SOFTMAX = 0,
+    SOFTMIN = 1,
+    LOGSOFTMAX = 2,
+};
 
 bool is_moreh_softmax_w_small_available(const Tensor &tensor);
 bool is_moreh_softmax_h_small_available(const Tensor &tensor);
 
 operation::ProgramWithCallbacks moreh_softmax_w_small(
-    const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
 operation::ProgramWithCallbacks moreh_softmax_w_large(
-    const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
 operation::ProgramWithCallbacks moreh_softmax_h_small(
-    const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
 operation::ProgramWithCallbacks moreh_softmax_h_large(
-    const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
 operation::ProgramWithCallbacks moreh_softmax_c_large(
-    const Tensor &input, Tensor &output, uint32_t dim, const CoreRange core_range, const MorehSoftmaxOp op);
+    const Tensor &input, const Tensor &output, uint32_t dim, const CoreRange core_range, const MorehSoftmaxOp op);
 
 struct MorehSoftmax {
     const uint32_t dim;
-    const MemoryConfig output_mem_config;
     const CoreRange core_range;  // unused for now
     const MorehSoftmaxOp op;
     const MorehSoftmaxOpParallelizationStrategy strategy;
@@ -53,23 +56,30 @@ struct MorehSoftmax {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     MorehSoftmaxOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config");
+    static constexpr auto attribute_names = std::make_tuple("dim");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config));
+        return std::make_tuple(std::cref(this->dim));
     }
 };
 
 // const ref prevents
 Tensor moreh_softmax(
     const Tensor &input_tensor,
+    const Tensor &output_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE);
+
 Tensor moreh_softmin(
     const Tensor &input_tensor,
+    const Tensor &output_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE);
+
+Tensor moreh_logsoftmax(
+    const Tensor &input_tensor,
+    const Tensor &output_tensor,
+    uint32_t dim,
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE);
 
 }  // namespace primary
 }  // namespace operations

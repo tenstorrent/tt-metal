@@ -248,11 +248,10 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 if (program_config.inplace) {
                     TT_FATAL(a.dtype() == program_config.out_data_format);
                     TT_FATAL(this->output_mem_config.is_sharded());
-                    TT_FATAL(a.memory_config() == this->output_mem_config);
-                } else {
-                    TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type);
-                    TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout);
                 }
+                TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type);
+                TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout);
+
                 // tensor shape
                 const auto shape = a.shape();
                 uint32_t M = a.volume() / shape[-1];

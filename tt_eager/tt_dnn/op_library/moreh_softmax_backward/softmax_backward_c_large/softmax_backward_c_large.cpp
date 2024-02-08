@@ -18,7 +18,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, uint32_t dim, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
+operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, uint32_t dim, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
     log_info(LogTest, "Large tensor algorithm selected");
 
     // split work
@@ -67,6 +67,16 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
 
+    std::map<string, string> compute_defines;
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
+    else compute_defines["SOFTMIN"] = "1";
+
+    if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
+        compute_defines["LOG"] = 1;
+        reader_defines["LOG"] = 1;
+    }
+
+
     auto reader_kernel_id = CreateReadKernel(
         program, "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/reader_moreh_softmax_backward_c.cpp", all_cores, {y_is_dram, dy_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
@@ -83,10 +93,6 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
         inner_size = C * Wt * Ht;
         dim_size = N;
     }
-
-    std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
-    else compute_defines["SOFTMIN"] = "1";
 
     // create compute kernel
     CreateComputeKernel(
@@ -141,12 +147,11 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
-        TT_ASSERT(input_buffers.size() == 2);
-        TT_ASSERT(output_buffers.size() == 1);
+        TT_ASSERT(input_buffers.size() == 3);
 
         auto output_dram_buffer = input_buffers.at(0);
         auto output_grad_dram_buffer = input_buffers.at(1);
-        auto input_grad_dram_buffer = output_buffers.at(0);
+        auto input_grad_dram_buffer = input_buffers.at(2);
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};

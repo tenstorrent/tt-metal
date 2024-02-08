@@ -42,7 +42,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor) {
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
+operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
     auto shape = input_grad.shape();
@@ -98,6 +98,10 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
     else compute_defines["SOFTMIN"] = "1";
 
+    if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
+        compute_defines["LOG"] = 1;
+    }
+
     // create compute kernel
     CreateComputeKernel(
         program,
@@ -150,12 +154,11 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
-        TT_ASSERT(input_buffers.size() == 2);
-        TT_ASSERT(output_buffers.size() == 1);
+        TT_ASSERT(input_buffers.size() == 3);
 
         auto output_dram_buffer = input_buffers.at(0);
         auto output_grad_dram_buffer = input_buffers.at(1);
-        auto input_grad_dram_buffer = output_buffers.at(0);
+        auto input_grad_dram_buffer = input_buffers.at(2);
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};

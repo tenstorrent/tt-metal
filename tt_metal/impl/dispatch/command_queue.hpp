@@ -27,30 +27,6 @@ using std::weak_ptr;
 using std::tuple;
 using std::unique_ptr;
 
-struct transfer_info {
-    uint32_t size_in_bytes;
-    uint32_t dst;
-    uint32_t dst_noc_encoding;
-    uint32_t num_receivers;
-    bool last_transfer_in_group;
-    bool linked;
-};
-
-enum class PageTransferType { MULTICAST, UNICAST };
-
-struct ProgramMap {
-    uint32_t num_workers;
-    vector<uint32_t> program_pages;
-    std::unordered_map<PageTransferType, vector<transfer_info>> program_page_transfers;
-    std::unordered_map<PageTransferType, vector<transfer_info>> runtime_arg_page_transfers;
-    std::unordered_map<PageTransferType, vector<transfer_info>> cb_config_page_transfers;
-    std::unordered_map<PageTransferType, vector<transfer_info>> go_signal_page_transfers;
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_program_pages;
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_runtime_arg_pages;
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_cb_config_pages;
-    std::unordered_map<PageTransferType, vector<uint32_t>> num_transfers_in_go_signal_pages;
-};
-
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_RESTART, INVALID };
 
@@ -255,15 +231,13 @@ class EnqueueProgramCommand : public Command {
    private:
     uint32_t command_queue_id;
     Device* device;
-    Buffer& buffer;
-    ProgramMap& program_to_dev_map;
     const Program& program;
     SystemMemoryManager& manager;
     bool stall;
     std::optional<std::reference_wrapper<Trace>> trace = {};
 
    public:
-    EnqueueProgramCommand(uint32_t command_queue_id, Device*, Buffer&, ProgramMap&, SystemMemoryManager&, const Program& program, bool stall, std::optional<std::reference_wrapper<Trace>> trace);
+    EnqueueProgramCommand(uint32_t command_queue_id, Device* device, const Program& program, SystemMemoryManager& manager, bool stall, std::optional<std::reference_wrapper<Trace>> trace);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 

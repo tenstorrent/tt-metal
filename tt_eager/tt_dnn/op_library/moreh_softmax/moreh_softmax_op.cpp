@@ -19,7 +19,7 @@ namespace operations {
 namespace primary {
 
 void MorehSoftmax::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 1, "Must have 1 input tensors");
+    TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
     TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
     auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -29,20 +29,17 @@ void MorehSoftmax::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<Shape> MorehSoftmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {};
 }
 
 std::vector<Tensor> MorehSoftmax::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    return {};
 }
 
 operation::ProgramWithCallbacks MorehSoftmax::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     auto& input = input_tensors.at(0);
-    auto& output = output_tensors.at(0);
+    auto& output = input_tensors.at(1);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
@@ -121,44 +118,64 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
 
 Tensor moreh_softmax(
     const Tensor& input_tensor,
+    const Tensor& output_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy,
-    const MemoryConfig& output_mem_config) {
+    const MorehSoftmaxOpParallelizationStrategy strategy) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
-    return operation::run(
+    operation::run(
                MorehSoftmax{
                    .dim = dim,
-                   .output_mem_config = output_mem_config,
                    .core_range = all_cores,
                    .op = MorehSoftmaxOp::SOFTMAX,
                    .strategy = strategy},
-               {input_tensor},
-               {})
-        .at(0);
+               {input_tensor, output_tensor},
+               {});
+
+    return output_tensor;
 }
 
 Tensor moreh_softmin(
     const Tensor& input_tensor,
+    const Tensor& output_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy,
-    const MemoryConfig& output_mem_config) {
+    const MorehSoftmaxOpParallelizationStrategy strategy) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
 
-    return operation::run(
+    operation::run(
                MorehSoftmax{
                    .dim = dim,
-                   .output_mem_config = output_mem_config,
                    .core_range = all_cores,
                    .op = MorehSoftmaxOp::SOFTMIN,
                    .strategy = strategy},
-               {input_tensor},
-               {})
-        .at(0);
+               {input_tensor, output_tensor},
+               {});
+    return output_tensor;
+}
+
+Tensor moreh_logsoftmax(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    uint32_t dim,
+    const MorehSoftmaxOpParallelizationStrategy strategy) {
+    auto device = input_tensor.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y - 1}};
+
+    operation::run(
+        MorehSoftmax{
+            .dim = dim,
+            .core_range = all_cores,
+            .op = MorehSoftmaxOp::LOGSOFTMAX,
+            .strategy = strategy},
+        {input_tensor, output_tensor},
+        {});
+
+    return output_tensor;
 }
 
 }  // namespace primary

@@ -65,6 +65,15 @@ void DeviceModule(py::module &m_device) {
         | device_id        | Device index           | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc");
+    m_device.def("CreateDevices", [](std::vector<int> device_ids) { return tt::tt_metal::detail::CreateDevices(device_ids); }, R"doc(
+        Creates an instance of TT device.
+
+        +------------------+------------------------+---------------------+------------------------------+----------+
+        | Argument         | Description            | Data type           | Valid range                  | Required |
+        +==================+========================+=====================+==============================+==========+
+        | device_id        | Device index           | int                 |                              | Yes      |
+        +------------------+------------------------+---------------------+------------------------------+----------+
+    )doc");
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -73,6 +82,23 @@ void DeviceModule(py::module &m_device) {
         +==================+========================+=======================+=============+==========+
         | device           | TT Device to close     | tt_lib.device.Device  |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
+    m_device.def("CloseDevices", &tt::tt_metal::detail::CloseDevices, R"doc(
+        Reset an instance of TT accelerator device to default state and relinquish connection to device.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | TT Device to close     | tt_lib.device.Device  |             | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_device.def("GetNumAvailableDevices", &GetNumAvailableDevices, R"doc(
+        Returns number of Tenstorrent devices that can be targeted.
+    )doc");
+
+    m_device.def("GetNumPCIeDevices", &GetNumPCIeDevices, R"doc(
+        Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted.
     )doc");
 
     m_device.def("SetDefaultDevice", &AutoFormat::SetDefaultDevice, R"doc(
@@ -132,9 +158,6 @@ void DeviceModule(py::module &m_device) {
     )doc");
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
-    )doc");
-    m_device.def("ClearCommandQueueProgramCache", &detail::ClearCommandQueueProgramCache, R"doc(
-        Deallocate the program cache saved by the command queue
     )doc");
 }
 

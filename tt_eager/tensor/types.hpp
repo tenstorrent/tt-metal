@@ -324,11 +324,6 @@ inline bool operator==(const Storage& v1, const Storage& v2) {
     }, v1, v2);
 };
 
-
-bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
-bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);
-
-
 }  // namespace tt_metal
 
 }  // namespace tt

@@ -55,7 +55,7 @@ def run_test_FalconAttention_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -78,9 +78,7 @@ def run_test_FalconAttention_inference(
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
         attention_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
-        attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(
-            diagonal=1
-        )
+        attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(diagonal=1)
         layer_past = None
 
         tt_attention_input = torch2tt_tensor(attention_input.unsqueeze(1), device)
@@ -107,9 +105,7 @@ def run_test_FalconAttention_inference(
         v_cache = torch.rand(batch, kv_cache_len, head_dim)
         layer_past = (k_cache, v_cache)
 
-        tt_attention_input = torch2tt_tensor(
-            attention_input.unsqueeze(1).transpose(0, 2), device
-        )
+        tt_attention_input = torch2tt_tensor(attention_input.unsqueeze(1).transpose(0, 2), device)
 
         kv_len_padded = (kv_len + 31) // 32 * 32
         attention_mask_bool_padded = torch.cat(
@@ -138,14 +134,10 @@ def run_test_FalconAttention_inference(
         tt_layer_past = (tt_k_cache, tt_v_cache)
 
     else:
-        raise NotImplementedError(
-            f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
-        )
+        raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
     # PyTorch output --------------------------------------------------------------------
-    pytorch_FalconAttention_model = PytorchFalconAttentionModel(
-        hugging_face_reference_model, layer_num
-    )
+    pytorch_FalconAttention_model = PytorchFalconAttentionModel(hugging_face_reference_model, layer_num)
     pytorch_out, pytorch_layer_present = pytorch_FalconAttention_model(
         attention_input,
         alibi=None,
@@ -197,16 +189,12 @@ def run_test_FalconAttention_inference(
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output: {output_pcc}")
 
-    does_pass2, output_pcc = comp_pcc(
-        pytorch_layer_present[0], tt_layer_present[0], pcc
-    )
+    does_pass2, output_pcc = comp_pcc(pytorch_layer_present[0], tt_layer_present[0], pcc)
     logger.info(f"K Cache: {output_pcc}")
 
     does_pass = does_pass and does_pass2
 
-    does_pass2, output_pcc = comp_pcc(
-        pytorch_layer_present[1], tt_layer_present[1], pcc
-    )
+    does_pass2, output_pcc = comp_pcc(pytorch_layer_present[1], tt_layer_present[1], pcc)
     logger.info(f"V Cache: {output_pcc}")
 
     does_pass = does_pass and does_pass2

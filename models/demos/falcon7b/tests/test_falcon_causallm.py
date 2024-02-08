@@ -57,7 +57,7 @@ def run_test_FalconCausalLM_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
+    model_name = model_location_generator(model_version, model_subdir="Falcon", low_cpu_mem_usage=True)
 
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
 
