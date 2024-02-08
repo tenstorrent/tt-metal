@@ -11,7 +11,6 @@ from loguru import logger
 import torch.nn.functional as F
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -53,7 +52,6 @@ def test_logsoftmax_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -94,7 +92,6 @@ def test_logsoftmax_large_algorithm_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -142,7 +139,6 @@ def test_logsoftmax_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -186,7 +182,6 @@ def test_logsoftmax_for_dim_nc(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -237,7 +232,6 @@ def test_logsoftmax_backward_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -287,7 +281,6 @@ def test_logsoftmax_backward_large_algorithm_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
@@ -350,7 +343,6 @@ def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert passing
 
 
-@pytest.mark.skip("Some of MOREH Softmax tests are failing from d5811b7edb55a1e7704b3860934554f3949d8dd7 on 02/07/24")
 @pytest.mark.parametrize(
     "shape_dim",
     (
