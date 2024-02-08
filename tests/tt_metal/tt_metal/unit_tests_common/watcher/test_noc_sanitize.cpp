@@ -122,7 +122,8 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
         GTEST_SKIP();
 
     CheckHostSanitization(this->devices_[0]);
-    for (Device* device : this->devices_) {
-        this->RunTestOnDevice(RunTest, device);
-    }
+
+    // Only run the main test on device 0, because it brings the watcher server down and we don't
+    // have a way to recover fromt hat between runs here.
+    this->RunTestOnDevice(RunTest, this->devices_[0]);
 }
