@@ -5,13 +5,15 @@
 import torch
 import pytest
 from loguru import logger
+import time
 
 import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
+from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
+    # get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -48,14 +50,21 @@ def run_test_LlamaMLP_inference(
     ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
 
-    hugging_face_reference_model = Llama.build(ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1).model
+    hugging_face_reference_model = Llama.build(
+        ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=True
+    ).model
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.params
     state_dict = hugging_face_reference_model.state_dict()
 
     # Prepare input
     torch.manual_seed(0)
-    mlp_input = (torch.rand(batch, 1, seq_len, configuration.dim) * 2) - 1
+    if seq_len == 1:
+        input_shape = [seq_len, 1, batch, configuration.dim]
+    else:
+        input_shape = [batch, 1, seq_len, configuration.dim]
+
+    mlp_input = (torch.rand(input_shape) * 2) - 1
     layer_num = 0
 
     print(state_dict.keys())
@@ -64,21 +73,46 @@ def run_test_LlamaMLP_inference(
     # PyTorch output --------------------------------------------------------------------
     pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_LlamaMLP_model(mlp_input)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    print(f"Compute grid size: {compute_grid_size}")
+    print(f"Compute grid size x: {compute_grid_size.x}")
+    print(f"Compute grid size y: {compute_grid_size.y}")
 
-    # TT hardware execution -------------------------------------------------------------
-    tt_LlamaMLP_model = TtLlamaMLP(
-        device,
-        state_dict,
-        base_url,
-        layer_num,
-        configuration.dim,
-        model_config,
-        tt_cache_path=None,
-    )
+    mlp_optimized = True
+    if mlp_optimized:
+        # TT hardware execution -------------------------------------------------------------
+        tt_LlamaMLP_model = TtLlamaMLP_optimized(
+            device,
+            state_dict,
+            base_url,
+            layer_num,
+            configuration.dim,
+            model_config,
+            tt_cache_path=None,
+        )
+        # Put input sharded in L1
+        tt_mlp_input = torch2tt_tensor(
+            mlp_input,
+            device,
+            tt_memory_config=model_config["LN_MLP_OUTPUT_MEMCFG"],
+            tt_dtype=model_config["LN_MLP_OUTPUT_DTYPE"],
+        )
+    else:
+        # TT hardware execution -------------------------------------------------------------
+        tt_LlamaMLP_model = TtLlamaMLP(
+            device,
+            state_dict,
+            base_url,
+            layer_num,
+            configuration.dim,
+            model_config,
+            tt_cache_path=None,
+        )
+        tt_mlp_input = torch2tt_tensor(mlp_input, device)
 
-    tt_mlp_input = torch2tt_tensor(mlp_input, device)
-
+    start = time.time()
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
+    print(f"Time taken for inference: {time.time() - start:.2f} seconds, using MLP optimized: {mlp_optimized}")
     tt_out = tt2torch_tensor(tt_out)
 
     # check outputs ----------------------------------------------------------------------
@@ -100,13 +134,13 @@ def run_test_LlamaMLP_inference(
     (
         (
             "llama-2-70B",
+            32,
             1,
-            128,
-            0.98,
+            0.96,
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED", "BFLOAT8_B-SHARDED"))
 def test_LlamaMLP_inference(
     model_version,
     batch,
