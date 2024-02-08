@@ -69,5 +69,7 @@ enum SfpuType {
     topk_local_sort,
     topk_merge,
     topk_rebuild,
+    to_uint16,
+    to_uint32,
     unused,
 };
