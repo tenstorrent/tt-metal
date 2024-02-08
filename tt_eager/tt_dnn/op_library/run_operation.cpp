@@ -95,6 +95,10 @@ void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>&
     op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
 }
 
+void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>& input_tensors, std::shared_ptr<const Program> program) {
+    setup_profiler(operation, input_tensors, *program);
+}
+
 template <typename OperationType>
 constexpr op_profiler::OpType get_profiler_operation_type() {
     if constexpr (std::is_same_v<OperationType, HostOperation>) {
@@ -220,7 +224,7 @@ std::vector<Tensor> run_device_operation(
         [&operation, &input_tensors, &optional_input_tensors](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
             using T = std::decay_t<decltype(program)>;
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
+            if constexpr (std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>> ) {
                 if (!operation::skip_profile) {
                     auto do_profile = op_profiler::get_profiler_flag();
                     if (do_profile) {
@@ -247,7 +251,12 @@ std::vector<Tensor> run_device_operation(
                         // LaunchKernel automatically dumps device data
                         op_profiler::dump_device_profiler_results(device, program);
                     } else {
-                        operation::skipped_programs.emplace(device->id(), std::ref(program));
+                        if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
+                            operation::skipped_programs.emplace(device->id(), *program);
+                        }
+                        else if constexpr( std::is_same_v<T, std::reference_wrapper<Program>> ){
+                            operation::skipped_programs.emplace(device->id(), program );
+                        }
                     }
                 } else {
                     ::detail::LaunchProgram(device, program);
