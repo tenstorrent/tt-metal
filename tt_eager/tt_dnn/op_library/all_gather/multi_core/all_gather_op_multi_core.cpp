@@ -18,7 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t ring_size, const uint32_t ring_index, const chip_id_t receiver_device_id, const chip_id_t sender_device_id) {
+operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const chip_id_t receiver_device_id, const chip_id_t sender_device_id) {
 
     constexpr uint32_t header_size = 32;
     constexpr uint32_t semaphore_offset = 32;
@@ -29,6 +29,8 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
 
     tt_metal::Program program{};
 
+    const uint32_t max_buffer_per_chunk = round_down(MAX_BUFFER, input_tensor.buffer()->page_size());
+    const uint32_t max_pages_per_chunk = max_buffer_per_chunk / input_tensor.buffer()->page_size();
     const auto& device = input_tensor.device();
     uint32_t sender_socket_idx = 0;
     uint32_t receiver_socket_idx = 0;
@@ -39,18 +41,21 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
             sender_socket_idx = 1;
         }
     }
-    auto eth_sender_core = device->get_ethernet_sockets(receiver_device_id)[sender_socket_idx];
-    auto eth_receiver_core = device->get_ethernet_sockets(sender_device_id)[receiver_socket_idx];
-    uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_bytes = 0, rem_pages = 0;
-    if (input_tensor.buffer()->size() > MAX_BUFFER) {
-        bytes_per_chunk = round_down(MAX_BUFFER, input_tensor.buffer()->page_size());
-        pages_per_chunk = bytes_per_chunk / input_tensor.buffer()->page_size();
-        num_full_chunks = input_tensor.buffer()->size() / bytes_per_chunk;
-        rem_bytes = input_tensor.buffer()->size() % bytes_per_chunk;
-        rem_pages = rem_bytes / input_tensor.buffer()->page_size();
-    } else {
-        rem_bytes = input_tensor.buffer()->size();
-        rem_pages = rem_bytes / input_tensor.buffer()->page_size();
+    std::vector<CoreCoord> eth_sender_cores;
+    eth_sender_cores.reserve(num_links);
+    std::vector<CoreCoord> eth_receiver_cores;
+    eth_receiver_cores.reserve(num_links);
+    std::vector<KernelHandle> eth_sender_kernels;
+    eth_sender_kernels.reserve(num_links);
+    std::vector<KernelHandle> eth_receiver_kernels;
+    eth_receiver_kernels.reserve(num_links);
+
+    uint32_t num_input_pages = input_tensor.buffer()->size() / input_tensor.buffer()->page_size();
+    uint32_t min_pages_per_link = num_input_pages / num_links;
+
+    std::vector<uint32_t> pages_per_link(num_links, min_pages_per_link);
+    for (uint32_t i = 0; i < num_input_pages % min_pages_per_link; ++i) {
+        pages_per_link[i]++;
     }
 
     bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
@@ -81,172 +86,211 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
     bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
     bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
-    uint32_t page_idx = 0;
-    uint32_t page_offset = 0;
+    uint32_t input_page_idx = 0;
+    uint32_t output_page_idx = 0;
+    uint32_t output_page_offset = 0;
+    uint32_t col_idx = 0;
+    uint32_t row_idx = 0;
 
     if (rm) {
         if (width) {
-            page_offset = ring_index * input_buffer->page_size();
+            output_page_offset = ring_index * input_buffer->page_size();
         } else {
-            page_idx = ring_index * num_rows;
+            output_page_idx = ring_index * num_rows;
         }
     } else {
         if (width) {
-            page_idx = ring_index * num_cols;
+            output_page_idx = ring_index * num_cols;
         } else {
-            page_idx = ring_index * num_tiles;
+            output_page_idx = ring_index * num_tiles;
         }
     }
 
-    string sender_kernel, receiver_kernel;
-    std::vector<uint32_t> sender_ct_args, sender_rt_args, receiver_ct_args, receiver_rt_args;
-    if (rm) {
-        sender_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_send_stick_layout.cpp";
-        sender_ct_args = {
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).x),
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).y),
-            static_cast<uint32_t>(input_is_dram),
-            static_cast<uint32_t>(output_is_dram),
-            static_cast<uint32_t>(ring_size - 1),
-            static_cast<uint32_t>(num_full_chunks),
-            static_cast<uint32_t>(input_buffer->page_size()),
-            static_cast<uint32_t>(pages_per_chunk),
-            static_cast<uint32_t>(bytes_per_chunk + header_size),
-            static_cast<uint32_t>(rem_pages),
-            static_cast<uint32_t>(rem_bytes + header_size),
-            static_cast<uint32_t>(page_idx),
-            static_cast<uint32_t>(page_offset),
-            static_cast<uint32_t>(output_buffer->page_size()),
-            static_cast<uint32_t>(row_offset),
-            static_cast<uint32_t>(num_rows)};
-        sender_rt_args = {static_cast<uint32_t>(input_buffer->address()),
-            static_cast<uint32_t>(output_buffer->address()),
-            static_cast<uint32_t>(src_eth_l1_byte_address),
-            static_cast<uint32_t>(dst_eth_l1_byte_address),
-            static_cast<uint32_t>(sem_l1_byte_address)
+    for (uint32_t i = 0; i < num_links; ++i) {
+        auto eth_sender_core = device->get_ethernet_sockets(receiver_device_id)[sender_socket_idx];
+        eth_sender_cores.push_back(eth_sender_core);
+        auto eth_receiver_core = device->get_ethernet_sockets(sender_device_id)[receiver_socket_idx];
+        eth_receiver_cores.push_back(eth_receiver_core);
+
+        // TODO: Sempahore support for eth cores
+        // llrt::write_hex_vec_to_core(
+        //     device->id(), device->ethernet_core_from_logical_core(eth_sender_core), {INVALID}, sem_l1_byte_address);
+        // llrt::write_hex_vec_to_core(
+        //     device->id(), device->ethernet_core_from_logical_core(eth_receiver_core), {INVALID}, sem_l1_byte_address);
+
+        uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_bytes = 0, rem_pages = 0;
+        uint32_t buffer_size = pages_per_link[i] * input_tensor.buffer()->page_size();
+        if (pages_per_link[i] > max_pages_per_chunk) {
+            bytes_per_chunk = max_buffer_per_chunk;
+            pages_per_chunk = max_pages_per_chunk;
+            num_full_chunks = buffer_size / bytes_per_chunk;
+            rem_bytes = buffer_size % bytes_per_chunk;
+            rem_pages = pages_per_link[i] % max_pages_per_chunk;
+        } else {
+            rem_bytes = buffer_size;
+            rem_pages = pages_per_link[i];
+        }
+
+        string sender_kernel, receiver_kernel;
+        std::vector<uint32_t> sender_ct_args, sender_rt_args, receiver_ct_args, receiver_rt_args;
+        if (rm) {
+            sender_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_send_stick_layout.cpp";
+            sender_ct_args = {
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).x),
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).y),
+                static_cast<uint32_t>(input_is_dram),
+                static_cast<uint32_t>(output_is_dram),
+                static_cast<uint32_t>(ring_size - 1),
+                static_cast<uint32_t>(num_full_chunks),
+                static_cast<uint32_t>(input_buffer->page_size()),
+                static_cast<uint32_t>(pages_per_chunk),
+                static_cast<uint32_t>(bytes_per_chunk + header_size),
+                static_cast<uint32_t>(rem_pages),
+                static_cast<uint32_t>(rem_bytes + header_size),
+                static_cast<uint32_t>(input_page_idx),
+                static_cast<uint32_t>(output_page_idx),
+                static_cast<uint32_t>(row_idx),
+                static_cast<uint32_t>(output_page_offset),
+                static_cast<uint32_t>(output_buffer->page_size()),
+                static_cast<uint32_t>(row_offset),
+                static_cast<uint32_t>(num_rows)};
+            sender_rt_args = {static_cast<uint32_t>(input_buffer->address()),
+                static_cast<uint32_t>(output_buffer->address()),
+                static_cast<uint32_t>(src_eth_l1_byte_address),
+                static_cast<uint32_t>(dst_eth_l1_byte_address),
+                static_cast<uint32_t>(sem_l1_byte_address)
+                };
+
+            receiver_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_receive_stick_layout.cpp";
+            receiver_ct_args = {
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
+                static_cast<uint32_t>(output_is_dram),
+                static_cast<uint32_t>(ring_size - 1),
+                static_cast<uint32_t>(num_full_chunks),
+                static_cast<uint32_t>(input_buffer->page_size()),
+                static_cast<uint32_t>(pages_per_chunk),
+                static_cast<uint32_t>(bytes_per_chunk + header_size),
+                static_cast<uint32_t>(rem_pages),
+                static_cast<uint32_t>(rem_bytes + header_size),
+                static_cast<uint32_t>(output_buffer->page_size()),
+                static_cast<uint32_t>(row_offset),
+                static_cast<uint32_t>(num_rows)};
+            receiver_rt_args = {
+                static_cast<uint32_t>(output_buffer->address()),
+                static_cast<uint32_t>(src_eth_l1_byte_address),
+                static_cast<uint32_t>(dst_eth_l1_byte_address),
+                static_cast<uint32_t>(sem_l1_byte_address)
+
             };
+        } else {
+            sender_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_send.cpp";
+            sender_ct_args = {
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).x),
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).y),
+                static_cast<uint32_t>(input_is_dram),
+                static_cast<uint32_t>(output_is_dram),
+                static_cast<uint32_t>(df),
+                static_cast<uint32_t>(ring_size - 1),
+                static_cast<uint32_t>(num_full_chunks),
+                static_cast<uint32_t>(input_buffer->page_size()),
+                static_cast<uint32_t>(pages_per_chunk),
+                static_cast<uint32_t>(bytes_per_chunk + header_size),
+                static_cast<uint32_t>(rem_pages),
+                static_cast<uint32_t>(rem_bytes + header_size),
+                static_cast<uint32_t>(input_page_idx),
+                static_cast<uint32_t>(output_page_idx),
+                static_cast<uint32_t>(row_idx),
+                static_cast<uint32_t>(col_idx),
+                static_cast<uint32_t>(row_offset),
+                static_cast<uint32_t>(col_offset),
+                static_cast<uint32_t>(num_rows),
+                static_cast<uint32_t>(num_cols)};
+            sender_rt_args = {static_cast<uint32_t>(input_buffer->address()),
+                static_cast<uint32_t>(output_buffer->address()),
+                static_cast<uint32_t>(src_eth_l1_byte_address),
+                static_cast<uint32_t>(dst_eth_l1_byte_address),
+                static_cast<uint32_t>(sem_l1_byte_address)
+                };
 
-        receiver_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_receive_stick_layout.cpp";
-        receiver_ct_args = {
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
-            static_cast<uint32_t>(output_is_dram),
-            static_cast<uint32_t>(ring_size - 1),
-            static_cast<uint32_t>(num_full_chunks),
-            static_cast<uint32_t>(input_buffer->page_size()),
-            static_cast<uint32_t>(pages_per_chunk),
-            static_cast<uint32_t>(bytes_per_chunk + header_size),
-            static_cast<uint32_t>(rem_pages),
-            static_cast<uint32_t>(rem_bytes + header_size),
-            static_cast<uint32_t>(output_buffer->page_size()),
-            static_cast<uint32_t>(row_offset),
-            static_cast<uint32_t>(num_rows)};
-        receiver_rt_args = {
-            static_cast<uint32_t>(output_buffer->address()),
-            static_cast<uint32_t>(src_eth_l1_byte_address),
-            static_cast<uint32_t>(dst_eth_l1_byte_address),
-            static_cast<uint32_t>(sem_l1_byte_address)
-
-        };
-    } else {
-        sender_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_send.cpp";
-        sender_ct_args = {
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).x),
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).y),
-            static_cast<uint32_t>(input_is_dram),
-            static_cast<uint32_t>(output_is_dram),
-            static_cast<uint32_t>(df),
-            static_cast<uint32_t>(ring_size - 1),
-            static_cast<uint32_t>(num_full_chunks),
-            static_cast<uint32_t>(input_buffer->page_size()),
-            static_cast<uint32_t>(pages_per_chunk),
-            static_cast<uint32_t>(bytes_per_chunk + header_size),
-            static_cast<uint32_t>(rem_pages),
-            static_cast<uint32_t>(rem_bytes + header_size),
-            static_cast<uint32_t>(page_idx),
-            static_cast<uint32_t>(row_offset),
-            static_cast<uint32_t>(col_offset),
-            static_cast<uint32_t>(num_rows),
-            static_cast<uint32_t>(num_cols)};
-        sender_rt_args = {static_cast<uint32_t>(input_buffer->address()),
-            static_cast<uint32_t>(output_buffer->address()),
-            static_cast<uint32_t>(src_eth_l1_byte_address),
-            static_cast<uint32_t>(dst_eth_l1_byte_address),
-            static_cast<uint32_t>(sem_l1_byte_address)
+            receiver_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_receive.cpp";
+            receiver_ct_args = {
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
+                static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
+                static_cast<uint32_t>(output_is_dram),
+                static_cast<uint32_t>(df),
+                static_cast<uint32_t>(ring_size - 1),
+                static_cast<uint32_t>(num_full_chunks),
+                static_cast<uint32_t>(input_buffer->page_size()),
+                static_cast<uint32_t>(pages_per_chunk),
+                static_cast<uint32_t>(bytes_per_chunk + header_size),
+                static_cast<uint32_t>(rem_pages),
+                static_cast<uint32_t>(rem_bytes + header_size),
+                static_cast<uint32_t>(row_offset),
+                static_cast<uint32_t>(col_offset),
+                static_cast<uint32_t>(num_rows),
+                static_cast<uint32_t>(num_cols)};
+            receiver_rt_args = {
+                static_cast<uint32_t>(output_buffer->address()),
+                static_cast<uint32_t>(src_eth_l1_byte_address),
+                static_cast<uint32_t>(dst_eth_l1_byte_address),
+                static_cast<uint32_t>(sem_l1_byte_address)
             };
-
-        receiver_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/interleaved_eth_ring_gather_receive.cpp";
-        receiver_ct_args = {
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
-            static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
-            static_cast<uint32_t>(output_is_dram),
-            static_cast<uint32_t>(df),
-            static_cast<uint32_t>(ring_size - 1),
-            static_cast<uint32_t>(num_full_chunks),
-            static_cast<uint32_t>(input_buffer->page_size()),
-            static_cast<uint32_t>(pages_per_chunk),
-            static_cast<uint32_t>(bytes_per_chunk + header_size),
-            static_cast<uint32_t>(rem_pages),
-            static_cast<uint32_t>(rem_bytes + header_size),
-            static_cast<uint32_t>(row_offset),
-            static_cast<uint32_t>(col_offset),
-            static_cast<uint32_t>(num_rows),
-            static_cast<uint32_t>(num_cols)};
-        receiver_rt_args = {
-            static_cast<uint32_t>(output_buffer->address()),
-            static_cast<uint32_t>(src_eth_l1_byte_address),
-            static_cast<uint32_t>(dst_eth_l1_byte_address),
-            static_cast<uint32_t>(sem_l1_byte_address)
-        };
-    }
-    auto eth_sender_kernel = tt_metal::CreateKernel(
-        program,
-        sender_kernel,
-        eth_sender_core,
-        tt_metal::experimental::SenderEthernetConfig{
-            .compile_args = sender_ct_args});
-
-
-    tt_metal::SetRuntimeArgs(
-        program,
-        eth_sender_kernel,
-        eth_sender_core,
-        sender_rt_args);
-
-    // TODO: Sempahore support for eth cores. These commands are only for SD
-    // llrt::write_hex_vec_to_core(
-    //     device->id(), device->ethernet_core_from_logical_core(eth_sender_core), {INVALID}, sem_l1_byte_address);
-    // llrt::write_hex_vec_to_core(
-    //     device->id(), device->ethernet_core_from_logical_core(eth_receiver_core), {INVALID}, sem_l1_byte_address);
-
-    auto eth_receiver_kernel = tt_metal::CreateKernel(
-        program,
-        receiver_kernel,
-        eth_receiver_core,
-        tt_metal::experimental::ReceiverEthernetConfig{
-            .compile_args = receiver_ct_args});
-
-    tt_metal::SetRuntimeArgs(
-        program,
-        eth_receiver_kernel,
-        eth_receiver_core,
-        receiver_rt_args);
-
-    if (rm) {
-        if (width) {
-            page_offset += input_buffer->page_size();
-        } else {
-            page_idx += input_buffer->size() / input_buffer->page_size();
         }
-    } else {
-        if (width) {
-            page_idx += num_cols;
+        auto eth_sender_kernel = tt_metal::CreateKernel(
+            program,
+            sender_kernel,
+            eth_sender_core,
+            tt_metal::experimental::SenderEthernetConfig{
+                .compile_args = sender_ct_args});
+
+        eth_sender_kernels.push_back(eth_sender_kernel);
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            eth_sender_kernel,
+            eth_sender_core,
+            sender_rt_args);
+
+        auto eth_receiver_kernel = tt_metal::CreateKernel(
+            program,
+            receiver_kernel,
+            eth_receiver_core,
+            tt_metal::experimental::ReceiverEthernetConfig{
+                .compile_args = receiver_ct_args});
+
+        eth_receiver_kernels.push_back(eth_receiver_kernel);
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            eth_receiver_kernel,
+            eth_receiver_core,
+            receiver_rt_args);
+
+        if (rm) {
+            uint32_t num_rows_shifted = row_idx + pages_per_link[i];
+            uint32_t num_blocks_shifted = width ? 0 : num_rows_shifted / num_rows;
+            output_page_idx += pages_per_link[i] + num_blocks_shifted * row_offset;
+            row_idx = width ? 0 : num_rows_shifted % num_rows;
         } else {
-            page_idx += num_tiles;
+            uint32_t num_cols_shifted = col_idx + pages_per_link[i];
+            uint32_t num_rows_shifted = num_cols_shifted / num_cols;
+            uint32_t num_blocks_shifted = width ? 0 : num_rows_shifted / num_rows;
+            output_page_idx += pages_per_link[i] + num_rows_shifted * col_offset + num_blocks_shifted * row_offset;
+            col_idx = num_cols_shifted % num_cols;
+            row_idx = width ? 0 : num_rows_shifted % num_rows;
+        }
+        input_page_idx += pages_per_link[i];
+        if (receiver_device_id == sender_device_id) {
+            receiver_socket_idx += 2;
+            sender_socket_idx += 2;
+        } else {
+            receiver_socket_idx += 1;
+            sender_socket_idx += 1;
         }
     }
 
-    auto override_runtime_arguments_callback = [eth_sender_kernel, eth_receiver_kernel, eth_sender_core, eth_receiver_core, sem_l1_byte_address] (
+    auto override_runtime_arguments_callback = [num_links, eth_sender_kernels, eth_receiver_kernels, eth_sender_cores, eth_receiver_cores, sem_l1_byte_address] (
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,
@@ -255,13 +299,14 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
     ) {
         const auto& input = input_tensors[0];
         const auto& output = output_tensors[0];
-        auto &sender_runtime_args = GetRuntimeArgs(program, eth_sender_kernel, eth_sender_core);
-        sender_runtime_args[0] = input.buffer()->address();
-        sender_runtime_args[1] = output.buffer()->address();
+        for (uint32_t i = 0; i < num_links; ++i) {
+            auto &sender_runtime_args = GetRuntimeArgs(program, eth_sender_kernels[i], eth_sender_cores[i]);
+            sender_runtime_args[0] = input.buffer()->address();
+            sender_runtime_args[1] = output.buffer()->address();
 
-        auto &receiver_runtime_args = GetRuntimeArgs(program, eth_receiver_kernel, eth_receiver_core);
-        receiver_runtime_args[0] = output.buffer()->address();
-        auto device = input.device();
+            auto &receiver_runtime_args = GetRuntimeArgs(program, eth_receiver_kernels[i], eth_receiver_cores[i]);
+            receiver_runtime_args[0] = output.buffer()->address();
+        }
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

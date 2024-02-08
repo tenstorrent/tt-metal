@@ -121,6 +121,7 @@ def get_model_config(model_config_str):
         "MOVE_DECODER_OUTPUT_BOOL": False,
         "NUM_DEVICES": 4,
         "MAX_GRID_SIZE": (8, 4),
+        "ALL_GATHER_NUM_LINKS": 2,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon40b/datasets/"),
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
