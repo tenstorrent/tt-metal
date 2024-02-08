@@ -506,18 +506,18 @@ TEST_F(CommandQueueFixture, TestNonblockingReads) {
 
     Buffer bufa(device_, 2048, 2048, buff_type);
     auto src_a = local_test_functions::generate_arange_vector(bufa.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, src_a, false);
+    EnqueueWriteBuffer(*this->cmd_queue, bufa, src_a, false);
 
     Buffer bufb(device_, 2048, 2048, buff_type);
     auto src_b = local_test_functions::generate_arange_vector(bufb.size());
-    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, src_b, false);
+    EnqueueWriteBuffer(*this->cmd_queue, bufb, src_b, false);
 
     vector<uint32_t> result_a;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, result_a, false);
+    EnqueueReadBuffer(*this->cmd_queue, bufa, result_a, false);
 
     vector<uint32_t> result_b;
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, result_b, false);
-    Finish(tt::tt_metal::detail::GetCommandQueue(device_));
+    EnqueueReadBuffer(*this->cmd_queue, bufb, result_b, false);
+    Finish(*this->cmd_queue);
 
     EXPECT_EQ(src_a, result_a);
     EXPECT_EQ(src_b, result_b);
@@ -531,7 +531,7 @@ TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(this->device_, *this->cmd_queue, config));
 }
 
 TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {

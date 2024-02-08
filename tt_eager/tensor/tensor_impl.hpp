@@ -416,29 +416,29 @@ DeviceBuffer allocate_buffer_on_device(
 );
 
 template <typename T>
-inline void read_data_from_device_buffer(const Tensor& tensor, void* host_buffer_data, bool blocking) {
-    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(tensor.device(), false), *tensor.buffer(), host_buffer_data, blocking);
+inline void read_data_from_device_buffer(CommandQueue &cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
+    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-inline void read_data_from_device_buffer_slow_dispatch(const Tensor& tensor, vector<T>& host_buffer) {
+inline void read_data_from_device_buffer(DeviceBuffer device_buffer, vector<T>& host_buffer) {
     std::vector<uint32_t> host_buffer_uint32;
-    ::detail::ReadFromBuffer(*tensor.buffer(), host_buffer_uint32);
+    ::detail::ReadFromBuffer(device_buffer, host_buffer_uint32);
     host_buffer = unpack_uint32_vec<T>(host_buffer_uint32);
 }
 
 template <typename T, template <typename> typename BufferType>
-inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, DeviceBuffer device_buffer) {
+inline void write_data_to_device_buffer(CommandQueue & cq, const BufferType<T>& host_buffer, DeviceBuffer device_buffer) {
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
-    EnqueueWriteBuffer( device_buffer.device()->command_queue(), device_buffer, host_buffer.data(), false);
+    EnqueueWriteBuffer( cq, device_buffer, host_buffer.data(), false);
 
 }
 
 template <typename T, template <typename> typename BufferType>
-inline void write_data_to_device_buffer_slow_dispatch(const BufferType<T>& host_buffer, Buffer& device_buffer) {
+inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& device_buffer) {
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
@@ -457,9 +457,9 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        write_data_to_device_buffer<T>(data_to_write, *device_buffer);
+        write_data_to_device_buffer<T>(device->command_queue(), data_to_write, device_buffer);
     } else {
-        write_data_to_device_buffer_slow_dispatch<T>(data_to_write, *device_buffer);
+        write_data_to_device_buffer<T>(data_to_write, *device_buffer);
     }
 
     return device_buffer;
@@ -527,7 +527,7 @@ inline Tensor to_host(const Tensor &tensor, bool blocking = true) {
         return tensor;
     }
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
-    auto device_buffer = tensor.buffer();
+    auto device_buffer = tensor.device_buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
@@ -535,9 +535,9 @@ inline Tensor to_host(const Tensor &tensor, bool blocking = true) {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(tensor, data_vec.data(), blocking);
+        read_data_from_device_buffer<T>(device->command_queue(), device_buffer, data_vec.data(), blocking);
     } else {
-        read_data_from_device_buffer_slow_dispatch<T>(tensor, data_vec);
+        read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
 
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
