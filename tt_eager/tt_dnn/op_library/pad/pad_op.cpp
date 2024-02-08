@@ -540,6 +540,8 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
         TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
 }
 
 std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

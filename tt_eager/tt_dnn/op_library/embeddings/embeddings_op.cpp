@@ -499,6 +499,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(weights.layout() == Layout::ROW_MAJOR);
     TT_FATAL(a.dtype() == DataType::UINT32, "Input must be UINT32");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16);
+    TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
+    TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
 
     TT_FATAL(weights.shape()[0] == 1 && weights.shape()[1] == 1, "First two dimensions for the weights must be 1");
     if (this->tilized) {

@@ -1,4 +1,4 @@
-personal_ws-1.1 en 462
+personal_ws-1.1 en 468
 ABI
 ADDI
 API
@@ -261,8 +261,10 @@ grayskull
 grey
 gte
 gtz
+hardshrink
 hardsigmoid
 hardswish
+hardtanh
 heaviside
 highlight
 hpp
@@ -308,6 +310,7 @@ lz
 matmul
 maxdepth
 md
+mish
 modindex
 mul
 multicast
@@ -341,6 +344,7 @@ phyiscally
 png
 pragma
 pre
+prelu
 preprocess
 preprocessing
 preprocessor
@@ -397,6 +401,8 @@ skillset
 smi
 smsg
 softmax
+softshrink
+softsign
 sqrt
 sr
 src

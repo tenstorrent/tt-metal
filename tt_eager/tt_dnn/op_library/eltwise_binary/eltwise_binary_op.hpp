@@ -65,14 +65,14 @@ struct EltwiseBinary {
 template <BinaryOpType binary_op_type>
 struct make_eltwise_binary {
      Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt) const {
-         TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+         TT_FATAL(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
          return operation::run_with_autoformat(EltwiseBinary{binary_op_type, fused_activations, output_mem_config, output_dtype.value_or(input_tensor_a.dtype()), false}, {input_tensor_a, input_tensor_b}).at(0);
      }
  };
 
 // TODO: in_place should not take output args
 inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, bool in_place=false) {
-    TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+    TT_FATAL(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
     auto output = operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD, fused_activations, output_mem_config, output_dtype.value_or(input_tensor_a.dtype()), in_place}, {input_tensor_a, input_tensor_b});
     if (in_place) {
         return input_tensor_a;
