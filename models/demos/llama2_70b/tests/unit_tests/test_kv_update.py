@@ -188,7 +188,7 @@ def run_test_LlamaKVUpdate(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))
 def test_LlamaKVUpdate_inference(
     model_version,
     batch,
