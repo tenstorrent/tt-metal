@@ -59,7 +59,6 @@ class JitBuildEnv {
     // Tools
     string gpp_;
     string objcopy_;
-    string hex8tohex32_;
 
     // Compilation options
     string cflags_;
