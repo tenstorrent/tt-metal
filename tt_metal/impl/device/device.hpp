@@ -34,6 +34,8 @@ namespace detail {
 struct ProgramDeleter {
     void operator()(Program* p);
 };
+
+
 }
 
 using on_close_device_callback = std::function<void ()>;

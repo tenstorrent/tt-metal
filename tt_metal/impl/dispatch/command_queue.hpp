@@ -325,6 +325,7 @@ class Trace {
 };
 
 namespace detail {
+inline bool LAZY_COMMAND_QUEUE_MODE = false;
 void EnqueueRestart(CommandQueue& cq);
 
 /*
@@ -412,14 +413,13 @@ class HWCommandQueue {
     uint32_t size_B;
     std::optional<uint32_t> last_event_id;
     std::thread completion_queue_thread;
+    SystemMemoryManager& manager;
 
     volatile bool exit_condition;
     volatile uint32_t num_issued_commands;
     volatile uint32_t num_completed_commands;
     detail::IssuedReadMap issued_reads;
     detail::thread_safe_map<uint32_t, detail::completion_wrap_mutex> issued_completion_wraps;
-
-
 
     Device* device;
 
@@ -436,23 +436,23 @@ class HWCommandQueue {
     void completion_wrap(uint32_t event);
     void restart();
     void launch(launch_msg_t& msg);
-
-    SystemMemoryManager& sysmem_manager() { return this->sysmem_manager_; }
-
-    uint32_t cq_id() const { return this->id; }
-   private:
-    uint32_t id;
-    uint32_t size_B;
-    Device* device;
-    SystemMemoryManager& sysmem_manager_;
-
+    friend void detail::EnqueueRestart(CommandQueue& cq);
+    friend void EnqueueTrace(Trace& trace, bool blocking);
+    friend void EndTrace(Trace& trace);
+    friend Trace BeginTrace(CommandQueue& cq);
+    friend void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
+    friend void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
+    friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer,
+                                          const void* src, bool blocking);
+    friend void Finish(CommandQueue & cq);
+    friend class Trace;
 };
 
 class CommandQueue
 {
     public:
         CommandQueue () = delete;
-        CommandQueue ( Device * device, uint32_t id) : device_(device), id_(id){}
+        CommandQueue ( Device * device, uint32_t id) : device_ptr(device), cq_id(id){}
         CommandQueue(const CommandQueue&) = default;
         CommandQueue(CommandQueue&&) = default;
         CommandQueue& operator=(const CommandQueue&) = default;
@@ -462,50 +462,42 @@ class CommandQueue
 
         template < class F >
         tf::AsyncTask& submit ( F && func, std::reference_wrapper< std::shared_future< void > > event ){
-            std::lock_guard<std::mutex> lk(mutex_);
-            std::tie(last_, event.get()) = last_.empty() ? detail::GetExecutor().dependent_async ( std::forward<F>(func) ) : detail::GetExecutor().dependent_async ( std::forward<F>(func), last_);
-            return last_;
+            std::lock_guard<std::mutex> lk(this->mutex);
+            std::tie(this->last, event.get()) = this->last.empty() ? detail::GetExecutor().dependent_async ( std::forward<F>(func) ) : detail::GetExecutor().dependent_async ( std::forward<F>(func), this->last);
+            return this->last;
         }
 
         //WARNING: Exceptions thrown by sub-tasks are retieved via future; the silent versions don't return a future object, and therefore exceptions are lost
         template < class F >
         void submit ( F && func){
-            std::lock_guard<std::mutex> lk(mutex_);
-            last_ = last_.empty() ? detail::GetExecutor().silent_dependent_async(std::forward<F>(func) ) : detail::GetExecutor().silent_dependent_async( std::forward<F>(func), last_ );
+            std::lock_guard<std::mutex> lk(this->mutex);
+            this->last = this->last.empty() ? detail::GetExecutor().silent_dependent_async(std::forward<F>(func) ) : detail::GetExecutor().silent_dependent_async( std::forward<F>(func), this->last );
         }
 
         // template < class F >
         // auto& submit ( F && func){
-        //     std::lock_guard<std::mutex> lk(mutex_);
-        //     last_ = last_.has_value() ? detail::GetExecutor().silent_dependent_async((func), last_.value()) : detail::GetExecutor().silent_dependent_async( func );
-        //     return last_.value();
+        //     std::lock_guard<std::mutex> lk(this->mutex);
+        //     this->last = this->last.has_value() ? detail::GetExecutor().silent_dependent_async((func), this->last.value()) : detail::GetExecutor().silent_dependent_async( func );
+        //     return this->last.value();
         // }
 
         Device* device() const {
-            return device_;
+            return this->device_ptr;
         }
         uint32_t id() const{
-            return id_;
+            return this->cq_id;
         }
 
         void reset() {
-            std::lock_guard<std::mutex> lk(mutex_);
-            last_.reset();
+            std::lock_guard<std::mutex> lk(this->mutex);
+            this->last.reset();
         }
 
     private:
-        std::mutex mutex_;
-        tf::AsyncTask last_;
-        uint32_t id_;
-        Device * device_;
+        std::mutex mutex;
+        tf::AsyncTask last;
+        uint32_t cq_id;
+        Device * device_ptr;
 };
-
-
-inline bool LAZY_COMMAND_QUEUE_MODE = false;
-
-namespace detail
-{
-    void ClearProgramCache( Device * device);
-}
 
 } // namespace tt::tt_metal

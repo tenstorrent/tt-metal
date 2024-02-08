@@ -15,16 +15,15 @@ TEST_F(CommandQueueFixture, TestEventsWrittenToCompletionQueueInOrder) {
     size_t num_buffers = 100;
     uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
-    CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(this->device_);
-    uint32_t completion_queue_base = this->device_->manager->get_completion_queue_read_ptr(0);
+    uint32_t completion_queue_base = this->device_->sysmem_manager().get_completion_queue_read_ptr(0);
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     constexpr uint32_t completion_queue_event_alignment = 32;
     for (size_t i = 0; i < num_buffers; i++) {
         Buffer buf(this->device_, page_size, page_size, BufferType::DRAM);
-        EnqueueWriteBuffer(cq, buf, page, false);
+        EnqueueWriteBuffer(*this->cmd_queue, buf, page, false);
     }
-    Finish(cq);
+    Finish(*this->cmd_queue);
 
     // Read completion queue and ensure we see events 0-99 inclusive in order
     uint32_t event;
