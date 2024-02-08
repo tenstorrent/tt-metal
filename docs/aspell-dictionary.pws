@@ -1,4 +1,4 @@
-personal_ws-1.1 en 468
+personal_ws-1.1 en 470
 ABI
 ADDI
 API
@@ -85,6 +85,7 @@ MULI
 Makefile
 MatMul
 MathFidelity
+MaxPool
 MemoryConfig
 Metalium
 MtKt
@@ -448,6 +449,7 @@ unsharded
 untilize
 untilized
 untilizing
+upsample
 vBool
 vConst
 vConstFloatPrgm

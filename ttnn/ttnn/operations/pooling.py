@@ -14,13 +14,19 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
 )
 
 
-class MaxPool2D:
-    # kernel_size (Union[int, Tuple[int, int]]) – the size of the window to take a max over
-    # stride (Union[int, Tuple[int, int]]) – the stride of the window. Default value is kernel_size
-    # padding (Union[int, Tuple[int, int]]) – Implicit negative infinity padding to be added on both sides
-    # dilation (Union[int, Tuple[int, int]]) – a parameter that controls the stride of elements in the window
-    # return_indices (bool) – if True, will return the max indices along with the outputs. Useful for torch.nn.MaxUnpool2d later
-    # ceil_mode (bool) – when True, will use ceil instead of floor to compute the output shape
+class MaxPool2d:
+    r"""
+    Applies a 2D max pooling over an input signal composed of several input planes.
+
+    If `padding` is non-zero, then the input is implicitly padded with negative infinity on both sides for padding number of points.
+    `dilation` controls the spacing between the kernel points.
+
+    Arguments:
+        * :attr: kernel_size (Union[int, Tuple[int, int]]): the size of the window to take a max over
+        * :attr: stride (Union[int, Tuple[int, int]]): the stride of the window. Default value is 1
+        * :attr: padding (Union[int, Tuple[int, int]]): Implicit negative infinity padding to be added on both sides
+        * :attr: dilation (Union[int, Tuple[int, int]]): a parameter that controls the stride of window elements
+    """
 
     def __init__(
         self,
@@ -85,6 +91,9 @@ class MaxPool2D:
         return ttnn.Tensor(self.max_pool.copy_output_from_device(output.value))
 
 
+## Average Pooling
+
+
 def _torch_average_pool2d(input_tensor: ttnn.Tensor):
     import torch
 
@@ -114,8 +123,11 @@ def _average_pool2d_validate_input_tensors(operation_name, input_tensor, *args, 
     torch_function=_torch_average_pool2d,
 )
 def average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-    """
-    average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor
+    r"""
+    Applies a 2D average pooling over an input signal composed of several input planes.
+
+    Arguments:
+        * :attr: input_tensor (ttnn.Tensor): the input tensor
     """
     output = ttl.tensor.average_pool_2d(input_tensor.value)
     return ttnn.Tensor(output)
