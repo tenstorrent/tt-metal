@@ -13,15 +13,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import complex_conj as pt_complex_conj
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import complex_conj as tt_complex_conj
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_complex
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
 # NB: memory use of complex ops is quadruple the tensor size
-def run_complex_conj_tests(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-):
+def run_complex_conj_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    # prev_dispatch_mode=#set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -45,7 +41,6 @@ def run_complex_conj_tests(
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
 
-    # set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -57,34 +52,30 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         38346,
-        "",
     ),
     (
         (1, 1, 192, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         16561724,
-        "",
     ),
     (
         (1, 1, 192, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         11178160,
-        "",
     ),
     (
         (1, 1, 192, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         8184290,
-        "",
     ),
     (
         (1, 1, 224, 416),
@@ -93,43 +84,37 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         11531034,
-        "",
     ),
     (
         (1, 1, 224, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         4171648,
-        "",
     ),
     (
         (1, 1, 224, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         16075476,
-        "",
     ),
     (
         (1, 1, 224, 416),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         3892584,
-        "",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_complex_conj_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
-):
-    run_complex_conj_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)
+def test_complex_conj_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+    run_complex_conj_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
