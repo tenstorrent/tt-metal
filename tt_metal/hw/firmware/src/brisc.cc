@@ -60,7 +60,8 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
 namespace kernel_profiler {
-uint32_t wIndex __attribute__((used));
+    uint32_t wIndex __attribute__((used));
+    uint32_t stackSize __attribute__((used)) = 0;
 }
 
 void enable_power_management() {
@@ -285,7 +286,6 @@ int main() {
 
     risc_init();
     device_setup();
-    kernel_profiler::mark_BR_fw_first_start();
     noc_init();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
@@ -302,57 +302,55 @@ int main() {
     mailboxes->launch.run = RUN_MSG_DONE;
 
     while (1) {
-
-        init_sync_registers();
-        assert_just_ncrisc_reset();
-
-        // Wait...
-        DEBUG_STATUS('G', 'W');
-        while (mailboxes->launch.run != RUN_MSG_GO);
-        DEBUG_STATUS('G', 'D');
-
-        kernel_profiler::init_profiler(
-                mailboxes->launch.brisc_watcher_kernel_id,
-                mailboxes->launch.ncrisc_watcher_kernel_id,
-                mailboxes->launch.triscs_watcher_kernel_id
-                );
-        kernel_profiler::mark_fw_start();
-
-
-        // Always copy ncrisc even if its size is 0 (save branch)...
-        l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
-                               MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
-                               mailboxes->launch.ncrisc_kernel_size16);
-
-        // Invalidate the i$ now the kernels have loaded and before running
-        volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-        cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
-
-        run_triscs();
-
-        noc_index = mailboxes->launch.brisc_noc_id;
-
-        setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
-        finish_ncrisc_copy_and_run();
-
-        // Run the BRISC kernel
-        DEBUG_STATUS('R');
-        if (mailboxes->launch.enable_brisc) {
-            setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
-            kernel_init();
-        } else {
-            // This was not initialized in kernel_init
-            noc_local_state_init(noc_index);
+        DeviceZoneScopedN("BRISC-FW");
+        {
+            DeviceZoneScopedN("BRISC-INIT");
+            init_sync_registers();
+            assert_just_ncrisc_reset();
         }
-        DEBUG_STATUS('D');
 
-        wait_ncrisc_trisc();
+        {
+            DeviceZoneScopedN("BRISC-GO-MSG-WAIT");
+            // Wait...
+            DEBUG_STATUS('G', 'W');
+            while (mailboxes->launch.run != RUN_MSG_GO);
+            DEBUG_STATUS('G', 'D');
+        }
 
-        mailboxes->launch.run = RUN_MSG_DONE;
+        {
+            DeviceZoneScopedN("BRISC-RUN");
 
+            // Always copy ncrisc even if its size is 0 (save branch)...
+            l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
+                                   MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
+                                   mailboxes->launch.ncrisc_kernel_size16);
 
-        kernel_profiler::mark_fw_end();
-        kernel_profiler::send_profiler_data_to_dram();
+            // Invalidate the i$ now the kernels have loaded and before running
+            volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
+
+            run_triscs();
+
+            noc_index = mailboxes->launch.brisc_noc_id;
+
+            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
+            finish_ncrisc_copy_and_run();
+
+            // Run the BRISC kernel
+            DEBUG_STATUS('R');
+            if (mailboxes->launch.enable_brisc) {
+                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
+                kernel_init();
+            } else {
+                // This was not initialized in kernel_init
+                noc_local_state_init(noc_index);
+            }
+            DEBUG_STATUS('D');
+
+            wait_ncrisc_trisc();
+
+            mailboxes->launch.run = RUN_MSG_DONE;
+        }
 
         // Notify dispatcher core that it has completed
         if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {

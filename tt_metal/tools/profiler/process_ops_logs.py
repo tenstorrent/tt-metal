@@ -109,112 +109,127 @@ def append_detail_host_time_data(opCandidatePath, call_count, timeDataDict):
                 timeDataDict[functionKey] = int(calls["stats"][stat])
 
 
-def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLogPath=None):
-    if not deviceLogPath:
-        deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", PROFILER_DEVICE_SIDE_LOG)
+def load_device_data(opCandidatePath):
+    deviceLogPath = os.path.join(opCandidatePath, PROFILER_DEVICE_SIDE_LOG)
     if os.path.isfile(deviceLogPath):
         setup = device_post_proc_config.default_setup()
         setup.intrestingCores = None
         setup.deviceInputLog = deviceLogPath
         setup.timerAnalysis = {
             "FW_START->FW_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
                 "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
             },
             "KERNEL_START->KERNEL_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "ANY", "timerID": 2},
                 "end": {"core": "ANY", "risc": "ANY", "timerID": 3},
             },
             "BR_KERNEL_START->BR_KERNEL_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
                 "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
             },
             "NC_KERNEL_START->NC_KERNEL_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "NCRISC", "timerID": 2},
                 "end": {"core": "ANY", "risc": "NCRISC", "timerID": 3},
             },
             "T0_KERNEL_START->T0_KERNEL_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "TRISC_0", "timerID": 2},
                 "end": {"core": "ANY", "risc": "TRISC_0", "timerID": 3},
             },
             "T1_KERNEL_START->T1_KERNEL_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "TRISC_1", "timerID": 2},
                 "end": {"core": "ANY", "risc": "TRISC_1", "timerID": 3},
             },
             "T2_KERNEL_START->T2_KERNEL_END": {
-                "across": "device",
-                "type": "model_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "TRISC_2", "timerID": 2},
                 "end": {"core": "ANY", "risc": "TRISC_2", "timerID": 3},
             },
             "ER_KERNEL_START->ER_KERNEL_END": {
-                "across": "device",
-                "type": "session_first_last",
+                "across": "ops",
+                "type": "op_first_last",
                 "start": {"core": "ANY", "risc": "ERISC", "timerID": 2},
                 "end": {"core": "ANY", "risc": "ERISC", "timerID": 3},
             },
         }
 
-        devicesData = import_log_run_stats(setup)
+        return import_log_run_stats(setup)
+
+
+def append_device_time_data(call_count, timeDataDict, devicesData):
+    res = True
+    if devicesData and devicesData["devices"].keys():
         deviceID = list(devicesData["devices"].keys())[0]  # Assume there is only one device
 
-        timeseriesData = devicesData["devices"][deviceID]["cores"]["DEVICE"]["riscs"]["TENSIX"]["timeseries"]
-        start_ID, start_ts, start_risc, start_core = timeseriesData[0]
-        end_ID, end_ts, end_risc, end_core = timeseriesData[-1]
-
-        cores = list(devicesData["devices"][deviceID]["cores"].keys())
-        cores.remove("DEVICE")
-
         freq = devicesData["deviceInfo"]["freq"]
-        deviceLevelStats = devicesData["devices"][deviceID]["cores"]["DEVICE"]["analysis"]
+        opsList = devicesData["devices"][deviceID]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
 
-        fw_delta_time_ns = deviceLevelStats["FW_START->FW_END"]["stats"]["Average"] * 1000 / freq
-        kernel_delta_time_ns = deviceLevelStats["KERNEL_START->KERNEL_END"]["stats"]["Average"] * 1000 / freq
+        if call_count - 1 < len(opsList):
+            op = opsList[call_count - 1]
+            timeseriesData = op["timeseries"]
+            start_ID, start_ts, start_risc, start_core = timeseriesData[0]
+            end_ID, end_ts, end_risc, end_core = timeseriesData[-1]
 
-        br_kernel_delta_time_ns = 0
-        nc_kernel_delta_time_ns = 0
-        t0_kernel_delta_time_ns = 0
-        t1_kernel_delta_time_ns = 0
-        t2_kernel_delta_time_ns = 0
-        er_kernel_delta_time_ns = 0
+            cores = set()
+            for timeID, ts, risc, core in timeseriesData:
+                if core not in cores:
+                    cores.add(core)
 
-        if "BR_KERNEL_START->BR_KERNEL_END" in deviceLevelStats.keys():
-            br_kernel_delta_time_ns = (
-                deviceLevelStats["BR_KERNEL_START->BR_KERNEL_END"]["stats"]["Average"] * 1000 / freq
-            )
-        if "NC_KERNEL_START->NC_KERNEL_END" in deviceLevelStats.keys():
-            nc_kernel_delta_time_ns = (
-                deviceLevelStats["NC_KERNEL_START->NC_KERNEL_END"]["stats"]["Average"] * 1000 / freq
-            )
-        if "T0_KERNEL_START->T0_KERNEL_END" in deviceLevelStats.keys():
-            t0_kernel_delta_time_ns = (
-                deviceLevelStats["T0_KERNEL_START->T0_KERNEL_END"]["stats"]["Average"] * 1000 / freq
-            )
-        if "T1_KERNEL_START->T1_KERNEL_END" in deviceLevelStats.keys():
-            t1_kernel_delta_time_ns = (
-                deviceLevelStats["T1_KERNEL_START->T1_KERNEL_END"]["stats"]["Average"] * 1000 / freq
-            )
-        if "T2_KERNEL_START->T2_KERNEL_END" in deviceLevelStats.keys():
-            t2_kernel_delta_time_ns = (
-                deviceLevelStats["T2_KERNEL_START->T2_KERNEL_END"]["stats"]["Average"] * 1000 / freq
-            )
-        if "ER_KERNEL_START->ER_KERNEL_END" in deviceLevelStats.keys():
-            er_kernel_delta_time_ns = (
-                deviceLevelStats["ER_KERNEL_START->ER_KERNEL_END"]["stats"]["Average"] * 1000 / freq
-            )
+            deviceLevelStats = op["analysis"]
 
+            fw_delta_time_ns = deviceLevelStats["FW_START->FW_END"]["stats"]["Average"] * 1000 / freq
+            kernel_delta_time_ns = deviceLevelStats["KERNEL_START->KERNEL_END"]["stats"]["Average"] * 1000 / freq
+
+            br_kernel_delta_time_ns = 0
+            nc_kernel_delta_time_ns = 0
+            t0_kernel_delta_time_ns = 0
+            t1_kernel_delta_time_ns = 0
+            t2_kernel_delta_time_ns = 0
+            er_kernel_delta_time_ns = 0
+
+            if "BR_KERNEL_START->BR_KERNEL_END" in deviceLevelStats.keys():
+                br_kernel_delta_time_ns = (
+                    deviceLevelStats["BR_KERNEL_START->BR_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+                )
+            if "NC_KERNEL_START->NC_KERNEL_END" in deviceLevelStats.keys():
+                nc_kernel_delta_time_ns = (
+                    deviceLevelStats["NC_KERNEL_START->NC_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+                )
+            if "T0_KERNEL_START->T0_KERNEL_END" in deviceLevelStats.keys():
+                t0_kernel_delta_time_ns = (
+                    deviceLevelStats["T0_KERNEL_START->T0_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+                )
+            if "T1_KERNEL_START->T1_KERNEL_END" in deviceLevelStats.keys():
+                t1_kernel_delta_time_ns = (
+                    deviceLevelStats["T1_KERNEL_START->T1_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+                )
+            if "T2_KERNEL_START->T2_KERNEL_END" in deviceLevelStats.keys():
+                t2_kernel_delta_time_ns = (
+                    deviceLevelStats["T2_KERNEL_START->T2_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+                )
+            if "ER_KERNEL_START->ER_KERNEL_END" in deviceLevelStats.keys():
+                er_kernel_delta_time_ns = (
+                    deviceLevelStats["ER_KERNEL_START->ER_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+                )
+        else:
+            res = False
+    else:
+        res = False
+
+    if res:
         timeDataDict["DEVICE FW START CYCLE"] = start_ts
         timeDataDict["DEVICE FW END CYCLE"] = end_ts
         timeDataDict["DEVICE FW DURATION [ns]"] = round(fw_delta_time_ns)
@@ -226,7 +241,6 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         timeDataDict["DEVICE TRISC2 KERNEL DURATION [ns]"] = round(t2_kernel_delta_time_ns)
         timeDataDict["DEVICE ERISC KERNEL DURATION [ns]"] = round(er_kernel_delta_time_ns)
         timeDataDict["CORE COUNT"] = len(cores)
-
     else:
         timeDataDict["DEVICE FW START CYCLE"] = "-"
         timeDataDict["DEVICE FW END CYCLE"] = "-"
@@ -259,14 +273,10 @@ def parse_ops_logs(opsFolder):
     paths = sorted(Path(opsFolder).iterdir(), key=os.path.getmtime, reverse=True)
     assert paths, f"{opsFolder} is empty. Use -i option to choose the correct logs dir"
 
-    opsDeviceFolder = os.path.normpath(opsFolder)
-    tmpSplit = opsDeviceFolder.rsplit("_", 1)
-    if tmpSplit[-1] != "device":
-        opsDeviceFolder = f"{os.path.normpath(opsFolder)}_device"
+    devicesData = load_device_data(opsFolder)
 
     for opCandidate in paths:
         opCandidatePath = os.path.join(opsFolder, opCandidate)
-        opCandidateDevicePath = os.path.join(opsDeviceFolder, os.path.basename(os.path.normpath(opCandidate)))
         if os.path.isdir(opCandidatePath):
             if "unknown" in str(opCandidate).lower():
                 continue
@@ -351,7 +361,7 @@ def parse_ops_logs(opsFolder):
                             "ATTRIBUTES": metadata,
                         }
 
-                        append_device_time_data(opCandidateDevicePath, call_count, timeDataDict)
+                        append_device_time_data(global_call_count, timeDataDict, devicesData)
                         append_detail_host_time_data(opCandidatePath, call_count, timeDataDict)
 
                         if op_name in ops.keys():
@@ -359,110 +369,9 @@ def parse_ops_logs(opsFolder):
                         else:
                             ops[op_name] = [timeDataDict]
                     except KeyError as e:
+                        print(e)
                         assert False, f"CSV {opLogPath} has bad header format"
     return ops
-
-
-preFig = go.Figure()
-
-
-def run_dashbaord_webapp(ops, opsFolder, port=None):
-    global preFig
-    curveDict = {}
-    curveNumber = 0
-    fig = go.Figure()
-    for op, opCalls in ops.items():
-        xVals = []
-        yVals = []
-        Xs = []
-        Ys = []
-        Cs = []
-        Ss = []
-        diffs = []
-        names = []
-        for opCall in opCalls:
-            s = opCall["HOST START TS"] - minTime
-            e = opCall["HOST END TS"] - minTime
-            c = opCall["_OP CALL COUNT"]
-            callDepth = opCall["CALL DEPTH"]
-            y = 1 + (0.2 / maxStackSize) * (maxStackSize - callDepth + 1)
-            diff = opCall["HOST DURATION [ns]"]
-            ps = opCall["ATTRIBUTES"]
-            m = (s + e) // 2
-            xVals += [None, s, e, e, s, s]
-            yVals += [None, 0, 0, y, y, 0]
-            Xs += [m]
-            Ys += [y]
-            Cs += [c]
-            diffs += [diff / 1e9]
-            names += [op]
-            Ss += [ps]
-
-            curveDict[curveNumber] = {"op": op, "callCount": c}
-            curveNumber += 1
-
-        fig.add_trace(go.Scatter(x=xVals, y=yVals, name=op, hoverinfo="none", mode="none", fill="toself"))
-
-        fig.add_trace(
-            go.Scatter(
-                x=Xs,
-                y=Ys,
-                name="",
-                customdata=np.stack((names, Cs, diffs, Ss), axis=-1),
-                hovertemplate="<br>".join(
-                    [
-                        "Op: %{customdata[0]}",
-                        "Call: %{customdata[1]}",
-                        "Duration: %{customdata[2]:.3f} s",
-                        "Meta: %{customdata[3]}",
-                    ]
-                ),
-                mode="markers",
-                marker_size=5,
-                hoverlabel=dict(bgcolor="white"),
-                marker_color="black",
-                hoverinfo="x",
-                showlegend=True,
-                opacity=0.5,
-            )
-        )
-        fig.update_layout(
-            xaxis=dict(range=[-1e7, maxDiff + 1e7], rangeslider=dict(visible=True)), yaxis=dict(visible=False)
-        )
-
-    external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css"]
-    app = Dash(__name__, external_stylesheets=external_stylesheets)
-    app.layout = html.Div(
-        [html.H5(f"OPs:", id="text"), dcc.Graph(figure=fig, id="plot"), dcc.Graph(figure=go.Figure(), id="plot-2")]
-    )
-
-    @app.callback(Output("plot-2", "figure"), [Input("plot", "hoverData")])
-    def plot_device_data(hoverData):
-        global preFig
-        fig = preFig
-        if hoverData and "points" in hoverData.keys():
-            if len(hoverData["points"]) > 0:
-                if "customdata" in hoverData["points"][0].keys():
-                    op = hoverData["points"][0]["customdata"][0]
-                    opFolder = op_to_folder[op]
-                    callCount = hoverData["points"][0]["customdata"][1]
-                    filePath = f"{opsFolder}/{opFolder}/{callCount}/{PROFILER_DEVICE_SIDE_LOG}"
-                    if os.path.isfile(filePath):
-                        setup = device_post_proc_config.default_setup()
-                        setup.deviceInputLog = filePath
-                        setup.timerAnalysis = {}
-
-                        devicesData = import_log_run_stats(setup)
-                        figs = generate_plots(devicesData, setup, saveFigure=False)
-                        for fig in figs.values():
-                            preFig = fig
-
-        return fig
-
-    if port:
-        app.run_server(host="0.0.0.0", port=port, debug=True)
-    else:
-        app.run_server(host="0.0.0.0", debug=True)
 
 
 def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
@@ -568,21 +477,14 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
 @click.option("-i", "--ops-folder", type=click.Path(exists=True, dir_okay=True), help="Ops profiler logs folder")
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
-@click.option("-p", "--port", type=int, help="Dashboard webapp port")
-@click.option("--webapp", default=False, is_flag=True, help="Run dashboard webapp")
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
-def main(ops_folder, output_folder, name_append, port, webapp, date):
+def main(ops_folder, output_folder, name_append, date):
     opsFolder = PROFILER_OPS_LOGS_DIR
     if ops_folder:
         opsFolder = os.path.abspath(ops_folder)
 
     ops = parse_ops_logs(opsFolder)
     print_ops_csv(ops, opsFolder, output_folder, date, name_append)
-
-    if webapp:
-        # TODO: Works but needs more refining
-        logger.info("Web app dashboard is a work in progress. Don't be alarmed by bugs and glitches!")
-        run_dashbaord_webapp(ops, opsFolder, port)
 
 
 if __name__ == "__main__":

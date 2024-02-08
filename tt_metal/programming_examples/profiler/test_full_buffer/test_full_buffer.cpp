@@ -11,10 +11,9 @@ void RunCustomCycle(tt_metal::Device *device, int loop_count, bool fast_dispatch
 {
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
+    //CoreCoord end_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
-
-    auto eth_cores =  device->get_active_ethernet_cores();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -38,13 +37,6 @@ void RunCustomCycle(tt_metal::Device *device, int loop_count, bool fast_dispatch
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
-    for (auto core : eth_cores)
-    {
-        auto eth_reader_kernel = tt_metal::CreateKernel(
-            program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
-            (CoreCoord){core.x,core.y},
-            tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
-    }
     if (fast_dispatch)
     {
         EnqueueProgram(device->command_queue(), program, false);

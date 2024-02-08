@@ -49,9 +49,9 @@ constexpr static std::uint32_t PROFILER_L1_MARKER_BYTES_SIZE = PROFILER_L1_MARKE
 
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
-constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 10;
+//constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 10;
 //TODO:(MO) Bring after custom host GO msg
-//constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
+constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
 
 constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE = (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) * PROFILER_L1_MARKER_UINT32_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE  * sizeof(uint32_t);
@@ -67,9 +67,9 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_T
 
 constexpr static std::uint32_t PROFILER_L1_END_ADDRESS = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
 
-constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 3;
+//constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 3;
 //TODO:(MO) Bring after custom host GO msg
-//constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 900;
+constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1100;
 constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_L1_MARKER_UINT32_SIZE * (PROFILER_L1_PROGRAM_ID_COUNT +  PROFILER_L1_GUARANTEED_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;
 constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
 

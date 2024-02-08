@@ -11,10 +11,8 @@ from tt_metal.tools.profiler.common import PROFILER_OUTPUT_DIR, PROFILER_SCRIPTS
 
 
 def post_process_ops_log(output_logs_subdir, columns):
-    runDate = sorted(os.listdir(PROFILER_OUTPUT_DIR / output_logs_subdir / "ops_device/"))[-1]
-    df = pd.read_csv(
-        PROFILER_OUTPUT_DIR / output_logs_subdir / "ops_device" / runDate / f"ops_perf_results_{runDate}.csv"
-    )
+    runDate = sorted(os.listdir(PROFILER_OUTPUT_DIR / output_logs_subdir / "ops/"))[-1]
+    df = pd.read_csv(PROFILER_OUTPUT_DIR / output_logs_subdir / "ops" / runDate / f"ops_perf_results_{runDate}.csv")
     results = {}
     for col in columns:
         results[col] = df[col].sum()
@@ -23,7 +21,7 @@ def post_process_ops_log(output_logs_subdir, columns):
 
 def run_device_profiler(command, output_logs_subdir):
     output_logs_dir = PROFILER_OUTPUT_DIR / output_logs_subdir
-    profiler_cmd = PROFILER_SCRIPTS_ROOT / f'profile_this.py -d -o {output_logs_dir} -c "{command}"'
+    profiler_cmd = PROFILER_SCRIPTS_ROOT / f'profile_this.py -o {output_logs_dir} -c "{command}"'
     subprocess.run([profiler_cmd], shell=True, check=True)
 
 

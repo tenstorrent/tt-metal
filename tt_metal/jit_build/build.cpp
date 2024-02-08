@@ -16,6 +16,8 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tools/profiler/profiler_state.hpp"
+#include "tools/profiler/common.hpp"
+
 
 using namespace std;
 using namespace tt;
@@ -547,6 +549,14 @@ void JitBuildState::weaken(const string& log_file, const string& out_dir) const
     }
 }
 
+void JitBuildState::extract_zone_src_locations(const string& log_file) const
+{
+    if (tt::tt_metal::getDeviceProfilerState()) {
+        string cmd = "cat " +  log_file + " | grep KERNEL_PROFILER";
+        tt::utils::run_command(cmd, tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONSS_LOG, false);
+    }
+}
+
 void JitBuildState::build(const JitBuildSettings *settings) const
 {
     string out_dir = (settings == nullptr) ?
@@ -565,6 +575,9 @@ void JitBuildState::build(const JitBuildSettings *settings) const
     if (this->is_fw_) {
         weaken(log_file, out_dir);
     }
+
+    extract_zone_src_locations(log_file);
+
 }
 
 void jit_build(const JitBuildState& build,

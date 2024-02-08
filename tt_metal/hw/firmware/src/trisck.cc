@@ -31,6 +31,7 @@ volatile tt_reg_ptr uint * pc_buf_base = reinterpret_cast<volatile uint *>(PC_BU
 
 void kernel_launch()
 {
+    DeviceZoneScopedN("TRISC_KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);

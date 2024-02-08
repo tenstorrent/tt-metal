@@ -16,6 +16,7 @@
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used)) = 0;
 }
 
 namespace ckernel
@@ -86,14 +87,13 @@ int main(int argc, char *argv[])
 
     reset_cfg_state_id();
 
-    // Cleanup profiler buffer incase we never get the go message
     kernel_profiler::init_profiler();
+    // Cleanup profiler buffer incase we never get the go message
     while (1) {
         DEBUG_STATUS('W');
         while (*trisc_run != RUN_SYNC_MSG_GO);
+        DeviceZoneScopedN("TRISC_FW");
 
-        kernel_profiler::init_profiler();
-        kernel_profiler::mark_fw_start();
 
 #if !defined(UCK_CHLKC_MATH)
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
@@ -106,8 +106,5 @@ int main(int argc, char *argv[])
         // Signal completion
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-
-        kernel_profiler::mark_fw_end();
-        kernel_profiler::finish();
     }
 }

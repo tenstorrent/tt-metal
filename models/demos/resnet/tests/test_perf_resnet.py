@@ -79,6 +79,7 @@ def run_perf_resnet(
             profiler.start(f"{iter}_key")
             _ = tt_resnet50(tt_inputs).cpu(blocking=True)
             profiler.end(f"{iter}_key")
+            # tt_lib.device.DumpDeviceProfiler(device)
 
         num_warm_iterations = 15
         warm_start = warmup_end

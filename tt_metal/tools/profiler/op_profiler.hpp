@@ -173,11 +173,10 @@ namespace op_profiler {
                 {
                     TT_ASSERT (profileFolder != "", "Bad log folder location, folder has been setup wrong");
                     tt::tt_metal::detail::SetHostProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
-                    tt::tt_metal::detail::SetDeviceProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
+                    tt::tt_metal::detail::SetDeviceProfilerDir(profileFolder);
                     if (freshTTmetalLogs)
                     {
                         tt::tt_metal::detail::FreshProfilerHostLog();
-                        tt::tt_metal::detail::FreshProfilerDeviceLog();
                     }
 
                     opProfiler.setOutputDir(profileFolder + "/" + opName);
@@ -349,24 +348,14 @@ namespace op_profiler {
                     string constructedFolder = string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME) + "/" + folder;
                     int noSlashEnd = constructedFolder.find_last_not_of(" /");
                     auto logFolder = (noSlashEnd == std::string::npos) ? "" : constructedFolder.substr(0, noSlashEnd + 1);
-                    auto logFolderDevice = fmt::format("{}_device", logFolder);
-                    if ((profileFolder == logFolder) || (profileFolder == logFolderDevice))
+                    if (profileFolder == logFolder)
                     {
                         //We are in the same active process keep going and append
                         return;
                     }
 
-                    if (getDeviceProfilerState())
-                    {
-                        profileFolder = logFolderDevice;
-                        tt::log_info("Device profiling detected, logs folder location changed to {}", profileFolder);
-                        add_log_location_record(logFolderDevice);
-                    }
-                    else
-                    {
-                        profileFolder = logFolder;
-                        add_log_location_record(logFolder);
-                    }
+                    profileFolder = logFolder;
+                    add_log_location_record(logFolder);
 
                     if (std::filesystem::is_directory(profileFolder))
                     {

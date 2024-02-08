@@ -24,7 +24,7 @@ import tt_metal.tools.profiler.dummy_refresh as dummy_refresh
 
 
 # TODO(MO): Grab this from the core_descriptor yaml files
-NON_COMPUTE_ROW = 9
+NON_COMPUTE_ROW = 11
 
 
 def coreCompare(core):
@@ -385,6 +385,41 @@ def import_device_profile_log(
     return devicesData
 
 
+def is_new_op_core(tsRisc):
+    timerID, tsValue, risc = tsRisc
+    if risc == "BRISC" and timerID == 1:
+        return True
+    return False
+
+
+def is_new_op_device(tsCore, coreOpMap):
+    timerID, tsValue, risc, core = tsCore
+    appendTs = False
+    isNewOp = False
+    isNewOpFinished = False
+    if core[1] != NON_COMPUTE_ROW:
+        if timerID != 0:
+            appendTs = True
+        if risc == "BRISC" and timerID == 1:
+            assert (
+                core not in coreOpMap.keys()
+            ), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}, this could be caused by soft resets"
+            if not coreOpMap:
+                isNewOp = True
+            coreOpMap[core] = (tsValue,)
+        elif risc == "BRISC" and timerID == 4:
+            assert core in coreOpMap.keys() and len(coreOpMap[core]) == 1, "Unexpected BRISC end"
+            coreOpMap[core] = (coreOpMap[core][0], tsValue)
+            isNewOpFinished = True
+            for opDuration in coreOpMap.values():
+                pairSize = len(opDuration)
+                assert pairSize == 1 or pairSize == 2, "Wrong op duration"
+                if pairSize == 1:
+                    isNewOpFinished = False
+                    break
+    return appendTs, isNewOp, isNewOpFinished
+
+
 def risc_to_core_timeseries(devicesData):
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
@@ -395,7 +430,16 @@ def risc_to_core_timeseries(devicesData):
 
             tmpTimeseries.sort(key=lambda x: x[1])
 
-            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries}
+            ops = []
+            for ts in tmpTimeseries:
+                timerID, tsValue, risc = ts
+                if is_new_op_core(ts):
+                    ops.append([ts])
+                else:
+                    if len(ops) > 0:
+                        ops[-1].append(ts)
+
+            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "ops": ops}
 
 
 def core_to_device_timeseries(devicesData):
@@ -416,6 +460,18 @@ def core_to_device_timeseries(devicesData):
         for risc in tmpTimeseries["riscs"].keys():
             tmpTimeseries["riscs"][risc]["timeseries"].sort(key=lambda x: x[1])
 
+        ops = []
+        coreOpMap = {}
+        for ts in tmpTimeseries["riscs"]["TENSIX"]["timeseries"]:
+            appendTs, isNewOp, isNewOpFinished = is_new_op_device(ts, coreOpMap)
+            if appendTs:
+                if isNewOp:
+                    ops.append({"timeseries": []})
+                ops[-1]["timeseries"].append(ts)
+            if isNewOpFinished:
+                coreOpMap = {}
+
+        tmpTimeseries["riscs"]["TENSIX"]["ops"] = ops
         deviceData["cores"]["DEVICE"] = tmpTimeseries
 
 
@@ -681,7 +737,11 @@ def first_last_analysis(timeseries, analysis):
     return durations
 
 
-def model_first_last_analysis(riscData, analysis):
+def session_first_last_analysis(riscData, analysis):
+    return first_last_analysis(riscData["timeseries"], analysis)
+
+
+def op_first_last_analysis(riscData, analysis):
     return first_last_analysis(riscData["timeseries"], analysis)
 
 
@@ -711,8 +771,10 @@ def timeseries_analysis(riscData, name, analysis):
     tmpList = []
     if analysis["type"] == "adjacent":
         tmpList = adjacent_LF_analysis(riscData, analysis)
-    elif analysis["type"] == "model_first_last":
-        tmpList = model_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "session_first_last":
+        tmpList = session_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "op_first_last":
+        tmpList = op_first_last_analysis(riscData, analysis)
 
     tmpDF = pd.DataFrame(tmpList)
     tmpDict = {}
@@ -758,6 +820,18 @@ def device_analysis(name, analysis, devicesData):
         timeseries_analysis(riscData, name, analysis)
 
 
+def ops_analysis(name, analysis, devicesData):
+    for chipID, deviceData in devicesData["devices"].items():
+        core = "DEVICE"
+        risc = "TENSIX"
+        assert core in deviceData["cores"].keys()
+        assert risc in deviceData["cores"][core]["riscs"].keys()
+        riscData = deviceData["cores"][core]["riscs"][risc]
+        if "ops" in riscData.keys():
+            for op in riscData["ops"]:
+                timeseries_analysis(op, name, analysis)
+
+
 def generate_device_level_summary(devicesData):
     for chipID, deviceData in devicesData["devices"].items():
         analysisLists = {}
@@ -769,6 +843,17 @@ def generate_device_level_summary(devicesData):
                             analysisLists[name]["statList"].append(analysis["stats"])
                         else:
                             analysisLists[name] = dict(analysis=analysis["analysis"], statList=[analysis["stats"]])
+                if core == "DEVICE" and risc == "TENSIX":
+                    if "ops" in riscData.keys():
+                        for op in riscData["ops"]:
+                            if "analysis" in op.keys():
+                                for name, analysis in op["analysis"].items():
+                                    if name in analysisLists.keys():
+                                        analysisLists[name]["statList"].append(analysis["stats"])
+                                    else:
+                                        analysisLists[name] = dict(
+                                            analysis=analysis["analysis"], statList=[analysis["stats"]]
+                                        )
 
         for name, analysisList in analysisLists.items():
             tmpDF = pd.DataFrame(analysisList["statList"])
@@ -814,6 +899,8 @@ def import_log_run_stats(setup=device_post_proc_config.default_setup()):
             core_analysis(name, analysis, devicesData)
         elif analysis["across"] == "device":
             device_analysis(name, analysis, devicesData)
+        elif analysis["across"] == "ops":
+            ops_analysis(name, analysis, devicesData)
 
     generate_device_level_summary(devicesData)
     return devicesData

@@ -39,13 +39,6 @@ struct TimerPeriod {
     steady_clock::time_point stop;
 };
 
-struct CoreTracyData
-{
-    std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> data;
-    TracyTTCtx tracyContext;
-    bool contextPopulated;
-    uint32_t runCounter;
-};
 
 class HostProfiler {
     private:
@@ -105,21 +98,34 @@ class DeviceProfiler {
         // Global custom marker counter
         uint32_t customMarkerCount = 0;
 
-        // Device-Core run data
-        std::map<std::pair<uint32_t,CoreCoord>, CoreTracyData> device_core_data;
+        // Device-Core tracy context
+        std::map<std::pair<uint16_t,CoreCoord>, TracyTTCtx> device_tracy_contexts;
+
+        // Device-Core tracy context
+        std::vector<tracy::TTDeviceEvent> device_events;
+
+        // Hash to zone source locations
+        std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
+
+        // Zone sourece locations
+        std::unordered_set<std::string> zone_src_locations;
+
+        //32bit FNV-1a hashing
+        uint32_t hash32CT( const char * str, size_t n, uint32_t basis = UINT32_C( 2166136261 ) );
+
+        // XORe'd 16-bit FNV-1a hashing functions
+        uint16_t hash16CT( const std::string& str);
+
+        // Iterate through all zone source locations and generate hash
+        void generateZoneSourceLocationsHashes();
 
         // Dumping profile result to file
         void dumpResultToFile(
-                bool debug,
                 uint32_t runID,
                 int device_id,
                 CoreCoord core,
                 int core_flat,
-                int core_flat_read,
-                int core_flat_read_ts,
                 int risc_num,
-                int risc_num_read,
-                int risc_num_read_ts,
                 uint32_t timer_id,
                 uint64_t timestamp
                 );
@@ -131,7 +137,7 @@ class DeviceProfiler {
                 const CoreCoord &worker_core);
 
         //Push device results to tracy
-        void pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device_core);
+        void pushTracyDeviceResults();
 
         //Track the smallest timestamp dumped to file
         void firstTimestamp(uint64_t timestamp);
@@ -141,7 +147,7 @@ class DeviceProfiler {
         DeviceProfiler();
 
         //DRAM buffer for device side results
-        Buffer output_dram_buffer;
+        std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
 
 
         //Set the device side file flag
@@ -155,7 +161,6 @@ class DeviceProfiler {
 
         //Traverse all cores on the device and dump the device profile results
         void dumpResults(Device *device, const vector<CoreCoord> &worker_cores);
-
 };
 
 }  // namespace tt_metal

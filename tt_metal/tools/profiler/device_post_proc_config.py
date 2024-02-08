@@ -62,11 +62,17 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"risc": "BRISC", "timerID": 0},
             "end": {"risc": "ANY", "timerID": 4},
         },
-        "BRISC FW start -> ANY RISC FW end": {
+        "BRISC FW start -> ANY RISC FW end-model": {
             "across": "core",
             "type": "session_first_last",
             "start": {"risc": "ANY", "timerID": 1},
             "end": {"risc": "ANY", "timerID": 4},
+        },
+        "BRISC FW start -> ANY RISC FW end-op": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
+            "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
         },
         "T0 -> ANY CORE ANY RISC FW end": {
             "across": "device",

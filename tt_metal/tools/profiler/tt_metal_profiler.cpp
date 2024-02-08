@@ -10,6 +10,8 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -31,6 +33,7 @@ void InitDeviceProfiler(Device *device){
 #if defined(PROFILER)
     ZoneScoped;
 
+    TracySetCpuTime();
     auto device_id = device->id();
     uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_channels();
     uint32_t coreCountPerDram = tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
@@ -39,7 +42,7 @@ void InitDeviceProfiler(Device *device){
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
 
 
-    if (tt_metal_device_profiler.output_dram_buffer.size() == 0 )
+    if (tt_metal_device_profiler.output_dram_buffer == nullptr )
     {
         tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device= device,
@@ -51,7 +54,7 @@ void InitDeviceProfiler(Device *device){
     }
 
     std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();
+    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer->address();
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
@@ -76,7 +79,7 @@ void InitDeviceProfiler(Device *device){
         }
     }
 
-    std::vector<uint32_t> inputs_DRAM(tt_metal_device_profiler.output_dram_buffer.size()/sizeof(uint32_t), 0);
+    std::vector<uint32_t> inputs_DRAM(tt_metal_device_profiler.output_dram_buffer->size()/sizeof(uint32_t), 0);
     tt_metal::detail::WriteToBuffer(tt_metal_device_profiler.output_dram_buffer, inputs_DRAM);
 
 #endif
@@ -98,18 +101,15 @@ void DumpDeviceProfileResults(Device *device) {
 void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores){
 #if defined(PROFILER)
     ZoneScoped;
-    const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-    if (USE_FAST_DISPATCH)
-    {
-        Finish(tt_metal::detail::GetCommandQueue(device));
-    }
-    TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
     if (getDeviceProfilerState())
     {
-        ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");
-        //TODO: (MO) This global is temporary need to update once the new interface is in
-        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+        if (USE_FAST_DISPATCH)
+        {
             Finish(device->command_queue());
+        }
+        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
+        ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");
         auto device_id = device->id();
         tt_metal_device_profiler.setDeviceArchitecture(device->arch());
         tt_metal_device_profiler.dumpResults(device, worker_cores);
