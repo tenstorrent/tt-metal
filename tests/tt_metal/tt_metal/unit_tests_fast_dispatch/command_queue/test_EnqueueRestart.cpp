@@ -12,6 +12,8 @@
 using namespace tt::tt_metal;
 
 TEST_F(CommandQueueFixture, TestEnqueueRestart) {
+    GTEST_SKIP() << "Skipping restart test until restart support added back in";
+
     Program program;
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});

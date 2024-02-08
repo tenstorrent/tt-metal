@@ -274,7 +274,7 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline CommandQueue &GetCommandQueue(Device *device)
+        inline CommandQueue &GetCommandQueue(Device *device, bool init_cq)
         {
             detail::DispatchStateCheck(true);
             // For now there is only one SW CommandQueue per device
@@ -283,7 +283,7 @@ namespace tt::tt_metal{
             TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
             TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
             static std::mutex cq_creation_mutex;
-            {
+            if (init_cq) {
                 std::lock_guard<std::mutex> lock(cq_creation_mutex);
                 command_queues[device->id()] = std::make_unique<CommandQueue>(device, 0);
             }
@@ -293,7 +293,7 @@ namespace tt::tt_metal{
         inline void Synchronize(Device *device)
         {
             if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                Finish(GetCommandQueue(device));
+                Finish(GetCommandQueue(device, false));
             }
         }
 

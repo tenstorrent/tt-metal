@@ -62,6 +62,7 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
     this->initialize(l1_bank_remap);
+    tt::tt_metal::detail::GetCommandQueue(this, true); // Needed to initialize a new command queue
 }
 
 void Device::initialize_cluster() {

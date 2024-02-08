@@ -561,9 +561,6 @@ void Program::invalidate_compile() {
 }
 
 ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& program) {
-    /*
-        TODO(agrebenisan): Move this logic to compile program
-    */
     std::unordered_map<PageTransferType, vector<transfer_info>> program_page_transfers = {
         {PageTransferType::MULTICAST, {}}, {PageTransferType::UNICAST, {}}};
     std::unordered_map<PageTransferType, vector<transfer_info>> runtime_arg_page_transfers = {

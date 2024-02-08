@@ -37,11 +37,11 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
 FORCE_INLINE
 uint32_t get_read_ptr(db_cb_config_t* db_cb_config) { return (db_cb_config->rd_ptr_16B) << 4; }
 
-inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_write_ptr() {
+FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_WRITE_PTR);
 }
 
-inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_read_ptr() {
+FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_READ_PTR);
 }
 
@@ -77,9 +77,9 @@ void notify_host_of_completion_queue_write_pointer() {
     noc_async_write_barrier();
 }
 
-template <uint32_t host_completion_queue_write_ptr_addr>
+template <uint32_t completion_queue_start_addr, uint32_t host_completion_queue_write_ptr_addr>
 FORCE_INLINE
-void completion_queue_push_back(const uint32_t completion_queue_start_addr, uint32_t push_size_B) {
+void completion_queue_push_back(uint32_t push_size_B) {
     uint32_t push_size_16B = align(push_size_B, 32) >> 4;
     cq_write_interface.completion_fifo_wr_ptr += push_size_16B;
     if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit) {
@@ -92,12 +92,10 @@ void completion_queue_push_back(const uint32_t completion_queue_start_addr, uint
     notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
 }
 
-template <uint32_t host_completion_queue_write_ptr_addr>
 FORCE_INLINE void write_buffers(
     db_cb_config_t* db_cb_config,
     const db_cb_config_t* remote_db_cb_config,
     volatile tt_l1_ptr uint32_t* command_ptr,
-    const uint32_t completion_queue_start_addr,
     uint32_t num_destinations,
     bool sharded,
     uint32_t sharded_buffer_num_cores,
@@ -125,9 +123,6 @@ FORCE_INLINE void write_buffers(
                             command_ptr + COMMAND_PTR_SHARD_IDX);
         }
 
-        if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            completion_queue_reserve_back(num_pages * page_size);
-        }
         uint32_t page_id = dst_page_index;
         uint32_t end_page_id = page_id + num_pages;
         while (page_id < end_page_id) {
@@ -144,9 +139,6 @@ FORCE_INLINE void write_buffers(
                 num_to_write,
                 db_cb_config->page_size_16B);
             page_id += num_to_write;
-        }
-        if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            completion_queue_push_back<host_completion_queue_write_ptr_addr>(completion_queue_start_addr, num_pages * page_size);
         }
     }
     noc_async_write_barrier();
@@ -305,4 +297,12 @@ FORCE_INLINE void notify_host_complete() {
     noc_async_write(uint32_t(finish_ptr), finish_noc_addr, 4);
     noc_async_write_barrier();
     finish_ptr[0] = 0;
+}
+
+FORCE_INLINE void write_event(uint32_t event_address) {
+    uint32_t completion_write_ptr = *get_cq_completion_write_ptr() << 4;
+    constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    uint64_t host_completion_queue_write_addr = pcie_core_noc_encoding | completion_write_ptr;
+    noc_async_write(event_address, host_completion_queue_write_addr, 4);
+    noc_async_write_barrier();
 }
