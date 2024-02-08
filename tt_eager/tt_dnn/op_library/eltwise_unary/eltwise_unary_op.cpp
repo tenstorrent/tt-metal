@@ -101,6 +101,10 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::NEG:
             defines["SFPU_OP_NEG_INCLUDE"] = "1";
             break;
+        case UnaryOpType::TO_UINT16:
+        case UnaryOpType::TO_UINT32:
+            defines["SFPU_OP_TYPECAST_INCLUDE"]="1";
+            break;
         default:
             defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
             break;

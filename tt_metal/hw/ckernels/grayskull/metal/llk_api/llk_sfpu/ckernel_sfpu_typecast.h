@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "noc_nonblocking_api.h"
+#include "sfpi.h"
 
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
-#include "ckernel_sfpu_elu.h"
+using namespace sfpi;
 
 namespace ckernel {
+
+namespace sfpu {
+
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_to_uint16()
@@ -23,8 +27,6 @@ inline void calculate_to_uint16()
 
         for(int i=0; i<47 ; i++)
         {
-            v_if( val >= 0.0f)
-            {
                 v_if ( val >= 10000.0f  ){
                 result += 10000;
                 val -= 10000.0f;
@@ -44,34 +46,12 @@ inline void calculate_to_uint16()
                 v_elseif ( val >= 1.0f){
                     result += 1;
                     val -= 1.0f;
+                }v_elseif ( val < 0.0f){
+                    result = 0;
+                    val = 0.0f;
                 }
                 v_endif;
-            }
-            v_elseif(val <  0.0f)
-            {
-                v_if ( val <= 10000.0f  ){
-                result -= 10000;
-                val += 10000.0f;
-                }
-                v_elseif ( val <= 1000.0f  ){
-                    result -= 1000;
-                    val += 1000.0f;
-                }
-                v_elseif ( val <= 100.0f  ){
-                    result -= 100;
-                    val += 100.0f;
-                }
-                v_elseif ( val <= 10.0f ){
-                    result -= 10;
-                    val += 10.0f;
-                }
-                v_elseif ( val <= 1.0f){
-                    result -= 1;
-                    val += 1.0f;
-                }
-                v_endif;
-            }
-            v_endif;
+
         }
         dst_reg[0] = result;
 
@@ -91,8 +71,6 @@ inline void calculate_to_uint32()
 
         for(int i = 0; i < 95; i++)
         {
-            v_if(val >= 0.0f)
-            {
                 v_if ( val >= 100000000.0f){
                     result += 100000000;
                     val -= 100000000.0f;
@@ -123,45 +101,11 @@ inline void calculate_to_uint32()
                 } v_elseif ( val >= 1.0f){
                     result += 1;
                     val -= 1.0f;
+                } v_elseif ( val < 0.0f){
+                    result = 0;
+                    val = 0.0f;
                 }
                 v_endif;
-            }
-            v_elseif(val < 0.0f)
-            {
-                v_if ( val <= 100000000.0f){
-                    result -= 100000000;
-                    val += 100000000.0f;
-                } v_elseif ( val <= 10000000.0f){
-                    result -= 10000000;
-                    val += 10000000.0f;
-                } v_elseif ( val <= 10000000.0f){
-                    result -= 10000000;
-                    val += 10000000.0f;
-                } v_elseif ( val <= 1000000.0f){
-                    result -= 1000000;
-                    val += 1000000.0f;
-                } v_elseif ( val <= 100000.0f){
-                    result -= 100000;
-                    val += 100000.0f;
-                } v_elseif ( val <= 10000.0f){
-                    result -= 10000;
-                    val += 10000.0f;
-                }v_elseif ( val <= 1000.0f){
-                    result -= 1000;
-                    val += 1000.0f;
-                } v_elseif ( val <= 100.0f){
-                    result -= 100;
-                    val += 100.0f;
-                } v_elseif ( val <= 10.0f){
-                    result -= 10;
-                    val += 10.0f;
-                } v_elseif ( val <= 1.0f){
-                    result -= 1;
-                    val += 1.0f;
-                }
-                v_endif;
-            }
-            v_endif;
         }
         dst_reg[0] = result;
 
@@ -170,4 +114,14 @@ inline void calculate_to_uint32()
 
 }
 
+template <bool APPROXIMATION_MODE>
+void to_uint16_tile_init(){
+    ;
+}
+
+template <bool APPROXIMATION_MODE>
+void to_uint32_tile_init() {
+    ;
+}
 } //ckernel
+} // sfpu

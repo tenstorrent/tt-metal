@@ -1559,7 +1559,7 @@ Tensor _typecast(const Tensor& input_a, const DataType& dtype, const MemoryConfi
     {
         return to_uint16(input_a,output_mem_config);
     }
-    else if(cb_data_format == tt::DataFormat::UInt32)
+    else if(cb_data_format == tt::DataFormat::UInt32  || cb_data_format == tt::DataFormat::Float32)
     {
         return to_uint32(input_a,output_mem_config);
     }

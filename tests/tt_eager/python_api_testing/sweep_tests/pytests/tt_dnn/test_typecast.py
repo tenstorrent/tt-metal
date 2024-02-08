@@ -29,6 +29,10 @@ mem_configs = [
         (torch.float16, ttl.tensor.DataType.FLOAT32),
         (torch.float32, ttl.tensor.DataType.BFLOAT8_B),
         (torch.bfloat16, ttl.tensor.DataType.BFLOAT16),
+        (
+            torch.int,
+            ttl.tensor.DataType.BFLOAT16,
+        ),  # we can't keep int for tt input because input will be of bfloat16 in ckernel.
         (torch.int, ttl.tensor.DataType.UINT32),
     ),
 )
@@ -39,6 +43,7 @@ mem_configs = [
         (torch.float32, ttl.tensor.DataType.BFLOAT8_B),
         (torch.int32, ttl.tensor.DataType.UINT16),
         (torch.int32, ttl.tensor.DataType.UINT32),
+        (torch.float32, ttl.tensor.DataType.FLOAT32),
     ),
 )
 @pytest.mark.parametrize(
@@ -78,14 +83,14 @@ class TestTypecast:
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
         if tt_input_dtype in [ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.FLOAT32]:
-            if tt_output_dtype in [ttl.tensor.DataType.UINT16, ttl.tensor.DataType.UINT32]:
+            if tt_output_dtype in [ttl.tensor.DataType.UINT16, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.FLOAT32]:
                 pytest.skip(f"{tt_input_dtype} cannot be converted yet. Skip")
 
         options = defaultdict(lambda: (-100, 100))
-        options[ttl.tensor.DataType.UINT16] = (0, 255)
-        options[ttl.tensor.DataType.UINT16] = (-30000, 30000)
+        options[ttl.tensor.DataType.FLOAT32] = (0, 2137483647)
+        options[ttl.tensor.DataType.UINT16] = (0, 65535)
         options[ttl.tensor.DataType.UINT32] = (
-            -207483647,
+            0,
             2137483647,
         )  # uint max value is 4294967295, as torch dont have uint32
 
