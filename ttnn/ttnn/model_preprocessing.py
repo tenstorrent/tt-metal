@@ -586,7 +586,7 @@ def preprocess_model(
                 if isinstance(model.ttnn_module_args, Conv2dArgs):
                     if isinstance(model.weight, torch.Tensor):
                         return model
-                    return ttnn.Conv2D(
+                    return ttnn.Conv2d(
                         **model.ttnn_module_args,
                         weight=model.weight,
                         bias=model.bias if "bias" in model else None,
