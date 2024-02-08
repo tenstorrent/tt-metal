@@ -11,7 +11,7 @@ from models.demos.llama2_70b.reference.llama import Llama
 from models.demos.llama2_70b.reference.llama.model import apply_rotary_emb, precompute_freqs_cis
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
+    # get_tt_cache_path,
 )
 from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
@@ -52,6 +52,7 @@ class TtLlamaRotary(torch.nn.Module):
         self.head_dim = hidden_size // n_heads
 
     def forward(self, xq, xk, xv, rot_mat):
+        breakpoint()
         seqlen = xq.shape()[0]
         bsz = xq.shape()[2]
 
@@ -172,8 +173,9 @@ def run_test_LlamaReshape(
     rot_mat = get_rotation_mat(
         dhead=head_dim, end=configuration.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
     )
-    inp[3] = rot_mat
     tt_inp = [torch2tt_tensor(i, device) for i in inp]
+    # FLOAT32 not supported! need for good rot emb.
+    tt_inp[3] = torch2tt_tensor(rot_mat, device)  # , tt_dtype=tt_lib.tensor.DataType.FLOAT32)
 
     tt_out = tt_model(*tt_inp)
     tt_out = [tt2torch_tensor(tt_out_tensor) for tt_out_tensor in tt_out]
@@ -218,7 +220,7 @@ def run_test_LlamaReshape(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))
 def test_LlamaReshape_inference(
     model_version,
     batch,
