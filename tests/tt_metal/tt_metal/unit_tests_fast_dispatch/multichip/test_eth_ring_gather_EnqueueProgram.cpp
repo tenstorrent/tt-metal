@@ -276,7 +276,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    std::vector<CommandQueue> cqs;
+    std::vector<std::reference_wrapper<CommandQueue>> cqs;
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
         tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
@@ -423,7 +423,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    std::vector<CommandQueue> cqs;
+    std::vector<std::reference_wrapper<CommandQueue>> cqs;
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
         tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
