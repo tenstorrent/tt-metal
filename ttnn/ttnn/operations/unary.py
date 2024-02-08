@@ -32,6 +32,11 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "asin": torch.asin,
             "acos": torch.acos,
             "atan": torch.atan,
+            "sinh": torch.sinh,
+            "cosh": torch.cosh,
+            "asinh": torch.asinh,
+            "acosh": torch.acosh,
+            "atanh": torch.atanh,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -109,6 +114,11 @@ TTL_UNARY_FUNCTIONS = [
     ("asin", ttl.tensor.asin),
     ("acos", ttl.tensor.acos),
     ("atan", ttl.tensor.atan),
+    ("sinh", ttl.tensor.sinh),
+    ("cosh", ttl.tensor.cosh),
+    ("asinh", ttl.tensor.asinh),
+    ("acosh", ttl.tensor.acosh),
+    ("atanh", ttl.tensor.atanh),
 ]
 
 

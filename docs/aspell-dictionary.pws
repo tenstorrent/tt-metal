@@ -1,4 +1,4 @@
-personal_ws-1.1 en 470
+personal_ws-1.1 en 474 
 ABI
 ADDI
 API
@@ -161,6 +161,7 @@ ZoneScoped
 abovementioned
 acc
 acos
+acosh
 addexp
 addr
 agrebenisan
@@ -169,9 +170,11 @@ apis
 arg
 args
 asin
+asinh
 asm
 async
 atan
+atanh
 autoclass
 autofunction
 backend
@@ -397,6 +400,7 @@ shft
 sigmoid
 signbit
 silu
+sinh
 sizeof
 skillset
 smi
