@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import math
 
 import torch
 import torch.nn as nn
@@ -85,10 +86,32 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w):
     ## permute to N H W C
     tt_input = input.permute(0, 2, 3, 1)
 
-    grid_size = (1, 8)  ## ttnn uses (y, x) convention
+    # grid_size = (1, 8)  ## ttnn uses (y, x) convention
 
-    in_shard_shape = [batch_size * h * w // (grid_size[1] * grid_size[0]), c]  ## y, x
-    out_shard_shape = [batch_size * h * w * scale_h * scale_w // (grid_size[1] * grid_size[0]), c]
+    ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
+    ## nsticks per shard should be divisible by in_w
+    max_grid_size = (9, 12)
+    min_in_shard_h = w  ## one full row of input
+    max_nshards = min(batch_size * h, max_grid_size[0] * max_grid_size[1])
+    nshards = max_nshards
+    while nshards > 0:
+        if batch_size * h % nshards == 0:
+            break
+        nshards -= 1
+
+    ncores = nshards
+    if ncores % max_grid_size[1] == 0:
+        grid_size = (ncores // max_grid_size[1], max_grid_size[1])
+    else:
+        if ncores < max_grid_size[1]:
+            grid_size = (1, ncores)
+        else:
+            grid1_size = (ncores // max_grid_size[1], max_grid_size[1])
+            grid2_size = (ncores // max_grid_size[1] + 1, ncores % max_grid_size[1])
+            grid_size = (grid1_size, grid2_size)
+
+    in_shard_shape = [batch_size * h * w // ncores, c]  ## y, x
+    out_shard_shape = [batch_size * h * w * scale_h * scale_w // ncores, c]
 
     in_sharded_mem_config = ttnn.create_sharded_memory_config(grid_size, in_shard_shape, ttnn.ShardStrategy.HEIGHT)
     out_sharded_mem_config = ttnn.create_sharded_memory_config(grid_size, out_shard_shape, ttnn.ShardStrategy.HEIGHT)
