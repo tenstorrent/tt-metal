@@ -166,6 +166,23 @@ Embedding
 
    ttnn/embedding
 
+Pooling
+=======
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/average_pool2d
+   ttnn/MaxPool2d
+
+Sampling
+========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/upsample
+
 
 Model Conversion
 ****************
