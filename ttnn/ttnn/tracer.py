@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Union, Tuple, Optional
 from contextlib import contextmanager
+import time
+from typing import Any, Union, Tuple, Optional
 
 import graphviz
 from pyrsistent import PClass, field
@@ -13,7 +14,6 @@ from pyrsistent import PClass, field
 import torchtrail
 from torchtrail.tracer import (
     Node,
-    TorchTensor,
     TracedTorchTensor,
     get_unique_id,
     create_input_tensor,
@@ -27,8 +27,6 @@ import ttnn
 
 
 class TTNNTensor(PClass):
-    tensor = field(mandatory=True)
-
     def __repr__(self):
         return "ttnn.Tensor"
 
@@ -56,9 +54,7 @@ class TracedTTNNTensor(ttnn.Tensor):
 def create_ttnn_input_tensor(tensor: ttnn.Tensor) -> TracedTTNNTensor:
     node_name = f"ttnn_input_{get_unique_id()}"
     node = Node(name=node_name)
-    graph = MultiDiGraph().add_node(
-        node, operation=TTNNTensor(tensor=tensor), shapes=(tuple(tensor.shape),), dtypes=(tensor.dtype,)
-    )
+    graph = MultiDiGraph().add_node(node, operation=TTNNTensor(), shapes=(tuple(tensor.shape),), dtypes=(tensor.dtype,))
     return TracedTTNNTensor(tensor, graph=graph, node=node, output_index=0)
 
 
@@ -129,7 +125,13 @@ def trace_ttnn_operation(pretty_operation_name, operation):
 
         node_name = f"{pretty_operation_name}_{get_unique_id()}"
 
+        start_time = time.time()
         operation_return_type = operation(*args, **kwargs)
+        end_time = time.time()
+
+        duration = None
+        if ttnn.TTNN_ENABLE_LOGGING:
+            duration = end_time - start_time
 
         output_tensors = preprocess_return_value(operation_return_type)
 
@@ -147,6 +149,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
             operation=TTNNOperation(pretty_name=pretty_operation_name, operation=operation),
             shapes=shapes,
             dtypes=dtypes,
+            duration=duration,
         )
         for input_index, tensor in enumerate(input_tensors):
             graph = graph.add_edge(

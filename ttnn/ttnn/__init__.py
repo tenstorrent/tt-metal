@@ -6,6 +6,8 @@ import pathlib
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
+from tt_lib.ttnn import TTNN_ENABLE_LOGGING
+
 from ttnn.types import (
     TILE_SIZE,
     Device,
