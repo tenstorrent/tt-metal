@@ -87,7 +87,9 @@ Table of Contents generated with
 accelerators. We are currently working on functionality for other Tenstorrent
 architectures.
 
-To find through all necessary instructions for setting up your Tenstorrent accelerator and this software, please refer to our full [installation instructions](./INSTALLING.md).
+To find through all necessary instructions for setting up your Tenstorrent
+accelerator and this software, please refer to our full [installation
+instructions](./INSTALLING.md).
 
 You should look ahead to [Getting started](#getting-started) to further use
 this project.
