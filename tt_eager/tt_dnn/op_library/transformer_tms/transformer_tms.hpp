@@ -77,8 +77,8 @@ inline Tensor attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tens
 }
 
 inline Tensor attn_matmul_from_cache(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const uint32_t num_tokens, const bool transpose_hw, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt) {
-    TT_ASSERT(num_tokens > 0, "Number of tokens must be at least 1!");
-    TT_ASSERT(num_tokens <= input_tensor_b.shape()[2], "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
+    TT_FATAL(num_tokens > 0, "Number of tokens must be at least 1!");
+    TT_FATAL(num_tokens <= input_tensor_b.shape()[2], "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
     const uint32_t num_tokens_rounded_up_to_32 = ((num_tokens - 1) / 32 + 1) * 32;
     return operation::run(AttnMatmul{num_tokens_rounded_up_to_32, transpose_hw, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
 }

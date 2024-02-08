@@ -76,6 +76,8 @@ void FillRM::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL((this->N > 0 && this->C > 0 && this-> H > 0 && this-> W > 0));
     TT_FATAL((this->hFill <= this->H && this->wFill <= this->W));
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "FillRM does not currently support sharding");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "FillRM does not currently support sharding");
 }
 
 std::vector<Shape> FillRM::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

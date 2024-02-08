@@ -31,7 +31,7 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
         device = a.device();
     }
 
-    TT_ASSERT(dims.size() == 4, "Only 4D tensor are supported for permute.");
+    TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
     uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
 
     bool pad_n = H == 0 || W == 0;
