@@ -2,17 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <filesystem>
-#include <mutex>
 #include <unordered_set>
 #include <string>
 
 #include "tt_metal/host_api.hpp"
-#include "impl/debug/dprint_server.hpp"
 #include "dev_msgs.h"
 
-#include "tools/profiler/profiler.hpp"
 #include "tools/cpuprof/cpuprof.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
@@ -232,10 +227,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         }
     }
 
-    void WriteToBuffer( std::shared_ptr<const Buffer> buffer, const std::vector<uint32_t> &host_buffer){
-        WriteToBuffer ( *buffer, host_buffer );
-    }
-
     void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
@@ -247,6 +238,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             } break;
             default: TT_FATAL(false && "Unsupported buffer type!");
         }
+    }
+
+    void WriteToBuffer( std::shared_ptr<const Buffer> buffer, const std::vector<uint32_t> &host_buffer){
+        WriteToBuffer ( *buffer, host_buffer );
     }
 
     void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
@@ -376,11 +371,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         }
     }
 
-    void ReadFromBuffer(std::shared_ptr<const Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order)
-    {
-        ReadFromBuffer(*buffer, host_buffer, shard_order);
-    }
-
     void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
         Device *device = buffer.device();
         switch (buffer.buffer_type()) {
@@ -398,6 +388,11 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             } break;
             default: TT_FATAL(false && "Unsupported buffer type!");
         }
+    }
+
+    void ReadFromBuffer(std::shared_ptr<const Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order)
+    {
+        ReadFromBuffer(*buffer, host_buffer, shard_order);
     }
 
     void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id) {

@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include "tt_metal/tt_stl/concepts.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 
 namespace tt {

@@ -12,8 +12,6 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
