@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 import torch
+import ttnn
 from tt_lib.utils import (
     _nearest_32 as nearest_32,
     tilize as tilize_util,
