@@ -4,7 +4,6 @@
 
 import random
 from loguru import logger
-import pytest
 import torch
 import tt_lib as ttl
 
@@ -21,7 +20,6 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
     y = torch.Tensor(size=input_shape).uniform_(-100, 100)
     z = torch.Tensor(size=input_shape).uniform_(-100, 100)
 
-    # ref_value = torch.addcdiv(x, y, z, value=scalar)
     logger.info(
         f"Running addcdiv with input_shape {input_shape} dtype {dtype} dlayout {dlayout} buffer_type {buffer_type} output_mem_config {output_mem_config} scalar {scalar} data_seed {data_seed}"
     )
@@ -53,7 +51,6 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
         t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
 
         y = tt2torch_tensor(t3)
-
     except Exception as exc:
         logger.warning(f"run_addcdiv RuntimeError occured {exc}")
 
@@ -63,40 +60,39 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
     logger.info(f"Finished running addcdiv")
 
 
-test_sweep_args = [
-    (
-        (9, 23, 416, 310),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        10406825,
-        -42.25,
-    ),
-    (
+def test_addcdiv_test():
+    run_addcdiv(
         (3, 10, 73, 388),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        8405597,
-        -61.75,
-    ),
-    (
+        dtype=[ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        dlayout=[ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        buffer_type=[ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
+        output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        data_seed=8405597,
+        scalar=-61.75,
+    )
+
+    run_addcdiv(
+        (9, 23, 416, 310),
+        dtype=[ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        dlayout=[ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        buffer_type=[ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1, ttl.tensor.BufferType.DRAM],
+        output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        data_seed=10406825,
+        scalar=-42.25,
+    )
+
+    run_addcdiv(
         (2, 24, 39, 462),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        10406825,
-        -42.25,
-    ),
-]
-
-
-@pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar",
-    (test_sweep_args),
-)
-def test_addcdiv_test(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar):
-    run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar)
+        dtype=[ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        dlayout=[ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        buffer_type=[
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.BufferType.DRAM,
+            ttl.tensor.BufferType.L1,
+        ],  # too large for L1
+        output_mem_config=ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        ),  # too large for L1
+        data_seed=10406825,
+        scalar=-42.25,
+    )
