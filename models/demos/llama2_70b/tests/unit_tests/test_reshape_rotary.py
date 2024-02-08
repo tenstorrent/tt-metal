@@ -52,7 +52,6 @@ class TtLlamaRotary(torch.nn.Module):
         self.head_dim = hidden_size // n_heads
 
     def forward(self, xq, xk, xv, rot_mat):
-        breakpoint()
         seqlen = xq.shape()[0]
         bsz = xq.shape()[2]
 
