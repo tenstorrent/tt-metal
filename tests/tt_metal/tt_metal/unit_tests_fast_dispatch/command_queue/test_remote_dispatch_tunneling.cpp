@@ -26,7 +26,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestCommandReachesRemoteDevice) {
             continue;
         }
 
-        CommandQueue &remote_cq = detail::GetCommandQueue(device);
+        CommandQueue &remote_cq = device->command_queue();
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());

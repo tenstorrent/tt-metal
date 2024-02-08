@@ -382,15 +382,15 @@ void EnqueueTrace(Trace& trace, bool blocking);
  * */
 void DumpDeviceProfileResults(Device *device, const Program &program);
 
-namespace experimental
-{
-    struct Event{
-        uint32_t id;
-        uint32_t cq_id;
-    };
+// namespace experimental
+// {
+//     struct Event{
+//         uint32_t id;
+//         uint32_t cq_id;
+//     };
 
-    void RecordEvent (Event & e);
-}
+//     void RecordEvent (Event & e);
+// }
 
 }  // namespace tt_metal
 
