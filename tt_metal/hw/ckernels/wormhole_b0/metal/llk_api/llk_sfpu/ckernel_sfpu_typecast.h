@@ -2,15 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "noc_nonblocking_api.h"
+#include "sfpi.h"
 
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
-#include "ckernel_sfpu_elu.h"
+using namespace sfpi;
 
 namespace ckernel {
+
+namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_to_uint16()
@@ -109,5 +113,14 @@ inline void calculate_to_uint32()
     }
 
 }
+template <bool APPROXIMATION_MODE>
+void to_uint16_tile_init(){
+    ;
+}
 
+template <bool APPROXIMATION_MODE>
+void to_uint32_tile_init() {
+    ;
+}
+}
 } //ckernel
