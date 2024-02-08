@@ -1552,7 +1552,30 @@ Tensor argmax(
     return operation::decorate_as_composite(__func__, _argmax)(input_a, dim, all, output_mem_config);
 }
 
+
+Tensor _typecast(const Tensor& input_a, const DataType& dtype, const MemoryConfig& output_mem_config) {
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(dtype);
+    if(cb_data_format == tt::DataFormat::UInt16)
+    {
+        return to_uint16(input_a,output_mem_config);
+    }
+    else if(cb_data_format == tt::DataFormat::UInt32)
+    {
+        return to_uint32(input_a,output_mem_config);
+    }
+    else{
+        return to_bfloat(input_a, dtype, output_mem_config);
+    }
+}
+
+Tensor typecast(const Tensor& input_tensors, const DataType& dtype, const MemoryConfig& output_mem_config ) {
+    return operation::decorate_as_composite(__func__, _typecast)(input_tensors, dtype, output_mem_config);
+}
+
+
 Tensor _argmin(const Tensor& input_a, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
+    auto& input_shape = input_a.shape();
+    TT_FATAL(input_shape.rank() == 4,"supported for rank-4 tensors at this time");
 
     Tensor neg_input =  neg(input_a, output_mem_config);
     return (argmax(neg_input, _dim, all, output_mem_config));
