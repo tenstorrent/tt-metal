@@ -60,6 +60,11 @@ Pointwise Unary
    ttnn/asin
    ttnn/acos
    ttnn/atan
+   ttnn/sinh
+   ttnn/cosh
+   ttnn/asinh
+   ttnn/acosh
+   ttnn/atanh
 
 Pointwise Binary
 ================
