@@ -32,17 +32,9 @@ def attempt_get_env_var(env_var_name):
 
 def get_is_srcdir_build():
     build_dir = Path(__file__).parent
-
     assert build_dir.is_dir()
-
     git_dir = build_dir / ".git"
-
-    is_srcdir_build = git_dir.exists()
-
-    if is_srcdir_build:
-        assert git_dir.is_dir(), f"{git_dir} is named .git/ but is not a directory"
-
-    return is_srcdir_build
+    return git_dir.exists()
 
 
 def get_is_dev_build():
