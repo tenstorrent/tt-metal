@@ -114,7 +114,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
             2,
             4096,
             320,
-            0,
+            3,
             40,
         ),
         (
@@ -122,7 +122,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
             2,
             1024,
             640,
-            1,
+            2,
             80,
         ),
         (
@@ -130,7 +130,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
             2,
             256,
             1280,
-            2,
+            1,
             160,
         ),
         (
@@ -138,7 +138,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
             2,
             64,
             1280,
-            2,
+            1,
             160,
         ),
     ],
@@ -151,7 +151,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     model.eval()
     state_dict = model.state_dict()
     config = model.config
-    basic_transformer = pipe.unet.down_blocks[index].attentions[1].transformer_blocks[0]
+    basic_transformer = pipe.unet.up_blocks[index].attentions[1].transformer_blocks[0]
 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.rand(hidden_states_shape) * 0.01
