@@ -19,6 +19,7 @@ parameters = {
     "input_dtype": [ttnn.bfloat16],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    "layout": [ttnn.TILE_LAYOUT],
 }
 
 
@@ -37,19 +38,20 @@ def run(
     input_dtype,
     input_memory_config,
     output_memory_config,
+    layout,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
-    low = -0.1
-    high = 0.1
+    low = -1
+    high = 1
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
     torch_output_tensor = torch.asin(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config
+        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
     )
 
     output_tensor = ttnn.asin(input_tensor, memory_config=output_memory_config)

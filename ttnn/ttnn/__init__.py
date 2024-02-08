@@ -105,6 +105,11 @@ from ttnn.operations.unary import (
     asin,
     acos,
     atan,
+    sinh,
+    cosh,
+    asinh,
+    acosh,
+    atanh,
 )
 
 from ttnn.operations.binary import (
