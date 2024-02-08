@@ -21,7 +21,7 @@ pytest-timeout==2.2.0
 jsbeautifier==1.14.7
 datasets==2.9.0
 torchvision==0.14.1+cpu
-transformers==4.37.2
+transformers==4.28.1
 xlsxwriter==3.0.8
 tiktoken==0.3.3
 tqdm==4.65.0
