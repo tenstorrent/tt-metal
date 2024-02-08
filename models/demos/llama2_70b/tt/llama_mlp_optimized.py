@@ -186,7 +186,7 @@ class TtLlamaMLP_optimized(nn.Module):
             output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
         )
 
-        x.deallocate()
+        x.deallocate(True)
 
         mul_mem_config = tt_lib.tensor.MemoryConfig(
             memory_layout=tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
