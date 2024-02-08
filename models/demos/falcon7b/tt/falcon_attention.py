@@ -290,7 +290,7 @@ class TtFalconAttention(nn.Module):
             )
 
         elif llm_mode == "decode":
-            attn_weights = tt_lib.operations.primary.transformers.attn_matmul(
+            attn_weights = tt_lib.operations.primary.transformers.group_attn_matmul(
                 query_layer,
                 key_layer_transposed,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -353,7 +353,7 @@ class TtFalconAttention(nn.Module):
             )
 
         elif llm_mode == "decode":
-            attn_output = tt_lib.operations.primary.transformers.attn_matmul(
+            attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(
                 attn_weights,
                 value_layer,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
