@@ -538,6 +538,11 @@ namespace op_profiler {
 #endif
     }
 
+    static void dump_device_profiler_results (Device * device, std::shared_ptr<Program> program)
+    {
+        dump_device_profiler_results(device, *program);
+    }
+
     class OpProfileScope
     {
         private:

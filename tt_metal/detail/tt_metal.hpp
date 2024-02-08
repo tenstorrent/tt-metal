@@ -81,6 +81,7 @@ namespace tt::tt_metal{
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
         void LaunchProgram(Device *device, Program &program);
+        void LaunchProgram(Device *device, std::shared_ptr<Program> program);
 
         /**
          *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`

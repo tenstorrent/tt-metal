@@ -431,6 +431,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     }
 
+    void LaunchProgram(Device *device, std::shared_ptr<Program> program){
+        LaunchProgram(device, *program);
+    }
+
     void LaunchProgram(Device *device, Program &program) {
         {//Profiler scope start
         ZoneScoped;
