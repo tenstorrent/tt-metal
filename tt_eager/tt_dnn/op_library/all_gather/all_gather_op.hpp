@@ -16,6 +16,7 @@ namespace tt_metal {
 
 struct AllGather {
     const uint32_t dim;
+    const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
     const chip_id_t receiver_device_id;
@@ -29,9 +30,9 @@ struct AllGather {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t ring_size, const uint32_t ring_index, const chip_id_t receiver_device_id, const chip_id_t sender_device_id);
+operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const chip_id_t receiver_device_id, const chip_id_t sender_device_id);
 
-std::vector<Tensor> all_gather(const std::vector<Tensor> &input_tensors, uint32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+std::vector<Tensor> all_gather(const std::vector<Tensor> &input_tensors, const uint32_t dim, const uint32_t num_links = 1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 
