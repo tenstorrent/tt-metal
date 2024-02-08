@@ -369,3 +369,18 @@ def rmsnorm(
     t2 = ttnn.rms_norm(t0, t1)
 
     return ttnn_tensor_to_torch(t2, output_mem_config)
+
+def transformer_concatenate_heads(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transformer.concatenate_heads(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
