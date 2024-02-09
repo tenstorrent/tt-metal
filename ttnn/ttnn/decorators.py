@@ -5,7 +5,6 @@
 from contextlib import contextmanager
 from functools import wraps
 import inspect
-import importlib
 from loguru import logger
 
 import ttnn
@@ -71,15 +70,6 @@ def convert_torch_output_to_be_like_ttnn_output(torch_output, output):
     return torch_output
 
 
-def is_import_time():
-    for frame_info in inspect.stack():
-        if frame_info.frame.f_globals.get("__name__") == "__main__":
-            return False
-        if "importlib" in frame_info.filename:
-            return True
-    return False
-
-
 def document_input_tensors(name, function, validate_input_tensors):
     signature = inspect.signature(validate_input_tensors)
     arguments = {arg_name: None for arg_name in signature.parameters}
@@ -98,14 +88,13 @@ def document_input_tensors(name, function, validate_input_tensors):
 
         return wrapper
 
-    if not is_import_time():
-        original_validate_input_tensor = ttnn.validate_input_tensor
-        ttnn.validate_input_tensor = document_validate_input_tensor(ttnn.validate_input_tensor)
-        try:
-            validate_input_tensors(**arguments)
-        except:
-            pass
-        ttnn.validate_input_tensor = original_validate_input_tensor
+    original_validate_input_tensor = ttnn.validate_input_tensor
+    ttnn.validate_input_tensor = document_validate_input_tensor(ttnn.validate_input_tensor)
+    try:
+        validate_input_tensors(**arguments)
+    except:
+        pass
+    ttnn.validate_input_tensor = original_validate_input_tensor
 
     if not tensor_schemas:
         # Handle the case for the functions without input tensors
@@ -128,14 +117,15 @@ def document_input_tensors(name, function, validate_input_tensors):
 
                 def to_string(object):
                     try:
-                        if isinstance(object, ttnn.DataType):
+                        if object is None:
+                            return ""
+                        elif isinstance(object, ttnn.DataType):
                             return f"ttnn.{object.name.lower()}"
                         elif isinstance(object, ttnn.Layout):
                             return f"ttnn.{object.name}_LAYOUT"
                         else:
                             return f"{object}"
                     except Exception as e:
-                        logger.warning(str(e))
                         return f"{object}"
 
                 value = f"{', '.join([to_string(element) for element in value])}"

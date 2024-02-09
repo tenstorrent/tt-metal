@@ -77,7 +77,7 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 )
 def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
     r"""
-    _reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
+    reshape(input_tensor: ttnn.Tensor, shape: Union[Shape, Tuple[int, ...]]) -> ttnn.Tensor
 
     Reshape :attr:`input_tensor` into :attr:`shape`.
 
@@ -220,13 +220,16 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
     """
-    _from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None) -> ttnn.Tensor
+    from_torch(tensor: torch.Tensor, dtype: Optional[DataType] = None, layout: Optional[Layout] = ROW_MAJOR_LAYOUT, device: Optional[Device] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
 
     Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
 
     Args:
         * :attr:`tensor`: the torch.Tensor
         * :attr:`dtype`: the optional `ttnn` data type.
+        * :attr:`layout`: the optional `ttnn` layout.
+        * :attr:`device`: the optional `ttnn` device.
+        * :attr:`memory_config`: the optional `ttnn` memory configuration.
 
     Example::
 
@@ -271,7 +274,7 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
 @ttnn.register_operation(name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors)
 def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch.Tensor":
     """
-    _to_torch(tensor: ttnn.Tensor) -> torch.Tensor
+    to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
 
     Converts the `ttnn.Tensor` :attr:`tensor` into a `torch.Tensor`.
 
@@ -329,7 +332,7 @@ def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
 @ttnn.register_operation(name="ttnn.to_device", validate_input_tensors=_to_device_validate_input_tensors)
 def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG):
     """
-    _to_device(tensor: ttnn.Tensor, device: tt_lib.device.Device, dtype: Optional[DataType] = None) -> ttnn.Tensor
+    to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
     The tensor may be placed in DRAM or L1 memory.
@@ -338,6 +341,7 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
 
     Args:
         * :attr:`tensor`: the ttnn.Tensor
+        * :attr:`device`: the ttnn.Device
         * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
 
     Example::
@@ -374,7 +378,7 @@ def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs)
 @ttnn.register_operation(name="ttnn.from_device", validate_input_tensors=_from_device_validate_input_tensors)
 def from_device(tensor):
     """
-    _from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
+    from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
 
     Copies the `ttnn.Tensor` :attr:`tensor` to the host.
 
@@ -455,7 +459,7 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
 
     Args:
         * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`memory_config`: the ttnn.Tensor
+        * :attr:`memory_config`: the desired MemoryConfig
 
     Example::
         >>> device_id = 0
@@ -531,7 +535,7 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 @ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
 def to_layout(tensor, layout: ttnn.Layout):
     """
-    _to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
+    to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 
     Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
     the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
