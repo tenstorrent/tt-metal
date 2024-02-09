@@ -271,7 +271,16 @@ validate_and_set_env_vars() {
 }
 
 set_up_chdir() {
-    cd $PYTHONPATH
+    # The user might have multiple entries in their PYTHONPATH so we should try to find the right one
+    IFS=':' read -ra ENTRIES <<< "$PYTHONPATH"
+    for ENTRY in "${ENTRIES[@]}"; do
+      if [[ $ENTRY == *"tt-metal" ]]; then
+        cd $ENTRY
+        return
+      fi
+    done
+    echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
+    exit 1
 }
 
 main() {
