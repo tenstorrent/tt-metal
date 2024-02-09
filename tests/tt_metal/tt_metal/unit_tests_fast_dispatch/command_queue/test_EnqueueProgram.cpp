@@ -130,7 +130,11 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 
     initialize_dummy_kernels(program, program_config.cr_set);
     EnqueueProgram(cq, program, false);
-    Finish(cq);
+    if (not device->is_mmio_capable()) {
+        // ensure that the write is flushed before doing host readback in `cb_config_successful` when tunneling to remote device
+        Finish(cq);
+    }
+
     auto pass_1 = cb_config_successful(device, program_config);
 
     DummyProgramMultiCBConfig program_config_2 = program_config;
@@ -163,6 +167,8 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
+
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
 
     vector<uint32_t> sem_vector;
     uint32_t sem_buffer_size = program_config.num_sems * L1_ALIGNMENT;
@@ -398,6 +404,9 @@ TEST_F(CommandQueueFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
     EnqueueProgram(*this->cmd_queue, program, false);
 
     Finish(*this->cmd_queue);
+
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
@@ -438,7 +447,7 @@ TEST_F(CommandQueueFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
-    DummyProgramConfig config = {.cr_set = cr_set, .num_sems = 1};
+    DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
     EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device_, *this->cmd_queue, config));
 }

@@ -164,7 +164,7 @@ FORCE_INLINE void write_remote_buffers(
 
         uint32_t num_to_write;
         uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
-        uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size_16B << 4) - 1;
+        uint32_t l1_consumer_fifo_limit = src_addr + (db_cb_config->total_size_16B << 4);
 
         Buffer buffer;
         if (not(sharded)) {
@@ -187,7 +187,7 @@ FORCE_INLINE void write_remote_buffers(
                 db_cb_config,
                 remote_producer_db_cb_config,
                 producer_noc_encoding,
-                l1_consumer_fifo_limit,
+                (l1_consumer_fifo_limit >> 4),
                 num_to_write,
                 db_cb_config->page_size_16B);
             page_id += num_to_write;
