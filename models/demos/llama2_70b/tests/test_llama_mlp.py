@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import time
 
 import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
@@ -110,28 +109,19 @@ def run_test_LlamaMLP_inference(
         )
         tt_mlp_input = torch2tt_tensor(mlp_input, device)
 
-    # Warmup
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
-    # print(f"Time taken for inference: {time.time() - start:.2f} seconds, using MLP optimized: {mlp_optimized}")
-    # tt_out = tt2torch_tensor(tt_out)
-    start = time.time()
-    for _ in range(2):
-        tt_out = tt_LlamaMLP_model(tt_out)
-
-    print(f"Time taken for 2 inference: {time.time() - start:.6f} seconds, using MLP optimized: {mlp_optimized}")
     tt_out = tt2torch_tensor(tt_out)
     # check outputs ----------------------------------------------------------------------
+    logger.info(comp_allclose(pytorch_out, tt_out))
 
-    # logger.info(comp_allclose(pytorch_out, tt_out))
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(f"PCC value: {output_pcc}")
 
-    # does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-    # logger.info(f"PCC value: {output_pcc}")
-
-    # if does_pass:
-    #     logger.info("Falcon MLP output Passed!")
-    # else:
-    #     logger.warning("Falcon MLP output Failed!")
-    #     assert does_pass, f"PCC value is lower than {pcc}"
+    if does_pass:
+        logger.info("Falcon MLP output Passed!")
+    else:
+        logger.warning("Falcon MLP output Failed!")
+        assert does_pass, f"PCC value is lower than {pcc}"
 
 
 @pytest.mark.parametrize(
