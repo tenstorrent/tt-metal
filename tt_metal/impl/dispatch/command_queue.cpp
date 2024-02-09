@@ -145,6 +145,7 @@ const DeviceCommand EnqueueReadInterleavedBufferCommand::create_buffer_transfer_
 const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t dst_address) {
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     uint32_t num_pages = this->pages_to_read;
+    std::cout << "DST ADDRESS FOR EQRB " << dst_address << std::endl;
     DeviceCommand command = this->create_buffer_transfer_instruction(dst_address, padded_page_size, num_pages);
 
     // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
@@ -182,13 +183,13 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     bool route_through_ethernet = not device->is_mmio_capable();
     if (route_through_ethernet) {
         uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
-        uint32_t router_tx_num_pages = 1;
-        if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-            router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
-            router_cb_num_pages = router_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
-        }
-        command.set_producer_router_transfer_num_pages(router_tx_num_pages);
-        command.set_consumer_router_transfer_num_pages(router_tx_num_pages);
+        // uint32_t router_tx_num_pages = 1;
+        // if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+        //     router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
+        //     router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+        // }
+        command.set_producer_router_transfer_num_pages(router_cb_num_pages);
+        command.set_consumer_router_transfer_num_pages(router_cb_num_pages);
 
         uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
         TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in router buffer");
@@ -334,13 +335,13 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     bool route_through_ethernet = not device->is_mmio_capable();
     if (route_through_ethernet) {
         uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
-        uint32_t router_tx_num_pages = 1;
-        if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-            router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
-            router_cb_num_pages = router_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
-        }
-        command.set_producer_router_transfer_num_pages(router_tx_num_pages);
-        command.set_consumer_router_transfer_num_pages(router_tx_num_pages);
+        // uint32_t router_tx_num_pages = 1;
+        // if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+        //     router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
+        //     router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+        // }
+        command.set_producer_router_transfer_num_pages(router_cb_num_pages);    // can get rid of this and use router_cb_num_pages instead
+        command.set_consumer_router_transfer_num_pages(router_cb_num_pages);
 
         uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
         TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in router buffer");
@@ -453,6 +454,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     command.set_page_size(DeviceCommand::PROGRAM_PAGE_SIZE);
     command.set_num_pages(DeviceCommand::TransferType::RUNTIME_ARGS, num_runtime_arg_pages);
     command.set_num_pages(DeviceCommand::TransferType::CB_CONFIGS, num_cb_config_pages);
+    std::cout << "Number of multicast pages: " << num_program_multicast_binary_pages << std::endl;
     command.set_num_pages(DeviceCommand::TransferType::PROGRAM_MULTICAST_PAGES, num_program_multicast_binary_pages);
     command.set_num_pages(DeviceCommand::TransferType::PROGRAM_UNICAST_PAGES, num_program_unicast_binary_pages);
     command.set_num_pages(DeviceCommand::TransferType::GO_SIGNALS_MULTICAST, num_go_signal_multicast_pages);

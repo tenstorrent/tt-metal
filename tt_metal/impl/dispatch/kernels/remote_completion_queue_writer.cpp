@@ -65,12 +65,10 @@ void kernel_main() {
             bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
             uint32_t producer_consumer_transfer_num_pages = header->consumer_router_transfer_num_pages;
-            debug_stepper[0] = ((db_cb_config->rd_ptr_16B) << 4);
-            write_buffers<host_completion_queue_write_ptr_addr>(
+            write_buffers(
                 db_cb_config,
                 eth_db_cb_config,
                 buffer_transfer_command_ptr,
-                completion_queue_start_addr,
                 num_buffer_transfers,
                 is_sharded,
                 sharded_buffer_num_cores,
