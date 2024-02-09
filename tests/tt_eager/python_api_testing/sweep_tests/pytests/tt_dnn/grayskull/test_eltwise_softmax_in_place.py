@@ -62,7 +62,7 @@ test_sweep_args = [
 ]
 
 
-@pytest.mark.skip("FAIL")
+# @pytest.mark.skip("FAIL")
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, data_seed",
     (test_sweep_args),

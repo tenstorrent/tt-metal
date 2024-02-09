@@ -20,7 +20,6 @@ def run_eltwise_pow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_co
         in_mem_config = None
 
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    x = torch.where(x.abs() > 1e-3, x, 1e-3)
 
     x_ref = x.detach().clone()
 

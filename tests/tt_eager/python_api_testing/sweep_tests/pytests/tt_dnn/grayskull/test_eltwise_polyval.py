@@ -19,7 +19,6 @@ def run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_me
     coeffs = [torch.Tensor([x]).to(torch.bfloat16).item() for x in coeffs]
 
     x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
-    x = torch.where(x.abs() > 1e-3, x, 1e-3)
     x_ref = x.detach().clone()
 
     # get referent value

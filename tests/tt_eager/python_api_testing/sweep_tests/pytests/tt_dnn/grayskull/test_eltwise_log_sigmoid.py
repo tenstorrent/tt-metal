@@ -20,7 +20,6 @@ def run_eltwise_log_sigmoid_tests(input_shape, dtype, dlayout, in_mem_config, ou
         in_mem_config = None
 
     x = torch.Tensor(size=input_shape).uniform_(-4, 10)
-    x = torch.where(x.abs() > 1e-3, x, 1e-3)
     x_ref = x.detach().clone()
     # get ref result
     ref_value = pytorch_ops.log_sigmoid(x_ref)
