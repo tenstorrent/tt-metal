@@ -10,7 +10,6 @@ import tt_lib as ttl
 from tt_lib.utils import (
     is_close,
 )
-from models.utility_functions import skip_for_wormhole_b0
 
 from models.utility_functions import comp_pcc, pad_by_zero
 
