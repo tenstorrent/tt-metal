@@ -214,8 +214,8 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
         operation_name,
         input_tensor,
         ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
+        dtypes=(ttnn.bfloat16,),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
     )
@@ -223,7 +223,7 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
         operation_name,
         weight,
         ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        dtypes=(ttnn.bfloat16,),
         layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -233,7 +233,7 @@ def _group_norm_validate_input_tensors(operation_name, input_tensor, *args, weig
         operation_name,
         bias,
         ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        dtypes=(ttnn.bfloat16,),
         layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -268,8 +268,8 @@ def group_norm(
         if input_tensor.shape.rank != 4:
             raise TypeError("The input tensor rank must equal to 4")
 
-        if input_tensor.shape[-1] % int(num_groups * ttnn.TILE_SIZE) != 0:
-            raise TypeError("number of channels must be divisible by number of groups * tile size")
+        if input_tensor.shape[-1] % num_groups != 0:
+            raise TypeError("number of channels must be divisible by number of groups")
 
         if ttnn.get_memory_config(input_tensor).memory_layout == ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
             raise TypeError("Cannot be width sharded")
@@ -285,21 +285,66 @@ def group_norm(
         if bias is not None:
             bias = ttnn.unsqueeze_to_4D(bias)
 
-        output_tensor = ttl.operations.primary.groupnorm(
-            input_tensor.value,
-            num_groups,
-            epsilon,
-            weight.value,
-            bias.value,
-            output_mem_config=memory_config,
-            program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
-                out_data_format=output_dtype,
-                inplace=False
-                if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
-                else True,
-            ),
-        )
+        if weight is not None and bias is not None:
+            output_tensor = ttl.operations.primary.groupnorm(
+                input_tensor.value,
+                num_groups,
+                epsilon,
+                weight.value,
+                bias.value,
+                output_mem_config=memory_config,
+                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    out_data_format=output_dtype,
+                    inplace=False
+                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
+                    else True,
+                ),
+            )
+        elif weight is not None:
+            output_tensor = ttl.operations.primary.groupnorm(
+                input_tensor.value,
+                num_groups,
+                epsilon,
+                weight.value,
+                output_mem_config=memory_config,
+                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    out_data_format=output_dtype,
+                    inplace=False
+                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
+                    else True,
+                ),
+            )
+        elif bias is not None:
+            output_tensor = ttl.operations.primary.groupnorm(
+                input_tensor.value,
+                num_groups,
+                epsilon,
+                bias.value,
+                output_mem_config=memory_config,
+                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    out_data_format=output_dtype,
+                    inplace=False
+                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
+                    else True,
+                ),
+            )
+        else:
+            output_tensor = ttl.operations.primary.groupnorm(
+                input_tensor.value,
+                num_groups,
+                epsilon,
+                output_mem_config=memory_config,
+                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    out_data_format=output_dtype,
+                    inplace=False
+                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
+                    else True,
+                ),
+            )
 
         return ttnn.Tensor(output_tensor)
 
