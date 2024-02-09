@@ -16,10 +16,8 @@ from tt_lib.utils import (
 )
 from models.utility_functions import print_diff_argmax, comp_pcc
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.utility_functions import skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "casual_mask",
     [True, False],
@@ -48,7 +46,8 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
 
     fuse_head = 2
 
-    grid_size = (12, 8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = [compute_grid_size.x, compute_grid_size.y]
     batch = grid_size[0]
     num_cores_r = grid_size[1]
     input_shape = (batch, num_cores_r, fuse_head * 384, 384)
@@ -126,7 +125,6 @@ def test_softmax(device, in_dtype, cb_dtype, in0_mem_config, casual_mask):
     assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "casual_mask",
     [True, False],
@@ -156,6 +154,10 @@ def test_scale_mask_softmax_rm(device, in_dtype, cb_dtype, in0_mem_config, casua
     fuse_head = 2
 
     grid_size = (8, 7)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.fail(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
     batch = grid_size[1]
     num_cores_r = grid_size[0]
     input_shape = (batch, num_cores_r, fuse_head * 384, 384)
