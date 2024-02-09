@@ -9,7 +9,7 @@
 template <typename T>
 void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_ASSERT(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
-    TT_ASSERT((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
+    TT_ASSERT((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n. size: {}, m: {}, n: {}", input.size(), m, n);
 
     std::vector<T> tilized_input;
     tilized_input.reserve(input.size());
@@ -28,7 +28,7 @@ void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
         }
     };
 
-    if constexpr (std::is_same<T, bfloat16>()) {
+    if constexpr (std::is_same<T, bfloat16>() or std::is_same<T, uint16_t>()) {
         uint32_t TILE_HEIGHT = 32;
         uint32_t TILE_WIDTH = 32;
         uint32_t FACE_HEIGHT = 16;
@@ -68,7 +68,7 @@ void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
 template <typename T>
 void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_ASSERT(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
-    TT_ASSERT((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
+    TT_ASSERT((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n. size: {}, m: {}, n: {}", input.size(), m, n);
 
     std::vector<T> untilized_input;
     untilized_input.reserve(input.size());
@@ -107,7 +107,7 @@ void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
         }
     };
 
-    if constexpr (std::is_same<T, bfloat16>()) {
+    if constexpr (std::is_same<T, bfloat16>() or std::is_same<T, uint16_t>()) {
         uint32_t TILE_HEIGHT = 32;
         uint32_t TILE_WIDTH = 32;
         uint32_t FACE_HEIGHT = 16;

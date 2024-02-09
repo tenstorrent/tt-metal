@@ -8,6 +8,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/common/tilize_untilize.hpp"
 #include "common/bfloat16.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -74,9 +75,10 @@ int main(int argc, char **argv) {
 
         constexpr CoreCoord core = {0, 0};
 
-        constexpr uint32_t single_tile_size = 2 * 1024;
+        constexpr uint32_t TILE_DIM = 32;
+        constexpr uint32_t single_tile_size_in_bytes = 2 * 1024;
         constexpr uint32_t num_tiles = 64;
-        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        constexpr uint32_t dram_buffer_size = single_tile_size_in_bytes * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         tt_metal::InterleavedBufferConfig dram_config{
                     .device= device,
@@ -95,16 +97,16 @@ int main(int argc, char **argv) {
          */
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t num_input_tiles = 2;
-        CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
+        CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size_in_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size_in_bytes);
         CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
+        CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size_in_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size_in_bytes);
         CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         constexpr uint32_t output_cb_index = CB::c_out0;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
+        CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size_in_bytes, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size_in_bytes);
         CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         /*
@@ -152,15 +154,18 @@ int main(int argc, char **argv) {
         /*
          * Create source data and write to DRAM.
          */
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
+        std::vector<bfloat16> src0_vec = create_random_vector_of_bfloat16<bfloat16>(
+            dram_buffer_size, 1.f, std::chrono::system_clock::now().time_since_epoch().count());
+        std::vector<bfloat16> src0_vec_golden = src0_vec;
 
-        EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
+        tilize(src0_vec, TILE_DIM, num_tiles * TILE_DIM);
+        EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec.data(), false);
 
         constexpr float val_to_add = -1.0f;
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
+        std::vector<bfloat16> src1_vec = create_constant_vector_of_bfloat16<bfloat16>(dram_buffer_size, val_to_add);
 
-        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+        tilize(src1_vec, TILE_DIM, num_tiles * TILE_DIM);
+        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec.data(), false);
 
         /*
          * Configure program and runtime kernel arguments, then execute.
@@ -213,8 +218,8 @@ int main(int argc, char **argv) {
         /*
          * Read in result into a host vector.
          */
-        std::vector<uint32_t> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        std::vector<bfloat16> result_vec(dst_dram_buffer->size() / sizeof(bfloat16));
+        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec.data(), true);
 
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
@@ -260,12 +265,14 @@ int main(int argc, char **argv) {
         /*
          * Send new input data.
          */
-        EnqueueWriteBuffer(cq, src0_dram_buffer, result_vec, false);
+        /* Input vector tilizing */
+        EnqueueWriteBuffer(cq, src0_dram_buffer, result_vec.data(), false);
 
         constexpr float val_to_mul = 2.0f;
-        src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_mul);
+        src1_vec = create_constant_vector_of_bfloat16<bfloat16>(dram_buffer_size, val_to_mul);
+        tilize(src1_vec, TILE_DIM, num_tiles * TILE_DIM);
 
-        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec.data(), false);
 
         /*
          * Configure program and runtime kernel arguments.
@@ -320,12 +327,14 @@ int main(int argc, char **argv) {
          * Read the result and compare to a golden result. Record pass/fail
          * and teardown.
          */
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec.data(), true);
+        untilize(result_vec, TILE_DIM, num_tiles * TILE_DIM);
 
         std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);
         };
-        std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
+        std::transform(src0_vec_golden.begin(), src0_vec_golden.end(), src0_vec_golden.begin(), transform_to_golden);
+        std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(src0_vec_golden);
 
         constexpr float abs_tolerance = 0.01f;
         constexpr float rel_tolerance = 0.001f;
@@ -333,7 +342,7 @@ int main(int argc, char **argv) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 
-        pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec, comparison_function);
+        pass &= packed_uint32_t_vector_comparison(golden_vec, pack_bfloat16_vec_into_uint32_vec(result_vec), comparison_function);
 
         pass &= CloseDevice(device);
 

@@ -147,22 +147,41 @@ inline void print_golden_metalium_vectors(vector<bfloat16>& golden_vec, vector<b
 }
 
 
-inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+template <typename T=uint32_t>
+inline std::vector<T> create_random_vector_of_bfloat16(size_t num_bytes, float rand_max_float, int seed, float offset = 0.0f) {
+    static constexpr size_t ELEM_SIZE_BYTES = std::is_same<T, bfloat16>::value ? 2 : sizeof(T);
+    static_assert(ELEM_SIZE_BYTES >= 2, "create_constant_vector_of_bfloat16 doesn't support a container element size of < 2 bytes");
+    static_assert(ELEM_SIZE_BYTES % 2 == 0, "create_constant_vector_of_bfloat16 doesn't support a container element size that isn't a multiple of 2 bytes");
+    static constexpr size_t BYTES_PER_BFLOAT16 = 2;
+    static constexpr size_t BF16_PER_VEC_ELEM = ELEM_SIZE_BYTES / BYTES_PER_BFLOAT16;
+
+    // pad if not clean multiple
+    const uint32_t num_elements_vec = ((std::max<size_t>(1, num_bytes) - 1) / ELEM_SIZE_BYTES) + 1;
+
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
-    std::vector<std::uint32_t> vec(num_bytes/sizeof(std::uint32_t), 0);
-    for (int i = 0; i < vec.size(); i++) {
-        float num_1_float = rand_float() + offset;
-        float num_2_float = rand_float() + offset;
+    std::vector<T> vec(num_elements_vec, 0);
+    for (size_t i = 0; i < vec.size(); i++) {
+        if constexpr (std::is_same<T, bfloat16>::value) {
+            float value = rand_float() + offset;
+            vec.at(i) = bfloat16(value);
+        } else {
+            TT_ASSERT(false);
+            for (size_t j = 0; j < BF16_PER_VEC_ELEM; j++) {
+                float value = rand_float() + offset;
+                vec.at(i) |= (bfloat16(value).to_uint16() << j * 16);
+            }
+        }
+    }
 
-        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
-
-        //std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
-        //std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
-
-        // pack 2 uint16 into uint32
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+    if constexpr (not std::is_same<T, bfloat16>::value) {
+        bool padded = num_bytes % ELEM_SIZE_BYTES != 0;
+        if (padded) {
+            // zero out the padding
+            size_t num_pad_bits = (ELEM_SIZE_BYTES - num_bytes % ELEM_SIZE_BYTES) * 8;
+            size_t mask_in = (1 << num_pad_bits) - 1;
+            vec.back() &= mask_in;
+        }
     }
 
     log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
@@ -178,20 +197,43 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(uint32_t 
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed); // 0.0f..2.0f
 }
 
-
 /*
- * rk: Still won't handle the case where the number of elements is odd, except
- * if it's 1. Whatever, for now.
+ * Creates a vector of bfloat16 with a constant value
+ * @param num_bytes: size of the vector in bytes. If not a multiple of sizeof(T), the last element will be padded with zeros
+ * @param value: the constant value to be used
+ * @return a vector of bfloat16 with the constant value
  */
-inline std::vector<std::uint32_t> create_constant_vector_of_bfloat16(uint32_t num_bytes, float value) {
-    const uint32_t num_elements_vec = std::max(static_cast<uint32_t>(1), static_cast<uint32_t>(num_bytes/sizeof(std::uint32_t))); // always at least have 1
-    std::vector<std::uint32_t> vec(num_elements_vec, 0);
-    for (int i = 0; i < vec.size(); i++) {
-        bfloat16 num_1_bfloat16 = bfloat16(value);
+template <typename T=uint32_t>
+inline std::vector<T> create_constant_vector_of_bfloat16(size_t num_bytes, float value) {
+    static_assert(sizeof(T) >= 2, "create_constant_vector_of_bfloat16 doesn't support a container element size of < 2 bytes");
+    static_assert(sizeof(T) % 2 == 0, "create_constant_vector_of_bfloat16 doesn't support a container element size that isn't a multiple of 2 bytes");
+    static constexpr size_t BYTES_PER_BFLOAT16 = 2;
+    static constexpr size_t BF16_PER_VEC_ELEM = sizeof(T) / BYTES_PER_BFLOAT16;
 
-        bfloat16 num_2_bfloat16 = num_elements_vec == 1 ? bfloat16(static_cast<float>(0.0)) : bfloat16(value);
+    // pad if not clean multiple
+    const size_t num_elements_vec = ((std::max<size_t>(1, num_bytes) - 1) / sizeof(T)) + 1;
 
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+    std::vector<T> vec(num_elements_vec, 0);
+
+    T value_packed = 0;
+    for (size_t j = 0; j < BF16_PER_VEC_ELEM; j++) {
+        if constexpr (std::is_same<T, bfloat16>::value) {
+            value_packed = bfloat16(value);
+        } else {
+            value_packed |= (bfloat16(value).to_uint16() << j * 16);
+        }
+    }
+
+    std::fill(vec.begin(), vec.end(), value_packed);
+
+    if constexpr (not std::is_same<T, bfloat16>::value) {
+        bool padded = num_bytes % sizeof(T) != 0;
+        if (padded) {
+            // zero out the padding
+            size_t num_pad_bits = (sizeof(T) - num_bytes % sizeof(T)) * 8;
+            size_t mask_in = (1 << num_pad_bits) - 1;
+            vec.back() &= mask_in;
+        }
     }
 
     log_info(tt::LogVerif, "Created a constant vector of size {} with value {}, bf16 = {}", vec.size(), value, vec[0]);
@@ -312,6 +354,17 @@ inline std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector
 
 inline bfloat16 bfloat16_identity_transform(const bfloat16 &input) {
     return input;
+}
+
+inline std::vector<bfloat16> unpack_uint16_vec_into_bfloat16_vec(
+    const std::vector<std::uint16_t>& data,
+    std::function<bfloat16(const bfloat16 &)> transform = bfloat16_identity_transform
+) {
+    std::vector<bfloat16> result;
+    for(auto i = 0 ; i < data.size(); i++) {
+        result.push_back(transform(bfloat16(data[i])));
+    }
+    return result;
 }
 
 inline std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
