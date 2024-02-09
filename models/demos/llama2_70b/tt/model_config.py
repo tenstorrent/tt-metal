@@ -178,14 +178,15 @@ def get_model_config(model_config_str):
                 ttl.tensor.CoreRangeSet(
                     {
                         ttl.tensor.CoreRange(
+                            # Volume must match # of attn heads
                             ttl.tensor.CoreCoord(0, 0),
                             ttl.tensor.CoreCoord(7, 3),
                         ),
                     }
                 ),
                 [
-                    32,
-                    1,  # Dynamic
+                    32,  # Each core has 32 users
+                    1,  # Dynamic - must set before using this config
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
