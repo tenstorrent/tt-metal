@@ -21,6 +21,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
@@ -47,7 +48,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
-        attn_mask[:, :, :, : start_pos + 1] = -1e9
+        # attn_mask[:, :, :, : start_pos + 1] = -1e9
         attn_mask = attn_mask.expand(-1, self.n_heads, -1, -1)
 
         return x, start_pos, freqs_cis, attn_mask
@@ -94,108 +95,103 @@ def run_test_LlamaAttention_inference(
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
 
-    # Prepare input
+    # Prepare configs
     torch.manual_seed(0)
     layer_num = 0
-
     base_url = "layers"
-
-    # max_position_embeddings = 2048
     configuration = hugging_face_reference_model.params
     n_heads = configuration.n_heads
     n_kv_heads = configuration.n_kv_heads
     hidden_dim = configuration.dim
     head_dim = hidden_dim // n_heads
 
-    pt_attention_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
-    tt_attention_input = pt_attention_input.clone()
-
-    start_pos = 127
-
-    # PyTorch output --------------------------------------------------------------------
+    # Prepare models
+    layer_past = [
+        hugging_face_reference_model.layers[layer_num].attention.cache_k.clone().permute(0, 2, 1, 3),
+        hugging_face_reference_model.layers[layer_num].attention.cache_v.clone().permute(0, 2, 1, 3),
+    ]
+    # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
-    attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
-        pt_attention_input, start_pos
+    # TT model -------------------------------------------------------------
+    tt_LlamaAttention_model = TtLlamaAttention(
+        device, state_dict, base_url, layer_num, model_config, layer_past, configuration
     )
 
-    pytorch_out = pytorch_LlamaAttention_model(
-        attention_input,
-        start_pos,
-        freqs_cis,
-        attn_mask,
-    )
+    generation_start_pos = 127
+    generation_length = 8
+    all_tests_pass = True
+    for i in range(generation_length):
+        # Prepare input
+        pt_attention_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
+        tt_attention_input = pt_attention_input.clone()
+        start_pos = generation_start_pos + i
 
+        # PyTorch output --------------------------------------------------------------------
+        attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
+            pt_attention_input, start_pos
+        )
+
+        pytorch_out = pytorch_LlamaAttention_model(
+            attention_input,
+            start_pos,
+            freqs_cis,
+            attn_mask,
+        )
+
+        # TT hardware execution -------------------------------------------------------------
+        attention_input, start_pos, rot_mat, attn_mask = tt_LlamaAttention_model.prepare_inputs(
+            pt_attention_input, start_pos
+        )
+
+        tt_out = tt_LlamaAttention_model(
+            attention_input,
+            rot_mat,
+            start_pos,
+            attn_mask,
+        )
+        tt_out = tt2torch_tensor(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+
+        # check outputs ----------------------------------------------------------------------
+        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+        logger.info(f"Output: {output_pcc}")
+
+        if does_pass:
+            logger.info(f"[start_pos={start_pos}] Llama2-70b Attention output Passed!")
+        else:
+            logger.warning(f"[start_pos={start_pos}] Llama2-70b Attention output Failed! PCC value is lower than {pcc}")
+            all_tests_pass = False
+
+    # Check kv cache
+    # PyTorch output --------------------------------------------------------------------
+    pytorch_layer_present = [
+        pytorch_LlamaAttention_model.attention.cache_k.clone().permute(
+            0, 2, 1, 3
+        ),  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaAttention_model.attention.cache_v.clone().permute(
+            0, 2, 1, 3
+        ),  # [batch, n_kv_heads, seq, head_dim]
+    ]
     # TT hardware execution -------------------------------------------------------------
-    # tt_FalconAttention_model = TtFalconAttention(
-    #     device,
-    #     state_dict,
-    #     # None,
-    #     base_url,
-    #     layer_num,
-    #     configuration.hidden_size,
-    #     configuration.n_head,
-    #     # 4544,
-    #     # 71,
-    #     max_position_embeddings,
-    #     model_config,
-    #     tt_cache_path,
-    # )
+    tt_layer_present = [tt2torch_tensor(cache) for cache in tt_LlamaAttention_model.layer_past]
 
-    # tt_out, tt_layer_present = tt_FalconAttention_model(
-    #     tt_attention_input,
-    #     alibi=None,
-    #     attention_mask=tt_attention_mask,
-    #     llm_mode=llm_mode,
-    #     user_id=user_id,
-    #     layer_past=tt_layer_past,
-    #     layer_past_len=kv_cache_len,
-    #     use_cache=use_cache,
-    # )
-    # tt_out = tt2torch_tensor(tt_out).squeeze(1)
-    # tt_layer_present = (
-    #     tt2torch_tensor(tt_layer_present[0]).squeeze(1),
-    #     tt2torch_tensor(tt_layer_present[1]).squeeze(1),
-    # )
+    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
+        cache_length_to_check = generation_start_pos + generation_length + 1
+        cache_pt = cache_pt[:, :, :cache_length_to_check, :]
+        cache_tt = cache_tt[:, :, :cache_length_to_check, :]
+        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+        logger.info(f"Output: {output_pcc}")
 
-    # if llm_mode == "decode":
-    #     tt_out = tt_out.transpose(0, 1)
-    # tt_layer_present = (
-    #     tt_layer_present[0][:, :kv_len, :],
-    #     tt_layer_present[1][:, :kv_len, :],
-    # )
+        if does_pass:
+            logger.info(f"KV Cache Passed!")
+        else:
+            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+            all_tests_pass = False
 
-    # check outputs ----------------------------------------------------------------------
-    does_pass, output_pcc = comp_pcc(pytorch_out, pytorch_out, pcc)
-    logger.info(f"Output: {output_pcc}")
-
-    if does_pass:
-        logger.info("Llama2-70b Attention output Passed!")
-    else:
-        logger.warning("Llama2-70b Attention output Failed!")
-        assert does_pass, f"PCC value is lower than {pcc}"
-
-    # does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-    # logger.info(f"Output: {output_pcc}")
-
-    # does_pass2, output_pcc = comp_pcc(
-    #     pytorch_layer_present[0], tt_layer_present[0], pcc
-    # )
-    # logger.info(f"K Cache: {output_pcc}")
-
-    # does_pass = does_pass and does_pass2
-
-    # does_pass2, output_pcc = comp_pcc(
-    #     pytorch_layer_present[1], tt_layer_present[1], pcc
-    # )
-    # logger.info(f"V Cache: {output_pcc}")
-
-    # does_pass = does_pass and does_pass2
-
-    if does_pass:
+    if all_tests_pass:
         logger.info("Llama2 Attention output Passed!")
     else:
         logger.warning("Llama2 Attention output Failed!")
-        assert does_pass, f"PCC value is lower than {pcc}"
+        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @pytest.mark.parametrize(
