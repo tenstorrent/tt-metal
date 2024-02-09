@@ -209,6 +209,13 @@ If you are using a machine with bare metal machine specs, please use
   - Ensure the python file you wish to debug, is standalone and has a main function
   - Run `gdb --args python <python file> `
   - You can add breakpoints for future loaded libraries
+- Metal codebase can be better demystified with the right tools -- `clangd` and `bear`
+  - install ClangD extension
+    - it will ask you to install clang16 language server if you don't already have it
+    - it will ask you to disable ms C/C++ extension intellisense
+  - At this point you will get something working but it will assume that you are just compiling each cpp with "clang your.cpp" and that isn't going to be great. To get nice experience you need to have "compile_commands.json" in the root of you repo which will tell ClangD exact set of flags used to compile some cpp. This leads us to..
+    - You need to install `bear`` with `sudo apt install bear``
+    - Run bear your-compile-command, for example `bear -- make build``
 
 ## Contribution standards
 
@@ -309,6 +316,8 @@ If you are using a machine with bare metal machine specs, please use
 
 - Use Loguru for Python logging.
 - Use Tenstorrent logger for C++ logging.
+  - TT_METAL_LOGGER_LEVEL=None/Info/Debug/Trace can be used to increase logging verbosity
+  - TT_METAL_LOGGER_TYPES=<Component0>,<Component1> can be used to filter on logging components
 
 ## Hardware troubleshooting
 
