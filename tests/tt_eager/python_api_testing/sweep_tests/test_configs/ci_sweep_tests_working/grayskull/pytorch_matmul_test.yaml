@@ -15,7 +15,6 @@ test-list:
         method: matmul
         bcast-batch: True
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
@@ -47,7 +46,6 @@ test-list:
         method: matmul
         bcast-batch: True
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
@@ -79,7 +77,6 @@ test-list:
         method: matmul
         bcast-batch: True
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: [""]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand

@@ -20,7 +20,6 @@ test-list:
       args-gen: gen_layernorm_args
       output-file: layernorm_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]

@@ -8,7 +8,6 @@ test-list:
         num-shapes: 3
         num-samples: 64
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_bin
@@ -32,7 +31,6 @@ test-list:
         num-shapes: 3
         num-samples: 64
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: [""]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
