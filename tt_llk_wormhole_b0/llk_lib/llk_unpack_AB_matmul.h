@@ -219,14 +219,14 @@ inline void _llk_unpack_AB_matmul_(
         std::uint32_t offset_address_a =tile_size_a*(tile_index_a + (reuse_a ? (t*kt_dim) : (0)));
         std::uint32_t next_offset_address_a = tile_size_a*(tile_index_a + (reuse_a ? ((t+1)*kt_dim) : (0)));
         if constexpr (kernel_broadcast_a>0) {
-            offset_address_a =tile_size_a*(tile_index_a + (reuse_a ? ((t*kt_dim)%kernel_broadcast_a) : (0)));
-            next_offset_address_a = tile_size_a*(tile_index_a + (reuse_a ? (((t+1)*kt_dim)%kernel_broadcast_a) : (0)));
+            offset_address_a      = tile_size_a*((tile_index_a + (reuse_a ? ((    t*kt_dim)) : (0)))%kernel_broadcast_a);
+            next_offset_address_a = tile_size_a*((tile_index_a + (reuse_a ? (((t+1)*kt_dim)) : (0)))%kernel_broadcast_a);
         }
         std::uint32_t offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : (t)));
         std::uint32_t next_offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : (t+1)));
         if constexpr (kernel_broadcast_b>0) {
-            offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : (t%kernel_broadcast_b)));
-            next_offset_address_b = tile_size_b*(tile_index_b + (reuse_a ? (0       ) : ((t+1)%kernel_broadcast_b)));
+            offset_address_b      = tile_size_b*((tile_index_b + (reuse_a ? (0) : (    t)))%kernel_broadcast_b);
+            next_offset_address_b = tile_size_b*((tile_index_b + (reuse_a ? (0) : ((t+1))))%kernel_broadcast_b);
         }
         std::uint32_t address_a = base_address_a + offset_address_a;
         std::uint32_t next_address_a = base_address_a + next_offset_address_a;
