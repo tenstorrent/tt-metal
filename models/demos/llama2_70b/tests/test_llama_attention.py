@@ -7,11 +7,11 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from models.demos.falcon7b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+
 from models.demos.llama2_70b.reference.llama import Llama
-from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
+from models.demos.llama2_70b.reference.llama.model import precompute_freqs_cis
+
+# from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
 from models.demos.falcon7b.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
@@ -31,7 +31,36 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         # Disable dropout
         self.attention.eval()
 
+        configuration = hf_reference_model.params
+        self.n_heads = configuration.n_heads
+        hidden_dim = configuration.dim
+        self.head_dim = hidden_dim // self.n_heads
+        self.max_seq_len = configuration.max_seq_len
+
+    def prepare_inputs(self, x, start_pos):
+        """
+        Prepare inputs for decode mode. Assume that current token is at
+        start_pos, and KV cache has valid data up to start_pos.
+        """
+        batch = x.size(0)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = freqs_cis[start_pos : start_pos + 1]
+
+        attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
+        attn_mask[:, :, :, : start_pos + 1] = -1e9
+        attn_mask = attn_mask.expand(-1, self.n_heads, -1, -1)
+
+        return x, start_pos, freqs_cis, attn_mask
+
     def forward(self, x, start_pos, freqs_cis, mask):
+        """
+        x: (batch, seq, hidden_dim)
+        start_pos: int
+        freqs_cis: ?
+        mask: ?
+
+        return: (batch, seq, hidden_dim)
+        """
         result = self.attention(
             x,
             start_pos,
@@ -39,29 +68,6 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
             mask,
         )
         return result
-
-
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    """
-    Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
-
-    This function calculates a frequency tensor with complex exponentials using the given dimension 'dim'
-    and the end index 'end'. The 'theta' parameter scales the frequencies.
-    The returned tensor contains complex values in complex64 data type.
-
-    Args:
-        dim (int): Dimension of the frequency tensor.
-        end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 10000.0.
-
-    Returns:
-        torch.Tensor: Precomputed frequency tensor with complex exponentials.
-    """
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)  # type: ignore
-    freqs = torch.outer(t, freqs).float()  # type: ignore
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    return freqs_cis
 
 
 def run_test_LlamaAttention_inference(
@@ -78,54 +84,45 @@ def run_test_LlamaAttention_inference(
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data/llama-2-70b/"
+    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
-
+    max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
-        ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=True
+        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
     ).model
     hugging_face_reference_model.eval()
-    configuration = hugging_face_reference_model.params
     state_dict = hugging_face_reference_model.state_dict()
-    # use_cache = True
-    # user_id = 0
+    print(state_dict.keys())
 
     # Prepare input
     torch.manual_seed(0)
     layer_num = 0
-    print(state_dict.keys())
+
     base_url = "layers"
 
     # max_position_embeddings = 2048
-    head_dim = configuration.dim // configuration.n_heads
+    configuration = hugging_face_reference_model.params
+    n_heads = configuration.n_heads
+    n_kv_heads = configuration.n_kv_heads
+    hidden_dim = configuration.dim
+    head_dim = hidden_dim // n_heads
 
-    attention_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
-    start_pos = 0
-    # Taken Directly from Llama2 model
-    freqs_cis = precompute_freqs_cis(head_dim, seq_len * 2)
-    freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
+    pt_attention_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
+    tt_attention_input = pt_attention_input.clone()
 
-    attention_mask_pytorch = None
-    if seq_len > 1:
-        attention_mask_pytorch = torch.full((seq_len, seq_len), float("-inf"))
-
-        attention_mask_pytorch = torch.triu(attention_mask_pytorch, diagonal=1)
-
-        # When performing key-value caching, we compute the attention scores
-        # only for the new sequence. Thus, the matrix of scores is of size
-        # (seqlen, cache_len + seqlen), and the only masked entries are (i, j) for
-        # j > cache_len + i, since row i corresponds to token cache_len + i.
-        attention_mask_pytorch = torch.hstack([torch.zeros((seq_len, start_pos)), attention_mask_pytorch]).type_as(
-            attention_input
-        )
+    start_pos = 127
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
+    attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
+        pt_attention_input, start_pos
+    )
+
     pytorch_out = pytorch_LlamaAttention_model(
         attention_input,
         start_pos,
         freqs_cis,
-        attention_mask_pytorch,
+        attn_mask,
     )
 
     # TT hardware execution -------------------------------------------------------------
