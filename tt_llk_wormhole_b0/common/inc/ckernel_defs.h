@@ -68,6 +68,12 @@ enum PackSelMask
     PACK_23=0xC
 };
 
+enum SortDir : bool
+ {
+    ArgMax      = false,
+    ArgMin      = true,
+};
+
 constexpr std::uint32_t FACE_HEIGHT = 16;
 constexpr std::uint32_t FACE_WIDTH  = 16;
 constexpr std::uint32_t TILE_HEIGHT = 32;
