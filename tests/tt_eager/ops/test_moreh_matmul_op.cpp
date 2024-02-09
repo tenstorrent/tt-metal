@@ -163,7 +163,6 @@ int main(int argc, char **argv) {
         Tensor with_output_tensor = tt::operations::primary::moreh_matmul(a, b, output_tensor_cpu, false, static_cast<bool>(transpose_b));
         const auto actual_storage = std::get<DeviceStorage>(with_output_tensor.storage());
         Tensor out_cpu_with_output_tensor = with_output_tensor.cpu();
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -220,13 +219,13 @@ int main(int argc, char **argv) {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
+        TT_THROW("System error message: {}", std::strerror(errno));
     }
 
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_error(LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 
     TT_ASSERT(pass);

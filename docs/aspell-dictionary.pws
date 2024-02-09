@@ -1,4 +1,4 @@
-personal_ws-1.1 en 462
+personal_ws-1.1 en 474 
 ABI
 ADDI
 API
@@ -85,6 +85,7 @@ MULI
 Makefile
 MatMul
 MathFidelity
+MaxPool
 MemoryConfig
 Metalium
 MtKt
@@ -160,6 +161,7 @@ ZoneScoped
 abovementioned
 acc
 acos
+acosh
 addexp
 addr
 agrebenisan
@@ -168,9 +170,11 @@ apis
 arg
 args
 asin
+asinh
 asm
 async
 atan
+atanh
 autoclass
 autofunction
 backend
@@ -261,8 +265,10 @@ grayskull
 grey
 gte
 gtz
+hardshrink
 hardsigmoid
 hardswish
+hardtanh
 heaviside
 highlight
 hpp
@@ -308,6 +314,7 @@ lz
 matmul
 maxdepth
 md
+mish
 modindex
 mul
 multicast
@@ -341,6 +348,7 @@ phyiscally
 png
 pragma
 pre
+prelu
 preprocess
 preprocessing
 preprocessor
@@ -392,11 +400,14 @@ shft
 sigmoid
 signbit
 silu
+sinh
 sizeof
 skillset
 smi
 smsg
 softmax
+softshrink
+softsign
 sqrt
 sr
 src
@@ -442,6 +453,7 @@ unsharded
 untilize
 untilized
 untilizing
+upsample
 vBool
 vConst
 vConstFloatPrgm

@@ -47,8 +47,19 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     // See set_runtime_args for how input shapes are used; these are the variables needed for setting up kernels and CBs
     const bool transpose_hw_bool = transpose_hw.value_or(false);
+    const uint32_t num_tokens_val = num_tokens.value_or(0); // should not be nullopt if transpose_hw=true
     uint32_t KV_HEADS = bshape[1]; // bshape[0] is user batch
+    uint32_t Mt = ashape[2]/TILE_HEIGHT;
     uint32_t Kt = ashape[3]/TILE_WIDTH;
+    uint32_t Nt = transpose_hw_bool ? num_tokens_val/TILE_HEIGHT : bshape[3]/TILE_WIDTH;
+    uint32_t MtNt = Mt * Nt;
+
+    // Matmul blocking parameters; these determine how large CBs are
+    constexpr uint32_t HALF_DST_MAX = 8;
+    uint32_t out_subblock_w = std::min(Nt, HALF_DST_MAX);
+    uint32_t out_block_w = out_subblock_w;
+    uint32_t in0_block_w = Kt;
+    uint32_t in1_block_num_tiles = KV_HEADS * in0_block_w * out_subblock_w;
 
     // Mcast args
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
@@ -80,49 +91,44 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 		    .set_page_size(src0_cb_index, in0_single_tile_size).set_globally_allocated_address(*src0_buffer);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
     } else {
-        uint32_t cb0_num_input_tiles = Kt * 2;
+        uint32_t cb0_num_input_tiles = in0_block_w; // TODO: Generalize; double buffer and add blocking along inner dim if we have Mt > 1
         tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		    .set_page_size(src0_cb_index, in0_single_tile_size);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
     }
 
-    // CB for in1 (ie. one kv_heads matching q_heads); for MQA, can probably optimize away unnecessary copies from cb2 to cb1
+    // CB for interleaved/sharded KV heads for mcasting; mcasts to same CB
+    // Then, push all KV_HEADS to compute and compute chooses which head to use for matmul
     uint32_t src1_cb_index = CB::c_in1;
-    uint32_t cb1_num_input_tiles = 2;
+    uint32_t cb1_num_input_tiles = 2 * in1_block_num_tiles;
     tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
 		.set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    // CB for interleaved/sharded KV heads for mcasting; mcasts to same CB
-    uint32_t src2_cb_index = CB::c_in2;
-    uint32_t cb2_num_input_tiles = KV_HEADS;
-    tt_metal::CircularBufferConfig cb_src2_config = tt_metal::CircularBufferConfig(cb2_num_input_tiles * in1_single_tile_size, {{src2_cb_index, in1_data_format}})
-		.set_page_size(src2_cb_index, in1_single_tile_size);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src2_config);
-
     // CB for sharded KV heads
-    CBHandle cb_src3 = 0;  // unused if KV heads is interleaved
+    CBHandle cb_src2 = 0;  // unused if KV heads is interleaved
     if (in1_is_sharded) {
-        uint32_t src3_cb_index = CB::c_in3;
-        uint32_t cb3_num_input_tiles = b.shard_spec().value().numel() / TILE_HW; // Should be full CKtNt and batch must be 32
-        tt_metal::CircularBufferConfig cb_src3_config = tt_metal::CircularBufferConfig(cb3_num_input_tiles * in1_single_tile_size, {{src3_cb_index, in1_data_format}})
-		    .set_page_size(src3_cb_index, in1_single_tile_size).set_globally_allocated_address(*src1_buffer);
-        cb_src3 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src3_config);
+        uint32_t src2_cb_index = CB::c_in2;
+        uint32_t cb2_num_input_tiles = b.shard_spec().value().numel() / TILE_HW; // Should be full CKtNt and batch must be 32
+        tt_metal::CircularBufferConfig cb_src2_config = tt_metal::CircularBufferConfig(cb2_num_input_tiles * in1_single_tile_size, {{src2_cb_index, in1_data_format}})
+		    .set_page_size(src2_cb_index, in1_single_tile_size).set_globally_allocated_address(*src1_buffer);
+        cb_src2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src2_config);
     }
 
     // Intermediate CBs for handling untilizing, copying rows, and tilizing to output CB
+    uint32_t interm_cb_num_tiles = 1 * out_block_w; // TODO: Generalize; should it be double buffered?
     uint32_t cb_intermed0_index = CB::c_intermed0;
-    tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
+    tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
 		.set_page_size(cb_intermed0_index, interm_single_tile_size);
     auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
     uint32_t cb_intermed1_index = CB::c_intermed1;
-    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
+    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
 		.set_page_size(cb_intermed1_index, interm_single_tile_size);
     auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
 
     uint32_t cb_intermed2_index = CB::c_intermed2;
-    tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
+    tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(MtNt * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
 		.set_page_size(cb_intermed2_index, interm_single_tile_size);
     auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
 
@@ -135,7 +141,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 		    .set_page_size(output_cb_index, output_single_tile_size).set_globally_allocated_address(*dst_buffer);
         cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
     } else {
-        uint32_t num_output_tiles = 2;
+        uint32_t num_output_tiles = MtNt; // TODO: Should be MtNt if Mt > 1? Or, produce one Nt at a time and double buffer?
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
 		    .set_page_size(output_cb_index, output_single_tile_size);
         cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
@@ -152,14 +158,15 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     const uint32_t dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) output_cb_index,
-        (std::uint32_t) dst_is_dram
+        (uint32_t) src0_is_dram,
+        (uint32_t) dst_is_dram,
+        (uint32_t) output_cb_index,
     };
 
     std::map<string, string> reader_kernel_defines;
     std::map<string, string> writer_kernel_defines;
     if (in0_is_sharded) {
-        reader_kernel_defines["IN0_SHARDED"] = "1";
+        writer_kernel_defines["IN0_SHARDED"] = "1";
     }
     if (in1_is_sharded) {
         reader_kernel_defines["IN1_SHARDED"] = "1";
@@ -206,17 +213,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
     );
 
-    // Reader runtime args that need updating for each core (after setting some defaults based on shape)
-    constexpr uint32_t HAS_WORK_VECTOR_IDX = 0;
-    constexpr uint32_t BLOCKS_VECTOR_IDX = 11;
-    constexpr uint32_t IN0_START_ID_VECTOR_IDX = 12;
-    constexpr uint32_t KV_HEADS_ADDR_OFFSET_VECTOR_IDX = 14;
-    constexpr uint32_t MCAST_SENDER_ID_VECTOR_IDX = 24;
-    constexpr uint32_t writer_runtime_args_size = 4;
-    constexpr uint32_t compute_runtime_args_size = 5;
-    // reader runtime args have 27 fixed args + mcast_sender coords for x and y (TODO: number of sender cores are currently hard-coded to be 32)
-    const uint32_t reader_runtime_args_size = 27 + in1_mcast_sender_noc_x.size() + in1_mcast_sender_noc_y.size();
-
     auto set_runtime_args = [
             num_tokens,
             transpose_hw,
@@ -227,11 +223,15 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             writer_id,
             compute_kernel_id,
             cb_src0,
+            cb_src1,
             cb_src2,
-            cb_src3,
+            cb_interm0,
+            cb_interm1,
+            cb_interm2,
             cb_output,
             in0_single_tile_size,
             in1_single_tile_size,
+            interm_single_tile_size,
             output_single_tile_size,
             in0_is_sharded,
             in1_is_sharded,
@@ -241,14 +241,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             in1_mcast_receiver_semaphore,
             in1_mcast_sender_noc_x,
             in1_mcast_sender_noc_y,
-            HAS_WORK_VECTOR_IDX,
-            BLOCKS_VECTOR_IDX,
-            IN0_START_ID_VECTOR_IDX,
-            KV_HEADS_ADDR_OFFSET_VECTOR_IDX,
-            MCAST_SENDER_ID_VECTOR_IDX,
-            reader_runtime_args_size,
-            writer_runtime_args_size,
-            compute_runtime_args_size
+            HALF_DST_MAX
         ]
     (
         Program& program,
@@ -272,7 +265,9 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         // TODO: For sharded KV_heads, user batch must be 32 due to how we shard
         // TODO: To generalize to allow parallelizing/sharding across generic batch for KV_heads, we need to track sender cores across batch-number of rows instead of 32
         // TODO: Only support one block of work (ie. 1 Q head per core) because each core assumes only one KV_heads to use
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, std::max(Q_HEADS, TILE_HEIGHT), row_major);
+        uint32_t num_active_cores = std::max(Q_HEADS, TILE_HEIGHT);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_active_cores, row_major);
+        // num_cores should be same as num_active_cores
         TT_FATAL(num_output_blocks_per_core_group_1 == 1 and num_output_blocks_per_core_group_2 == 0, "Group attention matmul only supports one q_heads per core. Increase compute grid size to at least have as many cores as q_heads!");
 
         // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
@@ -294,46 +289,83 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         // For transpose_hw=false, bshape[2] is max cache length
         uint32_t in1_KtNt = transpose_hw_bool ? bshape[2]/TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
         uint32_t in1_CKtNt = KV_HEADS * in1_KtNt;
-        uint32_t in1_CKtNt_skip = in1_CKtNt - (transpose_hw_bool ? in1_Kt : Kt * Nt); // Decrement by how much we increment while iterating through Kt
+
+        // Matmul params
+        constexpr uint32_t out_subblock_h = 1; // TODO: Only support per_core_Mt = 1 (mcasting assumes batch=32 for now anyways)
+        constexpr uint32_t in1_num_subblocks = 1; // out_block_w / out_subblock_w
+        uint32_t out_subblock_w = std::min(Nt, HALF_DST_MAX);
+        uint32_t out_block_w = out_subblock_w;
+        uint32_t in0_block_w = Kt;
+        uint32_t in0_subblock_num_tiles = in0_block_w * out_subblock_h;
+        uint32_t in0_block_num_tiles = in0_subblock_num_tiles;
+        uint32_t in1_block_num_tiles_per_kv_heads = in0_block_w * out_subblock_w;
+        uint32_t in1_block_num_tiles = KV_HEADS * in1_block_num_tiles_per_kv_heads;
+        uint32_t out_subblock_num_tiles = out_subblock_h * out_block_w;
+        uint32_t intermediate_num_tiles = out_subblock_num_tiles;
+        uint32_t in1_num_blocks = (Nt - 1) / out_block_w + 1; // Rounds up to include nearest out_block_w; "padding" is handled internally
+        uint32_t in1_per_core_w = in1_num_subblocks * out_block_w;
+
+        uint32_t Nt_bytes = Nt * in1_single_tile_size;
+        uint32_t in1_block_w_tile_bytes = out_subblock_w * in1_single_tile_size;
+        uint32_t out_last_subblock_w = Nt % out_block_w == 0 ? out_block_w : Nt % out_block_w;
+        uint32_t in1_last_block_w_tile_read_bytes = out_last_subblock_w * in1_single_tile_size;
+        uint32_t in1_last_block_addr_skip = (out_subblock_w - out_last_subblock_w) * in1_single_tile_size;
+
+        constexpr uint32_t ONE_ROW_BFLOAT16_BYTES = 64;
+        uint32_t bfloat16_Nt_bytes = ONE_ROW_BFLOAT16_BYTES * Nt;
+        uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w; // TODO: Generalize
+        uint32_t bfloat16_last_row_bytes_read = ONE_ROW_BFLOAT16_BYTES * out_last_subblock_w;
 
         // Mcast receiver args
-        CoreRange all_cores_bounding_box = all_cores.bounding_box();
-        uint32_t mcast_num_cores = all_cores_bounding_box.size();
-        CoreCoord mcast_receiver_grid = all_cores_bounding_box.grid_size();
-        CoreCoord top_left_core = all_cores_bounding_box.start;
-        CoreCoord bottom_right_core = all_cores_bounding_box.end;
+        // NOTE: If Q_HEADS < 32, have all cores in mcast grid participate in semaphore syncing because we mcast KV_HEADS from/to the same CB
+        // Otherwise, data corruption if sender is in mcast grid and it starts populating its mcast CB as other senders are sending
+        CoreRangeSet mcast_receiver_cores = num_cores_to_corerange_set(Q_HEADS, compute_with_storage_grid_size, row_major);
+        CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
+        uint32_t mcast_num_dests = mcast_receiver_cores.num_cores(); // same as num_active_cores if Q_HEADS >= 32; also, always same as Q_HEADS
+        uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
+        CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start;
+        CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end;
         CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
         CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
         // Default reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
-            0, // has_work
-            src0_buffer->address(),
+            0, // 0: has_work_for_mcast_kv_heads
+            0, // 1: has_work_for_q_heads
             src1_buffer->address(),
             Mt,
-            Kt,
             Nt,
-            MtKt,
             KV_HEADS,
-            in1_KtNt,
-            in1_CKtNt_skip, // Skip to get next batch for in1 after reading in0 Kt
+            in1_CKtNt,
             in1_CKtNt * TILE_HEIGHT, // in1 stride; skips 32 * KtNt in bshape[0] for one block of MtNt
-            0, // blocks of work
-            0, // in0_start_id
+            0, // 8: blocks of work
             0, // in1_start_id; always start at 0 for each block of work and let kernels handle id tracking; for sharded, this isn't used
-            0, // kv_heads_addr_offset; l1 offset in bytes to identify which kv_heads each q_heads is mapped to
+
+            in0_block_w,
+            out_subblock_w,
+            out_block_w,
+            in1_num_subblocks,
+            in1_num_blocks,
+            in1_block_num_tiles,
+
+            Nt_bytes,
+            in1_block_w_tile_bytes,
+            out_last_subblock_w,
+            in1_last_block_w_tile_read_bytes,
+            in1_last_block_addr_skip,
 
             // mcast args
             (uint32_t) (reader_noc_is_NOC_0 ? top_left_core_physical.x : bottom_right_core_physical.x), // in1_mcast_dest_noc_start_x
             (uint32_t) (reader_noc_is_NOC_0 ? top_left_core_physical.y : bottom_right_core_physical.y), // in1_mcast_dest_noc_start_y
             (uint32_t) (reader_noc_is_NOC_0 ? bottom_right_core_physical.x : top_left_core_physical.x), // in1_mcast_dest_noc_end_x
             (uint32_t) (reader_noc_is_NOC_0 ? bottom_right_core_physical.y : top_left_core_physical.y), // in1_mcast_dest_noc_end_y
-            num_cores - 1, // in1_mcast_num_dests
-            mcast_num_cores - 1, // in1_mcast_num_cores
+            0, // 25: in1_mcast_num_dests
+            0, // 26: in1_mcast_num_cores
+            mcast_num_cores, // mcast grid size; in1_mcast_num_cores may change depending on if sender is part of the receiver grid or not
             in1_mcast_sender_semaphore,
             in1_mcast_receiver_semaphore,
-            KV_HEADS * in1_single_tile_size, // in1_mcast_sender_size_bytes
-            0, // in1_mcast_sender_id
+            in1_block_num_tiles * in1_single_tile_size, // in1_mcast_sender_size_bytes
+            0, // 31: in1_mcast_sender_id
             (uint32_t) in1_mcast_sender_noc_x.size(), // in1_mcast_sender_num_x
             (uint32_t) in1_mcast_sender_noc_y.size(), // in1_mcast_sender_num_y
         };
@@ -341,6 +373,60 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         reader_runtime_args.insert(reader_runtime_args.end(), in1_mcast_sender_noc_x.begin(), in1_mcast_sender_noc_x.end());
         reader_runtime_args.insert(reader_runtime_args.end(), in1_mcast_sender_noc_y.begin(), in1_mcast_sender_noc_y.end());
 
+        // Default writer runtime args
+        std::vector<uint32_t> writer_runtime_args = {
+            0, // 0: has_work_for_q_heads
+            src0_buffer->address(),
+            dst_buffer->address(),
+            Mt,
+            Kt,
+            Nt,
+            KV_HEADS,
+            MtKt,
+            0, // 8: blocks of work
+            0, // 9: in0_start_id
+            0, // 10: out_start_id
+
+            in0_block_w,
+            out_subblock_w,
+            out_block_w,
+            in1_num_subblocks,
+            in1_num_blocks,
+            in0_block_num_tiles,
+            intermediate_num_tiles,
+            MtNt, // out_num_tiles
+
+            bfloat16_row_bytes,
+            bfloat16_Nt_bytes,
+            out_last_subblock_w,
+            bfloat16_last_row_bytes_read,
+        };
+
+        // Default compute runtime args
+        std::vector<uint32_t> compute_runtime_args = {
+            0, // 0: has_work_for_q_heads
+            0, // 1: batch,
+            Mt,
+            0, // 3: num_kv_heads_skip
+            0, // 4: num_kv_heads_remaining
+
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            out_block_w,
+            in1_num_subblocks,
+            in1_num_blocks,
+            in0_block_num_tiles,
+            in1_block_num_tiles,
+            out_subblock_num_tiles,
+            intermediate_num_tiles,
+            MtNt, // out_num_tiles
+
+            in0_subblock_num_tiles,
+            in1_per_core_w,
+        };
+
+        CoreRange all_cores_bounding_box = all_cores.bounding_box();
         std::vector<CoreCoord> cores = grid_to_cores_with_noop(
             all_cores_bounding_box.end.x,
             all_cores_bounding_box.end.y,
@@ -352,8 +438,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         uint32_t g2_numcores = core_group_2.num_cores();
 
         std::vector<std::vector<uint32_t>> all_reader_runtime_args = { cores.size(), reader_runtime_args };
-        std::vector<std::vector<uint32_t>> all_writer_runtime_args = { cores.size(), std::vector<uint32_t>(writer_runtime_args_size) };
-        std::vector<std::vector<uint32_t>> all_compute_runtime_args = { cores.size(), std::vector<uint32_t>(compute_runtime_args_size) };
+        std::vector<std::vector<uint32_t>> all_writer_runtime_args = { cores.size(), writer_runtime_args };
+        std::vector<std::vector<uint32_t>> all_compute_runtime_args = { cores.size(), compute_runtime_args };
 
         // Set runtime args
         uint32_t num_output_blocks_per_core;
@@ -368,31 +454,29 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
             uint32_t kv_heads_id = i / (Q_HEADS / KV_HEADS);
             // Runtime method of turning off kernels/code blocks
-            // Needed because some cores only have partial readers for reading kv_heads
-            uint32_t has_work = i < Q_HEADS;
+            // Needed because some cores only have partial readers for reading/mcasting kv_heads
+            uint32_t has_work_for_q_heads = i < Q_HEADS; // compute and writer only does work if this is true; reader will only receive kv_heads if this is true
+            uint32_t has_work_for_mcast_kv_heads = i < num_active_cores; // reader only does any work if this is true
+            uint32_t mcast_num_cores_for_core = mcast_num_cores - (uint32_t) (i < mcast_num_cores); // if sender is not part of mcast grid, send to full grid
 
             // Update core dependent runtime args
-            reader_runtime_args[HAS_WORK_VECTOR_IDX] = has_work;
-            reader_runtime_args[BLOCKS_VECTOR_IDX] = num_output_blocks_per_core;
-            reader_runtime_args[IN0_START_ID_VECTOR_IDX] = num_blocks_written * MtKt;
-            reader_runtime_args[KV_HEADS_ADDR_OFFSET_VECTOR_IDX] = kv_heads_id * in1_single_tile_size;
-            reader_runtime_args[MCAST_SENDER_ID_VECTOR_IDX] = i;
+            all_reader_runtime_args[i][0] = has_work_for_mcast_kv_heads;
+            all_reader_runtime_args[i][1] = has_work_for_q_heads;
+            all_reader_runtime_args[i][8] = num_output_blocks_per_core;
+            // If Q_HEADS < 32, have all cores participate in receiving; std::min is needed for cases where mcast grid is > num_active_cores and non-active cores are turned off and don't receive
+            all_reader_runtime_args[i][25] = Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
+            all_reader_runtime_args[i][26] = mcast_num_cores_for_core;
+            all_reader_runtime_args[i][31] = i;
 
-            // Update runtime_args vectors
-            all_reader_runtime_args[i] = reader_runtime_args;
-            all_writer_runtime_args[i] = {
-                has_work,
-                dst_buffer->address(),
-                num_output_blocks_per_core * MtNt, // num_tiles
-                num_blocks_written * MtNt, // start_id
-            };
-            all_compute_runtime_args[i] = {
-                has_work,
-                num_output_blocks_per_core, // B
-                Mt, // Mt
-                Kt, // Kt
-                Nt, // Nt
-            };
+            all_writer_runtime_args[i][0] = has_work_for_q_heads;
+            all_writer_runtime_args[i][8] = num_output_blocks_per_core;
+            all_writer_runtime_args[i][9] = num_blocks_written * MtKt;
+            all_writer_runtime_args[i][10] = num_blocks_written * MtNt;
+
+            all_compute_runtime_args[i][0] = has_work_for_q_heads;
+            all_compute_runtime_args[i][1] = num_output_blocks_per_core;
+            all_compute_runtime_args[i][3] = kv_heads_id * in1_block_num_tiles_per_kv_heads;
+            all_compute_runtime_args[i][4] = (KV_HEADS - kv_heads_id) * in1_block_num_tiles_per_kv_heads;
 
             num_blocks_written += num_output_blocks_per_core;
         }
@@ -401,23 +485,36 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         SetRuntimeArgs(program, writer_id, cores, all_writer_runtime_args);
         SetRuntimeArgs(program, compute_kernel_id, cores, all_compute_runtime_args);
 
-        // Update dynamic CBs
-        uint32_t cb2_num_input_tiles = KV_HEADS;
-        UpdateCircularBufferTotalSize(program, cb_src2, cb2_num_input_tiles * in1_single_tile_size);
-
+        // Update dynamic CBs (which is most of them)
         if (in0_is_sharded) {
             uint32_t cb0_num_input_tiles = a.shard_spec().value().numel() / TILE_HW; // Should be full MtKt and C should be 1
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src0_buffer);
             UpdateCircularBufferTotalSize(program, cb_src0, cb0_num_input_tiles * in0_single_tile_size);
+        } else {
+            uint32_t cb0_num_input_tiles = in0_block_w; // TODO: Generalize; double buffer and add blocking along ineer dim if we have Mt > 1
+            UpdateCircularBufferTotalSize(program, cb_src0, cb0_num_input_tiles * in0_single_tile_size);
         }
+
+        uint32_t cb1_num_input_tiles = 2 * in1_block_num_tiles;
+        UpdateCircularBufferTotalSize(program, cb_src1, cb1_num_input_tiles * in1_single_tile_size);
+
         if (in1_is_sharded) {
-            uint32_t cb3_num_input_tiles = b.shard_spec().value().numel() / TILE_HW; // Should be full CKtNt and batch must be 32
-            UpdateDynamicCircularBufferAddress(program, cb_src3, *src1_buffer);
-            UpdateCircularBufferTotalSize(program, cb_src3, cb3_num_input_tiles * in1_single_tile_size);
+            uint32_t cb2_num_input_tiles = b.shard_spec().value().numel() / TILE_HW; // Should be full CKtNt and batch must be 32
+            UpdateDynamicCircularBufferAddress(program, cb_src2, *src1_buffer);
+            UpdateCircularBufferTotalSize(program, cb_src2, cb2_num_input_tiles * in1_single_tile_size);
         }
+
+        uint32_t interm_cb_num_tiles = 1 * out_block_w; // TODO: Generalize; should it be double buffered?
+        UpdateCircularBufferTotalSize(program, cb_interm0, interm_cb_num_tiles * interm_single_tile_size);
+        UpdateCircularBufferTotalSize(program, cb_interm1, interm_cb_num_tiles * interm_single_tile_size);
+        UpdateCircularBufferTotalSize(program, cb_interm2, MtNt * interm_single_tile_size);
+
         if (output_is_sharded) {
             uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW; // Should be full MtNt and C should be 1
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateCircularBufferTotalSize(program, cb_output, num_output_tiles * output_single_tile_size);
+        } else {
+            uint32_t num_output_tiles = MtNt; // TODO: Should be MtNt if Mt > 1? Or, produce one Nt at a time and double buffer?
             UpdateCircularBufferTotalSize(program, cb_output, num_output_tiles * output_single_tile_size);
         }
     };

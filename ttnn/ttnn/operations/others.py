@@ -350,9 +350,8 @@ def softmax(
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         ttl_input_tensor = input_tensor.value
 
-        ttl_output_tensor = ttl.operations.primary.moreh_softmax(
-            ttl_input_tensor, dim=dim_4D, output_mem_config=memory_config
-        )
+        ttl_output_tensor = ttnn.Tensor(ttl_input_tensor).value
+        ttl.operations.primary.moreh_softmax(ttl_input_tensor, ttl_output_tensor, dim=dim_4D)
     output_tensor = ttnn.Tensor(ttl_output_tensor)
     output_tensor = ttnn.reshape(output_tensor, input_shape)
     return output_tensor
@@ -467,15 +466,22 @@ def _torch_upsample(input_tensor: ttnn.Tensor, scale_factor: [float, float], **_
 )
 def upsample(
     input_tensor: ttnn.Tensor,
-    scale_factor: Union[float, Tuple[float, float]],
+    scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float], Tuple[float, float, float, float]],
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """
-    upsample(input_tensor: ttnn.Tensor, scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float], Tuple[float, float, float, float]]) -> ttnn.Tensor
+    r"""
+    Upsamples a given multi-channel 2D (spatial) data.
+    The input data is assumed to be of the form N x C x H x W.
+
+    The algorithms available for upsampling are 'nearest' for now.
+
+    Args:
+        * :attr:`input_tensor`: the input tensor
+        * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
     """
 
     scale_h, scale_w = 1, 1
-    if isinstance(scale_factor, float):
+    if isinstance(scale_factor, float) or isinstance(scale_factor, int):
         scale_h = scale_factor
         scale_w = scale_factor
     elif isinstance(scale_factor, tuple):

@@ -101,7 +101,6 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
 }
 
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
-    bool pass = true;
     for (const bool use_void_star_api: {true, false}) {
 
         size_t buf_size = config.num_pages * config.page_size;
@@ -121,10 +120,9 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
         } else {
             EnqueueReadBuffer(cq, bufa, result, true);
         }
-        pass &= (src == result);
+        EXPECT_EQ(src, result);
     }
-
-    return pass;
+    return true;
 }
 
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -470,6 +468,29 @@ TEST_F(CommandQueueFixture, TestBackToBackNon32BAlignedPageSize) {
 }
 
 }  // end namespace l1_tests
+
+TEST_F(CommandQueueFixture, TestNonblockingReads) {
+    constexpr BufferType buff_type = BufferType::L1;
+
+    Buffer bufa(device_, 2048, 2048, buff_type);
+    auto src_a = local_test_functions::generate_arange_vector(bufa.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, src_a, false);
+
+    Buffer bufb(device_, 2048, 2048, buff_type);
+    auto src_b = local_test_functions::generate_arange_vector(bufb.size());
+    EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, src_b, false);
+
+    vector<uint32_t> result_a;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufa, result_a, false);
+
+    vector<uint32_t> result_b;
+    EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(device_), bufb, result_b, false);
+    Finish(tt::tt_metal::detail::GetCommandQueue(device_));
+
+    EXPECT_EQ(src_a, result_a);
+    EXPECT_EQ(src_b, result_b);
+}
+
 }  // end namespace basic_tests
 
 namespace stress_tests {

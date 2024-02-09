@@ -4,7 +4,11 @@
 
 import pathlib
 
-MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
+TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
+MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
+TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
+
+from tt_lib.ttnn import TTNN_ENABLE_LOGGING
 
 from ttnn.types import (
     TILE_SIZE,
@@ -103,6 +107,11 @@ from ttnn.operations.unary import (
     asin,
     acos,
     atan,
+    sinh,
+    cosh,
+    asinh,
+    acosh,
+    atanh,
 )
 
 from ttnn.operations.binary import (
@@ -129,6 +138,27 @@ from ttnn.operations.relational import (
     ne,
 )
 
+from ttnn.operations.activation import (
+    clip,
+    elu,
+    hardshrink,
+    hardswish,
+    hardtanh,
+    heaviside,
+    leaky_relu,
+    log_sigmoid,
+    mish,
+    prelu,
+    relu_max,
+    relu_min,
+    relu6,
+    sigmoid,
+    sign,
+    softshrink,
+    softsign,
+    swish,
+)
+
 from ttnn.operations.normalization import (
     layer_norm,
     rms_norm,
@@ -138,7 +168,7 @@ from ttnn.operations.normalization import (
 from ttnn.operations import transformer
 from ttnn.operations.conv import Conv2D
 from ttnn.operations.pooling import (
-    MaxPool2D,
+    MaxPool2d,
     average_pool2d,
 )
 

@@ -19,6 +19,12 @@ void py_module(py::module& m_ttnn) {
 
     auto m_operations = m_ttnn.def_submodule("operations", "ttnn Operations");
     operations::py_module(m_operations);
+
+#ifdef TTNN_ENABLE_LOGGING
+    m_ttnn.attr("TTNN_ENABLE_LOGGING") = true;
+#else
+    m_ttnn.attr("TTNN_ENABLE_LOGGING") = false;
+#endif
 }
 
 }  // namespace ttnn

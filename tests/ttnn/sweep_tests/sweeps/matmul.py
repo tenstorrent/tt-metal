@@ -19,6 +19,8 @@ parameters = {
     "batch_matrix_multiply": [True, False],
     "input_a_dtype": [ttnn.bfloat16],
     "input_b_dtype": [ttnn.bfloat16],
+    "input_a_layout": [ttnn.TILE_LAYOUT],
+    "input_b_layout": [ttnn.TILE_LAYOUT],
     "output_dtype": [ttnn.bfloat16],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -44,6 +46,8 @@ def run(
     input_a_dtype,
     input_b_dtype,
     output_dtype,
+    input_a_layout,
+    input_b_layout,
     input_b_memory_config,
     input_a_memory_config,
     output_memory_config,
@@ -61,10 +65,18 @@ def run(
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, dtype=input_a_dtype, device=device, memory_config=input_b_memory_config
+        torch_input_tensor_a,
+        layout=input_a_layout,
+        dtype=input_a_dtype,
+        device=device,
+        memory_config=input_b_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, dtype=input_b_dtype, device=device, memory_config=input_a_memory_config
+        torch_input_tensor_b,
+        layout=input_b_layout,
+        dtype=input_b_dtype,
+        device=device,
+        memory_config=input_a_memory_config,
     )
 
     output_tensor = ttnn.matmul(

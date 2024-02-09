@@ -40,7 +40,7 @@ void setup_runtime(
     uint32_t start_core_y = 0;
 
     if (num_cores_c > 1) {
-        TT_ASSERT(num_cores_c % 2 == 0, "Must be even number of cores");
+        TT_FATAL(num_cores_c % 2 == 0, "Must be even number of cores");
     }
     uint32_t idc_outer_limit = 1;
     uint32_t idc_inner_limit = num_cores_c;
@@ -115,14 +115,14 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     tt_metal::Buffer *in0_buffer = input_tensor.buffer();
 
     // Output buffers
-    TT_ASSERT(output_tensors.size() == num_chunks);
+    TT_FATAL(output_tensors.size() == num_chunks);
     tt_metal::Tensor &out0 = output_tensors[0];
     tt_metal::Tensor &out1 = output_tensors[1];
 
     tt_metal::Buffer *out0_buffer = out0.buffer();
-    TT_ASSERT(out0_buffer != nullptr, "Output 0 buffer should be allocated on device!");
+    TT_FATAL(out0_buffer != nullptr, "Output 0 buffer should be allocated on device!");
     tt_metal::Buffer *out1_buffer = out1.buffer();
-    TT_ASSERT(out1_buffer != nullptr, "Output 1 buffer should be allocated on device!");
+    TT_FATAL(out1_buffer != nullptr, "Output 1 buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = out0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    TT_ASSERT(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
+    TT_FATAL(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
 
     uint32_t num_tiles_per_z = (per_core_tiles_x * num_cores_x) * (per_core_tiles_y * num_cores_y);
     uint32_t z_stride_read = num_tiles_per_z;
@@ -303,7 +303,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_ten
 
 std::vector<Tensor> split_dim_two_chunks_tiled(
     const Tensor &input_tensor, uint dim /* = 3 */, const MemoryConfig &mem_config /* = default */) {
-    TT_ASSERT(dim == 3 || dim == 2, "split is possible along dim 2 or 3 only");
+    TT_FATAL(dim == 3 || dim == 2, "split is possible along dim 2 or 3 only");
     if (dim == 3) {
         return split_last_dim_two_chunks_tiled(input_tensor, mem_config);
     }

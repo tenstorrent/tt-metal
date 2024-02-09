@@ -399,16 +399,19 @@ Tensor convert_python_tensor_to_tt_tensor(
             py::object torch = py::module_::import("torch");
             py::object ttnn = py::module_::import("ttnn");
             if (py::isinstance<Tensor>(value)) {
-                auto tensor = py::cast<Tensor>(value);
-                input_tensors.push_back(tensor);
+                // TODO(arakhmati): figure out how to handle this without causing extra memory usage
+                // auto tensor = py::cast<Tensor>(value);
+                // input_tensors.push_back(tensor);
             } else if (py::isinstance(value, ttnn.attr("Tensor"))) {
-                auto tensor = py::cast<Tensor>(value.attr("value"));
-                input_tensors.push_back(tensor);
+                // TODO(arakhmati): figure out how to handle this without causing extra memory usage
+                // auto tensor = py::cast<Tensor>(value.attr("value"));
+                // input_tensors.push_back(tensor);
             } else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
                 // do nothing
             } else if (py::isinstance(value, torch.attr("Tensor"))) {
-                auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
-                input_tensors.push_back(tensor);
+                // TODO(arakhmati): figure out how to handle this without causing extra memory usage
+                // auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
+                // input_tensors.push_back(tensor);
             } else {
                 attributes.push_back({name, fmt::format("{}", value)});
             }

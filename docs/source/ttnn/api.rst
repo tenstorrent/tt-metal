@@ -60,6 +60,11 @@ Pointwise Unary
    ttnn/asin
    ttnn/acos
    ttnn/atan
+   ttnn/sinh
+   ttnn/cosh
+   ttnn/asinh
+   ttnn/acosh
+   ttnn/atanh
 
 Pointwise Binary
 ================
@@ -90,6 +95,31 @@ Pointwise Relational
    ttnn/lte
    ttnn/eq
    ttnn/ne
+
+Activation
+==========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/clip
+   ttnn/elu
+   ttnn/hardshrink
+   ttnn/hardswish
+   ttnn/hardtanh
+   ttnn/heaviside
+   ttnn/leaky_relu
+   ttnn/log_sigmoid
+   ttnn/mish
+   ttnn/prelu
+   ttnn/relu_max
+   ttnn/relu_min
+   ttnn/relu6
+   ttnn/sigmoid
+   ttnn/sign
+   ttnn/softshrink
+   ttnn/softsign
+   ttnn/swish
 
 Reduction
 =========
@@ -141,6 +171,23 @@ Embedding
 
    ttnn/embedding
 
+Pooling
+=======
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/average_pool2d
+   ttnn/MaxPool2d
+
+Sampling
+========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/upsample
+
 
 Model Conversion
 ****************
@@ -148,4 +195,5 @@ Model Conversion
 .. toctree::
    :maxdepth: 1
 
+   ttnn/model_preprocessing/preprocess_model
    ttnn/model_preprocessing/preprocess_model_parameters

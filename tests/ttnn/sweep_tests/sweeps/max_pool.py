@@ -94,7 +94,7 @@ def run(
     act_reshaped = act_permuted.reshape(act_shape)
 
     reader_patterns_cache = {}
-    max_pool = ttnn.MaxPool2D(
+    max_pool = ttnn.MaxPool2d(
         kernel_size=(kernel_h, kernel_w),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
