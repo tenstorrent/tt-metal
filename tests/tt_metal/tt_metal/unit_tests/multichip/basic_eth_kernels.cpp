@@ -894,11 +894,11 @@ TEST_F(N300DeviceFixture, EthKernelsScatterSend) {
     GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 0, .y = 8};
-    CoreCoord sender_core_1 = {.x = 0, .y = 9};
+    CoreCoord sender_core_0 = CoreCoord(0, 8);
+    CoreCoord sender_core_1 = CoreCoord(0, 9);
 
-    CoreCoord receiver_core_0 = {.x = 0, .y = 0};
-    CoreCoord receiver_core_1 = {.x = 0, .y = 1};
+    CoreCoord receiver_core_0 = CoreCoord(0, 0);
+    CoreCoord receiver_core_1 = CoreCoord(0, 1);
 
     std::size_t src_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     std::vector<size_t> dst_addrs = {
@@ -921,7 +921,7 @@ TEST_F(N300DeviceFixture, HungEthKernelsContextSwitch) {
     GTEST_SKIP();
     const auto& mmio_device = devices_.at(0);
     const auto& remote_device = devices_.at(1);
-    std::vector<CoreCoord> hung_cores = {{.x = 0, .y = 8}, {.x = 0, .y = 9}};
+    std::vector<CoreCoord> hung_cores = {CoreCoord(0, 8), CoreCoord(0, 9)};
 
     ASSERT_TRUE(unit_tests::erisc::kernels::eth_hung_kernels(mmio_device, remote_device, hung_cores));
 }

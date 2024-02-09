@@ -186,7 +186,7 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {2, 2};
 
-    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRange all_cores(start_core, end_core);
 
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
@@ -247,10 +247,10 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {1, 1};
-    CoreRange start_core_range = {.start=start_core, .end=start_core};
-    CoreRange core_group{.start={0, 1}, .end={1, 1}};
-    CoreRange single_core = {.start={1, 0}, .end={1, 0}};
-    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRange start_core_range(start_core, start_core);
+    CoreRange core_group({0, 1}, {1, 1});
+    CoreRange single_core({1, 0}, {1, 0});
+    CoreRange all_cores(start_core, end_core);
     CoreRangeSet core_blocks = CoreRangeSet({start_core_range, single_core, core_group});
 
     uint32_t single_tile_size = 2 * 1024;

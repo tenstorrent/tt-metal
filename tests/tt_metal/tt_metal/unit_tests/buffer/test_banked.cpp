@@ -23,7 +23,7 @@ struct BankedConfig {
     size_t page_size_bytes = 2 * 32 * 32;
     BufferType input_buffer_type = BufferType::L1;
     BufferType output_buffer_type = BufferType::L1;
-    CoreCoord logical_core = CoreCoord({.x = 0, .y = 0});
+    CoreCoord logical_core = CoreCoord(0, 0);
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
 

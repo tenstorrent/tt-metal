@@ -19,7 +19,7 @@ TEST_F(CoreCoordHarness, TestCoreRangeSetValidConstruct)
 
 TEST_F(CoreCoordHarness, TestCoreRangeSetInvalidConstruct)
 {
-    ::CoreRange overlapping_range = {.start={1, 2}, .end={3, 3}};
+    ::CoreRange overlapping_range({1, 2}, {3, 3});
     EXPECT_ANY_THROW( ::CoreRangeSet({this->cr1, this->cr2, overlapping_range}) );
     EXPECT_ANY_THROW( ::CoreRangeSet({this->sc1, this->cr1}) );
 }

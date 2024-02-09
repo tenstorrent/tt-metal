@@ -10,7 +10,7 @@ TT_METAL_UNIT_TESTS_OBJ_HOME = tt_metal/tests/unit_tests/
 TT_METAL_UNIT_TESTS_SRCS = $(patsubst $(TT_METAL_UNIT_TESTS_SRCS_HOME)%, $(TT_METAL_UNIT_TESTS_OBJ_HOME)%, $(TT_METAL_UNIT_TESTS))
 
 TT_METAL_UNIT_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES) -I$(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/common
-TT_METAL_UNIT_TESTS_LDFLAGS = $(LDFFLAGS) -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest -lgtest_main
+TT_METAL_UNIT_TESTS_LDFLAGS = $(LDFFLAGS) -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest -lgtest_main -lm
 
 TT_METAL_UNIT_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_UNIT_TESTS_SRCS:.cpp=.o))
 TT_METAL_UNIT_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_UNIT_TESTS_SRCS:.cpp=.d))

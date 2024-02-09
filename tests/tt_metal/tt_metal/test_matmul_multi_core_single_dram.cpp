@@ -167,7 +167,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
-    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRange all_cores(start_core, end_core);
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;
@@ -193,7 +193,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
                 .set_page_size(src1_cb_index, single_tile_size);
             auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-            CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+            CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
             tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size)
                 .set_page_size(interm0_cb_index, single_tile_size);

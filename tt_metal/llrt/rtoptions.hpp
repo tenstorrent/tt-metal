@@ -21,29 +21,29 @@ namespace llrt {
 class RunTimeOptions {
     std::string root_dir;
 
-    bool build_map_enabled;
+    bool build_map_enabled = false;
 
-    bool watcher_enabled;
+    bool watcher_enabled = false;
     int watcher_interval_ms;
-    bool watcher_dump_all;
-    bool watcher_append;
+    bool watcher_dump_all = false;
+    bool watcher_append = false;
 
     std::vector<CoreCoord> dprint_cores;
-    bool dprint_all_cores;
+    bool dprint_all_cores = false;
     std::vector<int> dprint_chip_ids;
-    bool dprint_all_chips;
-    uint32_t dprint_riscv_mask;
+    bool dprint_all_chips = false;
+    uint32_t dprint_riscv_mask = 0;
     std::string dprint_file_name;
 
-    bool test_mode_enabled;
+    bool test_mode_enabled = false;
 
-    bool profiler_enabled;
+    bool profiler_enabled = false;
 
-    bool null_kernels;
+    bool null_kernels = false;
 
-    bool clear_l1;
+    bool clear_l1 = false;
 
-public:
+   public:
     RunTimeOptions();
 
     const std::string& get_root_dir();

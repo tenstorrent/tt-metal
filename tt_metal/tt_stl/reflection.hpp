@@ -108,7 +108,7 @@ struct Attribute final {
             this->delete_storage = other.delete_storage;
             this->copy_storage = other.copy_storage;
             this->move_storage = other.move_storage;
-            this->implementations = implementations;
+            this->implementations = other.implementations;
         }
         return *this;
     }
@@ -130,7 +130,7 @@ struct Attribute final {
             this->delete_storage = other.delete_storage;
             this->copy_storage = other.copy_storage;
             this->move_storage = other.move_storage;
-            this->implementations = implementations;
+            this->implementations = other.implementations;
         }
         return *this;
     }

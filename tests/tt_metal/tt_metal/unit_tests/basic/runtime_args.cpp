@@ -105,8 +105,8 @@ bool verify_result_data_movement(
 TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
-        CoreRange first_core_range = {.start = CoreCoord(0, 0), .end = CoreCoord(1, 1)};
-        CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
+        CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
+        CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program =
             unit_tests::runtime_args::initialize_program_data_movement(this->devices_.at(id), core_range_set);
@@ -201,8 +201,8 @@ bool verify_result_compute(
 TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
-        CoreRange first_core_range = {.start = CoreCoord(0, 0), .end = CoreCoord(1, 1)};
-        CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
+        CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
+        CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
@@ -226,8 +226,8 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
 TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
-        CoreRange first_core_range = {.start = CoreCoord(0, 0), .end = CoreCoord(1, 1)};
-        CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
+        CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
+        CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program =
             unit_tests::runtime_args::initialize_program_data_movement(this->devices_.at(id), core_range_set);

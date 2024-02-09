@@ -34,14 +34,14 @@ bool l1_ping(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
-            CoreCoord dest_core({.x = static_cast<size_t>(x), .y = static_cast<size_t>(y)});
+            CoreCoord dest_core(static_cast<size_t>(x), static_cast<size_t>(y));
             tt_metal::detail::WriteToDeviceL1(device, dest_core, l1_byte_address, inputs);
         }
     }
 
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
-            CoreCoord dest_core({.x = static_cast<size_t>(x), .y = static_cast<size_t>(y)});
+            CoreCoord dest_core(static_cast<size_t>(x), static_cast<size_t>(y));
             std::vector<uint32_t> dest_core_data;
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
@@ -88,10 +88,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRange all_cores = CoreRange(
-        CoreCoord{.x = 0, .y = 0},
-        CoreCoord{.x = compute_grid_size.x - 1, .y = compute_grid_size.y -1}
-    );
+    CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
     CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
@@ -162,9 +159,9 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    CoreCoord unharvested_logical_grid_size = {.x = 12, .y = 10};
+    CoreCoord unharvested_logical_grid_size(12, 10);
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        unharvested_logical_grid_size = {.x = 8, .y = 10};
+        unharvested_logical_grid_size = CoreCoord(8, 10);
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {
@@ -312,7 +309,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
 
         tt_metal::Program program = tt_metal::CreateProgram();
         string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
-        CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
+        CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
         tt_metal::KernelHandle kernel_id = tt_metal::CreateKernel(

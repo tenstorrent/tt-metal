@@ -317,7 +317,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         num_shards = div_up(total_height, shard_shape[0]) * div_up(total_width, shard_shape[1]);
     } else {
-        TT_ASSERT("Unsupported sharding scheme");
+        TT_FATAL(false, "Unsupported sharding scheme");
     }
 
     TT_ASSERT(num_shards == num_cores, "Number of shards must match number of cores");

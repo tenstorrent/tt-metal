@@ -109,6 +109,9 @@ void write_record(
 }
 
 void OperationHistory::dump_to_csv() {
+    if (not enabled())
+        return;
+
     std::ofstream output_file_stream(csv_file_name());
 
     std::size_t num_attributes = 0;

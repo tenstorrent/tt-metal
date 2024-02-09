@@ -374,8 +374,10 @@ namespace tt::tt_metal{
                 const auto kernel = detail::GetKernel(program, kernel_id);
                 auto kernel_config = std::get<DataMovementConfig>(kernel->config());
                 auto noc_value = magic_enum::enum_integer(kernel_config.noc);
-                noc0_in_use, local_noc0_usage = noc_value == 0;
-                noc1_in_use, local_noc1_usage = noc_value == 1;
+                local_noc0_usage = noc_value == 0;
+                local_noc1_usage = noc_value == 1;
+                noc0_in_use = local_noc0_usage;
+                noc1_in_use = local_noc1_usage;
             };
 
             for (const auto &core_range : core_ranges.ranges()) {

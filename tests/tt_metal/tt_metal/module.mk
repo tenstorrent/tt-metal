@@ -72,7 +72,7 @@ TT_METAL_TESTS += \
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))
 
 TT_METAL_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES)
-TT_METAL_TESTS_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest
+TT_METAL_TESTS_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest -lm
 
 TT_METAL_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.o))
 TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))

@@ -87,7 +87,7 @@ core at (0, 0).
 
     CommandQueue& cq = detail::GetCommandQueue(device);
     Program program{};
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
 
 Create DRAM buffers & Circular buffers

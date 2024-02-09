@@ -64,7 +64,7 @@ typedef struct {
   uint32_t reserved_3       : 32;
 } packer_config_t; //16B
 
-typedef struct {
+struct fifo_ctl_t {
   uint32_t rd_ptr ;
   uint32_t wr_ptr ;
   uint32_t rsvd0 ;
@@ -76,7 +76,7 @@ typedef struct {
             % wr_ptr).str() ;
   }
 #endif
-} fifo_ctl_t ;
+};
 
 typedef struct {
   uint32_t val[4];

@@ -229,27 +229,13 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     KernelHandle brisc_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/dprint_raise_wait_brisc.cpp",
-        CoreRange{
-            .start = xy_start,
-            .end = xy_end
-        },
-        DataMovementConfig {
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default
-        }
-    );
+        CoreRange(xy_start, xy_end),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/dprint_raise_wait_ncrisc.cpp",
-        CoreRange{
-            .start = xy_start,
-            .end = xy_end
-        },
-        DataMovementConfig {
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default
-        }
-    );
+        CoreRange(xy_start, xy_end),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     // Write runtime args
     uint32_t multi_core = 1;

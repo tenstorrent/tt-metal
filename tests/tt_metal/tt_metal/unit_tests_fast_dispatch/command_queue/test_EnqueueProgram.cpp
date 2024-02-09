@@ -291,7 +291,7 @@ namespace compiler_workaround_hardware_bug_tests {
 TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
     Program program;
 
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately
@@ -307,7 +307,7 @@ TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
 namespace single_core_tests {
 
 TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config = {.cb_id=0, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -318,7 +318,7 @@ TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
 }
 
 TEST_F(CommandQueueFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -333,7 +333,7 @@ TEST_F(CommandQueueFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
 }
 
 TEST_F(CommandQueueFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config_0 = {.cb_id = 1, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -349,7 +349,7 @@ TEST_F(CommandQueueFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
 
 TEST_F(CommandQueueFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
 
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     uint32_t intermediate_cb = 24;
@@ -399,7 +399,7 @@ TEST_F(CommandQueueFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
 
 
 TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config = {.cb_id=0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
@@ -410,7 +410,7 @@ TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore)
 }
 
 TEST_F(CommandQueueFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = 1};
@@ -421,7 +421,7 @@ TEST_F(CommandQueueFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
 TEST_F(CommandQueueFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     Program program;
 
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately
@@ -437,7 +437,7 @@ TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
 
     Program program;
 
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     auto compute_kernel_id = CreateKernel(
@@ -464,7 +464,7 @@ TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
 }
 
 TEST_F(CommandQueueFixture, TestRuntimeArgsCorrectlySentSingleCore) {
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -477,7 +477,7 @@ namespace multicore_tests {
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -495,7 +495,7 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -513,7 +513,7 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
 TEST_F(CommandQueueFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -531,7 +531,7 @@ TEST_F(CommandQueueFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) 
 TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
@@ -542,7 +542,7 @@ TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
 TEST_F(CommandQueueFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};

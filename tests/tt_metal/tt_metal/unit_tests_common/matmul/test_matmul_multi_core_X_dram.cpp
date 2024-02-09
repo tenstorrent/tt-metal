@@ -48,7 +48,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
-    const CoreRange all_cores{.start=start_core, .end=end_core};
+    const CoreRange all_cores(start_core, end_core);
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;
@@ -79,7 +79,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
                 auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
             }else{
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
-                CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+                CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
                 auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
                 auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
                 auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);

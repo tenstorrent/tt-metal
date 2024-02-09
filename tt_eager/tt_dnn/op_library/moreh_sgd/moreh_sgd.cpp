@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_FATAL(false, "Core not in specified core ranges");
         }
 
         union { float f; uint32_t u; } u_lr, u_momentum, u_dampening, u_weight_decay, u_one;
@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

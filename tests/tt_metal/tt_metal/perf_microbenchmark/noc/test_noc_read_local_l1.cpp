@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1,
                           (std::size_t)num_cores_r - 1};
-    const CoreRange all_cores{.start = start_core, .end = end_core};
+    const CoreRange all_cores(start_core, end_core);
 
     log_info(LogTest, "core range {},{} - {},{}", start_core.x, start_core.y,
              end_core.x, end_core.y);

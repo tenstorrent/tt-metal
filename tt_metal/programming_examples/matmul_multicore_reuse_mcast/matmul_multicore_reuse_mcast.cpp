@@ -156,33 +156,32 @@ void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vect
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    CoreRange all_cores{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_cores(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    CoreRange left_column{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange left_column(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
 
-    CoreRange all_except_left_column{
-        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_except_left_column(
+        {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    CoreRange in0_sender_in1_sender{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x, (std::size_t) start_core_y}};
+    CoreRange in0_sender_in1_sender(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
 
-    CoreRange in0_sender_in1_receiver{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange in0_sender_in1_receiver(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
+        {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
 
-    CoreRange in0_receiver_in1_sender{
-        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        .end{(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
+    CoreRange in0_receiver_in1_sender(
+        {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 
-    CoreRange in0_receiver_in1_receiver{
-        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange in0_receiver_in1_receiver(
+        {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
     //////////////////////////////////////////////////
     /*

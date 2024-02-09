@@ -339,7 +339,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 } // scale_mask_softmax_multi_core
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
@@ -622,7 +622,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 } // scale_mask_softmax_sharded_multi_core
 
 }  // namespace tt_metal
