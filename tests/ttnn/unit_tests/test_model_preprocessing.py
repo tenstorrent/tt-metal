@@ -137,7 +137,7 @@ def test_conv_relu_conv(
         device=device,
         reader_patterns_cache=reader_patterns_cache,
     )
-    assert len(parameters) == 3
+    assert len(parameters) == 2
 
     conv1 = parameters.conv1
     conv2 = parameters.conv2
@@ -291,7 +291,7 @@ def test_conv_relu_linear(
         device=device,
         reader_patterns_cache=reader_patterns_cache,
     )
-    assert len(parameters) == 3
+    assert len(parameters) == 2
 
     conv = parameters.conv
     linear = parameters.linear
