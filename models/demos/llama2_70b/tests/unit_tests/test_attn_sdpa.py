@@ -68,9 +68,9 @@ class TtLlamaSDPA(torch.nn.Module):
 
         ## Need to figure out how to broadcast in t dim
         # attn_mask = tt_lib.tensor.repeat(attn_mask, [1, attn.shape()[1], 1, 1])  # this causes memory error as the broadcast result is too big
-        attn_mask = tt2torch_tensor(attn_mask)
-        attn_mask = attn_mask.repeat(1, attn.shape()[1], 1, 1)
-        attn_mask = torch2tt_tensor(attn_mask, self.device)
+        # attn_mask = tt2torch_tensor(attn_mask)
+        # attn_mask = attn_mask.repeat(1, attn.shape()[1], 1, 1)
+        # attn_mask = torch2tt_tensor(attn_mask, self.device)
 
         attn = tt_lib.tensor.add(attn, attn_mask)
         attn = tt_lib.tensor.softmax(attn)
@@ -80,7 +80,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # xq = [seqlen, n_heads, batch, head_dim]
         # keys = [batch, num_kv_heads, cache_len + seqlen, dhead]
         # values = [batch, num_kv_heads, cache_len + seqlen, dhead]
-        # attn_mask = [seq_len, 1, batch,cache_len + seqlen]
+        # attn_mask = [seq_len, n_heads, batch,cache_len + seqlen]
 
         keys = tt_lib.tensor.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
         attn = tt_lib.operations.primary.transformers.group_attn_matmul(
@@ -91,6 +91,9 @@ class TtLlamaSDPA(torch.nn.Module):
             # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )  # seqlen, n_heads, batch, cache_len + seqlen
 
+        # TODO: This op expects attn_mask to be sharded such that each core has 1 head
+        # This is illegal on single chip since we need 8x8 coregrid to shard
+        # 64 heads on. Until we fracture on multi-chip, we can't use this op.
         # attn = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
         #         attn,
         #         1 / math.sqrt(self.head_dim),
@@ -138,7 +141,7 @@ class PytorchLlamaSDPA(torch.nn.Module):
         # keys = [batch, num_kv_heads, cache_len + seqlen, dhead]
         # values = [batch, num_kv_heads, cache_len + seqlen, dhead]
         # attn_mask = [seq_len, 1, batch,cache_len + seqlen]
-        attn_mask = attn_mask.permute(2, 1, 0, 3)  # [batch, 1, seq_len, cache_len + seqlen]
+        attn_mask = attn_mask.permute(2, 1, 0, 3)  # [batch, n_heads, seq_len, cache_len + seqlen]
         bsz = xq.size(2)
         seqlen = xq.size(0)
 
@@ -198,7 +201,9 @@ def run_test_LlamaSDPA(
         (torch.rand(seq_len, n_heads, batch, head_dim) * 2) - 1,
         (torch.rand(batch, n_kv_heads, max_seq_len, head_dim) * 2) - 1,
         (torch.rand(batch, n_kv_heads, max_seq_len, head_dim) * 2) - 1,
-        (torch.rand(seq_len, 1, batch, max_seq_len) * 2) - 1,
+        # Match attn mask shape from falcon40b model_preprocessing
+        # [seqlen, n_heads, batch, max_seq_len]
+        (torch.rand(seq_len, 1, batch, max_seq_len).expand(-1, n_heads, -1, -1) * 2) - 1,
     ]
 
     layer_num = 0
@@ -223,6 +228,14 @@ def run_test_LlamaSDPA(
     )
 
     tt_inp = [torch2tt_tensor(i, device) for i in inp]
+    # attn_mask = tt_inp[3]
+    # attn_mask_mem_config = model_config["ATTN_MASK_MEMCFG"]
+    # attn_mask_shard_shape = attn_mask_mem_config.shard_spec.shape
+    # attn_mask_shard_shape[-1] = max_seq_len
+    # attn_mask_mem_config.shard_spec.shape = attn_mask_shard_shape
+
+    # attn_mask = tt_lib.tensor.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
+    # tt_inp[3] = attn_mask
 
     tt_out = tt_model(*tt_inp)
     tt_out = [tt2torch_tensor(tt_out).permute(2, 0, 1, 3).squeeze()]  # [batch, seq_len, hidden_dim]
