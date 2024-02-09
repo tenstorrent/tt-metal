@@ -65,6 +65,11 @@ Pointwise Unary
    ttnn/asinh
    ttnn/acosh
    ttnn/atanh
+   ttnn/identity
+   ttnn/logical_not_unary
+   ttnn/logical_noti
+   ttnn/logit
+   ttnn/move
 
 Pointwise Binary
 ================
@@ -95,6 +100,25 @@ Pointwise Relational
    ttnn/lte
    ttnn/eq
    ttnn/ne
+
+Pointwise Math
+==============
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/i0
+   ttnn/isfinite
+   ttnn/isinf
+   ttnn/isnan
+   ttnn/isneginf
+   ttnn/isposinf
+   ttnn/lgamma
+   ttnn/log10
+   ttnn/log1p
+   ttnn/log2
+   ttnn/multigammaln
+   ttnn/neg
 
 Activation
 ==========

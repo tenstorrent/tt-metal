@@ -1,4 +1,4 @@
-personal_ws-1.1 en 480
+personal_ws-1.1 en 484 
 ABI
 ADDI
 API
@@ -300,11 +300,13 @@ jupyter
 labelled
 ld
 lez
+lgamma
 linenos
 llk
 llrt
 loadi
 loadis
+logit
 loopback
 lt
 lte
@@ -319,6 +321,7 @@ mish
 modindex
 mul
 multicast
+multigammaln
 multihead
 namespace
 nans
@@ -332,6 +335,7 @@ nodebias
 nof
 nop
 nosgn
+noti
 ns
 ntiles
 num

@@ -118,6 +118,11 @@ from ttnn.operations.unary import (
     asinh,
     acosh,
     atanh,
+    identity,
+    logical_not_unary,
+    logical_noti,
+    logit,
+    move,
 )
 
 from ttnn.operations.binary import (
@@ -163,6 +168,21 @@ from ttnn.operations.activation import (
     softshrink,
     softsign,
     swish,
+)
+
+from ttnn.operations.math import (
+    i0,
+    isfinite,
+    isinf,
+    isnan,
+    isneginf,
+    isposinf,
+    lgamma,
+    log10,
+    log1p,
+    log2,
+    multigammaln,
+    neg,
 )
 
 from ttnn.operations.normalization import (

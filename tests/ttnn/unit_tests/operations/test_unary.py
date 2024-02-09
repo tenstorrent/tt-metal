@@ -132,3 +132,73 @@ def test_acosh(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_atanh(device, h, w):
     run_unary_test(device, h, w, ttnn.atanh, torch.atanh)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_identity(device, h, w):
+    run_unary_test(device, h, w, ttnn.identity, torch.clone)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_move(device, h, w):
+    run_unary_test(device, h, w, ttnn.move, torch.clone)
+
+
+def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor, scalar)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor, scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+def run_unary_test_float_key(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor, scalar=scalar)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor, scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+def torch_logical_noti(x, *args, **kwargs):
+    import torch
+
+    immediate = kwargs.pop("scalar")
+    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
+    return result
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_logical_not_unary(device, h, w):
+    run_unary_test(device, h, w, ttnn.logical_not_unary, torch.logical_not)
+
+
+@pytest.mark.parametrize("scalar", [1, 2])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_logical_noti(device, h, w, scalar):
+    run_unary_test_float_key(device, h, w, scalar, ttnn.logical_noti, torch_logical_noti)
+
+
+@pytest.mark.parametrize("scalar", [1, 2])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_logit(device, h, w, scalar):
+    run_unary_test_with_float(device, h, w, scalar, ttnn.logit, torch.logit)
