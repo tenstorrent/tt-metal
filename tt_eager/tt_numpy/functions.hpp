@@ -353,7 +353,14 @@ static Tensor manual_insertion(const Tensor& input_tensor, const Shape& shape, D
     TT_ASSERT(shape[0] * shape[1] * shape[2] * shape[3] == input_tensor.volume(), "Required shape volume must match old shape volume");
     auto device_buffer = input_tensor.buffer();
     uint32_t size_in_bytes = device_buffer->size();
-    auto data_vec = tt::tt_metal::tensor_impl::read_data_from_device<T>(input_tensor, size_in_bytes);
+    vector<T> data_vec;
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        data_vec.resize(size_in_bytes / sizeof(T));
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(input_tensor, data_vec.data(), true);
+    } else {
+        tt::tt_metal::tensor_impl::read_data_from_device_buffer_slow_dispatch<T>(input_tensor, data_vec);
+    }
     auto owned_buffer = owned_buffer::create<T>(std::move(data_vec));
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {

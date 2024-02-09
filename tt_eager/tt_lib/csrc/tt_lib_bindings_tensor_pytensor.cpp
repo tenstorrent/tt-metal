@@ -815,7 +815,9 @@ Tensor convert_python_tensor_to_tt_tensor(
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
-            .def("cpu", &Tensor::cpu, R"doc(
+            .def("cpu", [](const Tensor &self, bool blocking) {
+                return self.cpu(blocking);
+            }, py::arg("blocking") = true, R"doc(
                 Move TT Tensor from TT accelerator device to host device.
 
                 .. code-block:: python

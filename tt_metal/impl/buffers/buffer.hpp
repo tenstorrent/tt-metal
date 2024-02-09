@@ -192,6 +192,10 @@ class Buffer {
         return this->shard_parameters_.value();
     }
 
+    std::vector<uint32_t> get_dev_page_to_host_page_mapping() const {
+        return dev_page_to_host_page_mapping_;
+    }
+
     CoreCoord get_core_from_dev_page_id(uint32_t dev_page_id) const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         TT_ASSERT(dev_page_id < dev_page_to_core_mapping_.size());

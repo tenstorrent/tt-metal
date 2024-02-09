@@ -90,12 +90,12 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
 }
 
-Tensor Tensor::cpu() const {
+Tensor Tensor::cpu(bool blocking) const {
     ZoneScoped;
     if (storage_type() == StorageType::OWNED) {
         return *this;
     }
-    return tensor_impl::to_host_wrapper(*this);
+    return tensor_impl::to_host_wrapper(*this, blocking);
 }
 
 Tensor Tensor::cpu_sharded() const {
