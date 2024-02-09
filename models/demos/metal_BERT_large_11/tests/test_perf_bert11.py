@@ -71,6 +71,7 @@ def run_perf_bert11(
         return_tensors="pt",
     )
 
+    outputs = []
     with torch.no_grad():
         profiler.start(cpu_key)
         torch_out = HF_model(**inputs)
@@ -119,7 +120,8 @@ def run_perf_bert11(
         # Run last inference iteration
         tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
         tt_output = tt_model(tt_embedding, tt_attention_mask)
-        tt_output = tt_output.cpu()
+        tt_output = tt_output.cpu(blocking=False)
+        outputs.append(tt_output)
 
         profiler.end(second_run_accum_key, force_enable=True)
 
@@ -128,6 +130,7 @@ def run_perf_bert11(
         del tt_embedding
         del tt_output
 
+    tt_lib.device.Synchronize(device)
     first_iter_time = profiler.get(first_run_key)
     second_iter_time = profiler.get(second_run_accum_key) / inference_iterations
     cpu_time = profiler.get(cpu_key)
