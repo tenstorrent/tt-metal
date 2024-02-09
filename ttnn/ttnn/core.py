@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple
+from typing import Tuple, Union
 
 import tt_lib as ttl
 
@@ -41,7 +41,7 @@ def has_padding(tensor):
 
 
 def create_sharded_memory_config(
-    grid: Tuple[int, int],
+    grid: Union[Tuple[int, int], Tuple[Tuple[int, int], Tuple[int, int]]],
     shard_shape: Tuple[int, int],
     strategy: ShardStrategy,
     orientation: ShardOrientation = DEFAULT_SHARD_ORIENTATION,
@@ -80,8 +80,19 @@ def create_sharded_memory_config(
     else:
         raise RuntimeError("Invalid shard orientation")
 
-    grid_coord = ttl.tensor.CoreCoord(grid[1] - 1, grid[0] - 1)
-    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), grid_coord)})
+    shard_grid = None
+    if isinstance(grid[0], Tuple):
+        grid_coord_1 = ttl.tensor.CoreCoord(grid[0][1] - 1, grid[0][0] - 1)
+        grid_coord_2 = ttl.tensor.CoreCoord(grid[1][1] - 1, grid[0][0])
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), grid_coord_1),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, grid[0][0]), grid_coord_2),
+            }
+        )
+    else:
+        grid_coord = ttl.tensor.CoreCoord(grid[1] - 1, grid[0] - 1)
+        shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), grid_coord)})
     shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
     mem_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return mem_config

@@ -19,6 +19,7 @@ using namespace tt::tt_metal;
 namespace remote_tests {
 
 TEST_F(CommandQueueMultiDeviceFixture, TestCommandReachesRemoteDevice) {
+    GTEST_SKIP() << "Test incorrect. Writing to a buffer, but nothing blocking to ensure that the write has been received";
     for (unsigned int id = 0; id < devices_.size(); id++) {
         auto device = devices_.at(id);
         if (device->is_mmio_capable()) {

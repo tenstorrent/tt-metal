@@ -76,12 +76,13 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
 }
 
-uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
+uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, CoreCoord compute_grid_size, std::optional<uint32_t> num_shards) {
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
     if(num_shards.has_value()){
+        auto num_compute_banks = compute_grid_size.x * compute_grid_size.y;
         is_sharded = true;
-        TT_FATAL(num_shards.value() < num_banks, "Expected number of shards to be less than total number of L1 banks");
+        TT_FATAL(num_shards.value() <= num_compute_banks, "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
         num_banks = num_shards.value();
     }
     // Each page needs to be at a 32B aligned address
@@ -265,7 +266,7 @@ std::optional<uint64_t> lowest_occupied_l1_address(const Allocator &allocator, u
 }
 
 uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
-    return bank_manager.allocate_buffer(size, page_size, bottom_up, num_shards);
+    return bank_manager.allocate_buffer(size, page_size, bottom_up, config.compute_grid_size, num_shards);
 }
 
 uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards) {

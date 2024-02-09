@@ -62,6 +62,7 @@ Device::Device(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
     this->initialize(l1_bank_remap);
+    tt::tt_metal::detail::GetCommandQueue(this, true); // Needed to initialize a new command queue
 }
 
 void Device::initialize_cluster() {
@@ -90,6 +91,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
         .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
         .l1_bank_remap = l1_bank_remap,
+        .compute_grid_size = this->compute_with_storage_grid_size()
     });
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {

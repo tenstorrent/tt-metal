@@ -424,7 +424,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         std::vector<T> device_data;
         device_data.resize(size_in_bytes / sizeof(T));
-        EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(tensor.device()), *device_buffer, device_data.data(), true);
+        EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(tensor.device(), false), *device_buffer, device_data.data(), true);
         return device_data;
     } else {
         std::vector<uint32_t> device_data;
@@ -442,7 +442,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueWriteBuffer(
-            tt::tt_metal::detail::GetCommandQueue(device_buffer.device()), device_buffer, host_buffer.data(), false);
+            tt::tt_metal::detail::GetCommandQueue(device_buffer.device(), false), device_buffer, host_buffer.data(), false);
     } else {
         auto uint32_data = pack_vec_into_uint32_vec<T>(host_buffer);
         ::detail::WriteToBuffer(device_buffer, uint32_data);
@@ -923,10 +923,10 @@ void memcpy(Tensor& dst, const Tensor& src) {
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         EnqueueReadBuffer(
-            tt::tt_metal::detail::GetCommandQueue(src.device()), *src.buffer(), get_raw_host_data_ptr(dst), true);
+            tt::tt_metal::detail::GetCommandQueue(src.device(), false), *src.buffer(), get_raw_host_data_ptr(dst), true);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         EnqueueWriteBuffer(
-            tt::tt_metal::detail::GetCommandQueue(dst.device()), *dst.buffer(), get_raw_host_data_ptr(src), false);
+            tt::tt_metal::detail::GetCommandQueue(dst.device(), false), *dst.buffer(), get_raw_host_data_ptr(src), false);
     } else {
         TT_THROW("Unsupported memcpy");
     }

@@ -38,7 +38,7 @@ class BankManager {
 
     int64_t bank_offset(uint32_t bank_id) const;
 
-    uint64_t allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, std::optional<uint32_t> num_shards);
+    uint64_t allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, CoreCoord compute_grid_size, std::optional<uint32_t> num_shards);
 
     void deallocate_buffer(uint64_t address);
     void deallocate_all();
