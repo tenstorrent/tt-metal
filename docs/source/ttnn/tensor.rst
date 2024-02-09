@@ -48,7 +48,7 @@ Printing the shape would show the actual shape with the padding:
     ttnn.Shape([14 + 18, 28 + 4])
 
 
-Padded shape can be obtained by calling `padded()` method of `ttnn.Shape`
+Padded shape can be obtained by calling `padded()` method of :class:`ttnn.Shape`
 
 .. code-block:: python
 
@@ -125,17 +125,17 @@ ttnn supports the following data types:
 Storage
 *******
 
-**OWNED**
+**OWNED_HOST_STORAGE**
 
     The buffer of the tensor is on the host and its allocation/deallocation is owned by ttnn.
 
-**BORROWED**
+**BORROWED_HOST_STORAGE**
 
     The buffer of the tensor is on the host and it was borrowed from ``torch`` / ``numpy`` / an external buffer.
 
-**DEVICE**
+**DEVICE_STORAGE**
 
-    The buffer of the tensor is on a ttnn device.
+    The buffer of the tensor is on a ttnn device. And its allocation/deallocation is owned by ttnn.
 
 
 

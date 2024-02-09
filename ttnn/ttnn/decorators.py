@@ -40,6 +40,7 @@ def compare(torch_outputs, outputs, pcc):
 
 ENABLE_VALIDATE_DECORATOR = True
 ENABLE_DEBUG_DECORATOR = False
+PEARSON_CORRELATION_COEFFICIENT = 0.9999
 USE_TORCH_OUTPUT_IF_MISMATCHES = False
 
 
@@ -51,11 +52,15 @@ def disable_validate_decorator():
     ENABLE_VALIDATE_DECORATOR = True
 
 
-PEARSON_CORRELATION_COEFFICIENT = 0.9999
+@contextmanager
+def enable_debug_decorator():
+    ttnn.decorators.ENABLE_DEBUG_DECORATOR = True
+    yield
+    ttnn.decorators.ENABLE_DEBUG_DECORATOR = False
 
 
 @contextmanager
-def override_pearson_correlation_coefficient(value):
+def override_pcc_of_debug_decorator(value):
     global PEARSON_CORRELATION_COEFFICIENT
     old_value = PEARSON_CORRELATION_COEFFICIENT
     PEARSON_CORRELATION_COEFFICIENT = value
@@ -135,7 +140,9 @@ def document_input_tensors(name, function, validate_input_tensors):
     function.__doc__ = f"{doc}\n"
 
 
-def register_operation(*, name, validate_input_tensors, torch_function=None):
+def register_operation(
+    *, name, validate_input_tensors, torch_function=None, is_using_fallback=lambda *args, **kwargs: False
+):
     def operation_decorator(function):
         document_input_tensors(name, function, validate_input_tensors)
 
@@ -164,7 +171,7 @@ def register_operation(*, name, validate_input_tensors, torch_function=None):
                     if not matches:
                         if USE_TORCH_OUTPUT_IF_MISMATCHES:
                             logger.warning(f"{name}: Comparing against PyTorch failed, using PyTorch output")
-                            if not isinstance(output, Tensor):
+                            if not isinstance(output, ttnn.Tensor):
                                 raise TypeError(f"Expected Tensor, got {type(output)}")
                             output = convert_torch_output_to_be_like_ttnn_output(torch_output, output)
                         else:
