@@ -8,9 +8,9 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init(void (*func)()) {
-    eltwise_unary_sfpu_configure_addrmod();
+    eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
     func();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -18,7 +18,7 @@ inline void llk_math_eltwise_unary_sfpu_init(void (*func)()) {
 template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init(
     const uint param0 = 0, const uint param1 = 0, const uint param2 = 0, const uint param3 = 0, const uint param4 = 0, const uint param5 = 0) {
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
 
     switch (sfpu_op) {
         case SfpuType::tanh:

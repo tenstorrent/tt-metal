@@ -24,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = (
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::sqrt_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sqrt, APPROXIMATE>(sfpu::sqrt_init<APPROXIMATE>);
 }
 
 }
