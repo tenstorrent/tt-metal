@@ -541,6 +541,10 @@ inline Tensor to_host_sharded(const Tensor &tensor) {
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     std::vector<uint32_t> device_data;
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        TT_THROW("FAST_DISPATCH is not supported for to_host_sharded!");
+    }
     ::detail::ReadFromBuffer(*device_buffer, device_data, true);
     auto data_vec = unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
