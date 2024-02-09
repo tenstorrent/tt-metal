@@ -431,7 +431,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
         reader_runtime_args[4] = q_x;
         reader_runtime_args[5] = q_y;
         reader_runtime_args[7] = q_start_addr;
-        reader_runtime_args[8] = per_risc0_out_q_heads * single_tile_size;
+        reader_runtime_args[8] = per_risc0_out_q_heads * head_size;
 
         if (per_risc1_out_q_heads > 0) {
             remote_q_read += per_risc1_out_q_heads;
