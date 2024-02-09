@@ -8,8 +8,6 @@ test-list:
         num-shapes: 1
         num-samples: 64
         args-sampling-strategy: "all"
-      env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
       datagen:
         function: gen_rand
         args:
@@ -33,8 +31,6 @@ test-list:
         num-shapes: 1
         num-samples: 64
         args-sampling-strategy: "all"
-      env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
       datagen:
         function: gen_rand
         args:

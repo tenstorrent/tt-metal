@@ -19,7 +19,6 @@ test-list:
       args-gen: gen_tilize_with_val_padding_args
       output-file: tilize_with_val_padding_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: [""]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
