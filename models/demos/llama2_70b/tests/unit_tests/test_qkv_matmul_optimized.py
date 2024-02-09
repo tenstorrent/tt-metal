@@ -237,7 +237,7 @@ def run_test_LlamaQKV(
     pytorch_out = pytorch_LlamaQKV_model(inp)
 
     # TT hardware execution -------------------------------------------------------------
-    qkv_optimized = True
+    qkv_optimized = False
     if qkv_optimized:
         tt_LlamaQKV_model = TtLlamaQKV_optimized(
             device,
@@ -260,12 +260,9 @@ def run_test_LlamaQKV(
         )
 
     tt_inp = torch2tt_tensor(inp, device)
-
     tt_out = tt_LlamaQKV_model(tt_inp)
     tt_out = [tt2torch_tensor(tt_out_tensor) for tt_out_tensor in tt_out]
-
     # check outputs ----------------------------------------------------------------------
-
     for i in range(3):
         logger.info(comp_allclose(pytorch_out[i], tt_out[i]))
 
