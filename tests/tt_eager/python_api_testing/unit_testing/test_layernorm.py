@@ -15,7 +15,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 
 def ref_layernorm(x, eps, gamma, beta, H, W):
@@ -125,7 +125,6 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         assert is_close(tt_got_back, ref_lnorm)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
     (
@@ -247,7 +246,6 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, out_dtype, cb_dtype, in
         assert is_close(tt_got_back, ref_lnorm)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),),

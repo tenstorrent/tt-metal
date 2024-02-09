@@ -10,7 +10,7 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 TILE_HEIGHT = TILE_WIDTH = 32
 
@@ -19,7 +19,6 @@ def shape_padded(shape):
     return [shape[0], shape[1], _nearest_32(shape[2]), _nearest_32(shape[3])]
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "shapes",
     (

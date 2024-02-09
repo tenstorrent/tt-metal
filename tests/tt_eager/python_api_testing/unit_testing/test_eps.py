@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import tt_lib as ttl
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 
 def test_run_sfpu_attr(device):
