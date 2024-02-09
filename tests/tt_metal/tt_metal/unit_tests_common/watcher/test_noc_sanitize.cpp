@@ -16,9 +16,15 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(WatcherFixture* fixture, Device* device) {
+void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core) {
     // Set up program
     Program program = Program();
+    CoreCoord phys_core;
+    if (is_eth_core)
+        phys_core = device->ethernet_core_from_logical_core(core);
+    else
+        phys_core = device->worker_core_from_logical_core(core);
+    log_info(LogTest, "Running test on device {} core {}...", device->id(), phys_core.str());
 
     // Set up dram buffers
     uint32_t single_tile_size = 2 * 1024;
@@ -43,12 +49,27 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     // A DRAM copy kernel, we'll feed it incorrect inputs to test sanitization.
-    constexpr CoreCoord core = {0, 0}; // Run kernel on first core
-    auto dram_copy_kernel = tt_metal::CreateKernel(
+    KernelHandle dram_copy_kernel;
+    if (is_eth_core) {
+    dram_copy_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            tt_metal::EthernetConfig{
+                .noc = tt_metal::NOC::NOC_0
+            }
+    );
+    } else {
+    dram_copy_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default
+        }
+    );
+    }
 
     // Write to the input DRAM buffer
     std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
@@ -75,20 +96,21 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     try {
         fixture->RunProgram(device, program);
     } catch (std::runtime_error& e) {
-        const string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See build/watcher.log for details.";
+        const string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See built/watcher.log for details.";
         const string error = string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
     }
 
     // We should be able to find the expected watcher error in the log as well.
-    CoreCoord phys_core = device->worker_core_from_logical_core(core);
     string expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
     expected[7] = '0' + device->id();
     expected[18] = '0' + phys_core.x;
     expected[22] = '0' + phys_core.y;
     string addr = fmt::format("{:08x}", output_dram_buffer_addr);
     expected.replace(99, addr.length(), addr);
+    if (is_eth_core)
+        expected[43] = 'e';
 
     EXPECT_TRUE(
         FileContainsAllStrings(
@@ -96,6 +118,22 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             {expected}
         )
     );
+}
+
+static void RunTest(WatcherFixture* fixture, Device* device) {
+    // Run on just the first worker core, can't run on all since it takes down teh watcher server.
+    CoreCoord core {0, 0};
+    RunTestOnCore(fixture, device, core, false);
+}
+
+static void RunTestEth(WatcherFixture* fixture, Device* device) {
+    // Run on the first ethernet core (if there are any).
+    if (device->get_active_ethernet_cores().empty()) {
+        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+        GTEST_SKIP();
+    }
+    CoreCoord core = *(device->get_active_ethernet_cores().begin());
+    RunTestOnCore(fixture, device, core, true);
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher.hpp).
@@ -114,6 +152,9 @@ void CheckHostSanitization(Device *device) {
     }
 }
 
+void CheckDeviceSantization(WatcherFixture *fixture, bool use_eth_core) {
+}
+
 TEST_F(WatcherFixture, TestWatcherSanitize) {
     // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
     // tricky to check watcher server status from the finish loop for slow dispatch. Once issue #4363
@@ -122,7 +163,13 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
         GTEST_SKIP();
 
     CheckHostSanitization(this->devices_[0]);
-    for (Device* device : this->devices_) {
-        this->RunTestOnDevice(RunTest, device);
-    }
+
+    // Only run on device 0 because this test takes down the watcher server.
+    this->RunTestOnDevice(RunTest, this->devices_[0]);
+}
+
+TEST_F(WatcherFixture, TestWatcherSanitizeEth) {
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+    this->RunTestOnDevice(RunTestEth, this->devices_[0]);
 }
