@@ -786,6 +786,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         this->issued_reads.emplace(
             read_event,
             detail::IssuedReadData(buffer, padded_page_size, dst, unpadded_dst_offset, pages_to_read, src_page_index));
+
         if (is_sharded(buffer.buffer_layout())) {
             auto command = EnqueueReadShardedBufferCommand(
                 this->id, this->device, buffer, dst, this->manager, read_event, src_page_index, pages_to_read);
@@ -910,13 +911,14 @@ void CommandQueue::enqueue_program(
 }
 
 void CommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
-    const auto& [buffer, padded_page_size, dst, dst_offset, num_pages_read, cur_host_page_id] =
+    const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_host_page_id] =
         this->issued_reads.at(event);
+
     uint32_t padded_num_bytes = num_pages_read * padded_page_size;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED or
-        buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (buffer_layout == TensorMemoryLayout::INTERLEAVED or
+        buffer_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         void* contiguous_dst = (void*)(uint64_t(dst) + dst_offset);
-        if ((buffer.page_size() % 32) == 0) {
+        if ((page_size % 32) == 0) {
             tt::Cluster::instance().read_sysmem(
                 contiguous_dst, padded_num_bytes, read_ptr + align(EVENT_PADDED_SIZE, 32), mmio_device_id, channel);
         } else {
@@ -925,23 +927,23 @@ void CommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_
             for (uint32_t offset = 0; offset < padded_page_size * num_pages_read; offset += padded_page_size) {
                 tt::Cluster::instance().read_sysmem(
                     (char*)(uint64_t(contiguous_dst) + dst_offset),
-                    buffer.page_size(),
+                    page_size,
                     read_src + offset,
                     mmio_device_id,
                     channel);
-                dst_offset += buffer.page_size();
+                dst_offset += page_size;
             }
         }
     } else if (
-        buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-        buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or
+        buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t host_page_id = cur_host_page_id;
         uint32_t read_src = read_ptr + align(EVENT_PADDED_SIZE, 32);
         for (uint32_t offset = 0; offset < padded_page_size * num_pages_read; offset += padded_page_size) {
-            uint32_t device_page_id = buffer.get_mapped_page_id(host_page_id);
-            void* page_dst = (void*)(uint64_t(dst) + device_page_id * buffer.page_size());
+            uint32_t device_page_id = dev_page_to_host_page_mapping[host_page_id];
+            void* page_dst = (void*)(uint64_t(dst) + device_page_id * page_size);
             tt::Cluster::instance().read_sysmem(
-                page_dst, buffer.page_size(), read_src + offset, mmio_device_id, channel);
+                page_dst, page_size, read_src + offset, mmio_device_id, channel);
             host_page_id++;
         }
     }

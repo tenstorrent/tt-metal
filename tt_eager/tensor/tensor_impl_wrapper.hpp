@@ -17,7 +17,7 @@ uint32_t element_size_bytes_wrapper(DataType dtype);
 
 uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpacked_data);
 
-Tensor to_host_wrapper(const Tensor &tensor);
+Tensor to_host_wrapper(const Tensor &tensor, bool blocking = true);
 
 Tensor to_host_wrapper_sharded(const Tensor &tensor);
 

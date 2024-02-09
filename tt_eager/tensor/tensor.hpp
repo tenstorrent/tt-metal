@@ -49,7 +49,7 @@ class Tensor {
 
      Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
 
-     Tensor cpu() const;
+     Tensor cpu(bool blocking = true) const;
 
      Tensor cpu_sharded() const;
 

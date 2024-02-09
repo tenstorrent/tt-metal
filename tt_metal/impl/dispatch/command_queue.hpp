@@ -333,15 +333,22 @@ void EnqueueRestart(CommandQueue& cq);
  Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 */
 struct IssuedReadData {
-    Buffer& buffer;
+    TensorMemoryLayout buffer_layout;
+    uint32_t page_size;
     uint32_t padded_page_size;
+    vector<uint32_t> dev_page_to_host_page_mapping;
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
     uint32_t cur_host_page_id;
 
-    IssuedReadData(Buffer& buffer, uint32_t padded_page_size, void* dst, uint32_t dst_offset, uint32_t num_pages_read, uint32_t cur_host_page_id): buffer(buffer) {
+    IssuedReadData(Buffer& buffer, uint32_t padded_page_size, void* dst, uint32_t dst_offset, uint32_t num_pages_read, uint32_t cur_host_page_id) {
+        this->buffer_layout = buffer.buffer_layout();
+        this->page_size = buffer.page_size();
         this->padded_page_size = padded_page_size;
+        if (this->buffer_layout == TensorMemoryLayout::WIDTH_SHARDED or this->buffer_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            this->dev_page_to_host_page_mapping = buffer.get_dev_page_to_host_page_mapping();
+        }
         this->dst = dst;
         this->dst_offset = dst_offset;
         this->num_pages_read = num_pages_read;
