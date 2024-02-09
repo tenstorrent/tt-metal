@@ -27,9 +27,17 @@ inline void calculate_to_uint16()
 
         for(int i=0; i<47 ; i++)
         {
-                v_if ( val >= 10000.0f  ){
-                result += 10000;
-                val -= 10000.0f;
+                v_if (val == std::numeric_limits<float>::infinity()){
+                    result = std::numeric_limits<float>::infinity();
+                    val = 0.0f;
+                }
+                v_elseif (val == -std::numeric_limits<float>::infinity()){
+                    result = -std::numeric_limits<float>::infinity();
+                    val = 0.0f;
+                }
+                v_elseif  ( val >= 10000.0f  ){
+                    result += 10000;
+                    val -= 10000.0f;
                 }
                 v_elseif ( val >= 1000.0f  ){
                     result += 1000;
@@ -71,7 +79,15 @@ inline void calculate_to_uint32()
 
        for(int i = 0; i < 95; i++)
         {
-                v_if ( val >= 100000000.0f){
+                v_if (val == std::numeric_limits<float>::infinity()){
+                    result = std::numeric_limits<float>::infinity();
+                    val = 0.0f;
+                }
+                v_elseif (val == -std::numeric_limits<float>::infinity()){
+                    result = -std::numeric_limits<float>::infinity();
+                    val = 0.0f;
+                }
+                v_elseif  ( val >= 100000000.0f){
                     result += 100000000;
                     val -= 100000000.0f;
                 } v_elseif ( val >= 10000000.0f){
