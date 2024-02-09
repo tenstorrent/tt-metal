@@ -72,6 +72,8 @@ def test_layernorm_sharded_rm(test_id, in_dtype, out_dtype, cb_dtype, gamma_beta
 
     compute_grid_size = device.compute_with_storage_grid_size()
     grid_size = [compute_grid_size.x, compute_grid_size.y]
+    if grid_size[1] > 8:
+        grid_size[1] = 8
     fidelity = ttl.tensor.MathFidelity.HiFi4
 
     epsf = 1e-2
@@ -234,6 +236,8 @@ def test_layernorm_sharded_mix_precision_rm(
 
     compute_grid_size = device.compute_with_storage_grid_size()
     grid_size = [compute_grid_size.x, compute_grid_size.y]
+    if grid_size[1] > 8:
+        grid_size[1] = 8
     fidelity = ttl.tensor.MathFidelity.HiFi4
 
     epsf = 1e-2
