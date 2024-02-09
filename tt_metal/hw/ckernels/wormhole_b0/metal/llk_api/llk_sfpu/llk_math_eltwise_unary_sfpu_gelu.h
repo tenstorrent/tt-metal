@@ -23,7 +23,7 @@ inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = (
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gelu_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::gelu_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::gelu, APPROXIMATE>(sfpu::gelu_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -37,7 +37,7 @@ inline void llk_math_eltwise_unary_sfpu_gelu_derivative(uint dst_index, int vect
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gelu_derivative_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::gelu_derivative_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_derivative, APPROXIMATE>(sfpu::gelu_derivative_init<APPROXIMATE>);
 }
 
 }

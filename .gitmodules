@@ -19,3 +19,6 @@
 [submodule "tt_metal/third_party/tt_llk_grayskull"]
 	path = tt_metal/third_party/tt_llk_grayskull
 	url = https://github.com/tenstorrent/tt-llk-gs.git
+[submodule "tt_metal/third_party/tt_llk_wormhole_b0"]
+	path = tt_metal/third_party/tt_llk_wormhole_b0
+	url = https://github.com/tenstorrent/tt-llk-wh-b0.git
