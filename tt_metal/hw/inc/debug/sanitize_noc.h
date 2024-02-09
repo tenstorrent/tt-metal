@@ -30,6 +30,13 @@ enum debug_sanitize_which_riscv {
 
 #if defined(WATCHER_ENABLED)
 
+#if defined(COMPILE_FOR_ERISC)
+// Forward declaration to avoid circular dependency
+namespace internal_ {
+void __attribute__((section("code_l1"))) risc_context_switch();
+}
+#endif
+
 extern uint8_t noc_index;
 
 #include "noc_addr_ranges_gen.h"
@@ -76,7 +83,11 @@ inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32
         v[noc_index].invalid = invalid;
     }
 
-    while(1);
+    while(1) {
+#if defined(COMPILE_FOR_ERISC)
+        internal_::risc_context_switch();
+#endif
+    }
 }
 
 inline void debug_sanitize_worker_addr(uint32_t a, uint32_t l)
