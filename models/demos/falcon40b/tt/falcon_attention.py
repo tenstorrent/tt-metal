@@ -338,8 +338,8 @@ class TtFalconAttention:
             query_layer = self.rotary_embedding(query_layer)
             key_layer = self.rotary_embedding(key_layer)
         elif llm_mode == "decode":
-            query_layer = self.rotary_embedding(query_layer, layer_past_len + 1)
-            key_layer = self.rotary_embedding(key_layer, layer_past_len + 1)
+            query_layer = self.rotary_embedding(query_layer, layer_past_len)
+            key_layer = self.rotary_embedding(key_layer, layer_past_len)
 
         ######################
         ### K CACHE UPDATE ###
@@ -493,7 +493,10 @@ class TtFalconAttention:
             )
 
         attn_output = tt_lib.tensor.all_gather(
-            attn_output, dim=3, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            attn_output,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
         for i in range(len(attn_output)):

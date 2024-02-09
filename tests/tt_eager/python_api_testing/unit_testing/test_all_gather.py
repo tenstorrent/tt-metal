@@ -38,14 +38,21 @@ from models.utility_functions import skip_for_grayskull
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-def test_all_gather(pcie_devices, input_shape, dim, layout, mem_config, use_program_cache, function_level_defaults):
-    if layout == ttl.tensor.Layout.ROW_MAJOR and mem_config.buffer_type == ttl.tensor.BufferType.DRAM:
+@pytest.mark.parametrize("num_links", [1, 2])
+def test_all_gather(
+    pcie_devices, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
+):
+    if (
+        layout == ttl.tensor.Layout.ROW_MAJOR or num_links == 2
+    ) and mem_config.buffer_type == ttl.tensor.BufferType.DRAM:
         pytest.skip("All gather tests are hanging for RM in DRAM")
     devices = pcie_devices
     input_tensor = torch.rand(input_shape).bfloat16()
     num_devices = len(devices)
     if num_devices < 2:
         pytest.skip("Requires multiple devices to run")
+    elif num_devices == 2 and num_links == 2:
+        pytest.skip("Not enough links to run")
 
     if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
         pytest.skip("Unsupported test case")
@@ -57,7 +64,7 @@ def test_all_gather(pcie_devices, input_shape, dim, layout, mem_config, use_prog
             ttl.tensor.Tensor(t, ttl.tensor.DataType.BFLOAT16).to(layout).to(devices[i], mem_config)
         )
 
-    tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, mem_config)
+    tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, num_links, output_mem_config=mem_config)
 
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()

@@ -174,7 +174,10 @@ class TtFalconDecoderLayer:
                 )
             )
         replicated_hidden_states = tt_lib.tensor.all_gather(
-            replicated_hidden_states, dim=3, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            replicated_hidden_states,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            dim=3,
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
         for i in range(len(replicated_hidden_states)):
             replicated_hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(

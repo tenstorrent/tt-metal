@@ -282,7 +282,7 @@ def run_test_FalconAttention_inference(
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
-    [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.97), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.98)],
+    [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99)],
 )
 def test_FalconAttention_inference(
     model_version,
@@ -290,7 +290,7 @@ def test_FalconAttention_inference(
     batch,
     seq_len,
     kv_cache_len,
-    output_pcc,
+    out_pcc,
     cache_pcc,
     token_pcc,
     model_config_str,
@@ -317,7 +317,7 @@ def test_FalconAttention_inference(
         batch,
         seq_len,
         kv_cache_len,
-        output_pcc,
+        out_pcc,
         cache_pcc,
         token_pcc,
         model_config,

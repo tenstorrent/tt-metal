@@ -46,22 +46,22 @@ void kernel_main() {
 
             eth_wait_for_bytes(num_bytes);
             noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-            volatile tt_l1_ptr uint32_t * start_idx_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_addrs[curr_buffer_idx]);
+            volatile tt_l1_ptr uint32_t * header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_addrs[curr_buffer_idx]);
 
-            uint32_t curr_idx = start_idx_addr[0];
-            uint32_t start_offset = start_idx_addr[1];
-            uint32_t row_idx = start_idx_addr[2];
+            uint32_t output_page_idx = header[0];
+            uint32_t output_start_offset = header[1];
+            uint32_t row_idx = header[2];
 
-            d.bank_base_address = dst_addr + start_offset;
+            d.bank_base_address = dst_addr + output_start_offset;
             for (uint32_t i = 0; i < num_pages; ++i) {
-                uint64_t dst_noc_addr = get_noc_addr(curr_idx, d);
+                uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
                 noc_async_write(local_eth_l1_curr_src_addr, dst_noc_addr, page_size);
                 local_eth_l1_curr_src_addr += page_size;
-                curr_idx++;
+                output_page_idx++;
                 row_idx++;
                 if (row_idx == num_rows) {
                     row_idx = 0;
-                    curr_idx += row_offset;
+                    output_page_idx += row_offset;
                 }
             }
             std::swap(curr_buffer_idx, next_buffer_idx);

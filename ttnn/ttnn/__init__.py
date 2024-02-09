@@ -44,8 +44,14 @@ from ttnn.core import (
 )
 
 from ttnn.validation import validate_input_tensor
+import ttnn.tracer
 
-from ttnn.decorators import register_operation, disable_validate_decorator
+from ttnn.decorators import (
+    register_operation,
+    enable_debug_decorator,
+    override_pcc_of_debug_decorator,
+    disable_validate_decorator,
+)
 
 from ttnn.device import open, close
 
@@ -171,5 +177,3 @@ from ttnn.operations.pooling import (
     MaxPool2d,
     average_pool2d,
 )
-
-import ttnn.tracer

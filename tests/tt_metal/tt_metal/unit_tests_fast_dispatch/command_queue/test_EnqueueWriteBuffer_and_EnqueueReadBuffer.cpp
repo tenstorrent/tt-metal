@@ -125,11 +125,16 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
     return true;
 }
 
+template <bool blocking>
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     Device* device, CommandQueue& cq, const BufferStressTestConfig& config) {
     srand(config.seed);
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
+
+    vector<unique_ptr<Buffer>> buffers;
+    vector<vector<uint32_t>> srcs;
+    vector<vector<uint32_t>> dsts;
     while (num_pages_left) {
         uint32_t num_pages = std::min(rand() % (config.max_num_pages_per_buffer) + 1, num_pages_left);
         num_pages_left -= num_pages;
@@ -138,7 +143,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
         for (uint32_t i = 0; i < src.size(); i++) {
-            src.at(i) = i;
+            src[i] = rand();
         }
 
         BufferType buftype = BufferType::DRAM;
@@ -146,12 +151,40 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             buftype = BufferType::L1;
         }
 
-        Buffer buf(device, buf_size, config.page_size, buftype);
-        EnqueueWriteBuffer(cq, buf, src, false);
 
-        vector<uint32_t> res;
-        EnqueueReadBuffer(cq, buf, res, true);
-        pass &= src == res;
+        unique_ptr<Buffer> buf;
+        try {
+            buf = std::make_unique<Buffer>(device, buf_size, config.page_size, buftype);
+        } catch (...) {
+            Finish(cq);
+            size_t i = 0;
+            for (const auto& dst: dsts) {
+                EXPECT_EQ(srcs[i++],  dst);
+            }
+            srcs.clear();
+            dsts.clear();
+            buffers.clear();
+            buf = std::make_unique<Buffer>(device, buf_size, config.page_size, buftype);
+        }
+        EnqueueWriteBuffer(cq, *buf, src, false);
+        vector<uint32_t> dst;
+        if constexpr (blocking) {
+            EnqueueReadBuffer(cq, *buf, dst, true);
+            EXPECT_EQ(src,  dst);
+        } else {
+            srcs.push_back(std::move(src));
+            dsts.push_back(dst);
+            buffers.push_back(std::move(buf)); // Ensures that buffer not destroyed when moved out of scope
+            EnqueueReadBuffer(cq, *buffers[buffers.size() - 1], dsts[dsts.size() - 1], false);
+        }
+    }
+
+    if constexpr (not blocking) {
+        Finish(cq);
+        size_t i = 0;
+        for (const auto& dst: dsts) {
+            EXPECT_EQ(srcs[i++],  dst);
+        }
     }
     return pass;
 }
@@ -495,11 +528,18 @@ TEST_F(CommandQueueFixture, TestNonblockingReads) {
 
 namespace stress_tests {
 
-TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReads) {
+TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
+}
+
+TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {
+    BufferStressTestConfig config = {
+        .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
+    EXPECT_TRUE(
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<false>(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
 }
 
 

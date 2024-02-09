@@ -52,24 +52,24 @@ void kernel_main() {
 
             eth_wait_for_bytes(num_bytes);
             noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-            volatile tt_l1_ptr uint32_t * start_idx_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_addrs[curr_buffer_idx]);
+            volatile tt_l1_ptr uint32_t * header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_addrs[curr_buffer_idx]);
 
-            uint32_t curr_idx = start_idx_addr[0];
-            uint32_t col_idx = start_idx_addr[1];
-            uint32_t row_idx = start_idx_addr[2];
+            uint32_t output_page_idx = header[0];
+            uint32_t col_idx = header[1];
+            uint32_t row_idx = header[2];
 
             for (uint32_t i = 0; i < num_pages; ++i) {
-                noc_async_write_tile(curr_idx, d, local_eth_l1_curr_src_addr);
+                noc_async_write_tile(output_page_idx, d, local_eth_l1_curr_src_addr);
                 local_eth_l1_curr_src_addr += page_size;
-                curr_idx++;
+                output_page_idx++;
                 col_idx++;
                 if (col_idx == num_cols) {
-                    curr_idx += col_offset;
+                    output_page_idx += col_offset;
                     col_idx = 0;
                     row_idx++;
                     if (row_idx == num_rows) {
                         row_idx = 0;
-                        curr_idx += row_offset;
+                        output_page_idx += row_offset;
                     }
                 }
             }

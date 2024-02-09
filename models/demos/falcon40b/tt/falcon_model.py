@@ -229,7 +229,10 @@ class TtFalconModelShared:
                 layer_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
         layer_output = tt_lib.tensor.all_gather(
-            layer_output, dim=3, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            layer_output,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
         for i in range(len(layer_output)):
             layer_output[i] = tt_lib.tensor.interleaved_to_sharded(

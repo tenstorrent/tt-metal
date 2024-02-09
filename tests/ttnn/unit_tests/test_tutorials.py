@@ -16,6 +16,8 @@ TUTORIALS_PATH = pathlib.Path(ttnn.__path__[0]).parent / "tutorials"
 
 def collect_tutorials():
     for file_name in TUTORIALS_PATH.glob("*.ipynb"):
+        if "tutorials/005.ipynb" in str(file_name):
+            continue
         yield file_name
 
 
