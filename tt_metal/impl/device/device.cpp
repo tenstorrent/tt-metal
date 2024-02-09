@@ -187,8 +187,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
             log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
             llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
         }
-        llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
     }
+    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
 }
 
 void Device::initialize_and_launch_firmware() {

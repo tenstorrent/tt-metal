@@ -144,12 +144,17 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    if (is_ethernet_core(core, chip) && static_cast<bool>(msg->enable_erisc)) {
-        // ERISC doesn't use launch_msg, instead it uses erisc_info_t
-        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+    if (is_ethernet_core(core, chip)) {
+        tt::Cluster::instance().write_core(
+            (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_ETH_MAILBOX_ADDRESS_HOST(launch));
     } else {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+    }
+
+    // Ethernet cores use a different address for starting the kernel
+    if (is_ethernet_core(core, chip) && static_cast<bool>(msg->enable_erisc)) {
+        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 }
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
