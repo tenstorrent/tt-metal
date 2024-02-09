@@ -338,8 +338,8 @@ class TtFalconAttention:
             query_layer = self.rotary_embedding(query_layer)
             key_layer = self.rotary_embedding(key_layer)
         elif llm_mode == "decode":
-            query_layer = self.rotary_embedding(query_layer, layer_past_len + 1)
-            key_layer = self.rotary_embedding(key_layer, layer_past_len + 1)
+            query_layer = self.rotary_embedding(query_layer, layer_past_len)
+            key_layer = self.rotary_embedding(key_layer, layer_past_len)
 
         ######################
         ### K CACHE UPDATE ###
