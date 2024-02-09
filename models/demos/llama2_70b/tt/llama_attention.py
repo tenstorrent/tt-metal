@@ -15,16 +15,17 @@ from models.demos.llama2_70b.tt.llama_common import (
 
 
 class TtLlamaAttention(nn.Module):
-    def __init__(self, device, state_dict, base_url, layer_num, model_config, tt_cache_path, layer_past, configuration):
+    def __init__(self, device, state_dict, base_url, layer_num, model_config, layer_past, configuration):
         super().__init__()
 
         self.state_dict = state_dict
         self.device = device
 
-        self.hidden_size = configuration.hidden_size
+        self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
-        self.head_dim = self.hidden_dim // self.n_heads
+        self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
+        self.n_kv_heads = configuration.n_kv_heads
 
         self.model_config = model_config
 
@@ -71,7 +72,7 @@ class TtLlamaAttention(nn.Module):
         layer_past = [torch2tt_tensor(lp, device) for lp in layer_past]
         self.layer_past = layer_past
 
-    def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
+    def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
         cos, sin = tt_precompute_freqs(dhead, end)
         rot_mat = freqs_to_rotation_matrix(cos, sin)
         position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
@@ -82,28 +83,52 @@ class TtLlamaAttention(nn.Module):
         """
         Prepare inputs for decode mode. Assume that current token is at
         start_pos, and KV cache has valid data up to start_pos.
+        x: (batch, seq, hidden_dim)
+        start_pos: int
         """
-        batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
-        freqs_cis = freqs_cis[start_pos : start_pos + 1]
+        assert x.size(2) == self.hidden_size
+        assert len(x.size()) == 3
 
-        attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
-        attn_mask[:, :, :, : start_pos + 1] = -1e9
+        batch = x.size(0)
+        seq_len = x.size(1)
+        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+        rot_mat = self.get_rotation_mat(
+            dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
+        )
+
+        attn_mask = torch.zeros(seq_len, 1, batch, self.max_seq_len)
+        # attn_mask[:, :, :, : start_pos + 1] = -1e9
+        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
         attn_mask = attn_mask.expand(-1, self.n_heads, -1, -1)
 
-        return x, start_pos, freqs_cis, attn_mask
+        # expected shapes:
+        # x: (seq_len, 1, batch, hidden_dim)
+        # start_pos: int
+        # rot_mat: [1, bsz, head_dim, head_dim]
+        # attn_mask: [seq_len, n_heads, batch, self.max_seq_len]
+        assert x.size() == (seq_len, 1, batch, self.hidden_size)
+        assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
+        assert attn_mask.size() == (seq_len, self.n_heads, batch, self.max_seq_len)
+
+        device = self.device
+        return (
+            torch2tt_tensor(x, device),
+            start_pos,
+            torch2tt_tensor(rot_mat, device),
+            torch2tt_tensor(attn_mask, device),
+        )
 
     def forward(
         self,
         x: tt_lib.tensor.Tensor,
         rot_mat: tt_lib.tensor.Tensor,
-        layer_past_len: int,
+        start_pos: int,
         attn_mask: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
         rot_mat: ???
-        layer_past_len: the length of the KV cache. Same as current token's index.
+        start_pos: the length of the KV cache. Same as current token's index.
         attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
 
@@ -157,8 +182,8 @@ class TtLlamaAttention(nn.Module):
         ###
         keys = self.layer_past[0]
         values = self.layer_past[1]
-        tt_lib.tensor.update_cache(keys, k_heads, layer_past_len)
-        tt_lib.tensor.update_cache(values, v_heads, layer_past_len)
+        tt_lib.tensor.update_cache(keys, k_heads, start_pos)
+        tt_lib.tensor.update_cache(values, v_heads, start_pos)
 
         ###
         # Attention
