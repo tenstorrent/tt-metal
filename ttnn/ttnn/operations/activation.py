@@ -20,10 +20,6 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def rst_escape(name: str) -> str:
-    return name.replace("_", "\\_")
-
-
 def register_ttl_activation_function_unary(name, ttl_activation_function, op_name):
     def _torch_activation(input_tensor: ttnn.Tensor, **_):
         name_to_torch_function = {
@@ -184,7 +180,7 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    activation_function.__name__ = f"ttnn.{rst_escape(name)}"
+    activation_function.__name__ = f"ttnn.{(name)}"
     activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
@@ -259,7 +255,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
-    activation_function.__name__ = f"ttnn.{rst_escape(name)}"
+    activation_function.__name__ = f"ttnn.{(name)}"
     activation_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
         Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
@@ -308,18 +304,18 @@ TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAM = [
     ("clip", ttl.tensor.clip, "Clip", "min", "max"),
 ]
 
-for relational_function_name, ttl_relational_function, name, param in TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM:
-    register_ttl_activation_function_with_float(relational_function_name, ttl_relational_function, name, param)
+for activation_function_name, ttl_activation_function, name, param in TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM:
+    register_ttl_activation_function_with_float(activation_function_name, ttl_activation_function, name, param)
 
 for (
-    relational_function_name,
-    ttl_relational_function,
+    activation_function_name,
+    ttl_activation_function,
     name,
     param1,
     param2,
 ) in TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAM:
     register_ttl_activation_function_with_two_float(
-        relational_function_name, ttl_relational_function, name, param1, param2
+        activation_function_name, ttl_activation_function, name, param1, param2
     )
 
 for activation_function_name, ttl_activation_function, name in TTL_ACTIVATION_FUNCTIONS_UNARY:

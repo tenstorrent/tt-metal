@@ -1,0 +1,6 @@
+.. _ttnn.i0:
+
+ttnn.i0
+###############
+
+.. autofunction:: ttnn.i0
