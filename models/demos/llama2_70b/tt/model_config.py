@@ -315,7 +315,21 @@ def get_model_config(model_config_str):
             ),
         )
         # ATTN
-        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+
+        # Fused QKV Matmul Config
+        model_config["QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            per_core_M=1,
+            per_core_N=10,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
@@ -323,30 +337,20 @@ def get_model_config(model_config_str):
                     {
                         ttl.tensor.CoreRange(
                             ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
+                            ttl.tensor.CoreCoord(7, 3),
                         ),
                     }
                 ),
                 [
                     32,
-                    1024,
+                    320,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
-        model_config["QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 1),
-            in0_block_w=32,
-            out_subblock_h=1,
-            out_subblock_w=3,
-            per_core_M=1,
-            per_core_N=9,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
 
+        # Separate QKV Matmul Config
         model_config["QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
@@ -434,7 +438,7 @@ def get_model_config(model_config_str):
             ),
         )
 
-        model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
@@ -448,27 +452,7 @@ def get_model_config(model_config_str):
                 ),
                 [
                     32,
-                    288,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
-        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(1, 0),
-                        ),
-                    }
-                ),
-                [
-                    32,
-                    1152,
+                    1280,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -627,68 +611,6 @@ def get_model_config(model_config_str):
             fused_activation=None,
             mcast_in0=True,
         )
-
-        # Tested using full cores
-        # model_config["FF1_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-        # model_config["FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        #     compute_with_storage_grid_size=(8, 7),
-        #     in0_block_w=8,
-        #     out_subblock_h=1,
-        #     out_subblock_w=8,
-        #     per_core_M=1,
-        #     per_core_N=16,
-        #     fuse_batch=True,
-        #     fused_activation=ttl.tensor.FusibleActivation.SILU,
-        #     #fused_activation=None,
-        #     mcast_in0=True,
-        # )
-
-        # model_config["FF3_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-        # model_config["FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        #     compute_with_storage_grid_size=(8, 7),
-        #     in0_block_w=8,
-        #     out_subblock_h=1,
-        #     out_subblock_w=8,
-        #     per_core_M=1,
-        #     per_core_N=16,
-        #     fuse_batch=True,
-        #     fused_activation=None,
-        #     mcast_in0=True,
-        # )
-
-        # model_config["FF2_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-        # model_config["FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        #     compute_with_storage_grid_size=(8, 7),
-        #     in0_block_w=28,
-        #     out_subblock_h=1,
-        #     out_subblock_w=4,
-        #     per_core_M=1,
-        #     per_core_N=4,
-        #     fuse_batch=True,
-        #     fused_activation=None,
-        #     mcast_in0=True,
-        # )
-
-        # model_config["LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        #     ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        #     ttl.tensor.BufferType.L1,
-        #     ttl.tensor.ShardSpec(
-        #         ttl.tensor.CoreRangeSet(
-        #             {
-        #                 ttl.tensor.CoreRange(
-        #                     ttl.tensor.CoreCoord(0, 0),
-        #                     ttl.tensor.CoreCoord(7, 7),
-        #                 ),
-        #             }
-        #         ),
-        #         [
-        #             32,
-        #             128,
-        #         ],
-        #         ttl.tensor.ShardOrientation.ROW_MAJOR,
-        #         False,
-        #     ),
-        # )
 
         model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
