@@ -56,7 +56,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         return output_tensor
 
     binary_function.__name__ = f"ttnn.{name}"
-    binary_function.__doc__ = doc + binary_function.__doc__
+    binary_function.__doc__ = doc + (binary_function.__doc__ if binary_function.__doc__ is not None else "")
 
     setattr(THIS_MODULE, name, binary_function)
 
