@@ -29,10 +29,3 @@ def ttnn_enable_debug_decorator_from_cli(request):
         ttnn.decorators.ENABLE_DEBUG_DECORATOR = False
     else:
         yield
-
-
-@pytest.fixture
-def ttnn_enable_debug_decorator():
-    ttnn.decorators.ENABLE_DEBUG_DECORATOR = True
-    yield
-    ttnn.decorators.ENABLE_DEBUG_DECORATOR = False

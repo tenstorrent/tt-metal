@@ -23,6 +23,7 @@ Welcome to TT-Metalium documentation!
    :caption: TTNN
 
    ttnn/about
+   ttnn/usage
    ttnn/tensor
    ttnn/api
    ttnn/tutorials
