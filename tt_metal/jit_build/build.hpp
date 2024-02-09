@@ -101,6 +101,7 @@ class JitBuildState {
 
   public:
     JitBuildState(const JitBuildEnv& env, int which, bool is_fw = false);
+    virtual ~JitBuildState() = default;
     void finish_init();
 
     virtual void pre_compile(const string& kernel_in_path, const string& op_out_path) const;

@@ -23,7 +23,7 @@ void validate_cb_address(Program &program, Device *device, const CoreRangeSet &c
     for (const CoreRange &core_range : cr_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                CoreCoord core_coord{.x = x, .y = y};
+                CoreCoord core_coord(x, y);
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
@@ -42,8 +42,8 @@ TEST_F(DeviceFixture, TestCircularBuffersSequentiallyPlaced) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
-    CoreCoord core({.x = 0, .y = 0});
-    CoreRange cr = {.start = core, .end = core};
+    CoreCoord core(0, 0);
+    CoreRange cr(core, core);
     CoreRangeSet cr_set({cr});
 
     std::map<uint8_t, uint32_t> expected_addresses;
@@ -70,9 +70,9 @@ TEST_F(DeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
     Program program;
     CBConfig cb_config;
 
-    CoreCoord core0{.x = 0, .y = 0};
-    CoreCoord core1{.x = 0, .y = 1};
-    CoreCoord core2{.x = 0, .y = 2};
+    CoreCoord core0(0, 0);
+    CoreCoord core1(0, 1);
+    CoreCoord core2(0, 2);
 
     const static std::map<CoreCoord, uint32_t> core_to_num_cbs = {{core0, 3}, {core1, 0}, {core2, 5}};
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
@@ -91,7 +91,7 @@ TEST_F(DeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
         golden_addresses_per_core[core] = expected_addresses;
     }
 
-    CoreRange cr = {.start = core0, .end = core2};
+    CoreRange cr(core0, core2);
     CoreRangeSet cr_set({cr});
 
     auto expected_multi_core_address = L1_UNRESERVED_BASE + (max_num_cbs * cb_config.page_size);
@@ -121,7 +121,7 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
         };
     auto l1_buffer = CreateBuffer(buff_config);
 
-    CoreRange cr = {.start = {0, 0}, .end = {0, 2}};
+    CoreRange cr({0, 0}, {0, 2});
     CoreRangeSet cr_set({cr});
     std::vector<uint8_t> buffer_indices = {16, 24};
 
@@ -135,9 +135,9 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
     for (const CoreRange &core_range : cr_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                CoreCoord core_coord{.x = x, .y = y};
-                for (uint8_t buffer_index : buffer_indices) {
-                    golden_addresses_per_core[core_coord][buffer_index] = expected_cb_addr;
+                    CoreCoord core_coord(x, y);
+                    for (uint8_t buffer_index : buffer_indices) {
+                        golden_addresses_per_core[core_coord][buffer_index] = expected_cb_addr;
                 }
             }
         }
@@ -164,7 +164,7 @@ TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
 
     // L1 buffer is entirely in bank 0
     auto core = l1_buffer->logical_core_from_bank_id(0);
-    CoreRange cr = {.start = core, .end = core};
+    CoreRange cr(core, core);
     CoreRangeSet cr_set({cr});
     initialize_program(program, cr_set);
 
@@ -184,8 +184,8 @@ TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
-    CoreCoord core0{.x = 0, .y = 0};
-    CoreRange cr = {.start = core0, .end = core0};
+    CoreCoord core0(0, 0);
+    CoreRange cr(core0, core0);
     CoreRangeSet cr_set({cr});
 
     initialize_program(program, cr_set);
@@ -217,8 +217,8 @@ TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
-    CoreCoord core0{.x = 0, .y = 0};
-    CoreRange cr = {.start = core0, .end = core0};
+    CoreCoord core0(0, 0);
+    CoreRange cr(core0, core0);
     CoreRangeSet cr_set({cr});
 
     initialize_program(program, cr_set);
@@ -247,8 +247,8 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
-    CoreCoord core0{.x = 0, .y = 0};
-    CoreRange cr = {.start = core0, .end = core0};
+    CoreCoord core0(0, 0);
+    CoreRange cr(core0, core0);
     CoreRangeSet cr_set({cr});
 
     auto buffer_size = cb_config.page_size;
@@ -286,8 +286,8 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
-    CoreCoord core0{.x = 0, .y = 0};
-    CoreRange cr = {.start = core0, .end = core0};
+    CoreCoord core0(0, 0);
+    CoreRange cr(core0, core0);
     CoreRangeSet cr_set({cr});
 
     initialize_program(program, cr_set);
@@ -314,7 +314,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
     for (const CoreRange &core_range : cr_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                CoreCoord core_coord{.x = x, .y = y};
+                CoreCoord core_coord(x, y);
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     this->devices_.at(id), core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
@@ -339,7 +339,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
     for (const CoreRange &core_range : cr_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                CoreCoord core_coord{.x = x, .y = y};
+                CoreCoord core_coord(x, y);
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     this->devices_.at(id), core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
@@ -360,7 +360,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
 TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
-    CoreCoord core{.x = 0, .y = 0};
+    CoreCoord core(0, 0);
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2;

@@ -116,7 +116,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 
     CoreCoord start_core{0, 0};
     CoreCoord end_core{(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
-    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRange all_cores(start_core, end_core);
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {

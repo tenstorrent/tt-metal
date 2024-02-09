@@ -1122,7 +1122,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 } // namespace primary

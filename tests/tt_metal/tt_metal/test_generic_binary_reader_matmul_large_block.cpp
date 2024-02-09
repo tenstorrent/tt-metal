@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t interm0_cb_index = 24;
         uint32_t num_output_tiles = M * N;
-        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
         std::map<uint8_t, tt::DataFormat> data_format_spec = {
             {ouput_cb_index, tt::DataFormat::Float16_b},
             {interm0_cb_index, tt::DataFormat::Float16_b}

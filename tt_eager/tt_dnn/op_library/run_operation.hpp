@@ -126,7 +126,7 @@ constexpr auto decorate_as_composite(const char* name, FunctionType function) {
 namespace detail {
 
 template <typename OperationType>
-constexpr std::string operation_type_to_string() {
+std::string operation_type_to_string() {
     if constexpr (std::is_same_v<OperationType, HostOperation>) {
         return "host";
     } else if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
@@ -134,7 +134,7 @@ constexpr std::string operation_type_to_string() {
     } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
         return "external";
     } else {
-        static_assert(tt::stl::concepts::always_false_v<false>, "OperationType is not supported!");
+        static_assert(tt::stl::concepts::always_false_v<OperationType>, "OperationType is not supported!");
     }
 }
 

@@ -93,7 +93,7 @@ void init(int argc, char **argv) {
     ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
     trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
 
-    workers_g = {.start = {0, 0}, .end = {core_x, core_y}};
+    workers_g = CoreRange({0, 0}, {core_x, core_y});
 }
 
 void set_runtime_args(Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args) {

@@ -269,7 +269,8 @@ class CoreRangeSet {
         max_y = std::max ( max_y , cr.end.y );
       }
 
-      bool grid[max_y+1][max_x+1] = {};
+      bool grid[max_y + 1][max_x + 1];
+      memset(grid, 0, sizeof(grid));
 
       for (const auto & cr : crs )
         for (unsigned y = cr.start.y; y <= cr.end.y; y++)

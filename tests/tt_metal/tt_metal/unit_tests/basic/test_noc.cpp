@@ -81,10 +81,10 @@ TEST_F(BasicFixture, VerifyNocNodeIDs) {
     auto logical_grid_size = device->logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
         for (size_t x = 0; x < logical_grid_size.x; x++) {
-            auto worker_core = device->worker_core_from_logical_core({.x=x, .y=y});
+            auto worker_core = device->worker_core_from_logical_core(CoreCoord(x, y));
             // Read register from specific node
             uint32_t node_id_regval;
-            node_id_regval = unit_tests::basic::test_noc::read_reg(device, {.x=x, .y=y}, NOC_NODE_ID);
+            node_id_regval = unit_tests::basic::test_noc::read_reg(device, CoreCoord(x, y), NOC_NODE_ID);
             ASSERT_NE(node_id_regval, unit_tests::basic::test_noc::init_value); // Need to make sure we read in valid reg
             // Check it matches software translated xy
             uint32_t my_x = node_id_regval & NOC_NODE_ID_MASK;
@@ -110,7 +110,7 @@ TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
         for (size_t x = 0; x < logical_grid_size.x; x++) {
             std::vector<unsigned int> x_remap = {};
             std::vector<unsigned int> y_remap = {};
-            unit_tests::basic::test_noc::read_translation_table(device, {.x=x, .y=y}, x_remap, y_remap);
+            unit_tests::basic::test_noc::read_translation_table(device, CoreCoord(x, y), x_remap, y_remap);
             bool core_has_translation_error = false;
             // bottom 16 values are not remapped --> identity
             for (int x=0; x<16; x++) {

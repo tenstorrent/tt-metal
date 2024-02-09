@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
             }
         };
 
-    return {std::move(program), .override_addresses_callback = override_addresses_callback};
+    return {.program = std::move(program), .override_addresses_callback = override_addresses_callback};
 }
 
 }  // namespace primary

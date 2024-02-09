@@ -97,11 +97,8 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         out_cb_id,
     };
     auto writer_kernel_fname = std::string("tt_eager/tt_dnn/op_library/upsample/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
-    auto writer_kernel = CreateKernel(
-        program,
-        writer_kernel_fname,
-        all_cores,
-        WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+    auto writer_kernel =
+        CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
     // no reader kernel
     // no compute kernel

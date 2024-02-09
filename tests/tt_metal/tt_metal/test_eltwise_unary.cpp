@@ -274,7 +274,7 @@ int main(int argc, char** argv) {
         for (const auto& testCase : testCases) {
             size_t num_tiles = std::get<0>(testCase);
             std::string sfpu_op = std::get<1>(testCase);
-            CoreRange core_range = {.start = {0, 0}, .end = {0, 0}};
+            CoreRange core_range({0, 0}, {0, 0});
             CoreRangeSet core_range_set({core_range});
             SfpuConfig test_config = {
                 .num_tiles = num_tiles,

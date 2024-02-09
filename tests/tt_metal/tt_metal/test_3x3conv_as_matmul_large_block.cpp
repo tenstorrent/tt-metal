@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
         uint32_t interm0_cb_index = 24;
         uint32_t num_output_tiles = M * N;
         uint32_t cb_output_size = num_output_tiles * single_tile_size;
-        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(
                 num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}, {interm0_cb_index, tt::DataFormat::Float16_b}}
             )

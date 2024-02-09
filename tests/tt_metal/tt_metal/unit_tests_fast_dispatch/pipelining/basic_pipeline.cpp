@@ -145,7 +145,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     // will make proper sems. For now, using the original code.
     map<CoreCoord, vector<uint32_t>> sems;
     for (auto core : cores) {
-        CoreRange cr = {.start = core, .end = core};
+        CoreRange cr(core, core);
 
         auto sender_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);
         auto receiver_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);

@@ -110,16 +110,16 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
     TT_FATAL(in1_CB_size <= 130*1024);
     TT_FATAL(out_CB_size <= 540*1024);
 
-    CoreRange all_cores{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end{(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_cores(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    CoreRange mcast_senders{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
-    CoreRange mcast_receivers{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange mcast_senders(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
+    CoreRange mcast_receivers(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;
@@ -144,7 +144,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
                 .set_page_size(src1_cb_index, single_tile_size);
             auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-            CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+            CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
             tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size)
                 .set_page_size(interm0_cb_index, single_tile_size);

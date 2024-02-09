@@ -54,7 +54,7 @@ void matmul_single_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat1
     */
     CommandQueue& cq = device->command_queue();
     Program program{};
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     /*
     * EXtracting Matrix dimensions from input/output vectors

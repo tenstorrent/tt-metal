@@ -54,8 +54,8 @@ std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_co
 }
 
 // TODO(arakhmati): Should pack_vec_into_uint32_vec be a generator?
-template <typename DataType, template<typename> typename BufferType>
-constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
+template <typename DataType, template <typename> typename BufferType>
+std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
@@ -86,7 +86,7 @@ constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType
 }
 
 template <typename DataType>
-constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
+std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return data_to_unpack;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {

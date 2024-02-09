@@ -35,7 +35,7 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
     uint32_t single_tile_size = num_bytes_for_df * 1024;
 
     uint32_t num_output_tiles = M * N;
-    CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+    CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
 
     // Invariants
     uint32_t cb0_tiles = M * in0_block_w * 2;

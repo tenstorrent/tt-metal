@@ -100,7 +100,7 @@ bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulT
             {intermediate_cb_index, tt::DataFormat::Float16_b}
         };
 
-        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, partials_and_out_data_format_spec)
             .set_page_size(ouput_cb_index, single_tile_size)
             .set_page_size(intermediate_cb_index, single_tile_size);

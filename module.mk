@@ -93,7 +93,7 @@ LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBD
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
-WARNINGS += -Wno-c++11-narrowing
+WARNINGS += -Wno-c++11-narrowing -Wno-c++2a-extensions
 LDFLAGS += -lstdc++
 else
 WARNINGS += -Wmaybe-uninitialized

@@ -89,7 +89,7 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
     };
 
     uint32_t num_output_tiles = M * N;
-    CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+    CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, partials_and_out_data_format_spec)
         .set_page_size(interm0_cb_index, single_tile_size)
         .set_page_size(ouput_cb_index, single_tile_size);

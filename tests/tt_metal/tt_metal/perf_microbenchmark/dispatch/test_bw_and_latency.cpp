@@ -82,7 +82,7 @@ void init(int argc, char **argv) {
     }
     page_count_g = size_bytes / page_size_g;
 
-    worker_g = {.start = {core_x, core_y}, .end = {core_x, core_y}};
+    worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
 }
 

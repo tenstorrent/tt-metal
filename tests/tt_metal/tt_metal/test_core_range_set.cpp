@@ -90,7 +90,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         auto end = core_range.end;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
-                CoreCoord logical_core({.x=x, .y=y});
+                CoreCoord logical_core(x, y);
                 tt_metal::InterleavedBufferConfig l1_config{
                                         .device=device,
                                         .size = buffer_size,
@@ -220,8 +220,8 @@ int main(int argc, char **argv) {
 
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        CoreRange core_range_one = {.start={0, 0}, .end={1, 1}};
-        CoreRange core_range_two = {.start={2, 2}, .end={3, 3}};
+        CoreRange core_range_one({0, 0}, {1, 1});
+        CoreRange core_range_two({2, 2}, {3, 3});
         CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});
 
         pass &= test_program_specified_with_core_range_set(device, program, core_ranges);

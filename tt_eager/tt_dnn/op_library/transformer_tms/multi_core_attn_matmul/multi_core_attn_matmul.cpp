@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace transformers
