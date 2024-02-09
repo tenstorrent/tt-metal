@@ -681,7 +681,7 @@ class TTPyCompositeConv(TTPyOp):
                 [R, S, U, V, P_H, P_W],
                 K,
                 False,
-                True,
+                self.bias is not None,
                 fuse_relu,
                 math_fidelity,
                 opt_conv_parall_conf,

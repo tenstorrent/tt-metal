@@ -164,7 +164,7 @@ def _preprocess_model_parameters(
                     convert_to_ttnn=convert_to_ttnn,
                     custom_preprocessor=custom_preprocessor,
                     name=f"{name}.{index}" if name else f"{index}",
-                    module_config=module_config[index] if module_config is not None else None,
+                    module_config=module_config.get(child_name, index) if module_config is not None else None,
                 )
                 for index, child in enumerate(model.children())
             ]
@@ -197,13 +197,15 @@ def _preprocess_model_parameters(
 
     parameters = {}
     for child_name, child in named_children:
-        parameters[child_name] = _preprocess_model_parameters(
+        child_parameters = _preprocess_model_parameters(
             child,
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
             name=f"{name}.{child_name}" if name else child_name,
-            module_config=module_config[child_name] if module_config is not None else None,
+            module_config=module_config.get(child_name, None) if module_config is not None else None,
         )
+        if child_parameters:
+            parameters[child_name] = child_parameters
 
     for parameter_name, parameter in named_parameters:
         dtype = {
@@ -333,6 +335,19 @@ def populate_module_configs(*, model, run_model):
                 if isinstance(operation.module, torch.nn.Conv2d):
                     (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
                     input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
+
+                    activation = None
+                    successors = list(graph.successors(node))
+                    if len(successors) == 1:
+                        output_node = successors[0]
+                        successor_operation = graph.nodes[output_node]["operation"]
+                        if isinstance(successor_operation, torchtrail.tracer.TorchModule):
+                            if isinstance(successor_operation.module, torch.nn.ReLU):
+                                activation = "relu"
+                        elif isinstance(successor_operation, torchtrail.tracer.TorchFunction):
+                            if successor_operation.function == torch.nn.functional.relu:
+                                activation = "relu"
+
                     module_config[module_name] = ParameterDict(
                         {
                             "config": Conv2dConfig(
@@ -351,11 +366,14 @@ def populate_module_configs(*, model, run_model):
                                 dtype=ttnn.bfloat16,
                                 weights_dtype=ttnn.bfloat16,
                                 use_1d_systolic_array=True,
+                                activation=activation,
                             )
                         }
                     )
                 else:
-                    module_config[module_name] = _populate_module_config(operation.graph)
+                    submodule_config = _populate_module_config(operation.graph)
+                    if submodule_config:
+                        module_config[module_name] = submodule_config
         return ParameterDict(module_config)
 
     module_config = _populate_module_config(graph)
