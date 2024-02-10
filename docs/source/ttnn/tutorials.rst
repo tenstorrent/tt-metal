@@ -20,3 +20,4 @@ Hint: Be sure to always run the cells from top to bottom as the order of the cel
    tutorials/ttnn-tracer.rst
    tutorials/profiling.rst
    tutorials/resnet-basic-block.rst
+   tutorials/multihead-attention-visualized.rst
