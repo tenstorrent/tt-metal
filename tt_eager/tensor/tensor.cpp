@@ -240,7 +240,7 @@ bool Tensor::is_allocated() const {
 
 std::vector<uint32_t> Tensor::host_page_ordering(){
     auto cores = buffer()->all_cores();
-    auto shard_size = buffer()->shard_spec().size();
+    auto shard_size = buffer()->shard_spec().num_pages();
     auto num_pages = cores.size() * shard_size;
 
     std::vector<uint32_t> ret_vec;

@@ -10,6 +10,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/math.hpp"
 #include <map>
 #include <optional>
 
@@ -100,7 +101,7 @@ struct ShardSpecBuffer {
     bool halo() const {
         return tensor_shard_spec.halo;
     }
-    uint32_t size() const{
+    uint32_t num_pages() const{
         auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
         auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
         return width_in_pages * height_in_pages;
@@ -207,11 +208,13 @@ class Buffer {
     uint32_t get_mapped_page_id(uint32_t input_id) const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         TT_ASSERT(input_id < dev_page_to_core_mapping_.size());
+        TT_ASSERT(input_id < this->num_pages(), "Invalid page id");
         return dev_page_to_host_page_mapping_[input_id];
     }
 
     uint32_t get_bank_id_from_page_id (uint32_t page_id) const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        TT_ASSERT(page_id < this->num_pages(), "Invalid page id");
         auto core_id = dev_page_to_core_mapping_[page_id];
         return this->core_bank_indices_[core_id];
     }
@@ -224,9 +227,12 @@ class Buffer {
         if(!is_sharded(this->buffer_layout_))
             return 1;
         else{
-            auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = num_pages/this->shard_spec().size();
-            return shards_for_compute;
+            std::array<uint32_t, 2> shard_shape_in_pages = {this->shard_spec().tensor_shard_spec.shape[0] / this->shard_spec().page_shape[0] ,
+                        this->shard_spec().tensor_shard_spec.shape[1] / this->shard_spec().page_shape[1]};
+
+            std::array<uint32_t, 2> shards_for_compute {div_up(this->shard_spec().tensor2d_shape[0], shard_shape_in_pages[0]),
+                                                    div_up(this->shard_spec().tensor2d_shape[1], shard_shape_in_pages[1])};
+            return shards_for_compute[0] * shards_for_compute[1];
         }
     }
 

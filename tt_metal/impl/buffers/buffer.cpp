@@ -262,7 +262,7 @@ uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) con
         this->address_ :
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
 
-    int pages_offset_within_bank = page_index % shard_spec().size();
+    int pages_offset_within_bank = page_index % shard_spec().num_pages();
     auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
     return base_page_address + offset;
 }
