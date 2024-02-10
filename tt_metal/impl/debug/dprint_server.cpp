@@ -319,6 +319,12 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (CoreCoord phys_core: all_physical_printable_cores[core_type])
                 print_cores_sanitized.push_back(phys_core);
+            log_info(
+                tt::LogMetal,
+                "DPRINT enabled on device {}, all {} cores.",
+                device->id(),
+                core_type_to_str(core_type)
+            );
         } else {
             // Only print from the cores specified by the user
             vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores()[core_type];
@@ -336,6 +342,14 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 }
                 if (valid_logical_core && all_physical_printable_cores[core_type].count(phys_core) > 0) {
                     print_cores_sanitized.push_back(phys_core);
+                    log_info(
+                        tt::LogMetal,
+                        "DPRINT enabled on device {}, {} core {} (physical {}).",
+                        device->id(),
+                        core_type_to_str(core_type),
+                        logical_core.str(),
+                        phys_core.str()
+                    );
                 } else {
                     log_warning(
                         tt::LogMetal,
