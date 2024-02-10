@@ -65,11 +65,10 @@ Pointwise Unary
    ttnn/asinh
    ttnn/acosh
    ttnn/atanh
-   ttnn/identity
    ttnn/logical_not_unary
    ttnn/logical_noti
    ttnn/logit
-   ttnn/move
+   ttnn/clone
 
 Pointwise Binary
 ================
