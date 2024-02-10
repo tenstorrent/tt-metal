@@ -67,7 +67,7 @@ Before going into details, below is a simple example of SFPI code:
                 dst_reg[6] = setexp(a, 127);
             }
             v_endif;
-        } v_elseif (a == s2vFloat16a(3.0F) {
+        } v_elseif (a == s2vFloat16a(3.0F)) {
             // RISCV branch
             if (take_abs) {
                 dst_reg[7] = abs(a);
