@@ -44,6 +44,7 @@ Following TDD, the first step is to write a test for the model:
 
     from models.utility_functions import torch_random
     from tests.ttnn.utils_for_testing import assert_with_pcc
+    from ttnn.model_preprocessing import preprocess_model_parameters
 
     @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
     @pytest.mark.parametrize("batch_size", [1])
@@ -74,6 +75,7 @@ And finally, the model can be rewritten using functional torch APIs to make the 
 .. code-block:: python
 
     # torch_functional_bert.py
+    import torch
 
     def bert_intermediate(hidden_states, *, parameters):
         hidden_states = hidden_states @ parameters.dense.weight
@@ -106,6 +108,7 @@ Starting off with the test:
 
     from models.utility_functions import torch_random
     from tests.ttnn.utils_for_testing import assert_with_pcc
+    from ttnn.model_preprocessing import preprocess_model_parameters
 
     @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
     @pytest.mark.parametrize("batch_size", [1])
@@ -116,7 +119,7 @@ Starting off with the test:
         config = transformers.BertConfig.from_pretrained(model_name)
         model = transformers.models.bert.modeling_bert.BertIntermediate(config).eval()
 
-        torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1)
+        torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
         torch_output = model(torch_hidden_states)
 
         parameters = preprocess_model_parameters(
@@ -167,9 +170,10 @@ Starting off with the test:
 
     from models.utility_functions import torch_random
     from tests.ttnn.utils_for_testing import assert_with_pcc
+    from ttnn.model_preprocessing import preprocess_model_parameters
 
     @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-    @pytest.mark.parametrize("batch_size", [1])
+    @pytest.mark.parametrize("batch_size", [8])
     @pytest.mark.parametrize("sequence_size", [384])
     def test_bert_intermediate(device, model_name, batch_size, sequence_size):
         torch.manual_seed(0)
@@ -177,7 +181,7 @@ Starting off with the test:
         config = transformers.BertConfig.from_pretrained(model_name)
         model = transformers.models.bert.modeling_bert.BertIntermediate(config).eval()
 
-        torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1)
+        torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
         torch_output = model(torch_hidden_states)
 
         parameters = preprocess_model_parameters(
@@ -208,29 +212,28 @@ And the optimized model can be something like this:
 
         parameters = {}
         if isinstance(model, transformers.models.bert.modeling_bert.BertIntermediate):
-            parameters["weight"] = ttnn.model_preprocessing.preprocess_linear_weight(model.weight, dtype=ttnn.bfloat8_b)
-            parameters["bias"] = ttnn.model_preprocessing.preprocess_linear_bias(model.bias, dtype=ttnn.bfloat8_b)
+            parameters['weight'] = ttnn.model_preprocessing.preprocess_linear_weight(model.dense.weight, dtype=ttnn.bfloat8_b)
+            parameters['bias'] = ttnn.model_preprocessing.preprocess_linear_bias(model.dense.bias, dtype=ttnn.bfloat8_b)
 
         return parameters
 
     def bert_intermediate(
         hidden_states,
         *,
-        parameters,
-        num_cores_x,
+        parameters
     ):
         batch_size, *_ = hidden_states.shape
 
         num_cores_x = 12
         output = ttnn.linear(
             hidden_states,
-            ff1_weight,
-            bias=ff1_bias,
+            parameters['weight'],
+            bias=parameters['bias'],
             memory_config=ttnn.L1_MEMORY_CONFIG, # Put the output into local core memory
             core_grid=(batch_size, num_cores_x), # Specify manual core grid to get the best possible performance
             activation="gelu", # Fuse Gelu
         )
-        return True
+        return output
 
 More examples
 *************
