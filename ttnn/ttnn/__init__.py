@@ -118,11 +118,10 @@ from ttnn.operations.unary import (
     asinh,
     acosh,
     atanh,
-    identity,
     logical_not_unary,
     logical_noti,
     logit,
-    move,
+    clone,
 )
 
 from ttnn.operations.binary import (

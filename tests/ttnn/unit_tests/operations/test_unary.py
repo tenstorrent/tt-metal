@@ -136,14 +136,8 @@ def test_atanh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_identity(device, h, w):
-    run_unary_test(device, h, w, ttnn.identity, torch.clone)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_move(device, h, w):
-    run_unary_test(device, h, w, ttnn.move, torch.clone)
+def test_clone(device, h, w):
+    run_unary_test(device, h, w, ttnn.clone, torch.clone)
 
 
 def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
