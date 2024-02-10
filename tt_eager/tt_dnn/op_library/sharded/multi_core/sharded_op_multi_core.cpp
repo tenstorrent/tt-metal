@@ -550,7 +550,7 @@ std::unordered_map <CoreCoord, std::vector<CorePageRange> > get_core_page_ranges
 
 //now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)
     std::unordered_map <CoreCoord, std::vector<CorePageRange> > ret_map;
-    auto output_cores = corerange_to_cores(output_buffer->shard_spec().grid());
+    auto output_cores = corerangeset_to_cores(output_buffer->shard_spec().grid());
 
     for(auto output_core: output_cores) {
         auto vector_of_input_core_input_page = output_core_to_vector_input_core_page.at(output_core);
@@ -616,7 +616,7 @@ operation::ProgramWithCallbacks reshard_multi_core(
 
 
 
-    auto cores = corerange_to_cores(all_cores);
+    auto cores = corerangeset_to_cores(all_cores);
 
 
 
@@ -671,7 +671,7 @@ operation::ProgramWithCallbacks reshard_multi_core(
         auto input_shard_spec = input_tensors.at(0).shard_spec().value();
         auto output_shard_spec = output_tensors.at(0).shard_spec().value();
         auto all_cores = input_shard_spec.grid.merge(output_shard_spec.grid);
-        auto cores = corerange_to_cores(all_cores);
+        auto cores = corerangeset_to_cores(all_cores);
         auto device = input_tensors.at(0).device();
 
         for (const auto& core : cores) {

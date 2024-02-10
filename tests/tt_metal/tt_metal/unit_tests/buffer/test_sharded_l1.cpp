@@ -26,9 +26,9 @@ struct L1Config {
     uint32_t num_tiles_per_core_height = 2;
     uint32_t num_tiles_per_core_width = 2;
     uint32_t element_size = 2;
-    uint32_t size_bytes = 1 * num_cores_height * num_tiles_per_core_height
-                        * tt::constants::TILE_HEIGHT * num_cores_width
-                        * num_tiles_per_core_width * tt::constants::TILE_WIDTH
+    uint32_t size_bytes = (num_cores_height * num_tiles_per_core_height)
+                        * (num_cores_width * num_tiles_per_core_width)
+                        * tt::constants::TILE_HW
                         * element_size;
     uint32_t page_size_bytes = tt::constants::TILE_HW * element_size;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
@@ -36,17 +36,25 @@ struct L1Config {
 
     bool sharded = true;
     ShardSpecBuffer shard_spec() const{
+        std::array<uint32_t, 2> shard_shape;
+        if(this->buffer_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            shard_shape = {num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT,  tt::constants::TILE_WIDTH*num_cores_width};
+        }
+        else {
+            // WIDTH SHARDED
+            shard_shape = {tt::constants::TILE_HEIGHT*num_cores_height,  tt::constants::TILE_WIDTH*num_cores_width*num_tiles_per_core_width};
+        }
+        std::array<uint32_t, 2> page_shape = {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        std::array<uint32_t, 2> tensor2d_shape = {num_cores_height * num_tiles_per_core_height, num_tiles_per_core_width * num_cores_width };
         return ShardSpecBuffer(
                         CoreRangeSet(std::set<CoreRange>(
                             { CoreRange(CoreCoord(0,0), CoreCoord(0, num_cores_height*num_cores_width - 1))}
                             )),
-                        {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
-                            (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
+                        shard_shape,
                         ShardOrientation::ROW_MAJOR,
                         false,
-                        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                        {1* num_cores_height * num_tiles_per_core_height * num_cores_height,
-                            num_tiles_per_core_width * num_cores_width});
+                        page_shape,
+                        tensor2d_shape);
     }
 };
 

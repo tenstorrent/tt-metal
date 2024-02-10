@@ -345,10 +345,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
                                             };
 
     ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-    uint32_t shard_size = shard_shape[0] * shard_shape[1] * element_size;
-    if(layout == Layout::TILE)
-        shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
-    uint32_t packed_size_in_bytes = shard_size * num_cores;
+    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
                                                             data_type, layout, memory_config,
                                                             std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
