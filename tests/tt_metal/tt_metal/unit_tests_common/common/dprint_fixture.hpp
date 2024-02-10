@@ -23,7 +23,9 @@ protected:
         // The core range (physical) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
-        tt::llrt::OptionsG.set_dprint_all_cores(true);
+        tt::llrt::OptionsG.set_dprint_enabled(true);
+        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::WORKER, true);
+        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::ETH, true);
         tt::llrt::OptionsG.set_dprint_all_chips(true);
         // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
@@ -42,7 +44,10 @@ protected:
 
         // Reset DPrint settings
         tt::llrt::OptionsG.set_dprint_cores({});
-        tt::llrt::OptionsG.set_dprint_all_cores(false);
+        tt::llrt::OptionsG.set_dprint_enabled(false);
+        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::WORKER, false);
+        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::ETH, false);
+        tt::llrt::OptionsG.set_dprint_all_chips(false);
         tt::llrt::OptionsG.set_dprint_file_name("");
         tt::llrt::OptionsG.set_test_mode_enabled(false);
     }

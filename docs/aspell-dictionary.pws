@@ -1,4 +1,4 @@
-personal_ws-1.1 en 508 
+personal_ws-1.1 en 512 
 ABI
 ADDI
 API
@@ -54,6 +54,7 @@ DeviceStorage
 DstMode
 DumpDeviceProfileResults
 ENDL
+ETH
 EltwiseUnary
 EnqueueProgram
 EnqueueReadBuffer
@@ -117,6 +118,7 @@ Pytorch
 QueryDevices
 README
 RISCV
+RISCVS
 RISCVs
 RISCs
 ReadFromDevice
@@ -137,6 +139,7 @@ ShardedBufferConfig
 SliceRange
 TRISC
 TSLICE
+TT
 TTNN
 TTNN's
 TensTorrent's
@@ -253,6 +256,7 @@ eqz
 erf
 erfc
 erfinv
+ethernet
 exexp
 exman
 expm

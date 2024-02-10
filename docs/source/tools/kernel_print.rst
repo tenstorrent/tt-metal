@@ -14,12 +14,12 @@ Enabling
 Kernel debug printing can be enabled and configured using the environment variables shown below.  The first
 environment variable, ``TT_METAL_DPRINT_CORES`` specifies which cores the host-side will read print data from, and
 whether this environment variable is defined determines whether printing is enabled during kernel compilation.
-Note that the core coordinates are currently physical NOC coordinates (not logical); the top left core is (1,1) *not*
-(0,0).
+Note that the core coordinates are logical coordinates, so worker cores and ethernet cores both start at (0, 0).
 
 .. code-block::
 
-    export TT_METAL_DPRINT_CORES=1,1     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all
+    export TT_METAL_DPRINT_CORES=0,0     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all
+    export TT_METAL_DPRINT_ETH_CORES=0,0 # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all
     export TT_METAL_DPRINT_CHIPS=0       # optional, comma separated list of chips
     export TT_METAL_DPRINT_RISCVS=BR     # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
     export TT_METAL_DPRINT_FILE=log.txt  # optional, default is to print to the screen

@@ -284,43 +284,69 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     chip_id_t device_id = device->id();
 
     // A set of all valid printable cores, used for checking the user input. Note that the coords
-    // here are physical, which matches the user input for configuring the print server.
-    set<CoreCoord> all_printable_cores;
+    // here are physical.
+    map<CoreType, set<CoreCoord>> all_physical_printable_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size = device->logical_grid_size();
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             CoreCoord logical_coord(x, y);
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_coord);
-            all_printable_cores.insert(worker_core);
+            all_physical_printable_cores[CoreType::WORKER].insert(worker_core);
         }
     }
     for (const auto& eth_core : device->ethernet_cores()) {
         CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        all_printable_cores.insert(physical_core);
+        all_physical_printable_cores[CoreType::ETH].insert(physical_core);
     }
+
+    // Helper lambda to convert CoreType to string for printing purposes.
+    auto core_type_to_str = [](CoreType core_type){
+        switch(core_type) {
+            case CoreType::WORKER:
+                return "worker";
+            case CoreType::ETH:
+                return "ethernet";
+            default:
+                TT_THROW("DPRINT server unrecognized CoreType");
+        }
+    };
 
     // Core range depends on whether dprint_all_cores flag is set.
     vector<CoreCoord> print_cores_sanitized;
-    if (tt::llrt::OptionsG.get_dprint_all_cores()) {
-        // Print from all worker cores, cores returned here are guaranteed to be valid.
-        print_cores_sanitized = vector<CoreCoord>(all_printable_cores.begin(), all_printable_cores.end());
-    } else {
-        // Only print from the cores specified by the user.
-        vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores();
+    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+        if (tt::llrt::OptionsG.get_dprint_all_cores(core_type)) {
+            // Print from all cores of the given type, cores returned here are guaranteed to be valid.
+            for (CoreCoord phys_core: all_physical_printable_cores[core_type])
+                print_cores_sanitized.push_back(phys_core);
+        } else {
+            // Only print from the cores specified by the user
+            vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores()[core_type];
 
-        // We should also validate that the cores the user specified are valid worker cores.
-        for (auto core : print_cores) {
-            if (all_printable_cores.count(core) > 0) {
-                print_cores_sanitized.push_back(core);
-            } else {
-                log_warning(
-                    tt::LogMetal,
-                    "TT_METAL_DPRINT_CORES included worker core ({}, {}), which is not a valid coordinate. This coordinate will be ignored by the dprint server.",
-                    core.x,
-                    core.y
-                );
+            // We should also validate that the cores the user specified are valid worker cores.
+            for (auto logical_core : print_cores) {
+                // Need to convert user-specified logical cores to physical cores, this can throw
+                // if the user gave bad coords.
+                CoreCoord phys_core;
+                bool valid_logical_core = true;
+                try {
+                    phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+                } catch (std::runtime_error& error) {
+                    valid_logical_core = false;
+                }
+                if (valid_logical_core && all_physical_printable_cores[core_type].count(phys_core) > 0) {
+                    print_cores_sanitized.push_back(phys_core);
+                } else {
+                    log_warning(
+                        tt::LogMetal,
+                        "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (physical coordinates {}), which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
+                        core_type_to_str(core_type),
+                        logical_core.str(),
+                        valid_logical_core? phys_core.str() : "INVALID",
+                        device->id()
+                    );
             }
+        }
         }
     }
 
@@ -329,15 +355,17 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
-    for (auto core : all_printable_cores) {
-        int hart_count = GetNumRiscs(device_id, core);
-        for (int hart_index = 0; hart_index < hart_count; hart_index++) {
-            WriteInitMagic(device_id, core, hart_index, false);
+    for (auto &type_and_cores : all_physical_printable_cores) {
+        for (auto &core : type_and_cores.second) {
+            int hart_count = GetNumRiscs(device_id, core);
+            for (int hart_index = 0; hart_index < hart_count; hart_index++) {
+                WriteInitMagic(device_id, core, hart_index, false);
+            }
         }
     }
     // Write print enable magic for the cores the user specified.
     uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
-    for (auto core : print_cores_sanitized) {
+    for (auto &core : print_cores_sanitized) {
         int hart_count = GetNumRiscs(device_id, core);
         for (int hart_index = 0; hart_index < hart_count; hart_index++) {
             if (hart_mask & (1<<hart_index)) {

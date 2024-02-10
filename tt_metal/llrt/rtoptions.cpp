@@ -82,19 +82,29 @@ void RunTimeOptions::ParseWatcherEnv() {
 }
 
 void RunTimeOptions::ParseDPrintEnv() {
-    ParseDPrintCoreRange("TT_METAL_DPRINT_CORES");
+    ParseDPrintCoreRange("TT_METAL_DPRINT_CORES", CoreType::WORKER);
+    ParseDPrintCoreRange("TT_METAL_DPRINT_ETH_CORES", CoreType::ETH);
     ParseDPrintChipIds("TT_METAL_DPRINT_CHIPS");
     ParseDPrintRiscvMask("TT_METAL_DPRINT_RISCVS");
     ParseDPrintFileName("TT_METAL_DPRINT_FILE");
+
+    // Set dprint enabled if the user asked for any dprint cores
+    dprint_enabled = false;
+    for (auto &core_type_and_all_flag : dprint_all_cores)
+        if (core_type_and_all_flag.second)
+            dprint_enabled = true;
+    for (auto &core_type_and_cores : dprint_cores)
+        if (core_type_and_cores.second.size() > 0)
+            dprint_enabled = true;
 };
 
-void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
+void RunTimeOptions::ParseDPrintCoreRange(const char* env_var, CoreType core_type) {
     char *str = std::getenv(env_var);
     vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
     if (str != nullptr && strcmp(str, "all") == 0) {
-        dprint_all_cores = true;
+        dprint_all_cores[core_type] = true;
         return;
     }
     if (str != nullptr) {
@@ -139,8 +149,8 @@ void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
         }
     }
 
-    // Set the core range, whether or not dprint is enabled depends on whether this is empty.
-    dprint_cores = cores;
+    // Set the core range
+    dprint_cores[core_type] = cores;
 }
 
 void RunTimeOptions::ParseDPrintChipIds(const char* env_var) {
