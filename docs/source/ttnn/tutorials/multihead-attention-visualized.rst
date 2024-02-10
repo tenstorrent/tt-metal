@@ -1,8 +1,8 @@
 .. _MHA Optimization Visualized:
 
 MHA Optimization Visualized
-##################
+###########################
 
 .. toctree::
 
-   ttnn/tutorials/003_visualized
+   ttnn_tutorials/003_visualized
