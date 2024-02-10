@@ -94,24 +94,32 @@ tt_eager/tt_dnn/op_library/composite/ @muthutt
 tt_eager/tt_dnn/op_library/complex/ @muthutt
 tt_eager/tt_dnn/op_library/backward/ @muthutt
 
+# eager - tensor and op infra
+tt_eager/tt_dnn/op_library/operation_history.*pp @arakhmati @eyonland @cfjchu @xanderchin
+tt_eager/tt_dnn/op_library/operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
+tt_eager/tt_dnn/op_library/run_operation.*pp @arakhmati @eyonland @cfjchu @xanderchin
+tt_eager/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
+tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
+
 # eager - python api
 # **/tt_lib/
-**/tt_lib/csrc/ @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
-**/tt_lib/fallback_ops @tt-aho @arakhmati
+**/tt_lib/csrc/ @TT-BrianLiu @tt-aho @arakhmati @mywoodstock @eyonland @cfjchu @xanderchin
+**/tt_lib/fallback_ops @tt-aho @arakhmati @eyonland @cfjchu @xanderchin
 
 # TTNN
-ttnn/ @eyonland @arakhmati
-tests/ttnn/ @eyonland @arakhmati
+ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 
 # models
 models/ @boris-drazic @farbabi
 models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
-functional_*/ @eyonland @arakhmati
+functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 
 # docs
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @muthutt
+docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @muthutt @cfjchu @xanderchin
+docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @DrJessop @pgkeller @tt-rkim
@@ -122,6 +130,6 @@ tests/**/dtx/ @tt-nshanker
 tests/**/*test*conv*.py @tt-nshanker
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
-tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati
+tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati @eyonland @cfjchu @xanderchin
 tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py @muthutt
 scripts/profiler/ @muthutt @mo-tenstorrent @TT-billteng
