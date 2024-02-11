@@ -15,7 +15,7 @@ from models.demos.llama2_70b.tt.llama_common import (
 
 
 class TtLlamaAttention(nn.Module):
-    def __init__(self, device, state_dict, base_url, layer_num, model_config, layer_past, configuration):
+    def __init__(self, device, state_dict, base_url, layer_num, model_config, configuration):
         super().__init__()
 
         self.state_dict = state_dict
@@ -69,8 +69,24 @@ class TtLlamaAttention(nn.Module):
             self.device,
         )
 
-        layer_past = [torch2tt_tensor(lp, device) for lp in layer_past]
-        self.layer_past = layer_past
+        cache_k = torch.zeros(
+            (
+                configuration.max_batch_size,
+                self.n_kv_heads,
+                configuration.max_seq_len,
+                self.head_dim,
+            )
+        )
+        cache_v = torch.zeros(
+            (
+                configuration.max_batch_size,
+                self.n_kv_heads,
+                configuration.max_seq_len,
+                self.head_dim,
+            )
+        )
+        layer_past = [cache_k, cache_v]
+        self.layer_past = [torch2tt_tensor(lp, device) for lp in layer_past]
 
     def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
         cos, sin = tt_precompute_freqs(dhead, end)
@@ -91,6 +107,7 @@ class TtLlamaAttention(nn.Module):
 
         batch = x.size(0)
         seq_len = x.size(1)
+        assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
         rot_mat = self.get_rotation_mat(
             dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
