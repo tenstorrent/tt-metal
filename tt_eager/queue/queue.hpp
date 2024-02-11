@@ -2,55 +2,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <optional>
 #include <vector>
 #include "tt_eager/tensor/tensor.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace tt::tt_metal {
-class CommandQueue;
 
 namespace operation{
    class DeviceOperation;
 }
-
-using Queue = CommandQueue;
 
 //Dummy placeholder, definition will be moved to metal-level when it's ready
 struct Event {
    uint32_t id;
 };
 
+void EnqueueHostToDeviceTransfer(CommandQueue&, Tensor& dst, const void* src, size_t transfer_size);
+
+void EnqueueDeviceToHostTransfer(CommandQueue&, Tensor& src, void* dst, size_t transfer_size, size_t src_offset = 0);
 
 
-void EnqueueHostToDeviceTransfer(Queue&, Tensor& dst, void* src, size_t transfer_size);
-
-void EnqueueDeviceToHostTransfer(Queue&, Tensor& src, void* dst, size_t transfer_size, size_t src_offset = 0);
-
-
-void QueueRecordEvent(Queue&, Event&);
-void QueueWaitForEvent(Queue&, Event&);
+void QueueRecordEvent(CommandQueue&, Event&);
+void QueueWaitForEvent(CommandQueue&, Event&);
 void EventSynchronize(Event&);
-void QueueSynchronize(Queue&);
+void QueueSynchronize(CommandQueue&);
 
-
-void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
-void EnqueueOperation(Queue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
+void EnqueueOperation(CommandQueue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors);
+void EnqueueOperation(CommandQueue&, operation::DeviceOperation&, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors);
 
 }
 
 // Future APIs to be added later
-// void EnqueueAllocateDeviceBuffer(Queue&, DeviceBuffer&); // Part 2
-// void EnqueueAllocateHostBuffer(Queue&, HostBuffer&); // Part 2
+// void EnqueueAllocateDeviceBuffer(CommandQueue&, DeviceBuffer&); // Part 2
+// void EnqueueAllocateHostBuffer(CommandQueue&, HostBuffer&); // Part 2
 
 
-// void EnqueueDeallocate(Queue&, Tensor&); // Part 2
-// void EnqueueReallocate(Queue&, Tensor&); // TBD
-// void EnqueueAllocateHostMemory(Queue& , owned_buffer::Buffer& ); // TBD
+// void EnqueueDeallocate(CommandQueue&, Tensor&); // Part 2
+// void EnqueueReallocate(CommandQueue&, Tensor&); // TBD
+// void EnqueueAllocateHostMemory(CommandQueue& , owned_buffer::Buffer& ); // TBD
 
 // Example
 // auto Sqrt =
 //    tt::tt_metal::EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}};
-// void sqrt(Queue& queue, Tensor& input, Tensor& output) { EnqueueOperation(queue, Sqrt, {input, output}); }
+// void sqrt(CommandQueue& queue, Tensor& input, Tensor& output) { EnqueueOperation(queue, Sqrt, {input, output}); }
 // void sqrt(Tensor& input, Tensor& output) { EnqueueOperation(GetDefaultQueue(), Sqrt, {input, output}); }
 
 // void example() {

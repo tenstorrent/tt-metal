@@ -17,6 +17,7 @@
 
 #include <optional>
 #include "tensor/tensor_impl_wrapper.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -452,8 +453,8 @@ inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer
 }
 
 template <typename T, template<typename> typename BufferType>
-inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape,
-            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec) {
+inline DeviceBuffer initialize_data_on_device(BufferType<T>& data_to_write, Device* device, const Shape& shape,
+            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec, std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt ) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
@@ -461,7 +462,7 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        write_data_to_device_buffer<T>(device->command_queue(), data_to_write, device_buffer);
+        write_data_to_device_buffer<T>(queue.has_value() ? queue.value().get() : device->command_queue(), data_to_write, device_buffer);
     } else {
         write_data_to_device_buffer<T>(data_to_write, *device_buffer);
     }
@@ -470,7 +471,7 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
 }
 
 template <typename T>
-inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec) {
+inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec, std::optional<std::reference_wrapper<CommandQueue> >queue) {
 
     return std::visit(
         [&device, &shape, &data_type, &layout, memory_config, shard_spec] (auto&& storage) -> DeviceBuffer {
@@ -568,7 +569,7 @@ inline Tensor to_host_sharded(const Tensor &tensor) {
 
 
 template <typename T>
-inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
+inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config, std::optional<std::reference_wrapper<CommandQueue> > queue) {
     TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
     if (tensor.storage_type() ==  StorageType::OWNED) {
         TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
@@ -592,7 +593,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.storage(), target_device, shape,
         data_type, layout, memory_config,
-        shard_spec_buffer_opt
+        shard_spec_buffer_opt, queue
     );
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }

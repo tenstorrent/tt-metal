@@ -13,6 +13,7 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
+
 uint32_t element_size_bytes_wrapper(DataType dtype);
 
 uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpacked_data);
@@ -23,7 +24,7 @@ Tensor to_host_wrapper_sharded(const Tensor &tensor);
 
 Tensor to_extract_shard_wrapper(const Tensor &tensor, const uint32_t & core_id);
 
-Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config);
+Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config, std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt);
 
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout);
 
