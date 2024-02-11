@@ -10,6 +10,7 @@ import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
+    # get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -43,24 +44,34 @@ class TtLlamaRMSNorm(torch.nn.Module):
 
         self.norm_eps = configuration.norm_eps
 
-        # Must create weight like this to ensure it is in row-major order
-        # or we get an error that weight.shape[3] doesn't match inp.shape[3]
-        attn_norm = tt_lib.tensor.Tensor(
-            self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]), self.model_config["LN_ATTN_WEIGHTS_DTYPE"]
+        self.attn_norm = torch2tt_tensor(self.state_dict[attn_norm_str].unsqueeze(0).expand(batch, -1), self.device)
+
+        # Pad by zero to get a `32x8k` weight tensor
+        # self.attn_norm = pad_by_zero(self.state_dict[attn_norm_str], self.device)[0]
+
+    def rms_decomp(self, x):
+        squared = tt_lib.tensor.pow(x, 2)
+        # mean_squared = tt_lib.tensor.mean(squared, )
+        sum_squared = tt_lib.tensor.reduce(
+            squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0
         )
-        self.attn_norm = attn_norm.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
+        # Tensor is 1,1,32,1+31 now
+        mean_squared = tt_lib.tensor.div_unary(sum_squared, x.shape()[-1])
+        mean_squared_eps = tt_lib.tensor.add_unary(mean_squared, self.norm_eps)
+        rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
+        rms_recip = tt_lib.tensor.recip(rms)
+        normed_x = tt_lib.tensor.bcast(
+            x, rms_recip, math_op=tt_lib.tensor.BcastOpMath.MUL, dim=tt_lib.tensor.BcastOpDim.W
+        )
+        norm_out = tt_lib.tensor.mul(normed_x, self.attn_norm)
+        return norm_out
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        x = tt_lib.tensor.interleaved_to_sharded(
-            x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
-        x_attn_norm = tt_lib.operations.primary.rmsnorm(
-            x,
-            self.norm_eps,
-            self.attn_norm,
-            output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
-            program_config=self.model_config["LN_ATTN_PROGCFG"],
-        )
+        # x_attn_norm = tt_lib.tensor.rmsnorm(
+        #     x, self.norm_eps, self.attn_norm,
+        # )
+        #  (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)) * weight
+        x_attn_norm = self.rms_decomp(x)
         return x_attn_norm
 
 
@@ -152,7 +163,7 @@ def run_test_LlamaNorm(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))
 def test_LlamaNorm_inference(
     model_version,
     batch,

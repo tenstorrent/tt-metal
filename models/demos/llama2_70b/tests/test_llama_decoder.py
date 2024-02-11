@@ -78,7 +78,6 @@ def run_test_LlamaDecoder_inference(
     kv_cache_len,
     pcc,
     model_config,
-    n_devices
     # tt_cache_path,
     # model_location_generator,
 ):
@@ -95,8 +94,6 @@ def run_test_LlamaDecoder_inference(
     print(state_dict.keys())
 
     # Prepare configs
-    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
-
     torch.manual_seed(0)
     layer_num = 0
     base_url = "layers"
@@ -109,17 +106,15 @@ def run_test_LlamaDecoder_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaDecoder_model = TtLlamaDecoder(devices, state_dict, base_url, layer_num, model_config, configuration, batch)
+    tt_LlamaDecoder_model = TtLlamaDecoder(device, state_dict, base_url, layer_num, model_config, configuration, batch)
 
-    generation_start_pos = 126
-    generation_length = 3
+    generation_start_pos = 127
+    generation_length = 8
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
-        pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
-        pt_input = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
+        pt_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
         tt_input = pt_input.clone()
-
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
@@ -141,12 +136,7 @@ def run_test_LlamaDecoder_inference(
             start_pos,
             attn_mask,
         )
-
-        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
-        assert len(tt_out) == len(devices)
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = torch.cat(tt_outs, dim=-1)
-        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        tt_out = tt2torch_tensor(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -169,13 +159,7 @@ def run_test_LlamaDecoder_inference(
         ),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware execution -------------------------------------------------------------
-    tt_layer_present = []
-    for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
-        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-    # concat the pasts by heads
-    tt_layer_present = [
-        torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-    ]
+    tt_layer_present = [tt2torch_tensor(cache) for cache in tt_LlamaDecoder_model.attention.layer_past]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
         cache_length_to_check = generation_start_pos + generation_length + 1
@@ -198,18 +182,18 @@ def run_test_LlamaDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_devices",
+    "llm_mode, batch, seq_len, kv_cache_len",
     (
-        # ("prefill", 1, 128, 0, 8),
-        ("decode", 32, 1, 128, 8),
+        ("prefill", 1, 128, 0),
+        ("decode", 32, 1, 128),
     ),
-    ids=["decode_batch32"],
+    ids=["prefill_seq128", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED", "BFLOAT8_B-SHARDED"))
 def test_LlamaDecoder_inference(
     model_version,
     llm_mode,
@@ -218,11 +202,10 @@ def test_LlamaDecoder_inference(
     kv_cache_len,
     pcc,
     model_config_str,
-    n_devices,
     # model_location_generator,
     device,
 ):
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaDecoder_inference(
@@ -234,7 +217,6 @@ def test_LlamaDecoder_inference(
         kv_cache_len,
         pcc,
         model_config,
-        n_devices
         # tt_cache_path,
         # model_location_generator,
     )
