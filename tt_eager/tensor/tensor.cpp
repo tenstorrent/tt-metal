@@ -16,7 +16,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-
+#include "queue/queue.hpp"
 
 
 using namespace tt::constants;
@@ -77,6 +77,15 @@ void Tensor::deallocate(bool force) {
 }
 
 
+Tensor Tensor::to(CommandQueue & queue, const MemoryConfig & mem_config) const {
+    ZoneScoped;
+    if (storage_type() == StorageType::DEVICE) {
+        TT_ASSERT(this->device() == queue.device() && "Currently do not support moving between devices");
+        return *this;
+    }
+    tensor_impl::validate_on_device_dtype_and_layout(queue.device(), this->dtype(), this->layout());
+    return tensor_impl::to_device_wrapper(*this, queue.device(), mem_config, queue);
+}
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     ZoneScoped;
