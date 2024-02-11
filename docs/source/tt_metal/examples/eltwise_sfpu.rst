@@ -34,12 +34,12 @@ compute, and writer engines.
 
     constexpr uint32_t src0_cb_index = CB::c_in0;
     constexpr uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size_in_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size_in_bytes);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 2;
-    CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
+    CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size_in_bytes, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size_in_bytes);
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
 We will create one input circular buffers to accommodate our input tensor,
@@ -60,6 +60,24 @@ parameters here will suffice.
 
 These two parameters essentially tell the kernel how much data we'll be moving
 in one invocation.
+
+Data movement kernel data layout
+--------------------------------
+
+We create an activation tensor to feed to the eltwise sfpu op's kernels.
+Although the eltwise sfpu op doesn't functionally care about the data-layout,
+since the example kernel is implemented to accept tiles, for sake of clarity
+and consistency, we `tilize` the activation data before sending it to device.
+
+.. code-block:: cpp
+
+    std::vector<bfloat16> src0_vec = create_random_vector_of_bfloat16<bfloat16>(
+        dram_buffer_size, 1.f, std::chrono::system_clock::now().time_since_epoch().count());
+
+    tilize(src0_vec, TILE_DIM, num_tiles * TILE_DIM);
+
+Calling ``tilize`` on host applies the tilized data layout. For more information,
+please see the :ref:`tilized data layout<Tilized_data_layout>` page.
 
 Compute kernel declaration and compile-time defines
 ---------------------------------------------------
