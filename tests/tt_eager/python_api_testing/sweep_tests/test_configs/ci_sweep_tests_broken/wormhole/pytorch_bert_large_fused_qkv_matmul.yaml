@@ -25,5 +25,4 @@ test-list:
         out-buffer-type: ["DRAM", "L1"]
       output-file: bert_large_fused_qkv_matmul_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"

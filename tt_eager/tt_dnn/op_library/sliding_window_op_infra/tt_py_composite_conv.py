@@ -586,7 +586,11 @@ class TTPyCompositeConv(TTPyOp):
             mem_config = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
             )
-            conv_reader_indices_sharded_tensor = conv_reader_indices_tt_tensor.to(device, mem_config)
+            conv_reader_indices_sharded_tensor = (
+                conv_reader_indices_tt_tensor.to(device, mem_config)
+                if device is not None
+                else conv_reader_indices_tt_tensor
+            )
 
             conv_reader_patterns_cache[sliding_window_op_params_hash] = conv_reader_indices_sharded_tensor
 
@@ -677,7 +681,7 @@ class TTPyCompositeConv(TTPyOp):
                 [R, S, U, V, P_H, P_W],
                 K,
                 False,
-                True,
+                self.bias is not None,
                 fuse_relu,
                 math_fidelity,
                 opt_conv_parall_conf,

@@ -90,6 +90,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
         .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
         .l1_bank_remap = l1_bank_remap,
+        .compute_grid_size = this->compute_with_storage_grid_size()
     });
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
@@ -462,10 +463,10 @@ void Device::configure_command_queue_programs() {
 
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         // Reset the host manager's pointer for this command queue
-        this->manager->reset(cq_id);
+        this->sysmem_manager_->reset(cq_id);
 
         pointers[HOST_CQ_ISSUE_READ_PTR / sizeof(uint32_t)] = (CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->manager->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+        pointers[HOST_CQ_COMPLETION_WRITE_PTR / sizeof(uint32_t)] = (CQ_START + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), cq_id * cq_size, mmio_device_id, channel);
     }
@@ -512,7 +513,13 @@ void Device::configure_command_queue_programs() {
 
 void Device::initialize_command_queue() {
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
-    this->manager = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    hw_command_queues_.resize(num_hw_cqs());
+    sw_command_queues_.resize(num_hw_cqs());
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
+        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
+    }
 
     this->compile_command_queue_programs();
     TT_ASSERT(this->command_queue_programs.size() == 1);
@@ -787,6 +794,17 @@ const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, co
     return bs.get_target_out_path(kernel_name);
 }
 
+HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
+    TT_ASSERT( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
+    return *hw_command_queues_[cq_id];
+}
+
+CommandQueue& Device::command_queue(size_t cq_id) {
+    TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
+    return *sw_command_queues_[cq_id];
+}
 }  // namespace tt_metal
 
 }  // namespace tt

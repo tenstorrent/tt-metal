@@ -8,6 +8,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/common/math.hpp"
+
 using namespace tt::tt_metal;
 
 // Starting L1 address of commands
@@ -101,6 +102,8 @@ struct SystemMemoryCQInterface {
 
         this->completion_fifo_rd_ptr = this->issue_fifo_limit;
         this->completion_fifo_rd_toggle = 0;
+        this->next_completion_fifo_wr_ptr = this->completion_fifo_rd_ptr;
+        this->next_completion_fifo_wr_toggle = 0;
     }
 
     // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B aligned and remaining space is dedicated for completion queue
@@ -118,7 +121,9 @@ struct SystemMemoryCQInterface {
     uint32_t completion_fifo_size;
     uint32_t completion_fifo_limit;  // Last possible FIFO address
     uint32_t completion_fifo_rd_ptr;
+    uint32_t next_completion_fifo_wr_ptr;
     bool completion_fifo_rd_toggle;
+    bool next_completion_fifo_wr_toggle;
 };
 
 class SystemMemoryManager {
@@ -132,6 +137,8 @@ class SystemMemoryManager {
     vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size;
     uint32_t channel_offset;
+    vector<int> cq_to_event;
+    vector<std::mutex> cq_to_event_locks;
 
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
@@ -163,7 +170,17 @@ class SystemMemoryManager {
             this->completion_byte_addrs[cq_id] = completion_tlb_offset + CQ_COMPLETION_READ_PTR % completion_tlb_size;
 
             this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size));
+            this->cq_to_event.push_back(0);
         }
+        vector<std::mutex> temp_mutexes(num_hw_cqs);
+        cq_to_event_locks.swap(temp_mutexes);
+    }
+
+    uint32_t get_next_event(const uint8_t cq_id) {
+        cq_to_event_locks[cq_id].lock();
+        uint32_t next_event = this->cq_to_event[cq_id]++;
+        cq_to_event_locks[cq_id].unlock();
+        return next_event;
     }
 
     void reset(const uint8_t cq_id) {
@@ -171,6 +188,7 @@ class SystemMemoryManager {
         cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;  // In 16B words
         cq_interface.issue_fifo_wr_toggle = 0;
         cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
+        cq_interface.next_completion_fifo_wr_ptr = cq_interface.completion_fifo_rd_ptr;
         cq_interface.completion_fifo_rd_toggle = 0;
     }
 
@@ -204,14 +222,33 @@ class SystemMemoryManager {
         return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
     }
 
-    void issue_queue_reserve_back(uint32_t cmd_size_B, const uint8_t cq_id) const {
+    uint32_t get_completion_queue_read_toggle(const uint8_t cq_id) const {
+        return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
+    }
+
+    uint32_t get_next_completion_queue_write_ptr(const uint8_t cq_id) const {
+        return this->cq_interfaces[cq_id].next_completion_fifo_wr_ptr << 4;
+    }
+
+    uint32_t get_next_completion_queue_write_toggle(const uint8_t cq_id) const {
+        return this->cq_interfaces[cq_id].next_completion_fifo_wr_toggle;
+    }
+
+    void issue_queue_reserve_back(uint32_t cmd_size_B, const uint8_t cq_id) {
         uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
+
+        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        // if (cq_interface
+        //         .issue_fifo_wr_ptr + cmd_size_16B > cq_interface.issue_fifo_limit) {
+
+        //     // If we try reserving past the bounds, we need to wrap
+        //     cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;
+        //     cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
+        // }
 
         uint32_t rd_ptr_and_toggle;
         uint32_t rd_ptr;
         uint32_t rd_toggle;
-
-        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
         do {
             rd_ptr_and_toggle = get_cq_issue_rd_ptr<true>(this->device_id, cq_id, this->cq_size);
             rd_ptr = rd_ptr_and_toggle & 0x7fffffff;
@@ -268,16 +305,35 @@ class SystemMemoryManager {
         }
     }
 
-    void completion_queue_wait_front(const uint8_t cq_id) {
+    void completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
         uint32_t write_ptr_and_toggle;
         uint32_t write_ptr;
         uint32_t write_toggle;
         const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+
         do {
             write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
             write_ptr = write_ptr_and_toggle & 0x7fffffff;
             write_toggle = write_ptr_and_toggle >> 31;
-        } while (cq_interface.completion_fifo_rd_ptr == write_ptr and cq_interface.completion_fifo_rd_toggle == write_toggle);
+        } while (cq_interface.completion_fifo_rd_ptr == write_ptr and cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition);
+    }
+
+    void completion_queue_reserve_back(uint32_t cmd_size_B, const uint8_t cq_id) {
+        uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
+        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        while ((cq_interface.next_completion_fifo_wr_ptr < cq_interface.completion_fifo_rd_ptr and cq_interface.next_completion_fifo_wr_ptr + cmd_size_16B > cq_interface.completion_fifo_rd_ptr)
+        or (cq_interface.next_completion_fifo_wr_ptr == cq_interface.completion_fifo_rd_ptr and cq_interface.next_completion_fifo_wr_toggle != cq_interface.completion_fifo_rd_toggle));
+    }
+
+    void next_completion_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+        uint32_t push_size_16B = align(push_size_B, 32) >> 4;
+        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        cq_interface.next_completion_fifo_wr_ptr += push_size_16B;
+
+        if (cq_interface.next_completion_fifo_wr_ptr >= cq_interface.completion_fifo_limit) {
+            cq_interface.next_completion_fifo_wr_ptr -= cq_interface.completion_fifo_size;
+            cq_interface.next_completion_fifo_wr_toggle = not cq_interface.next_completion_fifo_wr_toggle;
+        }
     }
 
     void send_completion_queue_read_ptr(const uint8_t cq_id) const {
@@ -302,13 +358,19 @@ class SystemMemoryManager {
         cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
     }
 
+    void wrap_next_completion_queue_wr_ptr(const uint8_t cq_id) {
+        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        cq_interface.next_completion_fifo_wr_ptr = cq_interface.issue_fifo_limit;
+        cq_interface.next_completion_fifo_wr_toggle = not cq_interface.next_completion_fifo_wr_toggle;
+    }
+
     void completion_queue_pop_front(uint32_t data_read_B, const uint8_t cq_id) {
         uint32_t data_read_16B = align(data_read_B, 32) >> 4;
 
         SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
         cq_interface.completion_fifo_rd_ptr += data_read_16B;
         if (cq_interface.completion_fifo_rd_ptr >= cq_interface.completion_fifo_limit) {
-            cq_interface.completion_fifo_rd_ptr = cq_interface.command_issue_region_size >> 4;
+            cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
             cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
         }
 

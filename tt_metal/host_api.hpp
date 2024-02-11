@@ -7,6 +7,7 @@
 #include <optional>
 #include <variant>
 #include <vector>
+#include <future>
 #include "common/core_coord.h"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
@@ -128,7 +129,7 @@ CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, Co
  * | Argument  | Description                                                    | Type                         | Valid Range | Required |
  * |-----------|----------------------------------------------------------------|------------------------------|-------------|----------|
  * | program   | The program containing the circular buffer                     | Program &                    |             | Yes      |
- * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |             | Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       |    Yes      |
 */
 const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle);
 
@@ -140,7 +141,7 @@ const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle c
  * | Argument   | Description                                                    | Type                         | Valid Range | Required |
  * |------------|----------------------------------------------------------------|------------------------------|-------------|----------|
  * | program    | The program containing the circular buffer                     | Program &                    |             | Yes      |
- * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |             | Yes      |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       | Yes         |          |
  * | total_size | New size of the circular buffer in bytes                       | uint32_t                     |             | Yes      |
 */
 void UpdateCircularBufferTotalSize(Program &program, CBHandle cb_handle, uint32_t total_size);
@@ -167,7 +168,7 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
  * | Argument  | Description                                                                              | Type                         | Valid Range | Required |
  * |-----------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
  * | program   | The program containing the circular buffer                                               | Program &                    |             | Yes      |
- * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |             | Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
  * | buffer    | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  */
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer);
@@ -219,7 +220,7 @@ void DeallocateBuffer(Buffer &buffer);
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                    |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
  */
@@ -264,7 +265,7 @@ std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kerne
  * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &                  |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, std::vector<uint32_t>& dst, bool blocking);
 
 /**
  * Reads a buffer from the device
@@ -278,7 +279,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  * | dst          | The memory where the result will be stored                             | void*                               |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, void* dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void * dst, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -292,7 +293,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  * | src          | The vector we are writing to the device                                | vector<uint32_t> &                  |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, std::vector<uint32_t>& src, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -306,7 +307,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  * | src          | The memory we are writing to the device                                | const void*                         |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, const void* src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
 
 /**
  * Writes a program to the device and launches it
@@ -315,13 +316,13 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &              |                                    | Yes      |
  * | program      | The program that will be executed on the device that cq is bound to    | Program &                     |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  * | trace        | The trace object which represents the history of previously issued     | optional<reference_wrapper<Trace>>                       |                                    | Yes      |
  * |              | commands                                                               |                               |                                    |          |
  */
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace = {});
+void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace = {});
 
 /**
  * Blocks until all previously dispatched commands on the device have completed
@@ -330,7 +331,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, std::opti
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &              |                                    | Yes      |
  */
 void Finish(CommandQueue& cq);
 
@@ -381,6 +382,15 @@ void EnqueueTrace(Trace& trace, bool blocking);
  * */
 void DumpDeviceProfileResults(Device *device, const Program &program);
 
+// namespace experimental
+// {
+//     struct Event{
+//         uint32_t id;
+//         uint32_t cq_id;
+//     };
+
+//     void RecordEvent (Event & e);
+// }
 
 }  // namespace tt_metal
 

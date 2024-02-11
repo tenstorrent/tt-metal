@@ -20,7 +20,7 @@ namespace host_tests {
 namespace multi_device_tests {
 TEST_F(CommandQueueMultiDeviceFixture, TestAccessCommandQueue) {
     for (unsigned int device_id = 0; device_id < num_devices_; device_id++) {
-        EXPECT_NO_THROW(detail::GetCommandQueue(devices_[device_id]));
+        EXPECT_NO_THROW(devices_[device_id]->command_queue());
     }
 }
 
@@ -32,9 +32,9 @@ TEST(FastDispatchHostSuite, TestCannotAccessCommandQueueForClosedDevice) {
     }
     const unsigned int device_id = 0;
     Device* device = CreateDevice(device_id);
-    EXPECT_NO_THROW(detail::GetCommandQueue(device));
+    EXPECT_NO_THROW(device->command_queue());
     CloseDevice(device);
-    EXPECT_ANY_THROW(detail::GetCommandQueue(device));
+    EXPECT_ANY_THROW(device->command_queue());
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, TestDirectedLoopbackToUniqueHugepage) {

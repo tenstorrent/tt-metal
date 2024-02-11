@@ -80,6 +80,8 @@ namespace basic_tests {
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
 
+    GTEST_SKIP() << "Skipping trace test until restart support added back in";
+
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 

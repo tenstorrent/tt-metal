@@ -95,7 +95,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
 
     vector<uint32_t> out_vec;
     {
-        CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+        CommandQueue& cq = device->command_queue();
 
         // Enqueue program inputs
         Buffer buf(device, NUM_TILES * 2048, 2048, BufferType::DRAM);

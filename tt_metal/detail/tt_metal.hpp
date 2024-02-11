@@ -81,6 +81,7 @@ namespace tt::tt_metal{
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
         void LaunchProgram(Device *device, Program &program);
+        void LaunchProgram(Device *device, std::shared_ptr<Program> program);
 
         /**
          *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`
@@ -274,26 +275,10 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline CommandQueue &GetCommandQueue(Device *device)
-        {
-            detail::DispatchStateCheck(true);
-            // For now there is only one SW CommandQueue per device
-            static std::vector<std::unique_ptr<CommandQueue>> command_queues( GetNumAvailableDevices() );
-            chip_id_t id = device->id();
-            TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
-            TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
-            static std::mutex cq_creation_mutex;
-            {
-                std::lock_guard<std::mutex> lock(cq_creation_mutex);
-                command_queues[device->id()] = std::make_unique<CommandQueue>(device, 0);
-            }
-            return *(command_queues[id]);
-        }
-
         inline void Synchronize(Device *device)
         {
             if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                Finish(GetCommandQueue(device));
+                Finish(device->command_queue());
             }
         }
 

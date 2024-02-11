@@ -31,11 +31,12 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors[0].storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensors[0].buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(input_tensors[0].memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(this->num_links > 0);
     if (this->receiver_device_id == this->sender_device_id) {
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= 2, "2 Device ring requires at least 2 eth connections for ring gather");
+        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= 1, "Requires at least 1 eth connection between sender and receiver device");
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->sender_device_id).size() >= 1, "Requires at least 1 eth connection between sender and receiver device");
+        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender and receiver device");
+        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender and receiver device");
     }
 }
 
@@ -51,12 +52,13 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core(input_tensors.at(0), output_tensors.at(0), this->dim, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id);
+    return all_gather_multi_core(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id);
 }
 
 tt::stl::reflection::Attributes AllGather::attributes() const {
     return {
         {"dim", this->dim},
+        {"num_links", this->num_links},
         {"ring_size", this->ring_size},
         {"ring_index", this->ring_index},
         {"receiver_device_id", this->receiver_device_id},
@@ -65,7 +67,7 @@ tt::stl::reflection::Attributes AllGather::attributes() const {
     };
 }
 
-std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, uint32_t dim, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const MemoryConfig& output_mem_config) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
@@ -79,7 +81,7 @@ std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, uint32_
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
         chip_id_t receiver_device_id = input_tensors[(i + 1) % input_tensors.size()].device()->id();
         chip_id_t sender_device_id = input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id();
-        ops.emplace_back(AllGather{dim, static_cast<uint32_t>(input_tensors.size()), i, receiver_device_id, sender_device_id, output_mem_config});
+        ops.emplace_back(AllGather{dim, num_links, static_cast<uint32_t>(input_tensors.size()), i, receiver_device_id, sender_device_id, output_mem_config});
         output_tensors.push_back(operation::run(ops[i], {input_tensors[i]}).at(0));
     }
     if (tt::tt_metal::operation::skip_profile) {

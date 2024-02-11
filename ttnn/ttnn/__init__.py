@@ -4,7 +4,9 @@
 
 import pathlib
 
-MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
+TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
+MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
+TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
 from tt_lib.ttnn import TTNN_ENABLE_LOGGING
 
@@ -42,8 +44,14 @@ from ttnn.core import (
 )
 
 from ttnn.validation import validate_input_tensor
+import ttnn.tracer
 
-from ttnn.decorators import register_operation, disable_validate_decorator
+from ttnn.decorators import (
+    register_operation,
+    enable_debug_decorator,
+    override_pcc_of_debug_decorator,
+    disable_validate_decorator,
+)
 
 from ttnn.device import open, close
 
@@ -110,6 +118,10 @@ from ttnn.operations.unary import (
     asinh,
     acosh,
     atanh,
+    logical_not_unary,
+    logical_noti,
+    logit,
+    clone,
 )
 
 from ttnn.operations.binary import (
@@ -157,6 +169,21 @@ from ttnn.operations.activation import (
     swish,
 )
 
+from ttnn.operations.math import (
+    i0,
+    isfinite,
+    isinf,
+    isnan,
+    isneginf,
+    isposinf,
+    lgamma,
+    log10,
+    log1p,
+    log2,
+    multigammaln,
+    neg,
+)
+
 from ttnn.operations.normalization import (
     layer_norm,
     rms_norm,
@@ -169,5 +196,3 @@ from ttnn.operations.pooling import (
     MaxPool2d,
     average_pool2d,
 )
-
-import ttnn.tracer

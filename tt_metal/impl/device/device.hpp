@@ -23,6 +23,7 @@ enum class BufferType;
 class Buffer;
 class Program;
 class JitBuildEnv;
+class HWCommandQueue;
 class CommandQueue;
 
 namespace detail {
@@ -33,6 +34,8 @@ namespace detail {
 struct ProgramDeleter {
     void operator()(Program* p);
 };
+
+
 }
 
 using on_close_device_callback = std::function<void ()>;
@@ -68,11 +71,11 @@ class Device {
     ~Device();
 
     // TODO: Add copy/move semantics
-    Device(const Device &other): num_hw_cqs_(other.num_hw_cqs_) { }
-    Device& operator=(const Device &other) { return *this; }
+    Device(const Device &other) = delete;
+    Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other): num_hw_cqs_(other.num_hw_cqs_) { }
-    Device& operator=(Device &&other) { return *this; }
+    Device(Device &&other) = default;
+    Device& operator=(Device &&other) = default;
 
     tt::ARCH arch() const;
 
@@ -149,8 +152,6 @@ class Device {
     // Set of logical storage only core coordinates
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
 
-    std::unique_ptr<SystemMemoryManager> manager;
-
     // Set of logical dispatch core coordinates
 
     // Set of logical ethernet core coordinates
@@ -169,8 +170,9 @@ class Device {
     const JitBuildState& build_firmware_state(JitBuildProcessorType t, int i) const;
     const JitBuildState& build_kernel_state(JitBuildProcessorType t, int i) const;
     const JitBuildStateSubset build_kernel_states(JitBuildProcessorType t) const;
-
-   private:
+    SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
+    HWCommandQueue& hw_command_queue(size_t cq_id = 0);
+    CommandQueue& command_queue(size_t cq_id = 0);
     void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
@@ -212,6 +214,11 @@ class Device {
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
 
+    // SystemMemoryManager is the interface to the hardware command queue
+    std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
+    std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
+    std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+    vector<std::unique_ptr<Program, detail::ProgramDeleter>> command_queue_programs_;
     const uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;

@@ -408,7 +408,7 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
         );
 
 
-    // CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+    // CommandQueue& cq = device->command_queue();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

@@ -316,7 +316,7 @@ bool move_tiles_to_dram(
         }
     }
 
-    EnqueueWriteBuffer(cq, buffer, tiles, false);
+    EnqueueWriteBuffer(cq, std::ref(buffer), tiles, false);
     return pass;
 }
 
@@ -397,7 +397,7 @@ int main(int argc, char **argv) {
             per_core_N);
 
 
-        CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+        CommandQueue& cq = device->command_queue();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

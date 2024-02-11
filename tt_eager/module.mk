@@ -20,7 +20,7 @@ TT_LIBS_TO_BUILD = tt_eager/tensor \
 
 ifdef TT_METAL_ENV_IS_DEV
 TT_LIBS_TO_BUILD += \
-	tt_eager/tt_lib/dev_install
+	$(TT_LIB_LIB_LOCAL_SO)
 endif
 
 tt_eager: $(TT_LIBS_TO_BUILD)

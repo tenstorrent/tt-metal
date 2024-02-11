@@ -285,7 +285,7 @@ def run_test_FalconDecoder_inference(
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
-    [("BFLOAT8_B-SHARDED", 0.96, 0.99, 0.96), ("BFLOAT16-SHARDED", 0.97, 0.99, 0.96)],
+    [("BFLOAT8_B-SHARDED", 0.96, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.97, 0.99, 0.99)],
 )
 def test_FalconDecoder_inference(
     model_version,

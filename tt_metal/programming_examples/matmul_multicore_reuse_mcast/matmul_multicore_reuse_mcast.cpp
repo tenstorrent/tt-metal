@@ -53,7 +53,7 @@ void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vect
     * Setup program to execute along with its buffers and kernels to use
     * Core range is just single core
     */
-    CommandQueue& cq = tt_metal::detail::GetCommandQueue(device);
+    CommandQueue& cq = device->command_queue();
     Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;

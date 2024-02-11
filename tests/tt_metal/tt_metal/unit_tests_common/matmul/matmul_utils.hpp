@@ -134,7 +134,7 @@ inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> t
     int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
     int tile_id = 0;
-    CommandQueue& cq = tt_metal::detail::GetCommandQueue(device);
+    CommandQueue& cq = device->command_queue();
     vector<uint32_t> tiles;
     for (int i = 0; i < tiles_r; i++) {
         for (int j = 0; j < tiles_c; j++) {

@@ -11,7 +11,7 @@ The following set of commands will generate perf reports for ``resnet`` as an ex
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
 
-.. image:: ../../_static/ops_perf_location_example.png
+.. image:: ../_static/ops_perf_location_example.png
     :alt: CSV path
 
 The ``-n`` option is used to give a shorter version of the test name to be appended to the CSV file name and be used as the folder name.

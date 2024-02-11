@@ -57,6 +57,9 @@ void kernel_main() {
 
         db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
+        uint32_t completion_data_size = header->completion_data_size;
+        completion_queue_reserve_back(completion_data_size);
+        write_event(uint32_t(&header->event));
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
             cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
             cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
@@ -81,11 +84,10 @@ void kernel_main() {
             wait_for_program_completion(num_workers);
         } else {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
-            write_buffers<host_completion_queue_write_ptr_addr>(
+            write_buffers(
                 db_cb_config,
                 remote_db_cb_config,
                 command_ptr,
-                completion_queue_start_addr,
                 num_buffer_transfers,
                 is_sharded,
                 sharded_buffer_num_cores,
@@ -97,6 +99,7 @@ void kernel_main() {
             notify_host_complete<host_finish_addr>();
         }
 
+        completion_queue_push_back<completion_queue_start_addr, host_completion_queue_write_ptr_addr>(completion_data_size);
         if (not restart) {
             // notify producer that it has completed a command
             noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);

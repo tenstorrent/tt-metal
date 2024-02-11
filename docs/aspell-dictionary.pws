@@ -1,4 +1,4 @@
-personal_ws-1.1 en 474 
+personal_ws-1.1 en 484 
 ABI
 ADDI
 API
@@ -231,6 +231,7 @@ dprint
 dst
 dt
 dtype
+dtypes
 durations
 elementwise
 elseif
@@ -299,11 +300,13 @@ jupyter
 labelled
 ld
 lez
+lgamma
 linenos
 llk
 llrt
 loadi
 loadis
+logit
 loopback
 lt
 lte
@@ -318,18 +321,21 @@ mish
 modindex
 mul
 multicast
+multigammaln
 multihead
 namespace
 nans
 ncrisc
 nd
 ne
+networkx
 nez
 noc
 nodebias
 nof
 nop
 nosgn
+noti
 ns
 ntiles
 num
@@ -414,11 +420,13 @@ src
 srca
 srcb
 stderr
+stdout
 storages
 struct
 submodule
 subvec
 sudo
+svg
 sys
 tanh
 teardown
@@ -437,6 +445,7 @@ trisc
 triscs
 tt
 ttDNN
+ttl
 ttnn
 ttnn's
 txt
@@ -450,6 +459,7 @@ unicast
 uninit
 unpad
 unsharded
+unsqueeze
 untilize
 untilized
 untilizing

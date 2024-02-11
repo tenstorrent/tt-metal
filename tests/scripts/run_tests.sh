@@ -105,6 +105,7 @@ run_frequent_api_pipeline_tests() {
 
     # Please put model runs in here from now on - thank you
     if [[ $dispatch_mode == "slow" ]]; then
+        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_frequent
         echo "Running Python API unit tests in SD for frequent..."
         ./tests/scripts/run_python_api_unit_tests.sh
     else

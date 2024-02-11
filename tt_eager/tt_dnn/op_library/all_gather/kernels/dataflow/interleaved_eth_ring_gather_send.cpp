@@ -25,11 +25,14 @@ void kernel_main() {
     constexpr uint32_t num_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t rem_num_pages = get_compile_time_arg_val(10);
     constexpr uint32_t rem_num_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t global_start_idx = get_compile_time_arg_val(12);
-    constexpr uint32_t row_offset = get_compile_time_arg_val(13);
-    constexpr uint32_t col_offset = get_compile_time_arg_val(14);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(15);
-    constexpr uint32_t num_cols = get_compile_time_arg_val(16);
+    constexpr uint32_t input_start_idx = get_compile_time_arg_val(12);
+    constexpr uint32_t output_start_idx = get_compile_time_arg_val(13);
+    constexpr uint32_t row_start_idx = get_compile_time_arg_val(14);
+    constexpr uint32_t col_start_idx = get_compile_time_arg_val(15);
+    constexpr uint32_t row_offset = get_compile_time_arg_val(16);
+    constexpr uint32_t col_offset = get_compile_time_arg_val(17);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(18);
+    constexpr uint32_t num_cols = get_compile_time_arg_val(19);
 
     const InterleavedAddrGenFast<src_is_dram> s = {
         .bank_base_address = src_addr,
@@ -49,34 +52,34 @@ void kernel_main() {
     uint32_t buffer_addrs[2] = {buffer0_addr, buffer1_addr};
     uint64_t receiver_buffer_addrs[2] = {get_noc_addr(receiver_noc_x, receiver_noc_y, buffer_addrs[0]), get_noc_addr(receiver_noc_x, receiver_noc_y, buffer_addrs[1])};
 
-    const auto& get_and_send_data = [&](uint32_t& page_idx, uint32_t& curr_idx, uint32_t& row_idx, uint32_t& col_idx, const uint32_t num_pages, const uint32_t num_bytes, const uint32_t num_bytes_per_send, const uint32_t num_bytes_per_send_word_size, uint32_t& curr_buffer_idx, uint32_t& next_buffer_idx) __attribute__((always_inline)) {
+    const auto& get_and_send_data = [&](uint32_t& input_page_idx, uint32_t& output_page_idx, uint32_t& row_idx, uint32_t& col_idx, const uint32_t num_pages, const uint32_t num_bytes, const uint32_t num_bytes_per_send, const uint32_t num_bytes_per_send_word_size, uint32_t& curr_buffer_idx, uint32_t& next_buffer_idx) __attribute__((always_inline)) {
         uint32_t local_eth_l1_curr_src_addr = buffer_addrs[curr_buffer_idx] + 32;
-        const uint32_t end_read_idx = page_idx + num_pages;
-        for (; page_idx < end_read_idx; ++page_idx) {
-            noc_async_read_tile(page_idx, s, local_eth_l1_curr_src_addr);
+        const uint32_t end_read_idx = input_page_idx + num_pages;
+        for (; input_page_idx < end_read_idx; ++input_page_idx) {
+            noc_async_read_tile(input_page_idx, s, local_eth_l1_curr_src_addr);
             local_eth_l1_curr_src_addr += page_size;
         }
 
         local_eth_l1_curr_src_addr = buffer_addrs[curr_buffer_idx] + 32;
 
-        volatile tt_l1_ptr uint32_t * start_idx_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_addrs[curr_buffer_idx]);
-        start_idx_addr[0] = curr_idx;
-        start_idx_addr[1] = col_idx;
-        start_idx_addr[2] = row_idx;
+        volatile tt_l1_ptr uint32_t * header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_addrs[curr_buffer_idx]);
+        header[0] = output_page_idx;
+        header[1] = col_idx;
+        header[2] = row_idx;
         eth_noc_async_read_barrier();
 
         for (uint32_t i = 0; i < num_pages; ++i) {
-            noc_async_write_tile(curr_idx, d, local_eth_l1_curr_src_addr);
+            noc_async_write_tile(output_page_idx, d, local_eth_l1_curr_src_addr);
             local_eth_l1_curr_src_addr += page_size;
-            curr_idx++;
+            output_page_idx++;
             col_idx++;
             if (col_idx == num_cols) {
-                curr_idx += col_offset;
+                output_page_idx += col_offset;
                 col_idx = 0;
                 row_idx++;
                 if (row_idx == num_rows) {
                     row_idx = 0;
-                    curr_idx += row_offset;
+                    output_page_idx += row_offset;
                 }
             }
         }
@@ -109,21 +112,21 @@ void kernel_main() {
     constexpr uint32_t num_bytes_per_send = num_bytes;
     constexpr uint32_t num_bytes_per_send_word_size = num_bytes_per_send >> 4;
 
-    uint32_t page_idx = 0;
-    uint32_t curr_idx = global_start_idx;
-    uint32_t col_idx = 0;
-    uint32_t row_idx = 0;
+    uint32_t input_page_idx = input_start_idx;
+    uint32_t output_page_idx = output_start_idx;
+    uint32_t col_idx = col_start_idx;
+    uint32_t row_idx = row_start_idx;
 
     uint32_t curr_buffer_idx = 0, next_buffer_idx = 1;
     // How many chunks we split our local device data into
     for (uint32_t i = 0; i < num_full_chunks; ++i) {
-        get_and_send_data(page_idx, curr_idx, row_idx, col_idx, num_pages, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size, curr_buffer_idx, next_buffer_idx);
+        get_and_send_data(input_page_idx, output_page_idx, row_idx, col_idx, num_pages, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size, curr_buffer_idx, next_buffer_idx);
     }
 
     if constexpr (rem_num_pages > 0) {
         // TODO: Are these necessary?
         constexpr uint32_t rem_num_bytes_per_send = rem_num_bytes;
         constexpr uint32_t rem_num_bytes_per_send_word_size = rem_num_bytes_per_send >> 4;
-        get_and_send_data(page_idx, curr_idx, row_idx, col_idx, rem_num_pages, rem_num_bytes, rem_num_bytes_per_send, rem_num_bytes_per_send_word_size, curr_buffer_idx, next_buffer_idx);
+        get_and_send_data(input_page_idx, output_page_idx, row_idx, col_idx, rem_num_pages, rem_num_bytes, rem_num_bytes_per_send, rem_num_bytes_per_send_word_size, curr_buffer_idx, next_buffer_idx);
     }
 }

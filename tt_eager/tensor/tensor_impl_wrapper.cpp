@@ -35,15 +35,15 @@ uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpack
     return packed_buffer_size_bytes_map.at(dtype)(volume_unpacked_data);
 }
 
-Tensor to_host_wrapper(const Tensor &tensor) {
-    const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_host_map = {
+Tensor to_host_wrapper(const Tensor &tensor, bool blocking) {
+    const static std::map<DataType, std::function<Tensor(const Tensor &, bool blocking)>> to_host_map = {
         {DataType::BFLOAT16, &to_host<bfloat16>},
         {DataType::FLOAT32, &to_host<float>},
         {DataType::UINT32, &to_host<uint32_t>},
         {DataType::BFLOAT8_B, &to_host<uint32_t>},
         {DataType::UINT16, &to_host<uint16_t>},
     };
-    return to_host_map.at(tensor.dtype())(tensor);
+    return to_host_map.at(tensor.dtype())(tensor, blocking);
 }
 
 

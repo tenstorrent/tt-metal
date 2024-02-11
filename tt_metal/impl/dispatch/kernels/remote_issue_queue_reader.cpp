@@ -41,7 +41,7 @@ void kernel_main() {
         // Producer information
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
         volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
-        uint32_t data_size = header->data_size;
+        uint32_t data_size = header->issue_data_size;
         uint32_t num_buffer_transfers = header->num_buffer_transfers;
         uint32_t page_size = header->page_size;
         uint32_t producer_cb_size = header->producer_cb_size;
