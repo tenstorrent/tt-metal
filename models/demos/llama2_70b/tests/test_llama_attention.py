@@ -105,23 +105,10 @@ def run_test_LlamaAttention_inference(
     hidden_dim = configuration.dim
     head_dim = hidden_dim // n_heads
 
-    # devices setup
-    devices = [
-        device,
-        device,
-        device,
-        device,
-        device,
-        device,
-        device,
-        device,
-    ]  # let's assume we parallelize over the same devices because we only got one
-
-    # Prepare models
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaAttention_model = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
+    tt_LlamaAttention_model = TtLlamaAttention(device, state_dict, base_url, layer_num, model_config, configuration)
 
     generation_start_pos = 127
     generation_length = 8
@@ -146,7 +133,7 @@ def run_test_LlamaAttention_inference(
 
         # TT hardware execution -------------------------------------------------------------
         attention_input, start_pos, rot_mat, attn_mask = tt_LlamaAttention_model.prepare_inputs(
-            pt_attention_input, start_pos
+            tt_attention_input, start_pos
         )
 
         tt_out = tt_LlamaAttention_model(
@@ -191,8 +178,8 @@ def run_test_LlamaAttention_inference(
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
         cache_length_to_check = generation_start_pos + generation_length + 1
-        cache_pt = cache_pt[:, :, :cache_length_to_check, :]
-        cache_tt = cache_tt[:, :, :cache_length_to_check, :]
+        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
         logger.info(f"Output: {output_pcc}")
 
