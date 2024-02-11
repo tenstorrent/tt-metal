@@ -105,7 +105,6 @@ def run_test_LlamaMLP_inference(
             layer_num,
             configuration.dim,
             model_config,
-            tt_cache_path=None,
         )
         tt_mlp_input = torch2tt_tensor(mlp_input, device)
 
