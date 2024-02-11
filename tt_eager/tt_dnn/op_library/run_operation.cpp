@@ -156,9 +156,11 @@ std::vector<Tensor> run_host_operation(const HostOperation& operation, const std
 
 inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-std::vector<Tensor> run_device_operation(
+void run_device_operation(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    CommandQueue &q,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
     ZoneScoped;
@@ -215,14 +217,12 @@ std::vector<Tensor> run_device_operation(
             return std::make_shared<Program>(std::move(program_with_callbacks.program));
         };
     }
-
     operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
-    auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
 
     // Enqueue or Launch Program
     std::visit(
-        [&operation, &input_tensors, &optional_input_tensors](auto&& program) {
+        [&operation, &input_tensors, &optional_input_tensors, &q](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
             using T = std::decay_t<decltype(program)>;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>> ) {
@@ -234,11 +234,11 @@ std::vector<Tensor> run_device_operation(
                 }
                 if (USE_FAST_DISPATCH) {
 #ifndef TTNN_ENABLE_LOGGING
-                    EnqueueProgram(device->command_queue(), program, false);
+                    EnqueueProgram(q, program, false);
 #else
                     const auto start{std::chrono::steady_clock::now()};
-                    EnqueueProgram(device->command_queue(), program, false);
-                    Finish(device->command_queue());
+                    EnqueueProgram(q, program, false);
+                    Finish(q);
                     const auto end{std::chrono::steady_clock::now()};
                     const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                     tt::log_info(
@@ -269,8 +269,19 @@ std::vector<Tensor> run_device_operation(
     if (!operation::skip_profile) {
         op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
     }
+}
+
+std::vector<Tensor> run_device_operation_default_cq(
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    auto device = detail::get_device(input_tensors, optional_input_tensors);
+    auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
+    run_device_operation( operation, input_tensors, output_tensors, device->command_queue(), optional_input_tensors, optional_output_tensors);
     return output_tensors;
 }
+
 }  // namespace detail
 
 std::vector<Tensor> run(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
@@ -281,8 +292,19 @@ std::vector<Tensor> run(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    return detail::decorate_operation(detail::run_device_operation)(operation, input_tensors, optional_input_tensors, optional_output_tensors);
+    const std::vector<std::optional<Tensor>>& optional_output_tensors ) {
+    return detail::decorate_operation(detail::run_device_operation_default_cq)(operation, input_tensors, optional_input_tensors, optional_output_tensors);
+}
+
+void run(
+    CommandQueue & q,
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors
+    ) {
+    return detail::run_device_operation(operation, input_tensors, output_tensors, q, optional_input_tensors, optional_output_tensors);
 }
 
 std::vector<Tensor> run_without_autoformat(
