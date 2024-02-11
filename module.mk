@@ -106,10 +106,10 @@ ifneq (,$(filter "$(ARCH_NAME)","wormhole" "wormhole_b0"))
 endif
 
 set_up_kernels:
-	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short prepare
+	$(MAKE) -f $(TT_METAL_HOME)/tt_metal/hw/Makefile-runtime -C $(TT_METAL_HOME)/tt_metal/hw prepare
 
 set_up_kernels/clean:
-	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
+	$(MAKE) -f $(TT_METAL_HOME)/tt_metal/hw/Makefile-runtime -C $(TT_METAL_HOME)/tt_metal/hw clean
 
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
