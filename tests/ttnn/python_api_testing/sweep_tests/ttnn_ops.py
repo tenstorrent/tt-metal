@@ -318,8 +318,33 @@ def attention_softmax_nomask(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(x, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.transformer.attention_softmax(t0, head_size=None, attention_mask=None)
+
+    return ttnn_tensor_to_torch(t2, output_mem_config)
+
+
+def attention_softmax(
+    x,
+    y,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    y[y <= 0.50] = 0
+    y[y > 0.50] = 1
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    if scalar < 0:
+        scalar = -scalar
+
+    t2 = ttnn.transformer.attention_softmax(t0, head_size=scalar, attention_mask=t1)
 
     return ttnn_tensor_to_torch(t2, output_mem_config)

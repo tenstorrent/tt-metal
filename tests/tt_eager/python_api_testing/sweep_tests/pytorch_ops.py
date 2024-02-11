@@ -1327,3 +1327,18 @@ def attention_softmax_nomask(x, y, *args, **kwargs):
     )
 
     return torch_output_tensor
+
+
+def attention_softmax(x, y, *args, scalar, **kwargs):
+    y[y <= 0.50] = 0
+    y[y > 0.50] = 1
+    if scalar < 0:
+        scalar = -scalar
+
+    torch_output_tensor = ttnn.transformer._torch_attention_softmax(
+        x,
+        head_size=None,
+        attention_mask=y,
+    )
+
+    return torch_output_tensor
