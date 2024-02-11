@@ -29,7 +29,7 @@ $(TT_LIB_LIB): $(TT_LIB_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_
 	$(CXX) $(TT_LIB_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $(TT_LIB_OBJS) $(TT_LIB_LDFLAGS)
 
 $(TT_LIB_LIB_LOCAL_SO): $(TT_LIB_LIB)
-	ln -sf $^ $@
+	cp -fp $^ $@
 
 # Compile obj files
 $(OBJDIR)/tt_eager/tt_lib/csrc/%.o: tt_eager/tt_lib/csrc/%.cpp
