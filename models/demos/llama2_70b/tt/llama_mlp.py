@@ -18,7 +18,6 @@ class TtLlamaMLP(nn.Module):
         layer_num,
         hidden_size: int,
         model_config,
-        tt_cache_path,
     ):
         super().__init__()
 

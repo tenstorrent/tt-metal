@@ -11,26 +11,24 @@ import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
 from models.demos.llama2_70b.reference.llama.model import precompute_freqs_cis
 
-# from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
-from models.demos.falcon7b.tt.model_config import (
+from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
+from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
 
 
-class PytorchLlamaAttentionModel(torch.nn.Module):
+class PytorchLlamaDecoderModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
-        self.attention = hf_reference_model.layers[layer_num].attention
+        self.decoder = hf_reference_model.layers[layer_num]
 
         # Disable dropout
-        self.attention.eval()
+        self.decoder.eval()
 
         configuration = hf_reference_model.params
         self.n_heads = configuration.n_heads
@@ -62,7 +60,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
 
         return: (batch, seq, hidden_dim)
         """
-        result = self.attention(
+        result = self.decoder(
             x,
             start_pos,
             freqs_cis,
@@ -71,7 +69,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def run_test_LlamaAttention_inference(
+def run_test_LlamaDecoder_inference(
     device,
     model_version,
     llm_mode,
@@ -106,38 +104,34 @@ def run_test_LlamaAttention_inference(
     head_dim = hidden_dim // n_heads
 
     # PyTorch model --------------------------------------------------------------------
-    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
+    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaAttention_model = TtLlamaAttention(device, state_dict, base_url, layer_num, model_config, configuration)
+    tt_LlamaDecoder_model = TtLlamaDecoder(device, state_dict, base_url, layer_num, model_config, configuration, batch)
 
     generation_start_pos = 127
     generation_length = 8
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
-        pt_attention_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
-        tt_attention_input = pt_attention_input.clone()
+        pt_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
+        tt_input = pt_input.clone()
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
-            pt_attention_input, start_pos
-        )
+        x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs(pt_input, start_pos)
 
-        pytorch_out = pytorch_LlamaAttention_model(
-            attention_input,
+        pytorch_out = pytorch_LlamaDecoder_model(
+            x_input,
             start_pos,
             freqs_cis,
             attn_mask,
         )
 
         # TT hardware execution -------------------------------------------------------------
-        attention_input, start_pos, rot_mat, attn_mask = tt_LlamaAttention_model.prepare_inputs(
-            tt_attention_input, start_pos
-        )
+        x_input, start_pos, rot_mat, attn_mask = tt_LlamaDecoder_model.prepare_inputs(tt_input, start_pos)
 
-        tt_out = tt_LlamaAttention_model(
-            attention_input,
+        tt_out = tt_LlamaDecoder_model(
+            x_input,
             rot_mat,
             start_pos,
             attn_mask,
@@ -149,32 +143,23 @@ def run_test_LlamaAttention_inference(
         logger.info(f"Output: {output_pcc}")
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] Llama2-70b Attention output Passed!")
+            logger.info(f"[start_pos={start_pos}] Llama2-70b Decoder output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Llama2-70b Attention output Failed! PCC value is lower than {pcc}")
+            logger.warning(f"[start_pos={start_pos}] Llama2-70b Decoder output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
     pytorch_layer_present = [
-        pytorch_LlamaAttention_model.attention.cache_k.clone().permute(
+        pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(
             0, 2, 1, 3
         ),  # [batch, n_kv_heads, seq, head_dim]
-        pytorch_LlamaAttention_model.attention.cache_v.clone().permute(
+        pytorch_LlamaDecoder_model.decoder.attention.cache_v.clone().permute(
             0, 2, 1, 3
         ),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware execution -------------------------------------------------------------
-    tt_layer_present = []
-    for layer_past in tt_LlamaAttention_model.layer_past_list:
-        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-    # concat the pasts by heads
-    if len(devices) > 1:
-        tt_layer_present = [
-            torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-        ]
-    else:
-        tt_layer_present = tt_layer_present[0]
+    tt_layer_present = [tt2torch_tensor(cache) for cache in tt_LlamaDecoder_model.attention.layer_past]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
         cache_length_to_check = generation_start_pos + generation_length + 1
@@ -190,9 +175,9 @@ def run_test_LlamaAttention_inference(
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info("Llama2 Attention output Passed!")
+        logger.info("Llama2 Decoder output Passed!")
     else:
-        logger.warning("Llama2 Attention output Failed!")
+        logger.warning("Llama2 Decoder output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
@@ -208,8 +193,8 @@ def run_test_LlamaAttention_inference(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-def test_LlamaAttention_inference(
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED", "BFLOAT8_B-SHARDED"))
+def test_LlamaDecoder_inference(
     model_version,
     llm_mode,
     batch,
@@ -223,7 +208,7 @@ def test_LlamaAttention_inference(
     model_config = get_model_config(model_config_str)
     # tt_cache_path = get_tt_cache_path(model_version)
 
-    run_test_LlamaAttention_inference(
+    run_test_LlamaDecoder_inference(
         device,
         model_version,
         llm_mode,
