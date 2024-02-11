@@ -1,3 +1,3 @@
 # TT-Metal
 
-A low level programming model with user facing [host](./api/host_api.hpp) APIs
+A low level programming model with user facing [host](./host_api.hpp) APIs
