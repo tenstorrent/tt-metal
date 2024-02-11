@@ -113,9 +113,10 @@ inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> t
     int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
     int tile_id = 0;
+    std::vector<uint32_t> tile;
     for(int i = 0; i < tiles_r; i++) {
         for(int j = 0; j < tiles_c; j++) {
-            std::vector<uint32_t> tile;
+            tile.clear();
             tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
             uint32_t dram_addr = (tile_id / device->num_dram_channels()) * tile_size_bytes + dram_buffer_addr;
             int dram_channel = tile_id % device->num_dram_channels();
@@ -135,10 +136,11 @@ inline bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> t
     int start_index = 0;
     int tile_id = 0;
     CommandQueue& cq = device->command_queue();
-    vector<uint32_t> tiles;
+    std::vector<uint32_t> tile;
+    std::vector<uint32_t> tiles;
     for (int i = 0; i < tiles_r; i++) {
         for (int j = 0; j < tiles_c; j++) {
-            std::vector<uint32_t> tile;
+            tile.clear();
             tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
 
             tiles.insert(tiles.end(), tile.begin(), tile.end());
