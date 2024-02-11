@@ -5,6 +5,7 @@
 
 #include "tt_eager/queue/queue.hpp"
 #include "tt_eager/tt_dnn/op_library/operation.hpp"
+#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 
 namespace tt::tt_metal
 {
@@ -30,7 +31,12 @@ namespace tt::tt_metal
     void QueueWaitForEvent(CommandQueue& q, Event&e){}
     void EventSynchronize(Event&e){}
 
-    void EnqueueOperation(CommandQueue& q, operation::DeviceOperation& devop, const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors){}
-    void EnqueueOperation(CommandQueue& q, operation::DeviceOperation& devop, const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_input_tensors, const std::vector<Tensor>& output_tensors){}
+    void EnqueueOperation(CommandQueue& q, operation::DeviceOperation& devop,
+                          const std::vector<Tensor>& input_tensors,
+                          std::vector<Tensor>& output_tensors,
+                          const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                          const std::vector<std::optional<Tensor>>& optional_output_tensors){
+        operation::run( q, devop, input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
+    }
 
 }

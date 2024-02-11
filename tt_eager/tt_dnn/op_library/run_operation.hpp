@@ -259,6 +259,15 @@ std::vector<Tensor> run(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
 );
 
+void run(
+    CommandQueue & q,
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
+);
+
 
 template<typename ConcreteOperation>
 inline std::vector<Tensor> run(
