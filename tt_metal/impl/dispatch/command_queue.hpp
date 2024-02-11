@@ -453,11 +453,6 @@ class CommandQueue
     public:
         CommandQueue () = delete;
         CommandQueue ( Device * device, uint32_t id) : device_ptr(device), cq_id(id){}
-        CommandQueue(const CommandQueue&) = default;
-        CommandQueue(CommandQueue&&) = default;
-        CommandQueue& operator=(const CommandQueue&) = default;
-        CommandQueue& operator=(CommandQueue&&) = default;
-
         ~CommandQueue() {}
 
         template < class F >

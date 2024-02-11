@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     CreateCircularBuffer(
         program,
-        std::set<CoreRange>{CoreRange{.start = core, .end = core}},
+        std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
         {
             {CB::c_in0, in0_t},    // output_grad

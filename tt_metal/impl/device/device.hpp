@@ -220,7 +220,7 @@ class Device {
     std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     vector<std::unique_ptr<Program, detail::ProgramDeleter>> command_queue_programs_;
-    const uint8_t num_hw_cqs_;
+    uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
 };

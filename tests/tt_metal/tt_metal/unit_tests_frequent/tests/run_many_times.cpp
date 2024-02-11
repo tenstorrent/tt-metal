@@ -19,7 +19,7 @@ void RunTest(Device *device) {
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord core(x, y);
-            core_ranges.insert(CoreRange{.start=core, .end=core});
+            core_ranges.insert(CoreRange(core, core));
         }
     }
 
