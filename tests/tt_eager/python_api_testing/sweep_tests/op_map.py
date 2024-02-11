@@ -1064,4 +1064,8 @@ op_map = {
         "tt_lib_op": ttnn_ops.attention_softmax_nomask,
         "pytorch_op": pytorch_ops.attention_softmax_nomask,
     },
+    "ttnn-attention_softmax": {
+        "tt_lib_op": ttnn_ops.attention_softmax,
+        "pytorch_op": pytorch_ops.attention_softmax,
+    },
 }
