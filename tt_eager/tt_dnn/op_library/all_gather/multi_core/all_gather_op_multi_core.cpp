@@ -238,11 +238,7 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
             };
         }
         auto eth_sender_kernel = tt_metal::CreateKernel(
-            program,
-            sender_kernel,
-            eth_sender_core,
-            tt_metal::experimental::SenderEthernetConfig{
-                .compile_args = sender_ct_args});
+            program, sender_kernel, eth_sender_core, tt_metal::experimental::SenderEthernetConfig(sender_ct_args));
 
         eth_sender_kernels.push_back(eth_sender_kernel);
 
@@ -256,8 +252,7 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
             program,
             receiver_kernel,
             eth_receiver_core,
-            tt_metal::experimental::ReceiverEthernetConfig{
-                .compile_args = receiver_ct_args});
+            tt_metal::experimental::ReceiverEthernetConfig(receiver_ct_args));
 
         eth_receiver_kernels.push_back(eth_receiver_kernel);
 

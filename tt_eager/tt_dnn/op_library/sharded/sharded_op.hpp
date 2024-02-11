@@ -111,7 +111,7 @@ inline Tensor interleaved_to_sharded(
     std::optional<const DataType> output_dtype = std::nullopt) {
     TT_FATAL(sharded_mem_config.is_sharded());
     auto bbox = sharded_mem_config.shard_spec.value().grid.bounding_box();
-    auto grid_size = CoreCoord{.x = bbox.end.x + 1, .y = bbox.end.y + 1};
+    CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);
     return operation::run(
                Sharded{
                    .grid_size = grid_size,
