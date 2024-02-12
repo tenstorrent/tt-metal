@@ -8,7 +8,12 @@ import torch
 import torchvision
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model, preprocess_model_parameters
+from ttnn.model_preprocessing import (
+    preprocess_model,
+    preprocess_model_parameters,
+    preprocess_conv2d,
+    fold_batch_norm2d_into_conv2d,
+)
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
@@ -356,6 +361,98 @@ def test_module_with_childen_and_parameters(device, batch_size, m_size, k_size, 
 
     output_tensor = functional_ttnn(input_tensor, parameters)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("use_conv_bias", [True, False])
+def test_conv2d_with_batch_norm2d(device, use_conv_bias):
+    torch.manual_seed(0)
+
+    class TorchModule(torch.nn.Module):
+        def __init__(
+            self,
+            in_planes: int,
+            out_planes: int,
+            use_conv_bias: bool,
+            stride: int = 1,
+            groups: int = 1,
+            dilation: int = 1,
+        ) -> None:
+            super().__init__()
+            self.conv1 = torch.nn.Conv2d(
+                in_planes,
+                out_planes,
+                kernel_size=3,
+                stride=stride,
+                padding=dilation,
+                groups=groups,
+                bias=use_conv_bias,
+                dilation=dilation,
+            )
+            self.bn1 = torch.nn.BatchNorm2d(out_planes)
+
+        def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+            output_tensor = self.conv1(input_tensor)
+            output_tensor = self.bn1(output_tensor)
+            return output_tensor
+
+    def custom_preprocessor(model, name, ttnn_module_args):
+        parameters = {}
+        if isinstance(model, TorchModule):
+            conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
+            parameters["conv1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1)
+        return parameters
+
+    torch_model = TorchModule(in_planes=64, out_planes=64, use_conv_bias=use_conv_bias).eval()
+
+    new_state_dict = {}
+    for name, parameter in torch_model.state_dict().items():
+        if isinstance(parameter, torch.FloatTensor):
+            new_state_dict[name] = torch.rand_like(parameter)
+    torch_model.load_state_dict(new_state_dict)
+
+    torch_input_tensor = torch.rand((8, 64, 56, 56), dtype=torch.float32)
+    torch_output_tensor = torch_model(torch_input_tensor)
+
+    reader_patterns_cache = {}
+    parameters = preprocess_model(
+        initialize_model=lambda: torch_model,
+        run_model=lambda model: model(torch_input_tensor),
+        custom_preprocessor=custom_preprocessor,
+        reader_patterns_cache=reader_patterns_cache,
+        device=device,
+    )
+
+    class TTNNBasicBlock:
+        def __init__(
+            self,
+            parameters,
+        ) -> None:
+            self.conv1 = parameters.conv1
+
+        def __call__(self, input_tensor):
+            output_tensor = self.conv1(input_tensor)
+            return output_tensor
+
+        def torch_call(self, torch_input_tensor):
+            input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+            input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
+
+            input_tensor = self.conv1.copy_input_to_device(input_tensor)
+            output_tensor = self(input_tensor)
+            output_tensor = self.conv1.copy_output_from_device(output_tensor)
+
+            output_tensor = ttnn.to_torch(output_tensor)
+            output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+            output_tensor = torch.reshape(output_tensor, torch_input_tensor.shape)
+            output_tensor = output_tensor.to(torch_input_tensor.dtype)
+            return output_tensor
+
+    ttnn_model = TTNNBasicBlock(parameters)
+
+    output_tensor = ttnn_model.torch_call(torch_input_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor)
 
