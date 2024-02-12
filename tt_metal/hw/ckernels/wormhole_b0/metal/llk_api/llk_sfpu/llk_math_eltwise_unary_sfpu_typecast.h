@@ -24,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_to_uint16_init() {
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_to_uint16(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_0_param<SfpuType::to_uint16, APPROXIMATE, Dst>
                 (ckernel::sfpu::calculate_to_uint16<APPROXIMATE,8>,
 				 ckernel::sfpu::calculate_to_uint16<APPROXIMATE,8>,
 				 dst_index, (int)VectorMode::RC);
@@ -38,7 +38,7 @@ inline void llk_math_eltwise_unary_sfpu_to_uint32_init() {
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_to_uint32(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+    llk_math_eltwise_unary_sfpu_0_param<SfpuType::to_uint32,APPROXIMATE, Dst>
                 (ckernel::sfpu::calculate_to_uint32<APPROXIMATE,8>,
 				 ckernel::sfpu::calculate_to_uint32<APPROXIMATE,8>,
 				 dst_index, (int)VectorMode::RC);
