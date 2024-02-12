@@ -483,17 +483,21 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // layernorm
-    m_tensor.def("layernorm", &layernorm,
+    m_tensor.def("layernorm", layernorm,
         py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
-    m_tensor.def("add_layernorm", &add_layernorm,
+    m_tensor.def("add_layernorm", add_layernorm,
         py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm(a+b)*gamma + beta operation."
     )doc");
-    m_tensor.def("rmsnorm", &rmsnorm,
+    m_tensor.def("rmsnorm", rmsnorm,
         py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
+    )doc");
+    m_tensor.def("add_rmsnorm", add_rmsnorm,
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        "Performs a rmsnorm(a+b)*gamma + beta operation.
     )doc");
     m_tensor.def("rotate_half", &rotate_half,
         py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(

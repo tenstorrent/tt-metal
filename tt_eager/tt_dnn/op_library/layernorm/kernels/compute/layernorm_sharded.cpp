@@ -47,7 +47,11 @@ void MAIN {
     constexpr uint32_t cb_gamma = tt::CB::c_in5;
     constexpr uint32_t cb_beta = tt::CB::c_in6;
     constexpr uint32_t cb_x = tt::CB::c_intermed0; // x minus mean
+    #if defined RMSNORM and not defined FUSE_PRE_ADD
+    constexpr uint32_t cb_xmm = cb_in0; // x minus mean
+    #else
     constexpr uint32_t cb_xmm = tt::CB::c_intermed1; // x minus mean
+    #endif
     constexpr uint32_t cb_ex_partial = tt::CB::dataflow0; // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
@@ -57,7 +61,7 @@ void MAIN {
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_xmm2 = cb_x; // xmm^2
     constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3; // E[(x-E[x])^2]+eps
-    constexpr uint32_t cb_fusion = cb_xmm; // stream gamma/beta
+    constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
@@ -71,12 +75,16 @@ void MAIN {
     int index = 0;
 
     #ifdef FUSE_PRE_ADD
-    constexpr int cb_in = cb_x;
+    #ifdef RMSNORM
+    constexpr uint32_t cb_in = cb_xmm;
     #else
-    constexpr int cb_in = cb_in0;
+    constexpr uint32_t cb_in = cb_x;
     #endif
-    constexpr int cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
-    constexpr int cb_outgamma = do_beta ? cb_fusion : cb_out;
+    #else
+    constexpr uint32_t cb_in = cb_in0;
+    #endif
+    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
+    constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
     // pre-add x + y
     #ifdef FUSE_PRE_ADD
@@ -102,12 +110,19 @@ void MAIN {
         index_h_offset += block_w;
     }
     cb_push_back(cb_in, num_tiles_per_block);
+    #ifndef RMSNORM
     unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
+    #else
+    unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
+    #endif
     cb_wait_front(cb_in, num_tiles_per_block);
     #else
+    #ifndef RMSNORM
     unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
     #endif
+    #endif
 
+    #ifndef RMSNORM
     // E[x],
     index_h_offset = 0;
     reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
@@ -178,10 +193,13 @@ void MAIN {
         cb_pop_front(cb_in, block_w);
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
+    #ifndef FUSE_PRE_ADD
+    unpack_reconfig_data_format_srca(cb_in, cb_xmm);
+    #endif
     cb_wait_front(cb_xmm, num_tiles_per_block);
+    #endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
-    unpack_reconfig_data_format_srca(cb_in, cb_xmm);
     mul_tiles_init();
     index_h_offset = 0;
     cb_reserve_back(cb_xmm2, num_tiles_per_block);
@@ -204,6 +222,11 @@ void MAIN {
         index_h_offset += block_w;
     }
     cb_push_back(cb_xmm2, num_tiles_per_block);
+
+    #if defined RMSNORM and not defined FUSED_PRE_ADD
+    unpack_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+    #endif
+
     cb_wait_front(cb_xmm2, num_tiles_per_block);
 
     // Var(x)
@@ -276,6 +299,9 @@ void MAIN {
         pack_reconfig_data_format(cb_out);
     }
     // (x - Ex) * 1/[sqrt(Var + eps)]
+    #if defined RMSNORM and not defined FUSE_PRE_ADD
+    unpack_reconfig_data_format_srca(cb_ex2, cb_xmm);
+    #endif
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);

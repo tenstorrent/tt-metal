@@ -39,8 +39,8 @@ void kernel_main() {
     constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial); // tile size
-    const DataFormat data_format = get_dataformat(cb_ex_partial); // data format
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2); // tile size
+    const DataFormat data_format = get_dataformat(cb_ex_partial2); // data format
 
     uint64_t remote_noc_addrs[is_all_to_all_worker ? num_blocks : 1];
     if constexpr (is_all_to_all_worker) {
@@ -122,7 +122,9 @@ void kernel_main() {
             cb_push_back(cb_ex_global, num_tiles);
         }
     };
+    #ifndef RMSNORM
     global_reduce_receiver(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global);
+    #endif
     global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex_global);
 
 }
