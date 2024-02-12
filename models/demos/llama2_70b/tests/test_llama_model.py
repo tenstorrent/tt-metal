@@ -6,10 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-import scipy
-from sklearn.metrics import top_k_accuracy_score
-import numpy as np
-
 import tt_lib
 
 from models.demos.llama2_70b.reference.llama import Llama
@@ -58,14 +54,13 @@ def run_test_LlamaModel_inference(
     kv_cache_len,
     pcc,
     model_config,
-    n_layers,
-    n_devices
+    n_layers
     # tt_cache_path,
     # model_location_generator,
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
+    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
@@ -81,7 +76,7 @@ def run_test_LlamaModel_inference(
     print(state_dict.keys())
 
     # Prepare configs
-    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
 
     torch.manual_seed(0)
     base_url = "layers"
@@ -97,7 +92,7 @@ def run_test_LlamaModel_inference(
     tt_model = TtLlamaModel(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
 
     generation_start_pos = 0
-    generation_length = 2
+    generation_length = 8
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -123,28 +118,32 @@ def run_test_LlamaModel_inference(
 
         tt_out = tt2torch_tensor(tt_out)
 
-        tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
-        tt_out = tt_out.float()
-        pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
+        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
-
-        kl_divs = scipy.stats.entropy(
-            torch.nn.functional.softmax(pytorch_out, dim=-1), torch.nn.functional.softmax(tt_out, dim=-1), axis=-1
-        )
-        logger.info(f"Mean KL Divergence: {kl_divs.mean()}")
+        # TODO: Check KL divergence and top-5, top-1 accuracy
+        kl_divergence = torch.nn.functional.kl_div(tt_out, pytorch_out)
+        logger.info(f"KL Divergence: {kl_divergence}")
 
         # Write the code to check top-5 and top-1 accuracy. It should show the
         # percentage where the top-1 prediction in pytorch was in the top-5
         # predictions in tt.
-        reference_top1 = np.argmax(pytorch_out, axis=-1)
-        top1_acc = top_k_accuracy_score(reference_top1, tt_out, k=1, labels=np.arange(tt_out.shape[-1]))
-        top5_acc = top_k_accuracy_score(reference_top1, tt_out, k=5, labels=np.arange(tt_out.shape[-1]))
 
-        logger.info(f"Mean Top-1: {top1_acc}")
-        logger.info(f"Mean Top-5: {top5_acc}")
+        pt_top_1 = torch.argmax(pytorch_out, dim=-1)
+        tt_top_5 = torch.topk(tt_out, 5, dim=-1).indices
+
+        top_1_pct = torch.mean((pt_top_1 == tt_top_5[:, 0]).float())
+
+        n_correct = 0
+        for b in range(tt_top_5.shape[0]):
+            if pt_top_1[b] in tt_top_5[b]:
+                n_correct += 1
+        top_5_pct = n_correct / tt_top_5.shape[0]
+
+        logger.info(f"Top-1 Accuracy: {top_1_pct}")
+        logger.info(f"Top-5 Accuracy: {top_5_pct}")
 
         if does_pass:
             logger.info(f"[start_pos={start_pos}] Llama2-70b Decoder output Passed!")
@@ -192,15 +191,15 @@ def run_test_LlamaModel_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_layers, n_devices",
-    (("decode", 32, 1, 128, 2, 8),),
-    ids=["decode_batch32_layers1_devices8"],
+    "llm_mode, batch, seq_len, kv_cache_len, n_layers",
+    (("decode", 32, 1, 128, 1),),
+    ids=["decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))  # , "BFLOAT8_B-SHARDED"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))  # , "BFLOAT8_B-SHARDED"))
 def test_LlamaModel_inference(
     model_version,
     llm_mode,
@@ -210,11 +209,10 @@ def test_LlamaModel_inference(
     pcc,
     model_config_str,
     n_layers,
-    n_devices,
     # model_location_generator,
     device,
 ):
-    model_config = get_model_config(model_config_str, num_devices=n_devices)
+    model_config = get_model_config(model_config_str)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaModel_inference(
@@ -226,8 +224,7 @@ def test_LlamaModel_inference(
         kv_cache_len,
         pcc,
         model_config,
-        n_layers,
-        n_devices
+        n_layers
         # tt_cache_path,
         # model_location_generator,
     )
