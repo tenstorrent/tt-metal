@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def run_softmax_tests(
@@ -24,8 +25,8 @@ def run_softmax_tests(
 ):
     torch.manual_seed(data_seed)
 
-    x = torch.Tensor(size=input_shape).uniform_(-1, 1).to(torch.bfloat16)
-    y = torch.Tensor(size=input_shape).uniform_(-1, 1).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(-1, 1).to(torch.bfloat16)
+    y = torch.Tensor(size=input_shape[1]).uniform_(-1, 1).to(torch.bfloat16)
     y[y <= 0.50] = 0
     y[y > 0.50] = 1
     if scalar < 0:
@@ -33,17 +34,16 @@ def run_softmax_tests(
 
     try:
         # get ref result
-        ref_value = pytorch_ops.attention_softmax(x, y, scalar)
+        ref_value = pytorch_ops.attention_softmax(x, y, scalar=scalar)
         x = ttnn_ops.torch_to_ttnn(x, device, dlayout[0], in_mem_config, dtype[0])
         y = ttnn_ops.torch_to_ttnn(y, device, dlayout[0], in_mem_config, dtype[0])
 
-        tt_result = ttnn_ops.attention_softmax(x, y, scalar)
+        tt_result = ttnn.transformer.attention_softmax(input_tensor=x, attention_mask=y, head_size=scalar)
 
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
-        print(traceback.format_exc())
         raise e
 
     assert len(tt_result.shape) == len(ref_value.shape)
@@ -55,7 +55,7 @@ test_sweep_args = [
     (
         [(1, 1, 224, 32), (1, 1, 32, 32)],
         [ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         18139523,
