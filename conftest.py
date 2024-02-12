@@ -35,17 +35,20 @@ def function_level_defaults(reset_seeds):
 @pytest.fixture(scope="session")
 def model_location_generator():
     def model_location_generator_(model_version, model_subdir=""):
-        model_folder = Path("tt_dnn-models") / model_subdir
-        internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
-        has_internal_weka = internal_weka_path.exists()
-        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
-        has_internal_cache = internal_cache_path.exists()
-        if has_internal_weka:
-            return internal_weka_path
-        elif has_internal_cache:
-            return internal_cache_path
+        if "MODEL_LOCATION" in os.environ:
+            return Path(os.environ["MODEL_LOCATION"]) / model_subdir / model_version
         else:
-            return model_version
+            model_folder = Path("tt_dnn-models") / model_subdir
+            internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
+            has_internal_weka = internal_weka_path.exists()
+            internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
+            has_internal_cache = internal_cache_path.exists()
+            if has_internal_weka:
+                return internal_weka_path
+            elif has_internal_cache:
+                return internal_cache_path
+            else:
+                return model_version
 
     return model_location_generator_
 
@@ -53,6 +56,8 @@ def model_location_generator():
 @pytest.fixture(scope="session")
 def get_tt_cache_path():
     def get_tt_cache_path_(model_version, model_subdir="", default_dir=""):
+        if "MODEL_CACHE_LOCATION" in os.environ:
+            return Path(os.environ["MODEL_CACHE_LOCATION"])
         model_folder = Path("tt_dnn-models/tt") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
