@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skip("Getting killed on CI machines")
 def test_mistral_rms_norm_inference(model_location_generator, device, reset_seeds):
     model_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     transformer = Transformer.from_folder(Path(model_path), n_layers=32, max_batch_size=1, is_whole_model=True)
