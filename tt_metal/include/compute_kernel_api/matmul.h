@@ -98,18 +98,20 @@ ALWI void matmul_tiles(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
  *
  * | Argument       | Description                                                   | Type     | Valid Range                                         | Required |
  * |----------------|---------------------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | cbid           | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | True     |
+ * | c_in0          | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | False    |
+ * | c_in1          | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
+ * | c_in_old_srca  | The identifier of the old input to src A circular buffer (CB) | uint32_t | 0 to 31                                             | False    |
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set    | False    |
  */
-ALWI void mm_init_short_with_dt(uint32_t cbid, const uint32_t transpose=0) {
+ALWI void mm_init_short_with_dt(uint32_t c_in0 = 0, uint32_t c_in1 = 1, uint32_t c_in_old_srca = 2, const uint32_t transpose=0) {
     #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_matmul_init(cbid, 1, transpose) ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, 1) ));
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(cbid, 1, transpose) ));
+    UNPACK(( llk_unpack_AB_matmul_init(c_in0, c_in1, transpose) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(c_in_old_srca, c_in1) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(c_in0, c_in1, transpose) ));
     #else
-    UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, 1) ));
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(cbid, 1) ));
+    UNPACK(( llk_unpack_AB_matmul_init(c_in0, c_in1) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(c_in_old_srca, c_in1) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(c_in0, c_in1) ));
     #endif
 }
 
@@ -123,13 +125,13 @@ ALWI void mm_init_short_with_dt(uint32_t cbid, const uint32_t transpose=0) {
  * |----------------|---------------------------------------------------------------|----------|-----------------------------------------------------|----------|
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set    | False    |
  */
-ALWI void mm_init_short(const std::uint32_t transpose=0) {
+ALWI void mm_init_short(uint32_t c_in0 = 0, uint32_t c_in1 = 1, const std::uint32_t transpose=0) {
     #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0, 1, transpose)  ));
-    UNPACK(( llk_unpack_AB_matmul_init(0, 1, transpose)  ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(c_in0, c_in1, transpose)  ));
+    UNPACK(( llk_unpack_AB_matmul_init(c_in0, c_in1, transpose)  ));
     #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0, 1, 0)  ));
-    UNPACK(( llk_unpack_AB_matmul_init(0, 1) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(c_in0, c_in1, false)  ));
+    UNPACK(( llk_unpack_AB_matmul_init(c_in0, c_in1, false) ));
     #endif
 }
 

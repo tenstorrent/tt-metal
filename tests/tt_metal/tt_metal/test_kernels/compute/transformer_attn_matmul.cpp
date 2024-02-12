@@ -64,7 +64,7 @@ void MAIN {
             cb_pop_front(cb_intermed0, 1);
             untilize_uninit(cb_intermed0);
 
-            mm_init_short(transpose_hw);
+            mm_init_short(tt::CB::c_in0, tt::CB::c_in1, transpose_hw);
         }
         cb_pop_front(tt::CB::c_in0, Kt);
 
@@ -80,7 +80,7 @@ void MAIN {
         cb_pop_front(cb_intermed2, 1);
         tilize_uninit();
 
-        mm_init_short(transpose_hw);
+        mm_init_short(tt::CB::c_in0, tt::CB::c_in1, transpose_hw);
     }
 
 }

@@ -24,14 +24,14 @@ namespace ckernel {
  * |----------------|-------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | icb            | The identifier of the circular buffer (CB) containing input | uint32_t | 0 to 31                                        | True     |
  */
-ALWI void transpose_wh_init(uint32_t icb)
+ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(true, true, icb) ));
 
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 

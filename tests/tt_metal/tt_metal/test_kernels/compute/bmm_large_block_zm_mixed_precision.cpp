@@ -50,14 +50,14 @@ void MAIN {
 
                     if (enable_reload) {
                         // Reconfigure input
-                        copy_tile_to_dst_init_short_with_dt(mm_partials_cb_id);
+                        copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(mm_partials_cb_id, i, i);
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        mm_init_short_with_dt(mm_partials_cb_id);
+                        mm_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock

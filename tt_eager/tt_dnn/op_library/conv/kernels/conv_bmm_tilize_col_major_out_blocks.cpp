@@ -238,7 +238,7 @@ void MAIN {
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_matmul_partials_init_short_with_dt(matmul_partials_cb);
+                            copy_tile_matmul_partials_init_short_with_dt(in1_cb_id, matmul_partials_cb);
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             tile_regs_acquire();
 
