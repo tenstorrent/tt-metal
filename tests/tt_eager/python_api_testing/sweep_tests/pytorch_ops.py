@@ -1319,7 +1319,7 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
-def attention_softmax_nomask(x, y, *args, **kwargs):
+def attention_softmax_nomask(x, *args, **kwargs):
     torch_output_tensor = ttnn.transformer._torch_attention_softmax(
         x,
         head_size=None,
