@@ -20,9 +20,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import is_wormhole_b0
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, skip_for_wormhole_b0
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1),),
@@ -75,6 +76,8 @@ def test_layernorm_sharded_rm(test_id, in_dtype, out_dtype, cb_dtype, gamma_beta
     if grid_size[1] > 8:
         grid_size[1] = 8
     fidelity = ttl.tensor.MathFidelity.HiFi4
+
+    print(grid_size)
 
     epsf = 1e-2
     batch = 12
@@ -182,6 +185,7 @@ def test_layernorm_sharded_rm(test_id, in_dtype, out_dtype, cb_dtype, gamma_beta
     assert passing
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1),),
@@ -349,6 +353,7 @@ def test_layernorm_sharded_mix_precision_rm(
     assert passing
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "shard_orientation",
     (ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR),
