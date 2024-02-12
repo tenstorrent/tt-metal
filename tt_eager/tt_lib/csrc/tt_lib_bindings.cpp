@@ -16,7 +16,6 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/module.hpp"
 #include "type_caster.hpp"
 
 namespace py = pybind11;
@@ -331,8 +330,6 @@ PYBIND11_MODULE(_C, m) {
     py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
     tt::operations::py_module(m_operations);
 
-    py::module_ m_ttnn = m.def_submodule("ttnn", "Submodule for ttnn");
-    ttnn::py_module(m_ttnn);
 
 #if defined(TRACY_ENABLE)
     py::function tracy_decorator = py::module::import("tt_eager.tt_lib_profiler_wrapper").attr("callable_decorator");

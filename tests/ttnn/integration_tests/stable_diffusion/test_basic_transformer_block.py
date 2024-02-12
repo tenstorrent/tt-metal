@@ -18,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
-    "N, C, H, W, index",
+    "N, C, H, W, index, attention_head_dim",
     [
         (
             1,
@@ -26,6 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             1024,
             320,
             0,
+            40,
         ),
         (
             1,
@@ -33,6 +34,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             256,
             640,
             1,
+            80,
         ),
         (
             1,
@@ -40,6 +42,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             64,
             1280,
             2,
+            160,
         ),
         (
             1,
@@ -47,10 +50,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             16,
             1280,
             2,
+            160,
         ),
     ],
 )
-def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index):
+def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, attention_head_dim):
     torch.manual_seed(0)
 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
@@ -91,50 +95,55 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index):
         config=config,
         device=device,
         only_cross_attention=only_cross_attention,
+        attention_head_dim=attention_head_dim,
     )
 
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output.unsqueeze(0), ttnn_output, pcc=0.85)  # Keeping low PCC for the test to pass
+    assert_with_pcc(torch_output.unsqueeze(0), ttnn_output, pcc=0.98)
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
-    "N, C, H, W, index",
+    "N, C, H, W, index, attention_head_dim",
     [
         (
             1,
             2,
             4096,
             320,
-            0,
+            3,
+            40,
         ),
         (
             1,
             2,
             1024,
             640,
-            1,
+            2,
+            80,
         ),
         (
             1,
             2,
             256,
             1280,
-            2,
+            1,
+            160,
         ),
         (
             1,
             2,
             64,
             1280,
-            2,
+            1,
+            160,
         ),
     ],
 )
-def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index):
+def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, attention_head_dim):
     torch.manual_seed(0)
 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
@@ -142,7 +151,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index):
     model.eval()
     state_dict = model.state_dict()
     config = model.config
-    basic_transformer = pipe.unet.down_blocks[index].attentions[1].transformer_blocks[0]
+    basic_transformer = pipe.unet.up_blocks[index].attentions[1].transformer_blocks[0]
 
     hidden_states_shape = torch.Size([N, C, H, W])
     hidden_states = torch.rand(hidden_states_shape) * 0.01
@@ -173,9 +182,10 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index):
         parameters=parameters,
         config=config,
         device=device,
+        attention_head_dim=attention_head_dim,
     )
 
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output.unsqueeze(0), ttnn_output, pcc=0.85)  # Keeping low PCC for the test to pass
+    assert_with_pcc(torch_output.unsqueeze(0), ttnn_output, pcc=0.98)
