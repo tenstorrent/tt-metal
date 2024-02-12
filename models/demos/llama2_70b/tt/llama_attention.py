@@ -130,6 +130,7 @@ class TtLlamaAttention(nn.Module):
 
         batch = x.size(0)
         seq_len = x.size(1)
+        assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
         rot_mat = self.get_rotation_mat(
             dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
