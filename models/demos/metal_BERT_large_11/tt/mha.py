@@ -100,14 +100,6 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
 
         return attention_scores
 
-    def op5_bmm(attention_scores, V_heads):
-        weighted_activation = post_softmax_bmm(
-            attention_scores,
-            V_heads,
-        )
-
-        return weighted_activation
-
     if "OP5_POST_SOFTMAX_BMM_CONFIG" in model_config:
 
         def op5_bmm(attention_scores, V_heads):

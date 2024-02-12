@@ -13,7 +13,8 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
     [
         # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
         [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 165],
-        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED_BATCH12", 410],
+        # [7, "BERT_LARGE-batch_7-BFLOAT8_B-SHARDED", 240],
+        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED", 410],
     ],
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):
