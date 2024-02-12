@@ -161,23 +161,29 @@ class TTPyUntilizeWithHalo(TTPyOp):
             block_sharding = num_cores_nhw == num_cores_w
             if not block_sharding:
                 assert num_cores_w == 12
-                num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
-                assert num_cores_h >= num_cores_height_excluding_remainder_last_row
-                core_range_1 = ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
-                )
-                num_cores_last = num_cores_nhw % num_cores_w
-                core_range_2 = None
-                if num_cores_last > 0:
-                    assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
-                    core_range_2 = ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
-                        ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
+                if num_cores_nhw >= num_cores_w:
+                    num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
+                    assert num_cores_h >= num_cores_height_excluding_remainder_last_row
+                    core_range_1 = ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
                     )
-                    shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+                    num_cores_last = num_cores_nhw % num_cores_w
+                    if num_cores_last > 0:
+                        assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
+                        core_range_2 = ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
+                            ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
+                        )
+                        shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+                    else:
+                        assert num_cores_h == num_cores_height_excluding_remainder_last_row
+                        shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
                 else:
-                    assert num_cores_h == num_cores_height_excluding_remainder_last_row
+                    core_range_1 = ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_nhw - 1, 0),
+                    )
                     shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
             else:
                 core_range = ttl.tensor.CoreRange(
