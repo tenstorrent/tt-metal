@@ -12,9 +12,6 @@ namespace move_op_utils {
 using namespace tt::tt_metal;
 
 bool can_deallocate(const Tensor &input_tensor) {
-    if (input_tensor.device())
-        tt::tt_metal::Finish(input_tensor.device()->command_queue());
-
     return std::visit(
         [](auto&& storage)
         {
