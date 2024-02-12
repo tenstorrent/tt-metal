@@ -12,24 +12,41 @@
 
 #include <cstddef>
 
-constexpr int DEBUG_PRINT_TYPEID_CSTR           = 0;
-constexpr int DEBUG_PRINT_TYPEID_ENDL           = 1; // std::endl
-constexpr int DEBUG_PRINT_TYPEID_SETW           = 2; // std::setw
-constexpr int DEBUG_PRINT_TYPEID_UINT32         = 3;
-constexpr int DEBUG_PRINT_TYPEID_FLOAT32        = 4;
-constexpr int DEBUG_PRINT_TYPEID_CHAR           = 5;
-constexpr int DEBUG_PRINT_TYPEID_RAISE          = 6;
-constexpr int DEBUG_PRINT_TYPEID_WAIT           = 7;
-constexpr int DEBUG_PRINT_TYPEID_BFLOAT16       = 8;
-constexpr int DEBUG_PRINT_TYPEID_SETPRECISION   = 9; // std::setprecision
-constexpr int DEBUG_PRINT_TYPEID_FIXED          = 10; // std::fixed
-constexpr int DEBUG_PRINT_TYPEID_DEFAULTFLOAT   = 11; // std::defaultfloat
-constexpr int DEBUG_PRINT_TYPEID_HEX            = 12; // std::hex
-constexpr int DEBUG_PRINT_TYPEID_OCT            = 13; // std::oct
-constexpr int DEBUG_PRINT_TYPEID_DEC            = 14; // std::dec
-constexpr int DEBUG_PRINT_TYPEID_INT32          = 15;
-constexpr int DEBUG_PRINT_TYPEID_TILESLICE      = 16;
-constexpr int DEBUG_PRINT_TYPEID_UINT64         = 17;
+#define DPRINT_TYPES                 \
+    DPRINT_PREFIX(CSTR)              \
+    DPRINT_PREFIX(ENDL)              \
+    DPRINT_PREFIX(SETW)              \
+    DPRINT_PREFIX(UINT8)             \
+    DPRINT_PREFIX(UINT16)            \
+    DPRINT_PREFIX(UINT32)            \
+    DPRINT_PREFIX(UINT64)            \
+    DPRINT_PREFIX(INT8)              \
+    DPRINT_PREFIX(INT16)             \
+    DPRINT_PREFIX(INT32)             \
+    DPRINT_PREFIX(INT64)             \
+    DPRINT_PREFIX(FLOAT32)           \
+    DPRINT_PREFIX(CHAR)              \
+    DPRINT_PREFIX(RAISE)             \
+    DPRINT_PREFIX(WAIT)              \
+    DPRINT_PREFIX(BFLOAT16)          \
+    DPRINT_PREFIX(SETPRECISION)      \
+    DPRINT_PREFIX(FIDPRINT_PREFIXED) \
+    DPRINT_PREFIX(DEFAULTFLOAT)      \
+    DPRINT_PREFIX(HEDPRINT_PREFIX)   \
+    DPRINT_PREFIX(OCT)               \
+    DPRINT_PREFIX(DEC)               \
+    DPRINT_PREFIX(TILESLICE)
+
+enum DPrintTypeID : uint8_t {
+// clang-format off
+#define DPRINT_PREFIX(a) DPrint ## a,
+    DPRINT_TYPES
+#undef DPRINT_PREFIX
+    DPrintTypeID_Count,
+// clang-format on
+};
+static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
+
 
 // We need to set thw wpos, rpos pointers to 0 in the beginning of the kernel startup
 // Because there's no mechanism (known to me) to initialize values at fixed mem locations in kernel code,

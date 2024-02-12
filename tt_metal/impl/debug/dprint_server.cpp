@@ -503,7 +503,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         int nlen = 0;
         uint32_t i = 0, h = 0, w = 0;
         while (rpos < wpos) {
-            uint8_t code = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
+            auto code = static_cast<DPrintTypeID>(l->data[rpos++]); TT_ASSERT(rpos <= bufsize);
             uint8_t sz = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
             uint8_t* ptr = l->data + rpos;
 
@@ -512,8 +512,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
 
             // we are sharing the same output file between debug print threads for multiple cores
             switch(code) {
-                // TODO(AP): better code index sync with debug_print.h
-                case DEBUG_PRINT_TYPEID_CSTR: // const char*
+                case DPrintCSTR: // const char*
                     // terminating zero was included in size and should be present in the buffer
                     cptr = reinterpret_cast<const char*>(ptr);
                     nlen = strnlen(cptr, 200);
@@ -523,60 +522,90 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         stream << cptr;
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
-                case DEBUG_PRINT_TYPEID_TILESLICE:
+                case DPrintTILESLICE:
                     PrintTileSlice(stream, ptr, hart_id);
                 break;
 
-                case DEBUG_PRINT_TYPEID_ENDL:
+                case DPrintENDL:
                     stream << endl;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_SETW:
+                case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_SETPRECISION:
+                case DPrintSETPRECISION:
                     stream << std::setprecision(*ptr);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_FIXED:
+                case DPrintFIXED:
                     stream << std::fixed;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_DEFAULTFLOAT:
+                case DPrintDEFAULTFLOAT:
                     stream << std::defaultfloat;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_HEX:
+                case DPrintHEX:
                     stream << std::hex;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_OCT:
+                case DPrintOCT:
                     stream << std::oct;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_DEC:
+                case DPrintDEC:
                     stream << std::dec;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_UINT32:
+                case DPrintUINT8:
+                    // iostream default uint8_t printing is as char, not an int
+                    stream << *reinterpret_cast<uint8_t*>(ptr);
+                    TT_ASSERT(sz == 1);
+                break;
+                case DPrintUINT16:
+                    stream << *reinterpret_cast<uint16_t*>(ptr);
+                    TT_ASSERT(sz == 2);
+                break;
+                case DPrintUINT32:
                     stream << *reinterpret_cast<uint32_t*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_FLOAT32:
+                case DPrintUINT64:
+                    stream << *reinterpret_cast<uint64_t*>(ptr);
+                    TT_ASSERT(sz == 8);
+                break;
+                case DPrintINT8:
+                    // For int8_ts, we'll print an number instead of a char.
+                    stream << (int) *reinterpret_cast<int8_t*>(ptr);
+                    TT_ASSERT(sz == 1);
+                break;
+                case DPrintINT16:
+                    stream << *reinterpret_cast<int16_t*>(ptr);
+                    TT_ASSERT(sz == 2);
+                break;
+                case DPrintINT32:
+                    stream << *reinterpret_cast<int32_t*>(ptr);
+                    TT_ASSERT(sz == 4);
+                break;
+                case DPrintINT64:
+                    stream << *reinterpret_cast<int64_t*>(ptr);
+                    TT_ASSERT(sz == 8);
+                break;
+                case DPrintFLOAT32:
                     stream << *reinterpret_cast<float*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_BFLOAT16:
+                case DPrintBFLOAT16:
                     stream << bfloat16_to_float(*reinterpret_cast<uint16_t*>(ptr));
                     TT_ASSERT(sz == 2);
                 break;
-                case DEBUG_PRINT_TYPEID_CHAR:
+                case DPrintCHAR:
                     stream << *reinterpret_cast<char*>(ptr);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_RAISE:
+                case DPrintRAISE:
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
                     // Add this newly raised signals to the set of raised signals.
                     raise_wait_lock_.lock();
@@ -585,7 +614,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     //stream << "\nRaised signal=" << sigval << endl;
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_WAIT:
+                case DPrintWAIT:
                     {
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
                     // Given that we break immediately on a wait, this core should never be waiting
@@ -600,14 +629,6 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     //stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
                     TT_ASSERT(sz == 4);
                     }
-                break;
-                case DEBUG_PRINT_TYPEID_INT32:
-                    stream << *reinterpret_cast<int32_t*>(ptr);
-                    TT_ASSERT(sz == 4);
-                break;
-                case DEBUG_PRINT_TYPEID_UINT64:
-                    stream << *reinterpret_cast<uint64_t*>(ptr);
-                    TT_ASSERT(sz == 8);
                 break;
                 default:
                     TT_FATAL("Unexpected debug print type code" && false);
