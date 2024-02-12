@@ -1,5 +1,41 @@
 import torch
 from typing import Tuple
+import tt_lib
+from models.utility_functions import tt2torch_tensor, torch2tt_tensor
+
+
+def rms_decomp(x, norm_weight, eps):
+    squared = tt_lib.tensor.pow(x, 2)
+    # mean_squared = tt_lib.tensor.mean(squared, )
+    sum_squared = tt_lib.tensor.reduce(squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0)
+    # Tensor is 1,1,32,1+31 now
+    mean_squared = tt_lib.tensor.div_unary(sum_squared, x.shape()[-1])
+    mean_squared_eps = tt_lib.tensor.add_unary(mean_squared, eps)
+    rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
+    rms_recip = tt_lib.tensor.recip(rms)
+    normed_x = tt_lib.tensor.bcast(x, rms_recip, math_op=tt_lib.tensor.BcastOpMath.MUL, dim=tt_lib.tensor.BcastOpDim.W)
+    norm_out = tt_lib.tensor.mul(normed_x, norm_weight)
+    return norm_out
+
+
+def tt_all_reduce(tensors):
+    """
+    reduction on a list of tensors
+    """
+    base_tensor = tensors[0]
+    for tensor in tensors[1:]:
+        base_tensor = tt_lib.tensor.add(base_tensor, tensor)
+    dev = base_tensor.device()
+    # Emulate replication on all chips
+    res_pt = tt2torch_tensor(base_tensor)
+    res = [torch2tt_tensor(res_pt.clone(), dev) for _ in range(len(tensors))]
+    return res
+
+
+def generate_rot_emb(dhead, end, batch):
+    cos, sin = tt_precompute_freqs(dhead, end)
+    rot_mat = freqs_to_rotation_matrix(cos, sin)
+    return rot_mat
 
 
 def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
