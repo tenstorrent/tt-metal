@@ -88,7 +88,7 @@ def attention(config, x, bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen, 
 
     xq, xk = apply_rotary_emb(xq, xk, bcast_freq_xq, bcast_freq_xk, device, mem_config)
 
-    positions = ttnn.to_torch(ttnn.from_device(positions)).squeeze(0).squeeze(0).squeeze(0)
+    positions = ttnn.to_torch(ttnn.from_device(positions))
 
     scatter_pos = (positions[-config.sliding_window :] % config.sliding_window)[None, :, None, None]
     scatter_pos = scatter_pos.to(torch.int64)
