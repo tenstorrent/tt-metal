@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());

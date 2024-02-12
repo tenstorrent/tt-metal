@@ -484,7 +484,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     CoreCoord start_core = {0, 0};
     CoreRangeSet all_cores = shard_spec.grid;
-    CoreRange sender_cores{start_core, start_core};
+    CoreRange sender_cores(start_core, start_core);
     CoreRangeSet all_to_all_cores({});
     CoreRangeSet all_to_all_workers_except_sender({});
     CoreRangeSet not_all_to_all_workers({});
@@ -542,18 +542,18 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             sender_cores = {
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
                 {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
-            all_to_all_cores = CoreRangeSet({CoreRange{
+            all_to_all_cores = CoreRangeSet({CoreRange(
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
-                {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange{
+                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
                     {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
-                    {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                    {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange{
+                not_all_to_all_workers = CoreRangeSet({CoreRange(
                     {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             }
             num_cores_x_mcast = num_cores_x;
             num_cores_y_mcast = 1;
@@ -561,18 +561,18 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             sender_cores = {
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
                 {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
-            all_to_all_cores = CoreRangeSet({CoreRange{
+            all_to_all_cores = CoreRangeSet({CoreRange(
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
-                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
+                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange{
+                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
                     {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange{
+                not_all_to_all_workers = CoreRangeSet({CoreRange(
                     {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             }
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;

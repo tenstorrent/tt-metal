@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
-    CoreRange cores = {{0, 0}, {0, 0}};
+    CoreRange cores({0, 0}, {0, 0});
     uint32_t cb_id = CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering
     uint32_t cb_pagesize = round_up(padded_row_size_nbytes, constants::TILE_WIDTH);
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     bfloat16 bfloat_zero = bfloat16(0.0f);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core({0, 0}, {0, 0});
     KernelHandle reader_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
                                                         core,
@@ -284,7 +284,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
     tt_metal::Program program{};
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     tt_metal::Program program{};
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();

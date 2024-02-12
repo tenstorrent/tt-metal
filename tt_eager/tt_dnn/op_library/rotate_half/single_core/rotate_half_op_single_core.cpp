@@ -17,7 +17,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Tensor &output) {
     Program program{};
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);

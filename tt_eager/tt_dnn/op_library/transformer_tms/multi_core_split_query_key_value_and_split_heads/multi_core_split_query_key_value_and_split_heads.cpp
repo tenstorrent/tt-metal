@@ -86,10 +86,10 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    CoreRange all_cores{
+    CoreRange all_cores(
         {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1},
-    };
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}
+    );
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -275,9 +275,9 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     // define core ranges
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
-    CoreRange all_cores{
+    CoreRange all_cores(
         {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) num_heads_per_tensor,
