@@ -20,20 +20,24 @@ from models.utility_functions import (
 )
 from models.perf.perf_utils import prep_perf_report
 
-BATCH_SIZE = 12
 model_version = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"
 seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
-model_config_str = "BFLOAT8_B-SHARDED_BATCH12"
 
 
 def run_perf_bert11(
-    expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
+    batch_size,
+    model_config_str,
+    expected_inference_time,
+    expected_compile_time,
+    inference_iterations,
+    model_location_generator,
+    device,
 ):
-    model_config = get_model_config(BATCH_SIZE, model_config_str)
+    model_config = get_model_config(batch_size, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
@@ -46,7 +50,7 @@ def run_perf_bert11(
     second_run_key = "second_run"
     cpu_key = "ref_key"
 
-    HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False, low_cpu_mem_usage=True)
     HF_model.eval()
     tt_model = TtBertBatchDram(
         HF_model.config,
@@ -57,10 +61,10 @@ def run_perf_bert11(
     )
 
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
-    context = BATCH_SIZE * [
+    context = batch_size * [
         "Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."
     ]
-    question = BATCH_SIZE * ["What discipline did Winkelmann create?"]
+    question = batch_size * ["What discipline did Winkelmann create?"]
     inputs = tokenizer.batch_encode_plus(
         zip(question, context),
         max_length=seq_len,
@@ -129,7 +133,7 @@ def run_perf_bert11(
 
     prep_perf_report(
         model_name="bert11",
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         inference_and_compile_time=first_iter_time,
         inference_time=second_iter_time,
         expected_compile_time=expected_compile_time,
@@ -144,11 +148,16 @@ def run_perf_bert11(
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time, inference_iterations",
-    ([0.05, 14.5, 10],),
+    "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
+    (
+        [7, "BFLOAT8_B-SHARDED", 0.05, 14.5, 10],
+        [12, "BFLOAT8_B-SHARDED", 0.05, 14.5, 10],
+    ),
 )
 def test_perf_virtual_machine(
     use_program_cache,
+    batch_size,
+    model_config_str,
     expected_inference_time,
     expected_compile_time,
     inference_iterations,
@@ -159,17 +168,28 @@ def test_perf_virtual_machine(
         pytest.skip("Bert large 11 is not supported on E75")
 
     run_perf_bert11(
-        expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
+        batch_size,
+        model_config_str,
+        expected_inference_time,
+        expected_compile_time,
+        inference_iterations,
+        model_location_generator,
+        device,
     )
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time, inference_iterations",
-    ([0.0364, 10, 10],),
+    "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
+    (
+        [7, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
+        [12, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
+    ),
 )
 def test_perf_bare_metal(
     use_program_cache,
+    batch_size,
+    model_config_str,
     expected_inference_time,
     expected_compile_time,
     inference_iterations,
@@ -180,5 +200,11 @@ def test_perf_bare_metal(
         pytest.skip("Bert large 11 is not supported on E75")
 
     run_perf_bert11(
-        expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
+        batch_size,
+        model_config_str,
+        expected_inference_time,
+        expected_compile_time,
+        inference_iterations,
+        model_location_generator,
+        device,
     )

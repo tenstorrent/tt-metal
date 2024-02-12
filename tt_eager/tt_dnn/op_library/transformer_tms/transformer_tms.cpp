@@ -26,13 +26,22 @@ void SplitFusedQKVAndSplitHeads::validate(const std::vector<Tensor>& input_tenso
 
     if (input_tensor.is_sharded() == false) {
         TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
+    } else {
+        auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
+        TT_FATAL((bbox.end.x < this->compute_with_storage_grid_size.x && bbox.end.y < this->compute_with_storage_grid_size.y));
+        TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     }
 }
 
 std::vector<Shape> SplitFusedQKVAndSplitHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.shape()[0];
-    return {Shape{batch_size, 16, 384, 64}, Shape{batch_size, 16, 64, 384}, Shape{batch_size, 16, 384, 64}};
+    uint32_t num_heads = this->num_heads;
+    uint32_t num_output_tensors = 3;
+    uint32_t M = input_tensor.shape()[2]; // 384
+    uint32_t K = input_tensor.shape()[-1] / num_output_tensors / num_heads; // 64
+    return {Shape{batch_size, this->num_heads, M, K}, Shape{batch_size, this->num_heads, K, M}, Shape{batch_size, this->num_heads, M, K}};
 }
 
 std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -46,18 +55,17 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
         uint32_t M = input_tensor.shape()[2]; // 384
         uint32_t K = input_tensor.shape()[-1] / num_output_tensors / num_heads; // 64
         // core range
-        CoreRangeSet all_cores({});
-        ShardOrientation shard_orientation;
-        auto num_cores_x = this->compute_with_storage_grid_size.x;
-        auto num_cores_y = this->compute_with_storage_grid_size.y;
-        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})});
+        CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
+        ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
+        auto bbox = all_cores.bounding_box();
+        uint32_t num_M_cores = shard_orientation == ShardOrientation::ROW_MAJOR ? bbox.end.x + 1 : bbox.end.y + 1;
         // shard spec
-        uint32_t per_core_M_qv = (num_heads / num_cores_y) * M; // 768
+        uint32_t per_core_M_qv = (num_heads / num_M_cores) * M; // 768
         uint32_t per_core_N_qv = K; // 64
-        ShardSpec shard_spec_qv = ShardSpec{all_cores, {per_core_M_qv, per_core_N_qv}, ShardOrientation::COL_MAJOR};
-        uint32_t per_core_M_k = (num_heads / num_cores_y) * K; // 128
+        ShardSpec shard_spec_qv = ShardSpec{all_cores, {per_core_M_qv, per_core_N_qv}, shard_orientation};
+        uint32_t per_core_M_k = (num_heads / num_M_cores) * K; // 128
         uint32_t per_core_N_k = M; // 384
-        ShardSpec shard_spec_k = ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, ShardOrientation::COL_MAJOR};
+        ShardSpec shard_spec_k = ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, shard_orientation};
         // create sharded tensors
         auto mem_config_qv = this->output_mem_config;
         mem_config_qv.shard_spec = shard_spec_qv;

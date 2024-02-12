@@ -90,7 +90,7 @@ ACCEPTABLE_MODEL_CONFIG_STRS = (
     "BFLOAT16-L1",
     "MIXED_PRECISION_BATCH9",
     "MIXED_PRECISION_BATCH8",
-    "BFLOAT8_B-SHARDED_BATCH12",
+    "BFLOAT8_B-SHARDED",
 )
 
 
@@ -105,7 +105,7 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(batch, model_config_str):
+def get_model_config(batch, device_grid_size, model_config_str):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
@@ -129,7 +129,7 @@ def get_model_config(batch, model_config_str):
     elif model_config_str in ("MIXED_PRECISION_BATCH9", "MIXED_PRECISION_BATCH8"):
         dtype = tt_lib.tensor.DataType.BFLOAT8_B
         mem_config = L1_MEMCFG
-    elif model_config_str in ("BFLOAT8_B-SHARDED_BATCH12"):
+    elif model_config_str in ("BFLOAT8_B-SHARDED"):
         dtype = tt_lib.tensor.DataType.BFLOAT8_B
         mem_config = SHARDED_MEMCFG
     else:
@@ -296,13 +296,22 @@ def get_model_config(batch, model_config_str):
         }
         model_config.update(new_config_values)
 
-    elif model_config_str == "BFLOAT8_B-SHARDED_BATCH12":
-        grid_size = [12, 8]
+    elif model_config_str == "BFLOAT8_B-SHARDED":
+        activation_grid_dim = 8
+        if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
+            grid_size = [batch, activation_grid_dim]
+            shard_orientation = tt_lib.tensor.ShardOrientation.COL_MAJOR
+        elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
+            grid_size = [activation_grid_dim, batch]
+            shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
+        else:
+            assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
+        transpose_mm_mcast = shard_orientation == tt_lib.tensor.ShardOrientation.COL_MAJOR
         new_config_values = {
             "GRID_SIZE": grid_size,
             "SHARD_SIZE": [384, 128],
-            "SHARD_ORIENTATION": tt_lib.tensor.ShardOrientation.COL_MAJOR,
-            "QKV_INTERLEAVED": 8,
+            "SHARD_ORIENTATION": shard_orientation,
+            "QKV_INTERLEAVED": activation_grid_dim,
             "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG": SHARDED_MEMCFG,
             "OP1_FUSED_QKV_MM_INPUT_MEMCFG": L1_MEMCFG,
@@ -324,7 +333,7 @@ def get_model_config(batch, model_config_str):
                 out_subblock_w=6,
                 per_core_M=12,
                 per_core_N=12,
-                transpose_mcast=True,
+                transpose_mcast=transpose_mm_mcast,
                 fused_activation=None,
             ),
             "OP3_PRE_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
@@ -350,7 +359,7 @@ def get_model_config(batch, model_config_str):
                 out_subblock_w=4,
                 per_core_M=12,
                 per_core_N=4,
-                transpose_mcast=True,
+                transpose_mcast=transpose_mm_mcast,
                 fused_activation=None,
             ),
             "OP9_FF1_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -360,7 +369,7 @@ def get_model_config(batch, model_config_str):
                 out_subblock_w=8,
                 per_core_M=12,
                 per_core_N=16,
-                transpose_mcast=True,
+                transpose_mcast=transpose_mm_mcast,
                 fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
             ),
             "OP10_FF2_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -370,7 +379,7 @@ def get_model_config(batch, model_config_str):
                 out_subblock_w=4,
                 per_core_M=12,
                 per_core_N=4,
-                transpose_mcast=True,
+                transpose_mcast=transpose_mm_mcast,
                 fused_activation=None,
             ),
             "OP8_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormShardedMultiCoreProgramConfig(

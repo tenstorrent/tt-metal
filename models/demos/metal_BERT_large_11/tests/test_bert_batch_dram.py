@@ -238,7 +238,8 @@ def run_bert_question_and_answering_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
-        (12, "BFLOAT8_B-SHARDED_BATCH12"),
+        (7, "BFLOAT8_B-SHARDED"),
+        (12, "BFLOAT8_B-SHARDED"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -247,7 +248,8 @@ def run_bert_question_and_answering_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
-        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
+        "batch_7-BFLOAT8_B-SHARDED",
+        "batch_12-BFLOAT8_B-SHARDED",
     ],
 )
 @pytest.mark.parametrize(
@@ -280,7 +282,7 @@ def test_bert_batch_dram(
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
 
-    model_config = get_model_config(batch, model_config_str)
+    model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
     # This test will run BERT-Large once with cache disabled.
@@ -318,7 +320,9 @@ def test_bert_batch_dram(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
-        (12, "BFLOAT8_B-SHARDED_BATCH12"),
+        (7, "BFLOAT8_B-SHARDED"),
+        (8, "BFLOAT8_B-SHARDED"),
+        (12, "BFLOAT8_B-SHARDED"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -327,7 +331,9 @@ def test_bert_batch_dram(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
-        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
+        "batch_7-BFLOAT8_B-SHARDED",
+        "batch_8-BFLOAT8_B-SHARDED",
+        "batch_12-BFLOAT8_B-SHARDED",
     ],
 )
 @pytest.mark.parametrize(
@@ -361,7 +367,7 @@ def test_bert_batch_dram_with_program_cache(
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
 
-    model_config = get_model_config(batch, model_config_str)
+    model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
     # This test will run BERT-Large once with cache disabled.
@@ -389,7 +395,7 @@ def test_bert_batch_dram_with_program_cache(
         device,
     )
 
-    if batch == 12 and model_config_str == "BFLOAT8_B-SHARDED_BATCH12":
+    if model_config_str == "BFLOAT8_B-SHARDED":
         assert tt_lib.program_cache.num_entries() == 19
     elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
         assert tt_lib.program_cache.num_entries() == 17

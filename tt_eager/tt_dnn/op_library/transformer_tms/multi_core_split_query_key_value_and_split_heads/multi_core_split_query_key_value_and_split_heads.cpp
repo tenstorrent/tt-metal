@@ -227,9 +227,12 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t num_cores_c = compute_with_storage_grid_size.x;
-    uint32_t num_cores_r = compute_with_storage_grid_size.y;
-    uint32_t num_cores = num_cores_c * num_cores_r;
+    auto all_cores = a.shard_spec().value().grid;
+    auto bbox = all_cores.bounding_box();
+    ShardOrientation shard_orientation = a.shard_spec().value().orientation;
+    bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
+    uint32_t num_h_cores = rm ? bbox.end.y + 1 : bbox.end.x + 1;
+    uint32_t num_w_cores = rm ? bbox.end.x + 1 : bbox.end.y + 1;
     // tensor shape
     const auto shape = a.shape();
     uint32_t M = shape[2] * shape[0]; // 4608
@@ -239,8 +242,8 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     uint32_t num_tensors = 3;
     uint32_t num_heads_per_tensor = 2;
     // block
-    uint32_t block_w = K / num_cores_r; // 384
-    uint32_t block_h = M / num_cores_c; // 384
+    uint32_t block_w = K / num_w_cores; // 384
+    uint32_t block_h = M / num_h_cores; // 384
     uint32_t block_wt = block_w / TILE_WIDTH;
     uint32_t block_ht = block_h / TILE_WIDTH;
     uint32_t out_block_w = block_w / num_tensors / num_heads_per_tensor; // 64
@@ -252,8 +255,8 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     // check dims
     TT_ASSERT(M % TILE_WIDTH == 0 && "M must be divisible by tile width.");
     TT_ASSERT(K % TILE_WIDTH == 0 && "K must be divisible by tile width.");
-    TT_ASSERT(Kt / compute_with_storage_grid_size.y == block_wt && "block_w must equal to K / num_cores_r.");
-    TT_ASSERT(Mt / compute_with_storage_grid_size.x == block_ht && "block_h must equal to M / num_cores_c.");
+    TT_ASSERT(Kt / num_w_cores == block_wt && "block_w must equal to K / num_cores_w.");
+    TT_ASSERT(Mt / num_h_cores == block_ht && "block_h must equal to M / num_cores_h.");
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -272,12 +275,6 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
-    // define core ranges
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
-    CoreRange all_cores(
-        {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) num_heads_per_tensor,
