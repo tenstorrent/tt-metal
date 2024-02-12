@@ -105,17 +105,23 @@ def run_test_LlamaAttention_inference(
     hidden_dim = configuration.dim
     head_dim = hidden_dim // n_heads
 
+    # devices setup
+    devices = [
+        device,
+        device,
+        device,
+        device,
+        device,
+        device,
+        device,
+        device,
+    ]  # let's assume we parallelize over the same devices because we only got one
+
     # Prepare models
-    layer_past = [
-        hugging_face_reference_model.layers[layer_num].attention.cache_k.clone().permute(0, 2, 1, 3),
-        hugging_face_reference_model.layers[layer_num].attention.cache_v.clone().permute(0, 2, 1, 3),
-    ]
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaAttention_model = TtLlamaAttention(
-        device, state_dict, base_url, layer_num, model_config, layer_past, configuration
-    )
+    tt_LlamaAttention_model = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
 
     generation_start_pos = 127
     generation_length = 8
@@ -172,7 +178,16 @@ def run_test_LlamaAttention_inference(
         ),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware execution -------------------------------------------------------------
-    tt_layer_present = [tt2torch_tensor(cache) for cache in tt_LlamaAttention_model.layer_past]
+    tt_layer_present = []
+    for layer_past in tt_LlamaAttention_model.layer_past_list:
+        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+    # concat the pasts by heads
+    if len(devices) > 1:
+        tt_layer_present = [
+            torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+        ]
+    else:
+        tt_layer_present = tt_layer_present[0]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
         cache_length_to_check = generation_start_pos + generation_length + 1
