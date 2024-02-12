@@ -118,12 +118,16 @@ void kernel_main() {
     uint64_t in1_mcast_receiver_semaphore_noc_addr = in1_multicast_noc_addr | in1_mcast_receiver_semaphore_addr;
 
 
+    const bool in1_sender_in_receiver_grid = in1_mcast_sender_id < in1_mcast_grid_size;
+    bool mcast_in1_to_local_cb = false;
+    uint32_t in1_sharded_cb_addr = get_read_ptr(cb_id_in2);
     #ifdef IN1_SHARDED
     // Only used for sharded
     // Don't need to track batch because user batch must be 32 (ie. Mt must be 1)
-    uint64_t in1_sharded_cb_noc_addr_Nt = get_noc_addr(get_read_ptr(cb_id_in2));
+    uint64_t in1_sharded_cb_noc_addr_Nt = get_noc_addr(in1_sharded_cb_addr);
     uint64_t in1_sharded_cb_noc_addr;
     uint32_t in1_block_w_tile_read_bytes = in1_block_w_tile_bytes;
+    if (in1_num_blocks == 1) mcast_in1_to_local_cb = true; // For sharded in1, if no blocking along Nt, directly mcast instead of doing local copies
     #else
     // Only used for interleaved
     uint32_t in1_batch;
@@ -132,6 +136,7 @@ void kernel_main() {
     uint32_t in1_block_addr_skip = 0; // Skip padded subblocks to prevent reading from undefined memory
     uint32_t out_subblock_w_ = out_subblock_w;
     #endif
+
 
     for (uint32_t b = 0; b < blocks; b++) { // TODO: Must be 1
         #ifndef IN1_SHARDED
@@ -166,23 +171,25 @@ void kernel_main() {
                             if (tile_row_id == in1_mcast_sender_id) {
                                 // MCAST SENDER: send all kv_heads in one user batch
                                 #ifdef IN1_SHARDED
-                                // TODO: Try to optimize away the local copy and self-mcast instead for sharded; some things to try:
-                                // - block sharding so each core gets correct block along out width
-                                // - for post-attn, Nt is head_dim (eg. 2 tiles), so we can always just fully self-mcast
-                                // - overlap copy with mcasting to hide away the local copy time (maybe offload some work to writer)
+                                if (!mcast_in1_to_local_cb) {
+                                    // TODO: Try to optimize away the local copy and self-mcast instead for sharded; some things to try:
+                                    // - block sharding so each core gets correct block along out width
+                                    // - overlap copy with mcasting to hide away the local copy time (maybe offload some work to writer)
 
-                                // Copy to cb_id_in1 to mcast
-                                uint64_t in1_sharded_cb_noc_addr = in1_sharded_cb_noc_addr_Nt;
-                                uint32_t in1_current_l1_write_addr = l1_write_addr_in1;
-                                for (uint32_t kv_heads_id = 0; kv_heads_id < num_kv_heads; kv_heads_id++) {
-                                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                        noc_async_read(in1_sharded_cb_noc_addr, in1_current_l1_write_addr, in1_block_w_tile_read_bytes);
-                                        in1_sharded_cb_noc_addr += Nt_bytes; // Increment by Nt to get to next kt
-                                        in1_current_l1_write_addr += in1_block_w_tile_bytes;
+                                    // Copy to cb_id_in1 to mcast
+                                    uint64_t in1_sharded_cb_noc_addr = in1_sharded_cb_noc_addr_Nt;
+                                    uint32_t in1_current_l1_write_addr = l1_write_addr_in1;
+                                    for (uint32_t kv_heads_id = 0; kv_heads_id < num_kv_heads; kv_heads_id++) {
+                                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                                            noc_async_read(in1_sharded_cb_noc_addr, in1_current_l1_write_addr, in1_block_w_tile_read_bytes);
+                                            in1_sharded_cb_noc_addr += Nt_bytes; // Increment by Nt to get to next kt
+                                            in1_current_l1_write_addr += in1_block_w_tile_bytes;
+                                        }
+                                        // Next head follows after finishing KtNt, so no need to increment in1_current_l1_write_addr
                                     }
-                                    // Next head follows after finishing KtNt, so no need to increment in1_current_l1_write_addr
+                                    // These indices are local to each core, so don't modify when looping num_rows_in_one_tile
+                                    noc_async_read_barrier();
                                 }
-                                // These indices are local to each core, so don't modify when looping num_rows_in_one_tile
                                 #else
                                 uint32_t in1_tensor_id_along_Kt = in1_tensor_id;
                                 uint32_t in1_current_l1_write_addr = l1_write_addr_in1;
@@ -199,8 +206,8 @@ void kernel_main() {
                                     }
                                     // Next head follows after finishing KtNt, so no need to increment
                                 }
-                                #endif
                                 noc_async_read_barrier();
+                                #endif
 
                                 // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in1_mcast_num_dests), then reset
                                 // the semaphore_addr value back to zero for the next block
@@ -208,9 +215,18 @@ void kernel_main() {
                                 noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
 
                                 // Now we have the block in the CB address, we can mcast to dests!
-                                // num_dests will source, since we are copying to a different local CB as well
                                 uint64_t in1_multicast_data_addr = in1_multicast_noc_addr | l1_write_addr_in1;
-                                noc_async_write_multicast(l1_write_addr_in1, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores);
+                                if (mcast_in1_to_local_cb) { // directly mcast data in in1 sharded cb
+                                    if (in1_sender_in_receiver_grid) {
+                                        // if sender is in receiver grid, num_dests will include source, since we are copying to a different local CB as well
+                                        noc_async_write_multicast_loopback_src(in1_sharded_cb_addr, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores + 1);
+                                    } else {
+                                        // if sender is not in receiver grid, do a regular multicast but from in1_sharded_cb_addr
+                                        noc_async_write_multicast(in1_sharded_cb_addr, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores);
+                                    }
+                                } else { // mcast from l1_write_addr_in1 which is populated locally by copying from in1 sharded or interleaved
+                                    noc_async_write_multicast(l1_write_addr_in1, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores);
+                                }
 
                                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -220,7 +236,7 @@ void kernel_main() {
 
                                 // Write barrier needed to make sure we finish sending mcast flag before we modify locally
                                 noc_async_write_barrier();
-                            } else if (in1_mcast_sender_id < in1_mcast_grid_size) {
+                            } else if (in1_sender_in_receiver_grid) {
                                 // MCAST RECEIVER: receive all kv_heads in one user batch
                                 // All cores in mcast grid needs to participate in receiving otherwise data corruption since we mcast from and to the same CB
 
