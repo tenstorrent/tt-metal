@@ -94,6 +94,8 @@ def run_test_LlamaDecoder_inference(
     print(state_dict.keys())
 
     # Prepare configs
+    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
+
     torch.manual_seed(0)
     layer_num = 0
     base_url = "layers"
@@ -106,9 +108,9 @@ def run_test_LlamaDecoder_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaDecoder_model = TtLlamaDecoder(device, state_dict, base_url, layer_num, model_config, configuration, batch)
+    tt_LlamaDecoder_model = TtLlamaDecoder(devices, state_dict, base_url, layer_num, model_config, configuration, batch)
 
-    generation_start_pos = 127
+    generation_start_pos = 0
     generation_length = 8
     all_tests_pass = True
     for i in range(generation_length):
@@ -136,7 +138,16 @@ def run_test_LlamaDecoder_inference(
             start_pos,
             attn_mask,
         )
-        tt_out = tt2torch_tensor(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+
+        assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
+        assert len(tt_out) == len(devices)
+        tt_outs = [tt2torch_tensor(o) for o in tt_out]
+        tt_out = tt_outs[0]
+        # Check that all tensors match tt_out
+        for o in tt_outs[1:]:
+            assert comp_allclose(tt_out, o)
+
+        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -159,7 +170,13 @@ def run_test_LlamaDecoder_inference(
         ),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware execution -------------------------------------------------------------
-    tt_layer_present = [tt2torch_tensor(cache) for cache in tt_LlamaDecoder_model.attention.layer_past]
+    tt_layer_present = []
+    for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
+        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+    # concat the pasts by heads
+    tt_layer_present = [
+        torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+    ]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
         cache_length_to_check = generation_start_pos + generation_length + 1

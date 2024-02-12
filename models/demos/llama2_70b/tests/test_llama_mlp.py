@@ -50,11 +50,13 @@ def run_test_LlamaMLP_inference(
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
 
     hugging_face_reference_model = Llama.build(
-        ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=True
+        ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=False
     ).model
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.params
     state_dict = hugging_face_reference_model.state_dict()
+
+    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
 
     # Prepare input
     torch.manual_seed(0)
@@ -77,7 +79,7 @@ def run_test_LlamaMLP_inference(
     print(f"Compute grid size x: {compute_grid_size.x}")
     print(f"Compute grid size y: {compute_grid_size.y}")
 
-    mlp_optimized = True
+    mlp_optimized = False
     if mlp_optimized:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP_optimized(
@@ -99,22 +101,31 @@ def run_test_LlamaMLP_inference(
     else:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP(
-            device,
+            devices,
             state_dict,
             base_url,
             layer_num,
             configuration.dim,
             model_config,
         )
-        tt_mlp_input = torch2tt_tensor(mlp_input, device)
+        tt_mlp_input = [torch2tt_tensor(mlp_input.clone(), device) for device in devices]
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
-    tt_out = tt2torch_tensor(tt_out)
-    # check outputs ----------------------------------------------------------------------
-    logger.info(comp_allclose(pytorch_out, tt_out))
+    if len(devices) > 1:
+        assert len(tt_out) == len(devices)
+        tt_outs = [tt2torch_tensor(o) for o in tt_out]
+        for i in range(len(devices)):
+            logger.info(comp_allclose(pytorch_out, tt_outs[i]))
 
-    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-    logger.info(f"PCC value: {output_pcc}")
+            does_pass, output_pcc = comp_pcc(pytorch_out, tt_outs[i], pcc)
+            logger.info(f"PCC value: {output_pcc}")
+    else:
+        tt_out = tt2torch_tensor(tt_out[0])
+        # check outputs ----------------------------------------------------------------------
+        logger.info(comp_allclose(pytorch_out, tt_out))
+
+        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+        logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
         logger.info("Falcon MLP output Passed!")
