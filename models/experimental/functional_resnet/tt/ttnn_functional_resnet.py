@@ -21,11 +21,11 @@ class BasicBlock:
     def __call__(self, x):
         identity = x
 
+        # Relu and bn1 are fused with conv1
         out = self.conv1(x)
-        # out = self.bn1(out)
 
+        # Relu and bn2 are fused with conv1
         out = self.conv2(out)
-        # out = self.bn2(out)
 
         if self.downsample is not None:
             identity = self.downsample(x)
