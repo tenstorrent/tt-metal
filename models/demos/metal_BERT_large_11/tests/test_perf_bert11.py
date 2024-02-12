@@ -102,27 +102,20 @@ def run_perf_bert11(
 
         profiler.start(second_run_accum_key)
         # First input to device
-        tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
-        tt_embedding_inputs = {
-            key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
-            for (key, value) in tt_embedding_inputs_host.items()
-        }
         # Run inference iterations - 1 times with sending next input/reading output interleaved
-        for _ in range(inference_iterations - 1):
-            tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
-            tt_output = tt_model(tt_embedding, tt_attention_mask)
+        for _ in range(inference_iterations):
             tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
             tt_embedding_inputs = {
                 key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
                 for (key, value) in tt_embedding_inputs_host.items()
             }
-            tt_output = tt_output.cpu()
-        # Run last inference iteration
-        tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
-        tt_output = tt_model(tt_embedding, tt_attention_mask)
-        tt_output = tt_output.cpu(blocking=False)
-        outputs.append(tt_output)
+            tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
+            tt_output = tt_model(tt_embedding, tt_attention_mask)
+            tt_output = tt_output.cpu(blocking=False)
+            outputs.append(tt_output)
 
+        # Run last inference iteration
+        tt_lib.device.Synchronize(device)
         profiler.end(second_run_accum_key, force_enable=True)
 
         del tt_attention_mask
@@ -130,7 +123,6 @@ def run_perf_bert11(
         del tt_embedding
         del tt_output
 
-    tt_lib.device.Synchronize(device)
     first_iter_time = profiler.get(first_run_key)
     second_iter_time = profiler.get(second_run_accum_key) / inference_iterations
     cpu_time = profiler.get(cpu_key)
