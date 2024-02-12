@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib as ttl
+import tt_lib.fallback_ops
 from models.utility_functions import (
     comp_allclose_and_pcc,
 )
