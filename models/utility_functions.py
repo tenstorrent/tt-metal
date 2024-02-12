@@ -509,12 +509,12 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
     debug_index = or_abs_rel.to(torch.int32).argmin().item()
 
     if not or_abs_rel.reshape(-1)[debug_index]:
-        logger.info("isclose mismatch at index=", debug_index)
+        logger.info(f"isclose mismatch at index={debug_index}")
         logger.info(a.reshape(-1)[debug_index])
         logger.info(b.reshape(-1)[debug_index])
-        logger.info("reldiff1=", reldiff1.reshape(-1)[debug_index])
-        logger.info("reldiff2=", reldiff2.reshape(-1)[debug_index])
-        logger.info("absdiff=", absdiff.reshape(-1)[debug_index])
+        logger.info(f"reldiff1={reldiff1.reshape(-1)[debug_index]}")
+        logger.info(f"reldiff2={reldiff2.reshape(-1)[debug_index]}")
+        logger.info(f"absdiff={absdiff.reshape(-1)[debug_index]}")
 
         HT = a.shape[-2] // 32
         WT = a.shape[-1] // 32
@@ -524,7 +524,7 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
         h = (debug_index % 1024) // 32
         w = (debug_index % 1024) % 32
 
-        logger.info("****    at ", debug_index, " --- ", "HTWT=", ht, wt, "HW=", h, w)
+        logger.info(f"****    at {debug_index} --- HTWT={ht} {wt} HW={h} {w}")
 
     return torch.all(or_abs_rel)
 

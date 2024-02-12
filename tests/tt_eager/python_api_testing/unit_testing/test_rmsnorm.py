@@ -101,7 +101,8 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_rmsnorm = rmsnorm(x, gamma.flatten(), beta.flatten(), epsf)
 
-        assert is_close(tt_got_back, ref_rmsnorm)
+        passing = is_close(tt_got_back, ref_rmsnorm)
+        assert passing
 
 
 @pytest.mark.parametrize(

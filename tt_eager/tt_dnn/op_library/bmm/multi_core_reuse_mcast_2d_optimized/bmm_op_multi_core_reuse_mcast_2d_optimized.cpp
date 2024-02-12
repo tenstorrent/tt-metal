@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     if (split_half) {
          in0_receiver_in1_receiver_right_half = {
-             {(std::size_t) start_core_x + 1 + half_core, (std::size_t) start_core_y + 1},
+             {(std::size_t) start_core_x + half_core + 1, (std::size_t) start_core_y + 1},
              {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
     }
 
