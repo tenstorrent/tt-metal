@@ -40,27 +40,27 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
         if (ncores_x_cliff == ncores_x) {
             // no cliff, all is perfectly divisible
             ncores_x_cliff = 0;
-            core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)});
-            all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)});
+            core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
+            all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
         } else if (ncores_x_cliff == 1) {
             // just one cliff core in the last row
             nblocks_per_core_cliff = 1;
             if (ncores_y > 1) {
-                core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
-                all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
             }
-            core_range_cliff.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)});
-            all_cores.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)});
+            core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
+            all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
         } else if (ncores_x_cliff > 1) {
             // both normal and cliff cores in the last row
             nblocks_per_core_cliff = 1;
             if (ncores_y > 1) {
-                core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
-                all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
             }
-            core_range.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-            core_range_cliff.insert(CoreRange{CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-            all_cores.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
+            core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+            core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+            all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
         } else {
             TT_ASSERT(false, "Something went really wrong in splitting blocks across cores {} {}!!", ncores_x, ncores_x_cliff);
         }
@@ -75,25 +75,25 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
             if (ncores_x_cliff == ncores_x) {
                 // no x_cliff row => all cores are equal
                 ncores_x_cliff = 0;
-                core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
             } else if (ncores_x_cliff == 1) {
                 // just 1 core as cliff in the last core row
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range_cliff.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)});
-                all_cores.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)});
+                core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
             } else if (ncores_x_cliff < ncores_x) {
                 // last core row has last core as cliff, rest are normal
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-                core_range_cliff.insert(CoreRange{CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
             } else {
                 TT_ASSERT("Something went really wrong in calculating the core ranges {} {}", ncores_x, ncores_x_cliff);
             }
@@ -102,27 +102,27 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
             if (ncores_x_cliff == ncores_x) {
                 // ncores x is same throughout
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-                core_range_cliff.insert(CoreRange{CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
             } else if (ncores_x_cliff == 1) {
                 // last core row only has 1 core, as cliff
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range_cliff.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)});
-                all_cores.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)});
+                core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
             } else if (ncores_x_cliff < ncores_x) {
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-                core_range_cliff.insert(CoreRange{CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
             } else {
                 TT_ASSERT(false, "Something went very wrong in calculating core ranges (case 2)");
             }

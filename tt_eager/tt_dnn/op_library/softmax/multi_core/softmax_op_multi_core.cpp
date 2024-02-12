@@ -438,9 +438,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t num_cores_c = grid_size.x;
     uint32_t num_cores_r = grid_size.y;
     uint32_t num_cores = num_cores_c * num_cores_r;
-    CoreRange all_device_cores{
+    CoreRange all_device_cores(
         {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
     // reader compile arg
     bool is_dram_mask = 0;
     if (mask.has_value()) {

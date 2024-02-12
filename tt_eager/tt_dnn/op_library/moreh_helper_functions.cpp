@@ -22,21 +22,21 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     std::set<CoreRange> new_core_group_2_set;
 
     for (auto core : all_cores.ranges()) {
-        new_all_cores_set.insert((CoreRange){
+        new_all_cores_set.insert(CoreRange(
             {core.start.x + offset_x, core.start.y + offset_y},
-            {core.end.x + offset_x, core.end.y + offset_y}});
+            {core.end.x + offset_x, core.end.y + offset_y}));
     }
 
     for (auto core : core_group_1.ranges()) {
-        new_core_group_1_set.insert((CoreRange){
+        new_core_group_1_set.insert(CoreRange(
             {core.start.x + offset_x, core.start.y + offset_y},
-            {core.end.x + offset_x, core.end.y + offset_y}});
+            {core.end.x + offset_x, core.end.y + offset_y}));
     }
 
     for (auto core : core_group_2.ranges()) {
-        new_core_group_2_set.insert((CoreRange){
+        new_core_group_2_set.insert(CoreRange(
             {core.start.x + offset_x, core.start.y + offset_y},
-            {core.end.x + offset_x, core.end.y + offset_y}});
+            {core.end.x + offset_x, core.end.y + offset_y}));
     }
 
     CoreRangeSet new_all_cores(new_all_cores_set);

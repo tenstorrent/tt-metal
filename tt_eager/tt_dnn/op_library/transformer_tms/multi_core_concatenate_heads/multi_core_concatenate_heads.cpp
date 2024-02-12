@@ -68,10 +68,10 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    CoreRange all_cores{
+    CoreRange all_cores(
         {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1},
-    };
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}
+    );
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

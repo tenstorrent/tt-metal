@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {{0, 0}, {0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     auto src0_buffer = a.buffer();
 	auto src1_buffer = b.buffer();

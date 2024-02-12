@@ -132,7 +132,7 @@ inline std::set<CoreRange> num_cores_to_corerange_set(const CoreCoord start_core
     if (row_wise) {
         // Partial row at start
         if (s_core.x != 0 && leftover_size > num_cores_x - start_core.x) {
-            CoreRange start_block = {s_core, {num_cores_x - 1, s_core.y}};
+            CoreRange start_block(s_core, {num_cores_x - 1, s_core.y});
             all_cores_set.insert(start_block);
             s_core = {0, s_core.y + 1};
             leftover_size -= start_block.size();
@@ -140,20 +140,20 @@ inline std::set<CoreRange> num_cores_to_corerange_set(const CoreCoord start_core
         // Full rows
         if (leftover_size > num_cores_x) {
             uint32_t num_full_rows = leftover_size / num_cores_x;
-            CoreRange full_block = {s_core, {num_cores_x - 1, s_core.y + num_full_rows - 1}};
+            CoreRange full_block(s_core, {num_cores_x - 1, s_core.y + num_full_rows - 1});
             all_cores_set.insert(full_block);
             leftover_size -= full_block.size();
             s_core = {0, s_core.y + num_full_rows};
         }
         // Partial row at end
         if (leftover_size > 0) {
-            CoreRange leftover_block = {s_core, {s_core.x + leftover_size - 1, s_core.y}};
+            CoreRange leftover_block(s_core, {s_core.x + leftover_size - 1, s_core.y});
             all_cores_set.insert(leftover_block);
         }
     } else {
         // Partial col at start
         if (s_core.y != 0 && leftover_size > num_cores_y - start_core.y) {
-            CoreRange start_block = {s_core, {s_core.x, num_cores_y - 1}};
+            CoreRange start_block(s_core, {s_core.x, num_cores_y - 1});
             all_cores_set.insert(start_block);
             s_core = {s_core.x + 1, 0};
             leftover_size -= start_block.size();
@@ -161,14 +161,14 @@ inline std::set<CoreRange> num_cores_to_corerange_set(const CoreCoord start_core
         // Full cols
         if (leftover_size > num_cores_y) {
             uint32_t num_full_cols = leftover_size / num_cores_y;
-            CoreRange full_block = {s_core, {s_core.x + num_full_cols - 1, num_cores_y - 1}};
+            CoreRange full_block(s_core, {s_core.x + num_full_cols - 1, num_cores_y - 1});
             all_cores_set.insert(full_block);
             leftover_size -= full_block.size();
             s_core = {s_core.x + num_full_cols, 0};
         }
         // Partial row at end
         if (leftover_size > 0) {
-            CoreRange leftover_block = {s_core, {s_core.x, s_core.y + leftover_size - 1}};
+            CoreRange leftover_block(s_core, {s_core.x, s_core.y + leftover_size - 1});
             all_cores_set.insert(leftover_block);
         }
     }
@@ -209,49 +209,49 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
         if (row_wise) {
             // Case where only the last row is divided between core group 1 and 2
             if (last_block_group_1.end.y == last_block_all_cores.end.y && last_block_group_1.end.x != last_block_all_cores.end.x) {
-                CoreRange leftover_block = {
+                CoreRange leftover_block(
                     {last_block_group_1.end.x + 1, last_block_group_1.end.y},
                     last_block_all_cores.end
-                };
+                );
                 core_group_2_set.insert(leftover_block);
             } else {
                 // Case where a middle row is divided between core group 1 and 2
                 if (last_block_group_1.end.x != num_cores_x - 1) {
-                    CoreRange leftover_stick = {
+                    CoreRange leftover_stick(
                         {last_block_group_1.end.x + 1, last_block_group_1.end.y},
                         {num_cores_x - 1, last_block_group_1.end.y}
-                    };
+                    );
                     core_group_2_set.insert(leftover_stick);
                 }
                 // Remaining rows of cores that does less work
-                CoreRange leftover_block = {
+                CoreRange leftover_block(
                     {0, last_block_group_1.end.y + 1},
                     last_block_all_cores.end
-                };
+                );
                 core_group_2_set.insert(leftover_block);
             }
         } else {
             // Case where only the last column is divided between core group 1 and 2
             if (last_block_group_1.end.x == last_block_all_cores.end.x && last_block_group_1.end.y != last_block_all_cores.end.y) {
-                CoreRange leftover_block = {
+                CoreRange leftover_block(
                     {last_block_group_1.end.x, last_block_group_1.end.y + 1},
                     last_block_all_cores.end
-                };
+                );
                 core_group_2_set.insert(leftover_block);
             } else {
                 // Case where a middle column is divided between core group 1 and 2
                 if (last_block_group_1.end.y != num_cores_y - 1) {
-                    CoreRange leftover_stick = {
+                    CoreRange leftover_stick(
                         {last_block_group_1.end.x, last_block_group_1.end.y + 1},
                         {last_block_group_1.end.x, num_cores_y - 1}
-                    };
+                    );
                     core_group_2_set.insert(leftover_stick);
                 }
                 // Remaining columns of cores that does less work
-                CoreRange leftover_block = {
+                CoreRange leftover_block(
                     {last_block_group_1.end.x + 1, 0},
                     last_block_all_cores.end
-                };
+                );
                 core_group_2_set.insert(leftover_block);
             }
         }

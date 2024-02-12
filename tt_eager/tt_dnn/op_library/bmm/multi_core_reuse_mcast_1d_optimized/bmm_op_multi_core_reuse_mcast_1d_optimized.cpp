@@ -95,10 +95,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mcast_sender = all_cores;
     } else {
         mcast_sender = CoreRangeSet({
-            CoreRange{
+            CoreRange(
                 {(std::size_t) start_core_x, (std::size_t) start_core_y},
                 {(std::size_t) start_core_x, (std::size_t) start_core_y}
-            }
+            )
         });
         // TODO: Optimize difference of corerangesets
         std::set<CoreRange> mcast_receivers_set;
@@ -106,10 +106,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             uint32_t core_idx_x = i % num_cores_c;
             uint32_t core_idx_y = i / num_cores_c;
             if (!(core_idx_x == 0 && core_idx_y == 0)) {
-                CoreRange core = {
+                CoreRange core(
                     {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y},
                     {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y}
-                };
+                );
                 mcast_receivers_set.insert(core);
             }
         }
@@ -653,9 +653,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     CoreRangeSet all_cores = num_cores_to_corerange_set(num_cores, core_range, true);
 
 
-    CoreRange mcast_sender{
+    CoreRange mcast_sender(
         {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x, (std::size_t) start_core_y}};
+        {(std::size_t) start_core_x, (std::size_t) start_core_y});
 
     // TODO: Optimize difference of corerangesets
     std::set<CoreRange> mcast_receivers_set;
@@ -663,10 +663,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         uint32_t core_idx_x = i % num_cores_c;
         uint32_t core_idx_y = i / num_cores_c;
         if (!(core_idx_x == 0 && core_idx_y == 0)) {
-            CoreRange core = {
+            CoreRange core(
                 {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y},
                 {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y}
-            };
+            );
             mcast_receivers_set.insert(core);
         }
     }
