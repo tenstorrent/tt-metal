@@ -14,6 +14,7 @@
 #include "common/bfloat8.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "tensor/graph.hpp"
 #include "tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -29,7 +30,12 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-     Tensor(const Storage &storage, const Shape &shape, DataType dtype, Layout layout);
+     Tensor(
+         const Storage &storage,
+         const Shape &shape,
+         DataType dtype,
+         Layout layout,
+         const std::optional<GraphHook> graph_hook = std::nullopt);
 
      Tensor(const Tensor &other) = default;
      Tensor &operator=(const Tensor &other) = default;
@@ -128,9 +134,8 @@ class Tensor {
      Shape shape_;
      DataType dtype_;
      Layout layout_;
+     std::optional<GraphHook> graph_hook;
 };
-
-
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 

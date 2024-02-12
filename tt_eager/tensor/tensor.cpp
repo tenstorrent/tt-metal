@@ -25,8 +25,13 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) :
-    storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
+Tensor::Tensor(
+    const Storage& storage,
+    const Shape& shape,
+    DataType dtype,
+    Layout layout,
+    const std::optional<GraphHook> graph_hook) :
+    storage_(storage), shape_(shape), dtype_(dtype), layout_(layout), graph_hook(graph_hook) {
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -46,6 +51,9 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
         },
         this->storage_
     );
+    if constexpr (ENABLE_GRAPH) {
+        TT_ASSERT(this->graph_hook.has_value() && "Graph info must be provided for graph mode");
+    }
 }
 
 Tensor::~Tensor() {
