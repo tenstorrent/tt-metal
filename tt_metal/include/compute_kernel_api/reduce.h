@@ -45,10 +45,10 @@ ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uin
 
 // Delta from binary_op_init_common
 template<bool at_start>
-ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16)
+ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1)
 {
     // FIXME: API Update needed in compute kernel?
-    UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(0, 1) ));
+    UNPACK(( llk_unpack_AB_reduce_init<REDUCE_DIM>(icb0, icb1) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 

@@ -116,7 +116,7 @@ void MAIN {
                         untilize_uninit(cb_intermed0);
 
                         unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
-                        mm_init_short(transpose_hw);
+                        mm_init_short(cb_in0, cb_in1, transpose_hw);
                     }  // 32 tiles loop
 
                     in0_index_subblock_offset += in0_subblock_num_tiles;

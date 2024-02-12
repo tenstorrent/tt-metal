@@ -80,33 +80,21 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
  */
 ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
 {
-    #ifdef ARCH_GRAYSKULL
     PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
-    #else
-    PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
-    #endif
 }
 
 /**
  * Helper function to reconfigure packer output data format.
  */
 ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
-    #ifdef ARCH_GRAYSKULL
-        PACK(( llk_pack_reconfig_data_format(new_operand) ));
-    #else
-        PACK(( llk_pack_reconfig_data_format(new_operand) ));
-    #endif
+    PACK(( llk_pack_reconfig_data_format(new_operand) ));
 }
 
 /**
  * Helper function to reconfigure packer output data format.
  */
 ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t new_operand) {
-    #ifdef ARCH_GRAYSKULL
-        PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
-    #else
-        PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
-    #endif
+    PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
 }
 
 }

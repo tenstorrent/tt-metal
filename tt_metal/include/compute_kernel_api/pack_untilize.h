@@ -22,7 +22,7 @@ template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
 {
     #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_untilize_init<block_ct_dim>() ));
@@ -60,7 +60,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
         MATH(( llk_math_dest_section_done<SYNC>() ));
 
         PACK(( llk_packer_wait_for_math_done() ));
-        PACK(( llk_pack_untilize<block_ct_dim>(1, ocb) ));
+        PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb) ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
     #endif
@@ -89,7 +89,7 @@ ALWI void pack_untilize_dst_init_short()
 template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_dst(uint32_t ocb) {
     #ifdef ARCH_GRAYSKULL
-    PACK(( llk_pack_untilize<block_ct_dim>(1, ocb) ));
+    PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb) ));
     #endif
 }
 

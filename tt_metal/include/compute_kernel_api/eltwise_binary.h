@@ -51,10 +51,10 @@ ALWI void mul_tiles_init_f() { MATH(( llk_math_eltwise_binary_init<ELWMUL, NONE,
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void mul_tiles_init() {
+ALWI void mul_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     MATH(( llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(0, 1) ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
 }
 
 /**
@@ -68,10 +68,10 @@ ALWI void add_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWADD, NON
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void add_tiles_init() {
+ALWI void add_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(0, 1) ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
 }
 
 /**
@@ -85,10 +85,10 @@ ALWI void sub_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWSUB, NON
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sub_tiles_init() {
+ALWI void sub_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
     MATH(( llk_math_eltwise_binary_init<ELWSUB, NONE>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(0, 1) ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
 }
 
 

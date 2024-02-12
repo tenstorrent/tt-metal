@@ -70,7 +70,7 @@ void MAIN {
             untilize_uninit(cb_intermed0);
 
             unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
-            mm_init_short(transpose_hw);
+            mm_init_short(cb_in0, cb_in1, transpose_hw);
         }
         cb_pop_front(cb_in0, Kt);
 
@@ -91,7 +91,7 @@ void MAIN {
         // Hangs when in0 is BFLOAT8_B if we don't force the reconfig
         unpack_reconfig_data_format_srca(cb_in1);
         pack_reconfig_data_format(out_cb_id, cb_intermed0);
-        mm_init_short(transpose_hw);
+        mm_init_short(cb_in0, cb_in1, transpose_hw);
     }
 
 }

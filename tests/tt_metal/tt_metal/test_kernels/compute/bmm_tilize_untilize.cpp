@@ -168,14 +168,14 @@ void MAIN {
                         acquire_dst(tt::DstMode::Half);
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short_with_dt(matmul_partials_cb);
+                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                                 copy_tile(matmul_partials_cb, i, i);
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short_with_dt(matmul_partials_cb);
+                            mm_init_short_with_dt(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
                         } // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;

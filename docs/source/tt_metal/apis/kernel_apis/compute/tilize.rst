@@ -6,4 +6,4 @@ tilize
 .. doxygenfunction:: tilize_init_short_with_dt(uint32_t icb, uint32_t block)
 .. doxygenfunction:: tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 .. doxygenfunction:: tilize_uninit()
-.. doxygenfunction:: tilize_uninit_with_dt()
+.. doxygenfunction:: tilize_uninit_with_dt(uint32_t old_icb = 0, uint32_t new_icb = 1)
