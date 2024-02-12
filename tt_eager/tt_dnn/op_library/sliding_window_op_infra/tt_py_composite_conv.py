@@ -120,7 +120,7 @@ def determine_parallel_config(
         ]  # for 1d systolic array, we don't need to provide actual grid size because tensor sharding deterimines that automatically
         num_cores_nhw = actual_num_cores
         grid_size = [
-            max_grid_size["x"],
+            max_grid_size["x"] if num_cores_nhw >= max_grid_size["x"] else num_cores_nhw,
             math.ceil(num_cores_nhw / max_grid_size["x"]),
         ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
     else:
@@ -666,7 +666,7 @@ class TTPyCompositeConv(TTPyOp):
                 bias_untiled = bias_untiled.to_torch()
                 bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
                 bias_on_device = bias_.to(device) if move_weights_to_device else bias_
-                self.bias = bias_on_device
+            self.bias = bias_on_device
         else:
             self.weight = weight
             self.bias = bias
