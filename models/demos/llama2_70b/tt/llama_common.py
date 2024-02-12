@@ -32,8 +32,8 @@ def tt_all_reduce(tensors):
     return res
 
 
-def generate_rot_emb(dhead, end, batch):
-    cos, sin = tt_precompute_freqs(dhead, end)
+def generate_rot_emb(dhead, end):
+    cos, sin = precompute_freqs(dhead, end)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
     return rot_mat
 
