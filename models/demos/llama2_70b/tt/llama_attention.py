@@ -11,6 +11,7 @@ from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
+    tt_all_reduce,
 )
 
 
@@ -262,14 +263,4 @@ class TtLlamaAttention(nn.Module):
         if len(dense_outputs) > 1:
             return tt_all_reduce(dense_outputs)
         else:
-            return dense_outputs[0]
-
-
-def tt_all_reduce(tensors):
-    """
-    reduction on a list of tensors
-    """
-    base_tensor = tensors[0]
-    for tensor in tensors[1:]:
-        base_tensor = tt_lib.tensor.add(base_tensor, tensor)
-    return base_tensor
+            return dense_outputs

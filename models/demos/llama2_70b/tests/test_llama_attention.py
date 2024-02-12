@@ -110,7 +110,7 @@ def run_test_LlamaAttention_inference(
     # TT model -------------------------------------------------------------
     tt_LlamaAttention_model = TtLlamaAttention(device, state_dict, base_url, layer_num, model_config, configuration)
 
-    generation_start_pos = 127
+    generation_start_pos = 0
     generation_length = 8
     all_tests_pass = True
     for i in range(generation_length):
@@ -142,6 +142,9 @@ def run_test_LlamaAttention_inference(
             start_pos,
             attn_mask,
         )
+
+        assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
+        tt_out = tt_out[0]
         tt_out = tt2torch_tensor(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
