@@ -31,6 +31,8 @@ protected:
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
         tt::llrt::OptionsG.set_test_mode_enabled(true);
 
+        ExtraSetUp();
+
         // Parent class initializes devices and any necessary flags
         CommonFixture::SetUp();
     }
@@ -62,5 +64,19 @@ protected:
         CommonFixture::RunTestOnDevice(run_function_no_args, device);
         tt::DPrintServerClearLogFile();
         tt::DPrintServerClearSignals();
+    }
+
+    // Override this function in child classes for additional setup commands between DPRINT setup
+    // and device creation.
+    virtual void ExtraSetUp() {}
+};
+
+// For usage by tests that need the dprint server devices disabled.
+class DPrintFixtureDisableDevices: public DPrintFixture {
+protected:
+    void ExtraSetUp() override {
+        // For this test, mute each devices using the environment variable
+        tt::llrt::OptionsG.set_dprint_all_chips(false);
+        tt::llrt::OptionsG.set_dprint_chip_ids({});
     }
 };
