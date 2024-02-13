@@ -18,13 +18,13 @@ def rms_decomp(x, norm_weight, eps):
     return norm_out
 
 
-def tt_all_reduce(tensors):
+def tt_all_reduce(tensors, output_mem_config=None):
     """
     reduction on a list of tensors
     """
     base_tensor = tensors[0]
     for tensor in tensors[1:]:
-        base_tensor = tt_lib.tensor.add(base_tensor, tensor)
+        base_tensor = tt_lib.tensor.add(base_tensor, tensor, output_mem_config=output_mem_config)
     dev = base_tensor.device()
     # Emulate replication on all chips
     res_pt = tt2torch_tensor(base_tensor)
