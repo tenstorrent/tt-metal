@@ -68,11 +68,13 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
+    TestEntry("tt_eager/tests/ops/test_multi_queue_api", "ops/test_multi_queue_api"),
     TestEntry(
         "tt_eager/tests/tensors/test_host_device_loopback",
         "tensors/test_host_device_loopback",
     ),
     TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
+    TestEntry("tt_eager/tests/tensors/test_raw_host_memory_pointer", "tensors/test_raw_host_memory_pointer"),
     # DTX Tests
     TestEntry("tt_eager/tests/dtx/tensor", "dtx/tensor"),
     TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),

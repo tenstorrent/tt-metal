@@ -9,34 +9,29 @@
 
 namespace tt::tt_metal
 {
-    void EnqueueHostToDeviceTransfer(CommandQueue& q, Tensor& dst, const void* src, size_t transfer_size)
-    {
-        dst.to(q, MemoryConfig{});
-    }
+void EnqueueHostToDeviceTransfer(
+    CommandQueue& q, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size) {
+    memcpy(q, dst, src, transfer_size);
+}
 
-    void EnqueueHostToDeviceTransfer(CommandQueue& q, Tensor& dst, const void* src, size_t transfer_size, const MemoryConfig& mem_config)
-    {
-        dst.to(q, mem_config);
-    }
+void EnqueueDeviceToHostTransfer(
+    CommandQueue& q, Tensor& src, void* dst, const std::optional<std::size_t> transfer_size, size_t src_offset) {
+    TT_ASSERT(src_offset == 0, "src_offset is not supported");
+    memcpy(q, dst, src, transfer_size);
+}
 
-    void EnqueueDeviceToHostTransfer(CommandQueue& q, Tensor& src, void* dst, size_t transfer_size, size_t src_offset)
-    {
-    }
+void QueueSynchronize(CommandQueue& q) { Finish(q); }
 
-   void QueueSynchronize(CommandQueue& q){
-        Finish(q);
-    }
+void QueueRecordEvent(CommandQueue& q, Event& e) {}
+void QueueWaitForEvent(CommandQueue& q, Event& e) {}
+void EventSynchronize(Event& e) {}
 
-    void QueueRecordEvent(CommandQueue& q, Event&e){}
-    void QueueWaitForEvent(CommandQueue& q, Event&e){}
-    void EventSynchronize(Event&e){}
-
-    void EnqueueOperation(CommandQueue& q, operation::DeviceOperation& devop,
-                          const std::vector<Tensor>& input_tensors,
-                          std::vector<Tensor>& output_tensors,
-                          const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                          const std::vector<std::optional<Tensor>>& optional_output_tensors){
-        operation::run( q, devop, input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
-    }
-
+std::vector<Tensor> EnqueueOperation(
+    CommandQueue& queue,
+    operation::DeviceOperation& devop,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    return operation::run(queue, devop, input_tensors, optional_input_tensors, optional_output_tensors);
+}
 }

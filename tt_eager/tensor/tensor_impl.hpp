@@ -931,27 +931,6 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
         tensor.storage());
 }
 
-template <typename DataType>
-void memcpy(Tensor& dst, const Tensor& src) {
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    TT_ASSERT(dst.dtype() == src.dtype());
-    TT_ASSERT(dst.layout() == src.layout());
-
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        EnqueueReadBuffer(
-            src.device()->command_queue(), src.device_buffer(), get_raw_host_data_ptr(dst), true);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        EnqueueWriteBuffer(
-            dst.device()->command_queue(), dst.device_buffer(), get_raw_host_data_ptr(src), false);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
-}
-
 }  // namespace tensor_impl
 
 }  // namespace tt_metal

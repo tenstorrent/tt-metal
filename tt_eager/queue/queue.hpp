@@ -20,22 +20,27 @@ struct Event {
    uint32_t id;
 };
 
-void EnqueueHostToDeviceTransfer(CommandQueue&, Tensor& dst, const void* src, size_t transfer_size);
+void EnqueueHostToDeviceTransfer(
+    CommandQueue&, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
-void EnqueueDeviceToHostTransfer(CommandQueue&, Tensor& src, void* dst, size_t transfer_size, size_t src_offset = 0);
-
+void EnqueueDeviceToHostTransfer(
+    CommandQueue&,
+    Tensor& src,
+    void* dst,
+    const std::optional<std::size_t> transfer_size = std::nullopt,
+    size_t src_offset = 0);
 
 void QueueRecordEvent(CommandQueue&, Event&);
 void QueueWaitForEvent(CommandQueue&, Event&);
 void EventSynchronize(Event&);
 void QueueSynchronize(CommandQueue&);
 
-void EnqueueOperation(CommandQueue&,
-                      operation::DeviceOperation&,
-                      const std::vector<Tensor>& input_tensors,
-                      std::vector<Tensor>& output_tensors,
-                      const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-                      const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
+std::vector<Tensor> EnqueueOperation(
+    CommandQueue&,
+    operation::DeviceOperation&,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
 }
 
 // Future APIs to be added later
