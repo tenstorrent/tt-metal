@@ -87,6 +87,22 @@ def fold_batch_norm2d_into_conv2d(conv, bn):
     return weight, bias
 
 
+def fold_conv7s2_into_conv4s1(conv7s2_weight, conv7s2_bias, ttnn_module_args):
+    from models.utility_functions import pad_and_fold_conv_filters_for_unity_stride
+
+    stride = ttnn_module_args.stride
+    padding = ttnn_module_args.padding
+    conv4s1_weight = pad_and_fold_conv_filters_for_unity_stride(conv7s2_weight, *stride)
+    conv4s1_bias = conv7s2_bias
+    ttnn_module_args["kernel_size"] = (4, 4)
+    ttnn_module_args["stride"] = (1, 1)
+    ttnn_module_args["padding"] = (0, 0)
+    ttnn_module_args["in_channels"] = conv4s1_weight.shape[1]
+    ttnn_module_args["input_height"] = (ttnn_module_args["input_height"] + padding[0] * 2) // stride[0]
+    ttnn_module_args["input_width"] = (ttnn_module_args["input_width"] + padding[1] * 2) // stride[1]
+    return preprocess_conv2d(conv4s1_weight, conv4s1_bias, ttnn_module_args)
+
+
 class ParameterList(list):
     def __repr__(self):
         file = io.StringIO()
@@ -176,7 +192,7 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
     return make_parameter_dict(parameters)
 
 
-def _preprocess_model_parameters(
+def convert_torch_model_to_ttnn_model(
     model,
     *,
     convert_to_ttnn,
@@ -187,7 +203,7 @@ def _preprocess_model_parameters(
     if isinstance(model, torch.nn.modules.container.ModuleList):
         return ParameterList(
             [
-                _preprocess_model_parameters(
+                convert_torch_model_to_ttnn_model(
                     child,
                     convert_to_ttnn=convert_to_ttnn,
                     custom_preprocessor=custom_preprocessor,
@@ -199,11 +215,16 @@ def _preprocess_model_parameters(
         )
 
     if custom_preprocessor is not None:
-        args = (model, name)
         signature = inspect.signature(custom_preprocessor)
+        for arg_name in signature.parameters:
+            if arg_name not in {"model", "name", "ttnn_module_args", "convert_to_ttnn"}:
+                raise RuntimeError(f"Unsupported parameter: {arg_name}")
+        kwargs = {"model": model, "name": name}
         if "ttnn_module_args" in signature.parameters:
-            args += (ttnn_module_args,)
-        custom_preprocessor_parameters = custom_preprocessor(*args)
+            kwargs["ttnn_module_args"] = ttnn_module_args
+        if "convert_to_ttnn" in signature.parameters:
+            kwargs["convert_to_ttnn"] = convert_to_ttnn
+        custom_preprocessor_parameters = custom_preprocessor(**kwargs)
         if custom_preprocessor_parameters:
             return make_parameter_dict(custom_preprocessor_parameters)
 
@@ -229,7 +250,7 @@ def _preprocess_model_parameters(
 
     parameters = {}
     for child_name, child in named_children:
-        child_parameters = _preprocess_model_parameters(
+        child_parameters = convert_torch_model_to_ttnn_model(
             child,
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
@@ -277,6 +298,9 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
         elif extension == ".conv2d_module_args":
             with open(path, "rb") as file:
                 output[name] = Conv2dArgs(pickle.load(file))
+        elif extension == ".max_pool2d_module_args":
+            with open(path, "rb") as file:
+                output[name] = MaxPool2dArgs(pickle.load(file))
         else:
             raise RuntimeError("Unrecognized file extension!")
     return ParameterDict(output)
@@ -301,6 +325,11 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: ParameterDict) 
         elif isinstance(value, Conv2dArgs):
             file_path = str(model_cache_path / name)
             file_name = file_path + ".conv2d_module_args"
+            with open(file_name, "wb") as file:
+                pickle.dump(dict(value), file, protocol=pickle.HIGHEST_PROTOCOL)
+        elif isinstance(value, MaxPool2dArgs):
+            file_path = str(model_cache_path / name)
+            file_name = file_path + ".max_pool2d_module_args"
             with open(file_name, "wb") as file:
                 pickle.dump(dict(value), file, protocol=pickle.HIGHEST_PROTOCOL)
         else:
@@ -330,7 +359,11 @@ def git_hash():
         raise RuntimeError("Couldn't get git hash!") from e
 
 
-class Conv2dArgs(dict):
+class ModuleArgs(dict):
+    ...
+
+
+class Conv2dArgs(ModuleArgs):
     __getattr__ = dict.__getitem__
     __delattr__ = dict.__delitem__
 
@@ -338,7 +371,12 @@ class Conv2dArgs(dict):
         return super().__repr__()
 
 
-ModuleArgs = Union[Conv2dArgs]
+class MaxPool2dArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
 
 
 def infer_ttnn_module_args(*, model, run_model):
@@ -367,10 +405,9 @@ def infer_ttnn_module_args(*, model, run_model):
             operation = attributes["operation"]
             if isinstance(operation, torchtrail.tracer.TorchModule):
                 *_, module_name = operation.module.torchtrail_name.split(".")
+                (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
+                input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
                 if isinstance(operation.module, torch.nn.Conv2d):
-                    (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
-                    input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
-
                     ttnn_module_args[module_name] = Conv2dArgs(
                         in_channels=operation.module.in_channels,
                         out_channels=operation.module.out_channels,
@@ -387,6 +424,17 @@ def infer_ttnn_module_args(*, model, run_model):
                         dtype=ttnn.bfloat16,
                         weights_dtype=ttnn.bfloat16,
                         use_1d_systolic_array=True,
+                    )
+                elif isinstance(operation.module, torch.nn.MaxPool2d):
+                    ttnn_module_args[module_name] = MaxPool2dArgs(
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        dilation=operation.module.dilation,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        dtype=ttnn.bfloat16,
                     )
                 else:
                     ttnn_submodule_args = _infer_ttnn_module_args(operation.graph)
@@ -420,7 +468,7 @@ def _initialize_model_and_preprocess_parameters(
         model.eval()
 
     ttnn_module_args = infer_ttnn_module_args(model=model, run_model=run_model)
-    parameters = _preprocess_model_parameters(
+    parameters = convert_torch_model_to_ttnn_model(
         model,
         convert_to_ttnn=convert_to_ttnn,
         custom_preprocessor=custom_preprocessor,
@@ -541,6 +589,12 @@ def preprocess_model(
                         bias=model.bias if "bias" in model else None,
                         reader_patterns_cache=reader_patterns_cache,
                         using_parameters_cache=True,
+                        device=device,
+                    )
+                elif isinstance(model.ttnn_module_args, MaxPool2dArgs):
+                    return ttnn.MaxPool2d(
+                        **model.ttnn_module_args,
+                        reader_patterns_cache=reader_patterns_cache,
                         device=device,
                     )
                 else:

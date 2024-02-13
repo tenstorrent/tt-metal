@@ -198,5 +198,5 @@ from ttnn.operations import transformer
 from ttnn.operations.conv import Conv2D
 from ttnn.operations.pooling import (
     MaxPool2d,
-    average_pool2d,
+    global_avg_pool2d,
 )

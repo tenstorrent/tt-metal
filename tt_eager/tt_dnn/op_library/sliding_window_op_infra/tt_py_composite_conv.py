@@ -351,16 +351,15 @@ class TTPyCompositeConv(TTPyOp):
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
 
-        if len(reader_patterns_cache) == 0:
+        if "conv" not in reader_patterns_cache:
             reader_patterns_cache["conv"] = {}
+        if "halo" not in reader_patterns_cache:
             reader_patterns_cache["halo"] = {}
-        else:
-            assert len(reader_patterns_cache) == 2
-            assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
+
         for key in reader_patterns_cache:
             assert (
-                key == "conv" or key == "halo"
-            ), f"reader_patterns_cache should have 1 of the following keys only - conv or halo. Found key - {key}"
+                key == "conv" or key == "halo" or key == "max_pool"
+            ), f"reader_patterns_cache should have 1 of the following keys only - conv, max_pool or halo. Found key - {key}"
         if conv_blocking_and_parallelization_config_override is None:
             conv_blocking_and_parallelization_config_override = {}
         for key in conv_blocking_and_parallelization_config_override:

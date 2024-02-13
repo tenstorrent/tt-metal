@@ -13,6 +13,8 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     preprocess_conv2d,
     fold_batch_norm2d_into_conv2d,
+    fold_conv7s2_into_conv4s1,
+    convert_torch_model_to_ttnn_model,
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -458,25 +460,87 @@ def test_conv2d_with_batch_norm2d(device, use_conv_bias):
 
 
 @skip_for_wormhole_b0()
-def test_resnet():
+def test_resnet(device):
     torch.manual_seed(0)
 
     torch_model = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1).eval()
 
     torch_input_tensor = torch.rand((8, 3, 224, 224), dtype=torch.float32)
 
-    def convert_to_ttnn(model, name):
-        if name in {
-            "conv1",
-        }:
-            return False
-        return True
+    def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        parameters = {}
+        if isinstance(model, torchvision.models.resnet.BasicBlock):
+            ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
+
+            conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
+            conv2_weight, conv2_bias = fold_batch_norm2d_into_conv2d(model.conv2, model.bn2)
+
+            parameters["conv1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1)
+            parameters["conv2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.conv2)
+
+        elif isinstance(model, torchvision.models.resnet.ResNet):
+            conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
+            parameters["conv1"] = fold_conv7s2_into_conv4s1(conv1_weight, conv1_bias, ttnn_module_args.conv1)
+            named_parameters = tuple(
+                (name, parameter) for name, parameter in model.named_parameters() if "." not in name
+            )
+            for child_name, child in tuple(model.named_children()) + named_parameters:
+                if child_name in {"conv1", "bn1"}:
+                    continue
+                parameters[child_name] = convert_torch_model_to_ttnn_model(
+                    child,
+                    name=name,
+                    convert_to_ttnn=convert_to_ttnn,
+                    custom_preprocessor=custom_preprocessor,
+                    ttnn_module_args=ttnn_module_args.get(child_name, None),
+                )
+
+        return parameters
 
     reader_patterns_cache = {}
     parameters = preprocess_model(
         initialize_model=lambda: torch_model,
         run_model=lambda model: model(torch_input_tensor),
         reader_patterns_cache=reader_patterns_cache,
-        convert_to_ttnn=convert_to_ttnn,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
     )
-    print(parameters)
+
+    assert "conv1" in parameters
+    assert "maxpool" in parameters
+
+    assert "layer1" in parameters
+    assert "0" in parameters["layer1"]
+    assert "conv1" in parameters["layer1"]["0"]
+    assert "conv2" in parameters["layer1"]["0"]
+    assert "1" in parameters["layer1"]
+    assert "conv1" in parameters["layer1"]["1"]
+    assert "conv2" in parameters["layer1"]["1"]
+
+    assert "layer2" in parameters
+    assert "0" in parameters["layer3"]
+    assert "conv1" in parameters["layer2"]["0"]
+    assert "conv2" in parameters["layer2"]["0"]
+    assert "1" in parameters["layer2"]
+    assert "conv1" in parameters["layer2"]["1"]
+    assert "conv2" in parameters["layer2"]["1"]
+
+    assert "layer3" in parameters
+    assert "0" in parameters["layer3"]
+    assert "conv1" in parameters["layer3"]["0"]
+    assert "conv2" in parameters["layer3"]["0"]
+    assert "1" in parameters["layer3"]
+    assert "conv1" in parameters["layer3"]["1"]
+    assert "conv2" in parameters["layer3"]["1"]
+
+    assert "layer4" in parameters
+    assert "0" in parameters["layer4"]
+    assert "conv1" in parameters["layer4"]["0"]
+    assert "conv2" in parameters["layer4"]["0"]
+    assert "1" in parameters["layer4"]
+    assert "conv1" in parameters["layer4"]["1"]
+    assert "conv2" in parameters["layer4"]["1"]
+
+    assert "fc" in parameters
+    assert "weight" in parameters["fc"]
+    assert "bias" in parameters["fc"]
