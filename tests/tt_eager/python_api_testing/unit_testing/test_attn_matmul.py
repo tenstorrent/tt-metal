@@ -211,7 +211,9 @@ def test_group_attn_matmul_with_program_cache(in0_dtype, in1_dtype, output_dtype
     q_len = 1
     batch = 32
     num_cache_entries = 0  # Only track cache entries of group_attn_matmul
-    for K, seq_len, q_heads, kv_heads in ((96, 512 + 64, 10, 2), (64, 128, 50, 5)):
+    # NOTE: Program is cached on out_subblock_w as well, so only seq_len >= 256 (out_subblock_w = 8) will share cache
+    # For seq_len < = 256, recompile at worst 8 times.
+    for K, seq_len, q_heads, kv_heads in ((96, 512 + 64, 10, 2), (64, 256, 50, 5)):
         input_shape_a = [q_len, q_heads, batch, K]
         input_shape_b = [batch, kv_heads, K, seq_len]
 

@@ -15,7 +15,6 @@ void kernel_main() {
     uint32_t Mt                   = get_arg_val<uint32_t>(i++);
     uint32_t Kt                   = get_arg_val<uint32_t>(i++);
     uint32_t Nt                   = get_arg_val<uint32_t>(i++);
-    uint32_t num_kv_heads         = get_arg_val<uint32_t>(i++); // in1[1] (ie. in1 C)
     uint32_t MtKt                 = get_arg_val<uint32_t>(i++);
     uint32_t blocks               = get_arg_val<uint32_t>(i++);
     uint32_t in0_start_id         = get_arg_val<uint32_t>(i++);
@@ -23,30 +22,27 @@ void kernel_main() {
 
     // matmul params
     uint32_t in0_block_w                  = get_arg_val<uint32_t>(i++);
-    uint32_t out_subblock_w               = get_arg_val<uint32_t>(i++);
-    uint32_t out_block_w                  = get_arg_val<uint32_t>(i++);
     uint32_t in1_num_subblocks            = get_arg_val<uint32_t>(i++);
     uint32_t in1_num_blocks               = get_arg_val<uint32_t>(i++);
-    uint32_t in0_block_num_tiles          = get_arg_val<uint32_t>(i++);
-    uint32_t intermediate_num_tiles       = get_arg_val<uint32_t>(i++);
     uint32_t out_num_tiles                = get_arg_val<uint32_t>(i++);
 
     // constants
     uint32_t bfloat16_row_bytes           = get_arg_val<uint32_t>(i++);
     uint32_t bfloat16_Nt_bytes            = get_arg_val<uint32_t>(i++);
-    uint32_t out_last_subblock_w          = get_arg_val<uint32_t>(i++);
     uint32_t bfloat16_last_row_bytes_read = get_arg_val<uint32_t>(i++);
 
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(3);
+    constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(3);
 
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1; // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
+    constexpr uint32_t cb_id_intermed0 = 24;
     constexpr uint32_t cb_id_intermed1 = 25;
-    constexpr uint32_t cb_id_intermed2 = 26;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
@@ -108,8 +104,8 @@ void kernel_main() {
             #endif
             cb_push_back(cb_id_in0, in0_block_w);
 
-            cb_reserve_back(cb_id_intermed2, out_num_tiles);
-            uint32_t cb_intermed2_addr = get_write_ptr(cb_id_intermed2);
+            cb_reserve_back(cb_id_intermed1, out_num_tiles);
+            uint32_t cb_intermed1_addr = get_write_ptr(cb_id_intermed1);
             for (uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
                 const bool last_out = in1_block == in1_num_blocks - 1;
                 if (last_out) {
@@ -117,26 +113,26 @@ void kernel_main() {
                 }
 
                 uint32_t row_offset_bytes = 0;
-                uint32_t cb_intermed2_addr_curr_block = cb_intermed2_addr;
+                uint32_t cb_intermed1_addr_curr_block = cb_intermed1_addr;
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) { // TODO: Must be 1; to generalize, need to handle untilizing + reading for subblocks
                         // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
-                        cb_wait_front(cb_id_intermed1, intermediate_num_tiles);
-                        noc_async_read(get_noc_addr(get_read_ptr(cb_id_intermed1)) + row_offset_bytes, cb_intermed2_addr_curr_block, bfloat16_row_bytes_read);
+                        cb_wait_front(cb_id_intermed0, intermediate_num_tiles);
+                        noc_async_read(get_noc_addr(get_read_ptr(cb_id_intermed0)) + row_offset_bytes, cb_intermed1_addr_curr_block, bfloat16_row_bytes_read);
                         noc_async_read_barrier();
-                        cb_pop_front(cb_id_intermed1, intermediate_num_tiles);
+                        cb_pop_front(cb_id_intermed0, intermediate_num_tiles);
                         row_offset_bytes += bfloat16_row_bytes;
-                        cb_intermed2_addr_curr_block += bfloat16_Nt_bytes;
+                        cb_intermed1_addr_curr_block += bfloat16_Nt_bytes;
                     } // in1_num_subblocks loop
 
                     #ifndef IN0_SHARDED
                     in0_Mt += Kt;
                     #endif
                 } // 32 tiles loop
-                cb_intermed2_addr += bfloat16_row_bytes;
+                cb_intermed1_addr += bfloat16_row_bytes;
 
             } // in1_num_blocks loop
-            cb_push_back(cb_id_intermed2, out_num_tiles);
+            cb_push_back(cb_id_intermed1, out_num_tiles);
 
             #ifndef OUT_SHARDED
             cb_wait_front(cb_id_out, out_num_tiles);

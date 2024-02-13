@@ -17,7 +17,7 @@ namespace primary {
 namespace transformers {
 
 
-operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, const bool row_major) {
+operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major) {
 
     tt_metal::Program program{};
 
@@ -54,12 +54,20 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     uint32_t Nt = transpose_hw_bool ? num_tokens_val/TILE_HEIGHT : bshape[3]/TILE_WIDTH;
     uint32_t MtNt = Mt * Nt;
 
-    // Matmul blocking parameters; these determine how large CBs are
-    constexpr uint32_t HALF_DST_MAX = 8;
-    uint32_t out_subblock_w = std::min(Nt, HALF_DST_MAX);
-    uint32_t out_block_w = out_subblock_w;
-    uint32_t in0_block_w = Kt;
-    uint32_t in1_block_num_tiles = KV_HEADS * in0_block_w * out_subblock_w;
+    // Matmul blocking parameters; these determine how large CBs are; actual value doesn't matter here since CBs are resized in callback...
+    const uint32_t out_block_w = out_subblock_w;
+    const uint32_t in0_block_w = Kt;
+    const uint32_t in1_block_num_tiles = KV_HEADS * in0_block_w * out_subblock_w;
+
+    // out_subblock_w and other hardcoded params are known at compile time
+    constexpr uint32_t out_subblock_h = 1; // TODO: Only support per_core_Mt = 1 (mcasting assumes batch=32 for now anyways)
+    constexpr uint32_t in1_num_subblocks = 1; // out_block_w / out_subblock_w
+    const uint32_t out_subblock_num_tiles = out_subblock_h * out_block_w;
+    const uint32_t intermediate_num_tiles = out_subblock_num_tiles;
+    const uint32_t in1_per_core_w = in1_num_subblocks * out_block_w;
+    const uint32_t in1_block_w_tile_bytes = out_subblock_w * in1_single_tile_size;
+    constexpr uint32_t ONE_ROW_BFLOAT16_BYTES = 64;
+    const uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w; // TODO: Generalize
 
     // Mcast args
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
@@ -116,21 +124,16 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     }
 
     // Intermediate CBs for handling untilizing, copying rows, and tilizing to output CB
-    uint32_t interm_cb_num_tiles = 1 * out_block_w; // TODO: Generalize; should it be double buffered?
+    uint32_t interm_cb_num_tiles = 2 * intermediate_num_tiles; // TODO: Generalize; double buffering should help when we are not reader bound
     uint32_t cb_intermed0_index = CB::c_intermed0;
     tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
 		.set_page_size(cb_intermed0_index, interm_single_tile_size);
     auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
     uint32_t cb_intermed1_index = CB::c_intermed1;
-    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
+    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(MtNt * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
 		.set_page_size(cb_intermed1_index, interm_single_tile_size);
     auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
-
-    uint32_t cb_intermed2_index = CB::c_intermed2;
-    tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(MtNt * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
-		.set_page_size(cb_intermed2_index, interm_single_tile_size);
-    auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
 
     // CB for output (if sharded, full num tiles per core)
     uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
@@ -154,6 +157,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         (uint32_t) src1_is_dram,
         (uint32_t) transpose_hw_bool,
         (uint32_t) row_major,
+        out_subblock_w,
     };
 
     const uint32_t dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -161,6 +165,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         (uint32_t) src0_is_dram,
         (uint32_t) dst_is_dram,
         (uint32_t) output_cb_index,
+        out_subblock_w,
+        intermediate_num_tiles,
     };
 
     std::map<string, string> reader_kernel_defines;
@@ -204,6 +210,9 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     vector<uint32_t> compute_args = {
         (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
+        out_subblock_w,
+        out_subblock_num_tiles,
+        intermediate_num_tiles,
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
     auto compute_kernel_id = tt_metal::CreateKernel(
@@ -225,9 +234,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             cb_src0,
             cb_src1,
             cb_src2,
-            cb_interm0,
             cb_interm1,
-            cb_interm2,
             cb_output,
             in0_single_tile_size,
             in1_single_tile_size,
@@ -241,7 +248,16 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             in1_mcast_receiver_semaphore,
             in1_mcast_sender_noc_x,
             in1_mcast_sender_noc_y,
-            HALF_DST_MAX
+
+            // Params determined by out_subblock_w
+            out_subblock_w,
+            out_subblock_h,
+            in1_num_subblocks,
+            out_block_w,
+            in1_per_core_w,
+            in1_block_w_tile_bytes,
+            ONE_ROW_BFLOAT16_BYTES,
+            bfloat16_row_bytes
         ]
     (
         Program& program,
@@ -290,30 +306,20 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         uint32_t in1_KtNt = transpose_hw_bool ? bshape[2]/TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
         uint32_t in1_CKtNt = KV_HEADS * in1_KtNt;
 
-        // Matmul params
-        constexpr uint32_t out_subblock_h = 1; // TODO: Only support per_core_Mt = 1 (mcasting assumes batch=32 for now anyways)
-        constexpr uint32_t in1_num_subblocks = 1; // out_block_w / out_subblock_w
-        uint32_t out_subblock_w = std::min(Nt, HALF_DST_MAX);
-        uint32_t out_block_w = out_subblock_w;
+        // Matmul params that is runtime dependent
         uint32_t in0_block_w = Kt;
         uint32_t in0_subblock_num_tiles = in0_block_w * out_subblock_h;
         uint32_t in0_block_num_tiles = in0_subblock_num_tiles;
         uint32_t in1_block_num_tiles_per_kv_heads = in0_block_w * out_subblock_w;
         uint32_t in1_block_num_tiles = KV_HEADS * in1_block_num_tiles_per_kv_heads;
-        uint32_t out_subblock_num_tiles = out_subblock_h * out_block_w;
-        uint32_t intermediate_num_tiles = out_subblock_num_tiles;
         uint32_t in1_num_blocks = (Nt - 1) / out_block_w + 1; // Rounds up to include nearest out_block_w; "padding" is handled internally
-        uint32_t in1_per_core_w = in1_num_subblocks * out_block_w;
 
         uint32_t Nt_bytes = Nt * in1_single_tile_size;
-        uint32_t in1_block_w_tile_bytes = out_subblock_w * in1_single_tile_size;
         uint32_t out_last_subblock_w = Nt % out_block_w == 0 ? out_block_w : Nt % out_block_w;
         uint32_t in1_last_block_w_tile_read_bytes = out_last_subblock_w * in1_single_tile_size;
         uint32_t in1_last_block_addr_skip = (out_subblock_w - out_last_subblock_w) * in1_single_tile_size;
 
-        constexpr uint32_t ONE_ROW_BFLOAT16_BYTES = 64;
         uint32_t bfloat16_Nt_bytes = ONE_ROW_BFLOAT16_BYTES * Nt;
-        uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w; // TODO: Generalize
         uint32_t bfloat16_last_row_bytes_read = ONE_ROW_BFLOAT16_BYTES * out_last_subblock_w;
 
         // Mcast receiver args
@@ -342,7 +348,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             0, // in1_start_id; always start at 0 for each block of work and let kernels handle id tracking; for sharded, this isn't used
 
             in0_block_w,
-            out_subblock_w,
             out_block_w,
             in1_num_subblocks,
             in1_num_blocks,
@@ -359,13 +364,13 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             (uint32_t) (reader_noc_is_NOC_0 ? top_left_core_physical.y : bottom_right_core_physical.y), // in1_mcast_dest_noc_start_y
             (uint32_t) (reader_noc_is_NOC_0 ? bottom_right_core_physical.x : top_left_core_physical.x), // in1_mcast_dest_noc_end_x
             (uint32_t) (reader_noc_is_NOC_0 ? bottom_right_core_physical.y : top_left_core_physical.y), // in1_mcast_dest_noc_end_y
-            0, // 25: in1_mcast_num_dests
-            0, // 26: in1_mcast_num_cores
+            0, // 24: in1_mcast_num_dests
+            0, // 25: in1_mcast_num_cores
             mcast_num_cores, // mcast grid size; in1_mcast_num_cores may change depending on if sender is part of the receiver grid or not
             in1_mcast_sender_semaphore,
             in1_mcast_receiver_semaphore,
             in1_block_num_tiles * in1_single_tile_size, // in1_mcast_sender_size_bytes
-            0, // 31: in1_mcast_sender_id
+            0, // 30: in1_mcast_sender_id
             (uint32_t) in1_mcast_sender_noc_x.size(), // in1_mcast_sender_num_x
             (uint32_t) in1_mcast_sender_noc_y.size(), // in1_mcast_sender_num_y
         };
@@ -381,24 +386,18 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             Mt,
             Kt,
             Nt,
-            KV_HEADS,
             MtKt,
-            0, // 8: blocks of work
-            0, // 9: in0_start_id
-            0, // 10: out_start_id
+            0, // 7: blocks of work
+            0, // 8: in0_start_id
+            0, // 9: out_start_id
 
             in0_block_w,
-            out_subblock_w,
-            out_block_w,
             in1_num_subblocks,
             in1_num_blocks,
-            in0_block_num_tiles,
-            intermediate_num_tiles,
             MtNt, // out_num_tiles
 
             bfloat16_row_bytes,
             bfloat16_Nt_bytes,
-            out_last_subblock_w,
             bfloat16_last_row_bytes_read,
         };
 
@@ -412,14 +411,10 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
             in0_block_w,
             out_subblock_h,
-            out_subblock_w,
-            out_block_w,
             in1_num_subblocks,
             in1_num_blocks,
             in0_block_num_tiles,
             in1_block_num_tiles,
-            out_subblock_num_tiles,
-            intermediate_num_tiles,
             MtNt, // out_num_tiles
 
             in0_subblock_num_tiles,
@@ -464,14 +459,14 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             all_reader_runtime_args[i][1] = has_work_for_q_heads;
             all_reader_runtime_args[i][8] = num_output_blocks_per_core;
             // If Q_HEADS < 32, have all cores participate in receiving; std::min is needed for cases where mcast grid is > num_active_cores and non-active cores are turned off and don't receive
-            all_reader_runtime_args[i][25] = Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
-            all_reader_runtime_args[i][26] = mcast_num_cores_for_core;
-            all_reader_runtime_args[i][31] = i;
+            all_reader_runtime_args[i][24] = Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
+            all_reader_runtime_args[i][25] = mcast_num_cores_for_core;
+            all_reader_runtime_args[i][30] = i;
 
             all_writer_runtime_args[i][0] = has_work_for_q_heads;
-            all_writer_runtime_args[i][8] = num_output_blocks_per_core;
-            all_writer_runtime_args[i][9] = num_blocks_written * MtKt;
-            all_writer_runtime_args[i][10] = num_blocks_written * MtNt;
+            all_writer_runtime_args[i][7] = num_output_blocks_per_core;
+            all_writer_runtime_args[i][8] = num_blocks_written * MtKt;
+            all_writer_runtime_args[i][9] = num_blocks_written * MtNt;
 
             all_compute_runtime_args[i][0] = has_work_for_q_heads;
             all_compute_runtime_args[i][1] = num_output_blocks_per_core;
@@ -504,10 +499,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             UpdateCircularBufferTotalSize(program, cb_src2, cb2_num_input_tiles * in1_single_tile_size);
         }
 
-        uint32_t interm_cb_num_tiles = 1 * out_block_w; // TODO: Generalize; should it be double buffered?
-        UpdateCircularBufferTotalSize(program, cb_interm0, interm_cb_num_tiles * interm_single_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_interm1, interm_cb_num_tiles * interm_single_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_interm2, MtNt * interm_single_tile_size);
+        UpdateCircularBufferTotalSize(program, cb_interm1, MtNt * interm_single_tile_size);
 
         if (output_is_sharded) {
             uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW; // Should be full MtNt and C should be 1

@@ -24,7 +24,6 @@ void kernel_main() {
 
     // matmul params
     uint32_t in0_block_w                      = get_arg_val<uint32_t>(i++);
-    uint32_t out_subblock_w                   = get_arg_val<uint32_t>(i++);
     uint32_t out_block_w                      = get_arg_val<uint32_t>(i++);
     uint32_t in1_num_subblocks                = get_arg_val<uint32_t>(i++);
     uint32_t in1_num_blocks                   = get_arg_val<uint32_t>(i++);
@@ -58,6 +57,7 @@ void kernel_main() {
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
     #define transpose_hw_bool get_compile_time_arg_val(2) == 1
     constexpr bool row_major = (bool) get_compile_time_arg_val(3);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(4);
 
 
     constexpr uint32_t cb_id_in1 = 1; // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
@@ -136,7 +136,6 @@ void kernel_main() {
     uint32_t in1_block_addr_skip = 0; // Skip padded subblocks to prevent reading from undefined memory
     uint32_t out_subblock_w_ = out_subblock_w;
     #endif
-
 
     for (uint32_t b = 0; b < blocks; b++) { // TODO: Must be 1
         #ifndef IN1_SHARDED

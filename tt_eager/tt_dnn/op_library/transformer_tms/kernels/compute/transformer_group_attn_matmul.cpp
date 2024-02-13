@@ -6,7 +6,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/pack_untilize.h"
 
 using std::uint32_t;
 
@@ -27,14 +27,10 @@ void MAIN {
     // matmul params
     uint32_t in0_block_w            = get_arg_val<uint32_t>(i++);
     uint32_t out_subblock_h         = get_arg_val<uint32_t>(i++);
-    uint32_t out_subblock_w         = get_arg_val<uint32_t>(i++);
-    uint32_t out_block_w            = get_arg_val<uint32_t>(i++);
     uint32_t in1_num_subblocks      = get_arg_val<uint32_t>(i++);
     uint32_t in1_num_blocks         = get_arg_val<uint32_t>(i++);
     uint32_t in0_block_num_tiles    = get_arg_val<uint32_t>(i++);
     uint32_t in1_block_num_tiles    = get_arg_val<uint32_t>(i++);
-    uint32_t out_subblock_num_tiles = get_arg_val<uint32_t>(i++);
-    uint32_t intermediate_num_tiles = get_arg_val<uint32_t>(i++);
     uint32_t out_num_tiles          = get_arg_val<uint32_t>(i++);
 
     // matmul inner loop tracking
@@ -43,13 +39,15 @@ void MAIN {
 
 
     constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(1);
+    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(3);
 
 
     constexpr uint32_t cb_in0 = 0;
     constexpr uint32_t cb_in1 = 1;
     constexpr uint32_t cb_intermed0 = 24;
     constexpr uint32_t cb_intermed1 = 25;
-    constexpr uint32_t cb_intermed2 = 26;
     constexpr uint32_t out_cb_id = 16;
 
     constexpr uint32_t onetile = 1;
@@ -91,51 +89,38 @@ void MAIN {
                             }
                             tile_regs_commit();
 
-                            // TODO: Review inner dim blocking, untilizing, and in1_num_subblocks > 1 (with pack_untilize, can only untilize up to dst num tiles)
-                            cb_reserve_back(cb_intermed0, out_subblock_num_tiles);
-                            tile_regs_wait();
-                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                pack_tile(i, cb_intermed0);
-                            }
-                            tile_regs_release();
-                            cb_push_back(cb_intermed0, out_subblock_num_tiles);
-
                             in1_index_subblock_offset += out_subblock_w;
                         } // in1_num_subblocks loop
                         cb_pop_front(cb_in1, num_kv_heads_remaining);
 
-                        // untilize tile and write to CB::c_intermed1
-                        unpack_reconfig_data_format_srca(cb_in1, cb_intermed0);
-                        cb_wait_front(cb_intermed0, onetile);
-                        untilize_init_short(cb_intermed0);
-                        cb_reserve_back(cb_intermed1, intermediate_num_tiles);
-                        untilize_block(cb_intermed0, intermediate_num_tiles, cb_intermed1);
-                        cb_push_back(cb_intermed1, intermediate_num_tiles);
-
-                        cb_pop_front(cb_intermed0, intermediate_num_tiles);
-                        untilize_uninit(cb_intermed0);
-
-                        unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
-                        mm_init_short(cb_in0, cb_in1, transpose_hw);
+                        // TODO: Review inner dim blocking, untilizing, and in1_num_subblocks > 1 (with pack_untilize, can only untilize up to dst num tiles)
+                        // This should normally be inside subblock loop and we pack out out_subblock_num_tiles
+                        pack_untilize_dst_init_short<intermediate_num_tiles>();
+                        cb_reserve_back(cb_intermed0, intermediate_num_tiles);
+                        tile_regs_wait();
+                        pack_untilize_dst<intermediate_num_tiles>(cb_intermed0);
+                        tile_regs_release();
+                        pack_untilize_uninit();
+                        cb_push_back(cb_intermed0, intermediate_num_tiles);
                     }  // 32 tiles loop
 
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }  // in1_num_blocks loop
             } // in0_num_blocks_w
 
-            // cb_intermed2 comes from reader; untilized row-major tile
-            unpack_reconfig_data_format_srca(cb_in1, cb_intermed2);
-            pack_reconfig_data_format(cb_intermed1, out_cb_id);
-            cb_wait_front(cb_intermed2, out_num_tiles);
+            // cb_intermed1 comes from reader; untilized row-major tile
+            unpack_reconfig_data_format_srca(cb_in1, cb_intermed1);
+            pack_reconfig_data_format(cb_intermed0, out_cb_id);
+            cb_wait_front(cb_intermed1, out_num_tiles);
 
             cb_reserve_back(out_cb_id, out_num_tiles);
 
-            // tilize CB::intermed2 and write to CB::c_out0
-            tilize_init_short(cb_intermed2, out_num_tiles);
-            tilize_block(cb_intermed2, out_num_tiles, out_cb_id);
+            // tilize CB::intermed1 and write to CB::c_out0
+            tilize_init_short(cb_intermed1, out_num_tiles);
+            tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
             cb_push_back(out_cb_id, out_num_tiles);
 
-            cb_pop_front(cb_intermed2, out_num_tiles);
+            cb_pop_front(cb_intermed1, out_num_tiles);
             tilize_uninit();
 
             cb_pop_front(cb_in0, in0_block_num_tiles);

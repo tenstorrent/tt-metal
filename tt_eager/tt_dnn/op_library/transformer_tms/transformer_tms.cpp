@@ -372,12 +372,13 @@ operation::ProgramWithCallbacks GroupAttnMatmul::create_program(const std::vecto
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
     TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
-    return multi_core_group_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->num_tokens, this->transpose_hw, this->compute_with_storage_grid_size, this->row_major);
+    return multi_core_group_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->num_tokens, this->transpose_hw, this->out_subblock_w, this->compute_with_storage_grid_size, this->row_major);
 }
 
 tt::stl::reflection::Attributes GroupAttnMatmul::attributes() const {
     return {
         {"transpose_hw", this->transpose_hw},
+        {"out_subblock_w", this->out_subblock_w},
         {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
         {"output_mem_config", this->output_mem_config},
         {"output_dtype", this->output_dtype},
@@ -392,6 +393,7 @@ const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Te
 
     return operation::hash_operation<GroupAttnMatmul>(
         this->transpose_hw,
+        this->out_subblock_w,
         this->compute_with_storage_grid_size.str(),
         this->output_mem_config.memory_layout,
         this->output_mem_config.buffer_type,

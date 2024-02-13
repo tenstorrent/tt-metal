@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
 operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
 // TODO: Group attention matmul will support sharding, mcasting, and should be faster; we should make attn_matmul (ie. KV heads = 1) a special case of group_attn_matmul and run the same op
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, const bool row_major);
+operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major);
 
 struct SplitFusedQKVAndSplitHeads {
     CoreCoord compute_with_storage_grid_size;
@@ -87,6 +87,7 @@ inline Tensor attn_matmul_from_cache(const Tensor &input_tensor_a, const Tensor 
 struct GroupAttnMatmul {
     std::optional<const uint32_t> num_tokens;
     std::optional<const bool> transpose_hw;
+    const uint32_t out_subblock_w;
     CoreCoord compute_with_storage_grid_size;
     MemoryConfig output_mem_config;
     DataType output_dtype;
@@ -113,7 +114,12 @@ inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &inpu
         }
     }
 
-    return operation::run(GroupAttnMatmul{std::nullopt, std::nullopt, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.dtype()), row_major}, {input_tensor_a, input_tensor_b}).at(0);
+    // Need to cache on out_subblock_w because it must be a compile time arg for optimal use of templated pack_untilize APIs
+    const uint32_t Nt = input_tensor_b.shape()[-1] / TILE_WIDTH;
+    constexpr uint32_t HALF_DST_MAX = 8; // 8 is the max number of tiles for half DST (assuming out_subblock_h == 1)
+    const uint32_t out_subblock_w = std::min(Nt, HALF_DST_MAX);
+
+    return operation::run(GroupAttnMatmul{std::nullopt, std::nullopt, out_subblock_w, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.dtype()), row_major}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
 }  // namespace transformers
