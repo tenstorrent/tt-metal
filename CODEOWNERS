@@ -62,6 +62,9 @@ tt_metal/hw/firmware/**/Makefile @tt-rkim
 tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
 tt_metal/include/dataflow_kernel_api.h @davorchap @DrJessop @mywoodstock @tarafdarTT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @DrJessop @mywoodstock
+tt_metal/hw/firmware/src/*erisc* @aliuTT
+tt_metal/hw/inc/ethernet/ @aliuTT
+tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT
 
 # metal - profiler
 # tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
