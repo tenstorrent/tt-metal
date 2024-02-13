@@ -172,4 +172,4 @@ ttnn_model = ttnn_functional_unet.UNet(parameters)
 #
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
 #
-# assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
