@@ -158,7 +158,7 @@ torch_model.load_state_dict(new_state_dict)
 # torch_output_tensor = torch_model(torch_input_tensor)
 # torch_input_tensor = torch.randn(1, 3, 1056, 160)  # Batch size of 1, 3 channels (RGB),  1056x160 input
 torch_input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 2, 3 channels (RGB), 1056x160 input
-torch_output_tensor = model(input_tensor)
+torch_output_tensor = torch_model(torch_input_tensor)
 
 reader_patterns_cache = {}
 parameters = preprocess_model(
