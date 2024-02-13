@@ -38,6 +38,18 @@ def tt_all_reduce(tensors, output_mem_config=None):
     return res
 
 
+def tt_all_gather(tensors, dim=-1):
+    # Needs to be on DRAM
+    all_gathered_output = tt_lib.tensor.concat(tensors, dim=dim)
+
+    # Emulate replication on all chips
+    dev = all_gathered_output.device()
+    res_pt = tt2torch_tensor(all_gathered_output)
+    res = [torch2tt_tensor(res_pt.clone(), dev) for _ in range(len(tensors))]
+
+    return res
+
+
 def generate_rot_emb(dhead, end):
     cos, sin = precompute_freqs(dhead, end)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
