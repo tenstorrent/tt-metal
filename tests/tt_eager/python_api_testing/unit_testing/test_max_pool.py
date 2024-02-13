@@ -204,7 +204,6 @@ def test_run_max_pool(
     ncores = 1
     grid_size = [1, 1]
     if in_mem_config.is_sharded():
-        ttact = ttact.to(device, interleaved_mem_config)
         in_height = in_n * in_h * in_w
         out_nhw = in_n * out_h * out_w
         ## NOTE: these should match the max_pool op code for now. Hardcoded Resnet shapes only.
@@ -221,6 +220,8 @@ def test_run_max_pool(
             assert False
         if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
             pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+        ttact = ttact.to(device, interleaved_mem_config)
         ttact = ttl.tensor.interleaved_to_sharded(
             ttact,
             grid_size,
