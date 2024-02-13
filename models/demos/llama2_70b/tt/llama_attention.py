@@ -6,7 +6,7 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor
+from models.utility_functions import torch2tt_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
@@ -27,6 +27,7 @@ class TtLlamaAttention(nn.Module):
         self.n_heads = configuration.n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
+        self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
 
         self.n_local_heads = self.n_heads // self.num_devices
@@ -74,20 +75,21 @@ class TtLlamaAttention(nn.Module):
             self.device,
         )
 
-        cache_k = torch.zeros(
-            (
-                configuration.max_batch_size,
-                self.n_kv_heads,
-                configuration.max_seq_len,
-                self.head_dim,
+            cache_k = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads // self.num_devices,
+                    self.max_seq_len,
+                    self.head_dim,
+                )
             )
-        )
-        cache_v = torch.zeros(
-            (
-                configuration.max_batch_size,
-                self.n_kv_heads,
-                configuration.max_seq_len,
-                self.head_dim,
+            cache_v = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads // self.num_devices,
+                    self.max_seq_len,
+                    self.head_dim,
+                )
             )
         )
         layer_past = [cache_k, cache_v]
@@ -118,7 +120,8 @@ class TtLlamaAttention(nn.Module):
             dhead=self.head_dim, end=self.max_seq_len * 2, start_pos=start_pos, seqlen=seq_len, batch=batch
         )
 
-        attn_mask = torch.zeros(seq_len, 1, batch, self.max_seq_len)
+        padded_layer_past_len = nearest_32(start_pos + 1)
+        attn_mask = torch.zeros(seq_len, 1, batch, padded_layer_past_len)
         # attn_mask[:, :, :, : start_pos + 1] = -1e9
         attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
         attn_mask = attn_mask.expand(-1, self.n_local_heads, -1, -1)
@@ -127,10 +130,10 @@ class TtLlamaAttention(nn.Module):
         # x: (seq_len, 1, batch, hidden_dim)
         # start_pos: int
         # rot_mat: [1, bsz, head_dim, head_dim]
-        # attn_mask: [seq_len, n_heads, batch, self.max_seq_len]
+        # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
         assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
-        assert attn_mask.size() == (seq_len, self.n_local_heads, batch, self.max_seq_len)
+        assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
 
         xs, rot_mats, attn_masks = [], [], []
         for i in range(self.num_devices):
@@ -158,6 +161,7 @@ class TtLlamaAttention(nn.Module):
         start_pos: the length of the KV cache. Same as current token's index.
         attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
+        padded_layer_past_len = nearest_32(start_pos + 1)
         dense_outputs = []
         for i in range(self.num_devices):
             x = xs[i]
@@ -221,6 +225,29 @@ class TtLlamaAttention(nn.Module):
             values = layer_past[1]
             tt_lib.tensor.update_cache(keys, k_heads, start_pos)
             tt_lib.tensor.update_cache(values, v_heads, start_pos)
+
+            keys = tt_lib.tensor.unpad(
+                layer_past[0],
+                [0, 0, 0, 0],
+                [
+                    self.max_batch_size - 1,
+                    self.n_local_kv_heads - 1,
+                    padded_layer_past_len - 1,
+                    self.head_dim - 1,
+                ],
+                # output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
+            values = tt_lib.tensor.unpad(
+                layer_past[1],
+                [0, 0, 0, 0],
+                [
+                    self.max_batch_size - 1,
+                    self.n_local_kv_heads - 1,
+                    padded_layer_past_len - 1,
+                    self.head_dim - 1,
+                ],
+                # output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
 
             ###
             # Attention
