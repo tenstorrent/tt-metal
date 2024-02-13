@@ -81,6 +81,8 @@ def run_test_LlamaMLP_inference(
     print(f"Compute grid size: {compute_grid_size}")
 
     mlp_optimized = True
+    all_gather = True
+
     if mlp_optimized:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP_optimized(
@@ -110,7 +112,12 @@ def run_test_LlamaMLP_inference(
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
     if len(devices) > 1:
         assert len(tt_out) == len(devices)
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
+        if all_gather:  # concatenate outputs from all devices
+            tt_out = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
+            tt_outs = [tt_out for _ in range(len(devices))]
+        else:
+            tt_outs = [tt2torch_tensor(o) for o in tt_out]
+
         for i in range(len(devices)):
             logger.info(comp_allclose(pytorch_out, tt_outs[i]))
 
@@ -153,7 +160,7 @@ def test_LlamaMLP_inference(
     device,
     use_program_cache,
 ):
-    num_devices = 1
+    num_devices = 8
     model_config = get_model_config(model_config_str, num_devices=num_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
