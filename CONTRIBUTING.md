@@ -310,6 +310,9 @@ If you are using a machine with bare metal machine specs, please use
   submission follows the contribution guidelines. Failure to do so constitutes
   a violation of these contribution guidelines.
 
+- Merge commits are not allowed in our main branch. We enforce a linear
+  history.
+
 ### Code reviews
 
 - A PR must be opened for any code change with the following criteria:
