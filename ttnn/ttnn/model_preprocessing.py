@@ -50,7 +50,7 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
     if bias is not None:
         bias = ttnn.from_torch(torch.reshape(bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16)
 
-    conv = ttnn.Conv2D(
+    conv = ttnn.Conv2d(
         **ttnn_module_args,
         weight=weight,
         bias=bias,
