@@ -49,7 +49,7 @@ class Command {
 
    public:
     Command() {}
-    virtual void process(){};
+    virtual void process() {};
     virtual EnqueueCommandType type() = 0;
     virtual const DeviceCommand assemble_device_command(uint32_t buffer_size) = 0;
 };
@@ -61,6 +61,7 @@ class EnqueueRestartCommand : public Command {
     uint32_t event;
     uint32_t command_queue_id;
    public:
+    constexpr bool has_side_effects() { return true; }
     EnqueueRestartCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -73,6 +74,7 @@ class EnqueueRestartCommand : public Command {
     void process();
 
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_RESTART; };
+
 };
 
 class EnqueueReadBufferCommand : public Command {
@@ -82,6 +84,7 @@ class EnqueueReadBufferCommand : public Command {
     uint32_t pages_to_read;
     uint32_t command_queue_id;
     uint32_t event;
+    bool stall;
 
     virtual const DeviceCommand create_buffer_transfer_instruction(uint32_t dst_address, uint32_t padded_page_size, uint32_t num_pages) = 0;
    protected:
@@ -94,6 +97,7 @@ class EnqueueReadBufferCommand : public Command {
         Device* device,
         Buffer& buffer,
         void* dst,
+        bool stall,
         SystemMemoryManager& manager,
         uint32_t event,
         uint32_t src_page_index = 0,
@@ -104,6 +108,8 @@ class EnqueueReadBufferCommand : public Command {
     void process();
 
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_READ_BUFFER; };
+
+    constexpr bool has_side_effects() { return false; }
 };
 
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
@@ -116,6 +122,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
         Device* device,
         Buffer& buffer,
         void* dst,
+        bool stall,
         SystemMemoryManager& manager,
         uint32_t event,
         uint32_t src_page_index = 0,
@@ -124,6 +131,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
                                 device,
                                 buffer,
                                 dst,
+                                stall,
                                 manager,
                                 event,
                                 src_page_index,
@@ -141,6 +149,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
         Device* device,
         Buffer& buffer,
         void* dst,
+        bool stall,
         SystemMemoryManager& manager,
         uint32_t event,
         uint32_t src_page_index = 0,
@@ -149,6 +158,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
                                 device,
                                 buffer,
                                 dst,
+                                stall,
                                 manager,
                                 event,
                                 src_page_index,
@@ -187,6 +197,8 @@ class EnqueueWriteBufferCommand : public Command {
     void process();
 
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WRITE_BUFFER; }
+
+    constexpr bool has_side_effects() { return true; }
 };
 
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
@@ -260,6 +272,8 @@ class EnqueueProgramCommand : public Command {
     void process();
 
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_PROGRAM; }
+
+    constexpr bool has_side_effects() { return true; }
 };
 
 class EnqueueWrapCommand : public Command {
@@ -285,6 +299,11 @@ class EnqueueIssueWrapCommand : public EnqueueWrapCommand {
      const DeviceCommand assemble_device_command(uint32_t);
 
      void process();
+
+     constexpr bool has_side_effects() {
+        // This command does not make it to dispatch core, and pre-fetcher can get the next command while dispatcher is still running.
+        return true;
+     }
 };
 
 class EnqueueCompletionWrapCommand : public EnqueueWrapCommand {
@@ -297,6 +316,8 @@ class EnqueueCompletionWrapCommand : public EnqueueWrapCommand {
      const DeviceCommand assemble_device_command(uint32_t);
 
      void process();
+
+     constexpr bool has_side_effects() { return false; }
 };
 
 class Trace {
@@ -414,6 +435,7 @@ class HWCommandQueue {
     std::optional<uint32_t> last_event_id;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
+    bool stall_before_read;
 
     volatile bool exit_condition;
     volatile uint32_t num_issued_commands;
@@ -423,9 +445,13 @@ class HWCommandQueue {
 
     Device* device;
 
+
     void copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel);
     void read_completion_queue();
-    void enqueue_command(Command& command, bool blocking);
+
+    template <typename T>
+    void enqueue_command(T& command, bool blocking);
+
     void enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* dst, bool blocking);
     void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking);
     void enqueue_write_buffer(std::shared_ptr<const Buffer> buffer, const void* src, bool blocking);

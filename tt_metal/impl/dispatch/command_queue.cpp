@@ -64,12 +64,14 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     Device* device,
     Buffer& buffer,
     void* dst,
+    bool stall,
     SystemMemoryManager& manager,
     uint32_t event,
     uint32_t src_page_index,
     std::optional<uint32_t> pages_to_read) :
     command_queue_id(command_queue_id),
     dst(dst),
+    stall(stall),
     manager(manager),
     buffer(buffer),
     src_page_index(src_page_index),
@@ -164,7 +166,9 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     uint32_t producer_cb_num_pages = consumer_cb_num_pages * 2;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
 
-    command.set_stall();
+    if (this->stall) {
+        command.set_stall();
+    }
     command.set_page_size(padded_page_size);
     command.set_producer_cb_size(producer_cb_size);
     command.set_consumer_cb_size(consumer_cb_size);
@@ -691,6 +695,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) : manager(device->sy
     this->exit_condition = false;
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
+    this->stall_before_read = false;
 }
 
 HWCommandQueue::~HWCommandQueue() {
@@ -712,13 +717,18 @@ HWCommandQueue::~HWCommandQueue() {
     }
 }
 
-void HWCommandQueue::enqueue_command(Command& command, bool blocking) {
+template <typename T>
+void HWCommandQueue::enqueue_command(T& command, bool blocking) {
     command.process();
     this->num_issued_commands++;
 
     if (blocking) {
         this->finish();
     }
+
+    // If this command has side-effects, then the next scheduled read needs
+    // to stall before fetching. Else, it can pre-fetch
+    this->stall_before_read = command.has_side_effects();
 }
 
 // TODO: Currently converting page ordering from interleaved to sharded and then doing contiguous read/write
@@ -792,11 +802,11 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
 
         if (is_sharded(buffer.buffer_layout())) {
             auto command = EnqueueReadShardedBufferCommand(
-                this->id, this->device, buffer, dst, this->manager, read_event, src_page_index, pages_to_read);
+                this->id, this->device, buffer, dst, this->stall_before_read, this->manager, read_event, src_page_index, pages_to_read);
             this->enqueue_command(command, false);
         } else {
             auto command = EnqueueReadInterleavedBufferCommand(
-                this->id, this->device, buffer, dst, this->manager, read_event, src_page_index, pages_to_read);
+                this->id, this->device, buffer, dst, this->stall_before_read, this->manager, read_event, src_page_index, pages_to_read);
             this->enqueue_command(command, false);
         }
         uint32_t completion_num_bytes = align(EVENT_PADDED_SIZE + pages_to_read * padded_page_size, 32);
