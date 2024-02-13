@@ -216,15 +216,18 @@ def convert_torch_model_to_ttnn_model(
 
     if custom_preprocessor is not None:
         signature = inspect.signature(custom_preprocessor)
-        for arg_name in signature.parameters:
-            if arg_name not in {"model", "name", "ttnn_module_args", "convert_to_ttnn"}:
+        if len(signature.parameters) < 2:
+            raise RuntimeError(f"Custom preprocessor must have at least two parameters: model and name")
+        for arg_name in list(signature.parameters)[2:]:
+            if arg_name not in {"ttnn_module_args", "convert_to_ttnn"}:
                 raise RuntimeError(f"Unsupported parameter: {arg_name}")
-        kwargs = {"model": model, "name": name}
+        args = [model, name]
+        kwargs = {}
         if "ttnn_module_args" in signature.parameters:
             kwargs["ttnn_module_args"] = ttnn_module_args
         if "convert_to_ttnn" in signature.parameters:
             kwargs["convert_to_ttnn"] = convert_to_ttnn
-        custom_preprocessor_parameters = custom_preprocessor(**kwargs)
+        custom_preprocessor_parameters = custom_preprocessor(*args, **kwargs)
         if custom_preprocessor_parameters:
             return make_parameter_dict(custom_preprocessor_parameters)
 
