@@ -41,6 +41,7 @@ def run_test_LlamaMLP_inference(
     seq_len,
     pcc,
     model_config,
+    num_devices,
     # tt_cache_path,
     # model_location_generator,
 ):
@@ -68,7 +69,10 @@ def run_test_LlamaMLP_inference(
     layer_num = 0
     base_url = "layers"
 
-    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
+    # Only 4 or 8 devices are supported, single device cant use full core grid for now.
+    assert num_devices == 4 or num_devices == 8
+
+    devices = [device for _ in range(num_devices)]  # Emulate fracturing on N chips
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, layer_num)
@@ -149,7 +153,8 @@ def test_LlamaMLP_inference(
     device,
     use_program_cache,
 ):
-    model_config = get_model_config(model_config_str, num_devices=8)
+    num_devices = 1
+    model_config = get_model_config(model_config_str, num_devices=num_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaMLP_inference(
@@ -159,6 +164,7 @@ def test_LlamaMLP_inference(
         seq_len,
         pcc,
         model_config,
+        num_devices,
         # tt_cache_path,
         # model_location_generator,
     )
