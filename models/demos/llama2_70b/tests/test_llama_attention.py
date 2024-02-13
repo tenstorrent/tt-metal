@@ -111,7 +111,7 @@ def run_test_LlamaAttention_inference(
     tt_LlamaAttention_model = TtLlamaAttention(device, state_dict, base_url, layer_num, model_config, configuration)
 
     generation_start_pos = 0
-    generation_length = 8
+    generation_length = 67
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input

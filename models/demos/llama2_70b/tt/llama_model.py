@@ -6,7 +6,7 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
 from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, rms_decomp
 
@@ -100,7 +100,8 @@ class TtLlamaModel(nn.Module):
         position_ids = torch.ones(seq_len, batch, dtype=torch.long) * start_pos
         rot_mat = gather_rotary_emb(self.rot_emb, position_ids)
 
-        attn_mask = torch.zeros(seq_len, 1, batch, self.max_seq_len)
+        padded_layer_past_len = nearest_32(start_pos + 1)
+        attn_mask = torch.zeros(seq_len, 1, batch, padded_layer_past_len)
         attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
         attn_mask = attn_mask.expand(-1, self.n_local_heads, -1, -1)
 
@@ -108,10 +109,10 @@ class TtLlamaModel(nn.Module):
         # x: (seq_len, 1, batch, hidden_dim)
         # start_pos: int
         # rot_mat: [1, bsz, head_dim, head_dim]
-        # attn_mask: [seq_len, n_heads, batch, self.max_seq_len]
+        # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
         assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
-        assert attn_mask.size() == (seq_len, self.n_local_heads, batch, self.max_seq_len)
+        assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
 
         xs, rot_mats, attn_masks = [], [], []
         for i in range(self.num_devices):
