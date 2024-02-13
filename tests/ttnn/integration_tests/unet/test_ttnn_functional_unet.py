@@ -25,6 +25,8 @@ def custom_preprocessor(model, name, ttnn_module_args):
         # ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1_2["activation"] = "relu"  # Fuse relu with conv1
+        ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
 
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.c1, model.b1)
         conv2_weight, conv2_bias = fold_batch_norm2d_into_conv2d(model.c1_2, model.b1_2)
@@ -117,14 +119,16 @@ class UNet(nn.Module):
 
 # Example usage
 model = UNet()
-input_tensor = torch.randn(1, 3, 1056, 160)  # Batch size of 1, 3 channels (RGB), 256x256 input
+# input_tensor = torch.randn(1, 3, 1056, 160)  # Batch size of 1, 3 channels (RGB), 256x256 input
+input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 1, 3 channels (RGB), 256x256 input
 output_tensor = model(input_tensor)
 print("\n\n\n")
 print("output_tensor size is: ", output_tensor.size())
 print("\n\n\n")
 model_graph = draw_graph(
     model,
-    input_size=(1, 3, 1056, 160),
+    # input_size=(1, 3, 1056, 160),
+    input_size=(2, 3, 1056, 160),
     dtypes=[torch.float32],
     expand_nested=True,
     graph_name="unetSeqEdit",
@@ -152,7 +156,8 @@ torch_model.load_state_dict(new_state_dict)
 
 # torch_input_tensor = torch.rand((8, 64, 56, 56), dtype=torch.float32)
 # torch_output_tensor = torch_model(torch_input_tensor)
-torch_input_tensor = torch.randn(1, 3, 1056, 160)  # Batch size of 1, 3 channels (RGB), 256x256 input
+# torch_input_tensor = torch.randn(1, 3, 1056, 160)  # Batch size of 1, 3 channels (RGB),  1056x160 input
+torch_input_tensor = torch.randn(2, 3, 1056, 160)  # Batch size of 2, 3 channels (RGB), 1056x160 input
 torch_output_tensor = model(input_tensor)
 
 reader_patterns_cache = {}
@@ -163,7 +168,6 @@ parameters = preprocess_model(
     reader_patterns_cache=reader_patterns_cache,
     device=device,
 )
-
 ttnn_model = ttnn_functional_unet.UNet(parameters)
 #
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
