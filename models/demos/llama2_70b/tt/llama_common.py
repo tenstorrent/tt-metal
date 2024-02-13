@@ -22,9 +22,15 @@ def tt_all_reduce(tensors, output_mem_config=None):
     """
     reduction on a list of tensors
     """
+    if len(tensors) == 1:
+        return tensors[0]
     base_tensor = tensors[0]
     for tensor in tensors[1:]:
-        base_tensor = tt_lib.tensor.add(base_tensor, tensor, output_mem_config=output_mem_config)
+        # base_tensor = tt_lib.tensor.add(base_tensor, tensor, output_mem_config=output_mem_config)  Cbinding doesnt support this optional argument passed in as None
+        if output_mem_config is not None:
+            base_tensor = tt_lib.tensor.add(base_tensor, tensor, output_mem_config)
+        else:
+            base_tensor = tt_lib.tensor.add(base_tensor, tensor)
     dev = base_tensor.device()
     # Emulate replication on all chips
     res_pt = tt2torch_tensor(base_tensor)
