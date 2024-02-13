@@ -35,17 +35,3 @@ class BasicBlock:
         # out = self.relu(out)
 
         return out
-
-    def torch_call(self, torch_input_tensor):
-        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
-
-        input_tensor = self.conv1.copy_input_to_device(input_tensor)
-        output_tensor = self(input_tensor)
-        output_tensor = self.conv2.copy_output_from_device(output_tensor)
-
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = torch.reshape(output_tensor, torch_input_tensor.shape)
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
-        return output_tensor

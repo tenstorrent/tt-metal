@@ -200,7 +200,7 @@ Pooling
 .. toctree::
    :maxdepth: 1
 
-   ttnn/average_pool2d
+   ttnn/global_avg_pool2d
    ttnn/MaxPool2d
 
 Sampling

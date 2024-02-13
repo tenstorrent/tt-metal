@@ -94,18 +94,18 @@ class MaxPool2d:
 ## Average Pooling
 
 
-def _torch_average_pool2d(input_tensor: ttnn.Tensor):
+def _torch_global_avg_pool2d(input_tensor: ttnn.Tensor):
     import torch
 
-    output_size = (1, 1)
     input_tensor = ttnn.from_device(input_tensor)
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.to_torch(input_tensor)
 
-    return torch.nn.AdaptiveAvgPool2d(output_size)(input_tensor)
+    output_size = (1, 1)
+    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
 
 
-def _average_pool2d_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+def _global_avg_pool2d_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
         input_tensor,
@@ -118,16 +118,16 @@ def _average_pool2d_validate_input_tensors(operation_name, input_tensor, *args, 
 
 
 @ttnn.register_operation(
-    name="ttnn.average_pool2d",
-    validate_input_tensors=_average_pool2d_validate_input_tensors,
-    torch_function=_torch_average_pool2d,
+    name="ttnn.global_avg_pool2d",
+    validate_input_tensors=_global_avg_pool2d_validate_input_tensors,
+    torch_function=_torch_global_avg_pool2d,
 )
-def average_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+def global_avg_pool2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     r"""
-    Applies a 2D average pooling over an input signal composed of several input planes.
+    Applies a 2D adaptive average pooling over an input signal composed of several input planes.
 
     Arguments:
-        * :attr: input_tensor (ttnn.Tensor): the input tensor
+        * :attr: input_tensor: the input tensor
     """
     output = ttl.tensor.average_pool_2d(input_tensor.value)
     return ttnn.Tensor(output)
