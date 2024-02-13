@@ -310,7 +310,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     };
 
     std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || device->arch() != ARCH::GRAYSKULL) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(LogOp, "Using slow untilize.");
         compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
     } else {

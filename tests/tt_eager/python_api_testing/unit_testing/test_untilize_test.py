@@ -76,6 +76,8 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
     # torch.save(untilized_inp, "golden.pt")
 
     passing1 = torch.equal(untilized_inp, c1)
+    # print(f'OUTPUT: {untilized_inp}')
+    # print(f'GOLDEN: {c1}')
     # passing2 = torch.equal(untilized_inp, c2)
     assert passing1
     # assert passing1 and passing2
