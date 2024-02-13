@@ -3,6 +3,7 @@
 Table of Contents
 =================
 
+* [Table of Contents](#table-of-contents)
    * [Contributing to tt-metal](#contributing-to-tt-metal)
    * [Machine setup](#machine-setup)
       * [Hugepages setup](#hugepages-setup)
@@ -17,7 +18,8 @@ Table of Contents
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
       * [File structure and formats](#file-structure-and-formats)
-      * [CI/CD Guidelines](#cicd-guidelines)
+      * [CI/CD Principles](#cicd-principles)
+      * [Using CI/CD for development](#using-cicd-for-development)
       * [Documentation](#documentation)
       * [Git rules and guidelines](#git-rules-and-guidelines)
       * [Code reviews](#code-reviews)
@@ -228,15 +230,17 @@ If you are using a machine with bare metal machine specs, please use
   For C++ header files, we will treat them as C++ source files and use this
   convention:
 
+  ```
   // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
   //
   // SPDX-License-Identifier: Apache-2.0
+  ```
 
-### CI/CD Guidelines
+### CI/CD Principles
 
 - Revert commits on main which fail post-commit tests immediately.
-- There shall be a recurring scheduled meeting concerning post-commit tests
-  where:
+- There shall be a periodic discussion among the technical leads of this
+  project concerning:
   - Certain codeowners and project-specific members review current tests in
     post-commit.
   - Certain codeowners and project-specific members decide whether to
@@ -257,6 +261,30 @@ If you are using a machine with bare metal machine specs, please use
     for such tests. However, it is the collective responsibility of all
     developers to ensure that we do not regress this pipeline.
 
+### Using CI/CD for development
+
+- There are some automated checks upon opening a PR. These checks are part, but
+  not all, of the post-commit test suite. They must pass, but are not enough to
+  ensure your PR will not be reverted.
+- To run any CI pipeline on GitHub Actions, please navigate to the [actions
+  page](https://github.com/tenstorrent-metal/tt-metal/actions).
+
+  Next, you can navigate to any pipeline on the left side of the view. For
+  example, you can run the entire post-commit CI suite by clicking on
+  "[post-commit] Run all post-commit workflows", clicking "Run workflow",
+  selecting your branch, and pressing "Run workflow".
+
+  You can see the status of your CI run by clicking on the specific run you
+  dispatched.
+
+  We have a sizeable number of workflows, so don't forget to press "Show more
+  workflows...".
+- Unfortunately, we currently do not do automatic checks of all required
+  workflows upon opening a PR. There are various reasons for this, such as
+  limited machine resources. This means that developer and reviewer discretion
+  is still the most important factor in ensuring PRs are merged successfully
+  and without CI failure.
+
 ### Documentation
 
 - Any API changes must be accompanied with appropriate documentation changes.
@@ -275,6 +303,12 @@ If you are using a machine with bare metal machine specs, please use
   - Commit messages which state that a code review or comments are being
     addressed. You must explicitly state what you are doing in each commit even
     if it's just cosmetic.
+
+- If you are working on a branch and would like to skip the Git commit hooks,
+  you may delete the `git_hooks` Makefile directive in `/module.mk` before your
+  first build. However, you are responsible for making sure your final
+  submission follows the contribution guidelines. Failure to do so constitutes
+  a violation of these contribution guidelines.
 
 ### Code reviews
 
