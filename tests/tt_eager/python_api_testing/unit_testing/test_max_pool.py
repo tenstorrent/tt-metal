@@ -269,8 +269,6 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    print(f"OUTPUT: {out_pytorch}")
-    print(f"GOLDEN: {golden_pytorch}")
     passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
