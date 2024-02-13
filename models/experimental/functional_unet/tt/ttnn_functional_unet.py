@@ -36,9 +36,13 @@ class UNet:
         input_tensor = self.c1.copy_input_to_device(input_tensor)
         output_tensor = self(input_tensor)
         output_tensor = self.c1_2.copy_output_from_device(output_tensor)
+        # output_tensor = self.c1_2.copy_output_from_device(input_tensor)
 
         output_tensor = ttnn.to_torch(output_tensor)
+        print("the shape before change is: ", output_tensor.size())
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = torch.reshape(output_tensor, torch_input_tensor.shape)
+        print("the shape after change is: ", output_tensor.size())
+        print(" torch_input_tensor.shape: ", torch_input_tensor.shape)
+        # output_tensor = torch.reshape(output_tensor, torch_input_tensor.shape)
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
         return output_tensor
