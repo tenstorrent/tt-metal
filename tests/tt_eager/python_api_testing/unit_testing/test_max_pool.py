@@ -14,7 +14,6 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
-from models.utility_functions import skip_for_wormhole_b0
 
 from functools import reduce
 import operator
@@ -29,7 +28,6 @@ def volume(shape):
 ## stride_h, stride_w
 ## pad_h, pad_w
 ## dilation_h, dilation_w
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -221,6 +219,8 @@ def test_run_max_pool(
             grid_size = [12, 9]
         else:
             assert False
+        if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+            pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
         ttact = ttl.tensor.interleaved_to_sharded(
             ttact,
             grid_size,
@@ -269,6 +269,8 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
+    print(f"OUTPUT: {out_pytorch}")
+    print(f"GOLDEN: {golden_pytorch}")
     passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)

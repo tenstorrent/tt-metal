@@ -21,7 +21,6 @@ namespace ckernel {
 template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
 {
-    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
@@ -32,25 +31,14 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated(icb) ));
-    UNPACK(( llk_unpack_A_init() )); // init must be after configure
-    #endif
+    UNPACK(( llk_unpack_A_init(0, 0, icb) )); // init must be after configure
 }
-
-/**
- * Short init function to initialize untilize op, after a full init is already performed.
- */
-// ALWI void pack_untilize_init_short(uint32_t icb)
-// {
-//     UNPACK(( llk_unpack_untilize_init(icb) ));
-//     PACK(( llk_pack_untilize_init() ));
-// }
 
 /**
  * Perform the untilize operation on a block of tiles. This simply loops over the provided block size.
 */
 template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb) {
-    #ifdef ARCH_GRAYSKULL
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH(( llk_math_wait_for_dest_available<SYNC>() ));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
@@ -63,34 +51,26 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
         PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb) ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
-    #endif
 }
 
 /**
  * Uninitialize untilize operation, to allow initializing another operation.
  */
-ALWI void pack_untilize_uninit() {
-    #ifdef ARCH_GRAYSKULL
-    PACK(( llk_pack_init() ));
+ALWI void pack_untilize_uninit(uint32_t ocb = 16) {
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
-    #endif
 }
 
 template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_dst_init_short()
 {
-    #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_untilize_init<block_ct_dim>() ));
-    // PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, true>() ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, true>() ));
-    #endif
 }
 
 template <uint32_t block_ct_dim = 8>
 ALWI void pack_untilize_dst(uint32_t ocb) {
-    #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb) ));
-    #endif
 }
 
 }
