@@ -44,10 +44,10 @@ tt_metal/impl/program/ @TT-billteng
 # tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
 
 # metal - dispatch
-tt_metal/impl/dispatch/ @DrJessop @davorchap
-tt_metal/impl/dispatch/**/module.mk @DrJessop @davorchap @tt-rkim
-tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap @tarafdarTT
-docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
+tt_metal/impl/dispatch/ @DrJessop @pgkeller
+tt_metal/impl/dispatch/**/module.mk @DrJessop @tt-rkim @pgkeller
+tt_metal/kernels/dataflow/dispatch/ @DrJessop @tarafdarTT @pgkeller
+docs/source/frameworks/tt_dispatch.rst @DrJessop @pgkeller
 docs/source/tt_metal/apis/host_apis/ @TT-billteng
 
 # metal - fw, llks, risc-v
