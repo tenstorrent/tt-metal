@@ -22,7 +22,6 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_bias_tensor,
     create_conv_weight_tensor_special_padding,
 )
-from models.utility_functions import skip_for_wormhole_b0
 import torch
 
 
@@ -41,7 +40,6 @@ import torch
     ),
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@skip_for_wormhole_b0()
 def test_run_downsample(
     use_program_cache,
     batch_size,
@@ -59,6 +57,10 @@ def test_run_downsample(
 ):
     if batch_size > 8 and dtype != ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip("Batch > 8 must be run fully bfp8")
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
     assert input_channels % 32 == 0
     assert output_channels % 32 == 0
     assert stride_h == stride_w
