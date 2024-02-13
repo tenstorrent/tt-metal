@@ -50,7 +50,11 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "recip", recip, R"doc(Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.)doc");
         detail::bind_unary_op(m_tensor, "relu", relu, R"doc(Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "relu6", relu6, R"doc(Returns tensor with the relu6 activation on elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "sqrt", sqrt, R"doc(Returns tensor with the square-root of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(
+            m_tensor,
+            "sqrt",
+            py::overload_cast<const Tensor &, const MemoryConfig &>(sqrt),
+            R"doc(Returns tensor with the square-root of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "sigmoid", sigmoid, R"doc(Applies the sigmoid function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "log", log, R"doc(Returns tensor with the natural logarithm of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "tanh", tanh, R"doc(Returns tensor with the hyperbolic tangent of elements of the input tensor ``{0}``.)doc");

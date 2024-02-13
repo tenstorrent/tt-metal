@@ -148,7 +148,17 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
 // template<typename Buffer>
 // void *get_host_buffer(const Tensor &tensor);
 void *get_raw_host_data_ptr(const Tensor &tensor);
-void memcpy(Tensor &dst, const Tensor &src);
+
+void memcpy(
+    CommandQueue &queue, void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
+void memcpy(
+    CommandQueue &queue, Tensor &dst, const void *src, const std::optional<std::size_t> transfer_size = std::nullopt);
+void memcpy(
+    CommandQueue &queue, Tensor &dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
+
+void memcpy(void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
+void memcpy(Tensor &dst, const void *src, const std::optional<std::size_t> transfer_size = std::nullopt);
+void memcpy(Tensor &dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
 }  // namespace tt_metal
 

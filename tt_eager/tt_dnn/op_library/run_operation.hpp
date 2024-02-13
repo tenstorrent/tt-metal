@@ -140,7 +140,7 @@ std::string operation_type_to_string() {
 
 static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {
     return std::visit(
-        [&] (const auto& storage) -> operation_history::TensorRecord {
+        [&](const auto& storage) -> operation_history::TensorRecord {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, OwnedStorage>) {
                 return operation_history::TensorRecord{
@@ -155,13 +155,11 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
                 return operation_history::TensorRecord{
                     tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout()
                 };
-            }
-            else {
+            } else {
                 raise_unsupported_storage<T>();
             }
         },
-        tensor.storage()
-    );
+        tensor.storage());
 }
 
 template<typename OperationType>
@@ -252,22 +250,19 @@ std::vector<Tensor> run(
     const HostOperation& operation,
     const std::vector<Tensor>& input_tensors
 );
+
+std::vector<Tensor> run(
+    CommandQueue& queue,
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
+
 std::vector<Tensor> run(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
-);
-
-void run(
-    CommandQueue & q,
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
-);
-
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
 
 template<typename ConcreteOperation>
 inline std::vector<Tensor> run(
@@ -294,13 +289,12 @@ std::vector<Tensor> run_without_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
 );
-template<typename ConcreteOperation>
+template <typename ConcreteOperation>
 inline std::vector<Tensor> run_without_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}
-) {
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {
     const auto operation = DeviceOperation(concrete_op);
     return run_without_autoformat(operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }

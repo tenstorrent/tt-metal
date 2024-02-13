@@ -367,17 +367,69 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
     return dispatch_map.at(tensor.dtype())(tensor);
 }
 
-void memcpy(Tensor& dst, const Tensor& src) {
-    ZoneScoped;
+void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
+    if (not transfer_size.has_value()) {
+        TT_ASSERT("transfer_size is not supported for memcpy right now!");
+    }
+    if (not is_device_tensor(src)) {
+        TT_THROW("memcpy: src tensor must be on device");
+    }
 
-    const static std::unordered_map<DataType, std::function<void(Tensor&, const Tensor&)>> dispatch_map = {
-        {DataType::BFLOAT16, &tensor_impl::memcpy<bfloat16>},
-        {DataType::FLOAT32, &tensor_impl::memcpy<float>},
-        {DataType::UINT32, &tensor_impl::memcpy<uint32_t>},
-        {DataType::BFLOAT8_B, &tensor_impl::memcpy<uint32_t>},
-        {DataType::UINT16, &tensor_impl::memcpy<uint16_t>},
-    };
-    dispatch_map.at(dst.dtype())(dst, src);
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+    EnqueueReadBuffer(queue, src.device_buffer(), dst, true);
+}
+
+void memcpy(void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
+    memcpy(src.device()->command_queue(), dst, src, transfer_size);
+}
+
+void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size) {
+    if (not transfer_size.has_value()) {
+        TT_ASSERT("transfer_size is not supported for memcpy right now!");
+    }
+    if (not is_device_tensor(dst)) {
+        TT_THROW("memcpy: memcpy to non-device tensor is not supported!");
+    }
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+    EnqueueWriteBuffer(queue, dst.device_buffer(), src, false);
+}
+
+void memcpy(Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size) {
+    memcpy(dst.device()->command_queue(), dst, src, transfer_size);
+}
+
+void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+
+    TT_ASSERT(dst.dtype() == src.dtype());
+    TT_ASSERT(dst.layout() == src.layout());
+
+    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
+        memcpy(queue, get_raw_host_data_ptr(dst), src, transfer_size);
+    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
+        memcpy(queue, dst, get_raw_host_data_ptr(src), transfer_size);
+    } else {
+        TT_THROW("Unsupported memcpy");
+    }
+}
+
+void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
+    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
+        memcpy(src.device()->command_queue(), dst, src, transfer_size);
+    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
+        memcpy(dst.device()->command_queue(), dst, src, transfer_size);
+    } else {
+        TT_THROW("Unsupported memcpy");
+    }
 }
 
 }  // namespace tt_metal

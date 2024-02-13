@@ -131,24 +131,26 @@ void test_raw_host_memory_pointer() {
     /* Alternative Way to Print Start */
     // Alternatively, we could allocate memory manually and create Tensors with BorrowedStorage on the fly to print the
     // data
-    void* alternative_tensor_for_printing_data = malloc(tt::tt_metal::compute_volume(shape) * sizeof(bfloat16));
+    void* storage_of_alternative_tensor_for_printing = malloc(tt::tt_metal::compute_volume(shape) * sizeof(bfloat16));
+    tt::tt_metal::memcpy(storage_of_alternative_tensor_for_printing, c_dev);
+
     Tensor alternative_tensor_for_printing = Tensor(
         BorrowedStorage{
             borrowed_buffer::Buffer(
-                static_cast<bfloat16*>(alternative_tensor_for_printing_data), tt::tt_metal::compute_volume(shape)),
+                static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing),
+                tt::tt_metal::compute_volume(shape)),
             on_creation_callback,
             on_destruction_callback},
         shape,
         DataType::BFLOAT16,
         Layout::TILE);
-    tt::tt_metal::memcpy(alternative_tensor_for_printing, c_dev);
     alternative_tensor_for_printing.print();
 
     for (auto& element : borrowed_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
 
-    free(alternative_tensor_for_printing_data);
+    free(storage_of_alternative_tensor_for_printing);
     /* Alternative Way to Print End */
 
     auto d_np_array = numpy::ndarray<bfloat16>(shape);

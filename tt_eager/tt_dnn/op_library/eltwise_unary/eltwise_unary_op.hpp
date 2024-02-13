@@ -154,6 +154,21 @@ inline Tensor run_eltwise_unary(
         .at(0);
 }
 
+inline Tensor run_eltwise_unary(
+    CommandQueue& queue,
+    const Tensor& input_tensor,
+    std::vector<UnaryWithParam> ops_chain,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
+    Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
+    FormatParams input_format_params = {.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    return operation::run(
+               queue,
+               tt::tt_metal::operation::DeviceOperation(EltwiseUnary{ops_chain, output_mem_config}),
+               {input_tensor})
+        .at(0);
+}
+
 template <UnaryOpType unary_op_type, typename T = float>
 struct make_eltwise_unary_with_param {
     Tensor operator()(
@@ -228,7 +243,18 @@ inline Tensor relu_without_autoformat(
         .at(0);
 }
 
-constexpr auto sqrt = make_eltwise_unary<UnaryOpType::SQRT>{};
+inline Tensor sqrt(
+    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return run_eltwise_unary(input_tensor, {UnaryWithParam{.op_type = UnaryOpType::SQRT}}, output_mem_config);
+}
+
+inline Tensor sqrt(
+    CommandQueue& queue,
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return run_eltwise_unary(queue, input_tensor, {UnaryWithParam{.op_type = UnaryOpType::SQRT}}, output_mem_config);
+}
+
 constexpr auto recip = make_eltwise_unary<UnaryOpType::RECIP>{};
 constexpr auto relu = make_eltwise_unary<UnaryOpType::RELU>{};
 constexpr auto relu6 = make_eltwise_unary<UnaryOpType::RELU6>{};
