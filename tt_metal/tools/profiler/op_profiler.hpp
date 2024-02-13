@@ -32,7 +32,12 @@ namespace op_profiler {
     };
 
     namespace detail {
-        static const std::filesystem::path logLocationsRecord = string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME) + "/.locations.log";
+        static std::filesystem::path const& getLogLocationsRecord()
+        {
+            static const std::filesystem::path logLocationsRecord =
+                string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME) + "/.locations.log";
+            return logLocationsRecord;
+        }
 
         static string replace_comma(const string& s)
         {
@@ -84,15 +89,12 @@ namespace op_profiler {
             return join_vector(tensorStrs, "|");
         }
 
-        static void delete_logs_location_record()
-        {
-            std::filesystem::remove(logLocationsRecord);
-        }
+        static void delete_logs_location_record() { std::filesystem::remove(getLogLocationsRecord()); }
 
         static void add_log_location_record(const string& logLocation)
         {
             std::ofstream recordFile;
-            recordFile.open(logLocationsRecord, std::ios_base::app);
+            recordFile.open(getLogLocationsRecord(), std::ios_base::app);
             recordFile << logLocation << std::endl;
             recordFile.close();
 
