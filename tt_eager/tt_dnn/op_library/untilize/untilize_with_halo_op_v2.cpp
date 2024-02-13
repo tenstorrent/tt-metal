@@ -570,7 +570,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
         TT_FATAL(ncores_nhw_ == shard_spec.grid.num_cores());
     }
     auto out_shard_spec = shard_spec;
-    out_shard_spec.shape[0] = output_shape[0] * div_up(output_shape[2], ncores_nhw_);
+    out_shard_spec.shape[0] = div_up(output_shape[0] * output_shape[2], ncores_nhw_);
     out_shard_spec.halo = true;
     // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
     auto mem_config = out_mem_config_;

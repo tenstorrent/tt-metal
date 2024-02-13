@@ -21,12 +21,39 @@ import ttnn
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (  ## Only resnet shapes supported for now in untilize with halo + maxpool
+        (  ## resnet shapes
             [1, 64, 112, 112],
             [4, 64, 112, 112],
             [8, 64, 112, 112],
             [16, 64, 112, 112],
             # [20, 64, 112, 112],
+            ## hpr shapes
+            [8, 32, 132, 20],  ## pass
+            [16, 32, 132, 20],  ## pass
+            [32, 32, 132, 20],  ## pass
+            [64, 32, 132, 20],  ## pass
+            [128, 32, 132, 20],  ## pass
+            # [256, 32, 132, 20],   ## oom
+            [8, 32, 264, 40],  ## pass
+            [16, 32, 264, 40],  ## pass
+            [32, 32, 264, 40],  ## pass
+            # [64, 32, 264, 40],    ## oom
+            # [128, 32, 264, 40],   ## oom
+            # [256, 32, 264, 40],   ## oom
+            # ## not supported yet
+            # [4, 16, 1056, 160],
+            # [8, 16, 1056, 160],
+            # [16, 16, 1056, 160],
+            # [32, 16, 1056, 160],
+            # [64, 16, 1056, 160],
+            # [128, 16, 1056, 160],
+            # [256, 16, 1056, 160],
+            # [8, 16, 528, 80],
+            # [16, 16, 528, 80],
+            # [32, 16, 528, 80],
+            # [64, 16, 528, 80],
+            # [128, 16, 528, 80],
+            # [256, 16, 528, 80],
         )
     ),
 )
@@ -64,9 +91,6 @@ def test_run_max_pool(
     device,
     dtype,
 ):
-    if act_shape[0] >= 16 and dtype == ttnn.bfloat16:
-        pytest.skip("Configuration does not fit in L1")
-
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding
@@ -74,8 +98,7 @@ def test_run_max_pool(
     dilation_h, dilation_w = dilation
 
     if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
-        logger.info("Invalid case")
-        pytest.skip()
+        pytest.skip("Invalid case")
 
     if (kernel_h == 3 and pad_h != 1) or (kernel_h == 2 and pad_h != 0):
         pytest.skip("kernel size and padding combination not supported")
@@ -83,12 +106,10 @@ def test_run_max_pool(
     out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     if out_w % nblocks != 0:
-        logger.info(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
-        pytest.skip()
+        pytest.skip(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
 
-    if in_c != 64:
-        logger.info("Current maxpool writer needs nchannels to be 64!")
-        pytest.skip()
+    if in_c % 16 != 0:
+        pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -125,6 +146,8 @@ def test_run_max_pool(
     )
 
     if dtype == ttnn.bfloat8_b:
+        if (in_h * in_w) % 32 != 0:
+            pytest.skip("For BFP8_B datatype, input height * width should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
