@@ -1143,7 +1143,7 @@ class TTPyCompositeConv(TTPyOp):
             self.conv_output_shape[0],
             self.conv_output_shape[1],
             self.conv_output_shape[2],
-            self.conv_output_shape[3],
+            conv_output_on_device.shape_without_padding()[3],
         )
 
         # Copy to host
