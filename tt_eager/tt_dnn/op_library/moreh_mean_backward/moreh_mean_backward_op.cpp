@@ -23,10 +23,36 @@ void MorehMeanBackward::validate(const std::vector<Tensor>& inputs) const {
     const auto& output_grad = inputs.at(0);
     const auto& input_grad = inputs.at(1);
 
-    auto output_grad_shape = output_grad.shape();
-    const auto& input_grad_shape = input_grad.shape();
     auto output_grad_shape_wo_padding = output_grad.shape().without_padding();
     const auto& input_grad_shape_wo_padding = input_grad.shape().without_padding();
+
+    for (int i = 0; i < output_grad_shape_wo_padding.rank(); ++i) {
+        const auto output_grad_dim = output_grad_shape_wo_padding[i];
+        const auto input_grad_dim = input_grad_shape_wo_padding[i];
+        if (output_grad_dim == input_grad_dim) {
+            continue;
+        }
+        TT_ASSERT(output_grad_dim == 1);
+    }
+
+    TT_ASSERT(
+        (output_grad.layout() == Layout::TILE && input_grad.layout() == Layout::TILE),
+        "Tensors must be tilized");
+    TT_ASSERT(
+        output_grad.dtype() == DataType::BFLOAT16 || output_grad.dtype() == DataType::BFLOAT8_B,
+        "Unsupported data format");
+    TT_ASSERT(
+        input_grad.dtype() == DataType::BFLOAT16 || input_grad.dtype() == DataType::BFLOAT8_B,
+        "Unsupported data format");
+    TT_ASSERT(
+        output_grad.dtype() == input_grad.dtype(), "Unsupported data format");
+    TT_ASSERT(
+        output_grad.storage_type() == StorageType::DEVICE and input_grad.storage_type() == StorageType::DEVICE,
+        "Operands to mean backward need to be on device!");
+    TT_ASSERT(output_grad.device() == input_grad.device(), "Operands to mean backward need to be on the same device!");
+    TT_ASSERT(
+        output_grad.buffer() != nullptr and input_grad.buffer() != nullptr,
+        "Operands to mean backward need to be allocated in buffers on device!");
 }
 
 operation::ProgramWithCallbacks MorehMeanBackward::create_program(
