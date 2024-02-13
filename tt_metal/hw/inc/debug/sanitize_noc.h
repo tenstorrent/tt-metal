@@ -34,6 +34,7 @@ enum debug_sanitize_which_riscv {
 // Forward declaration to avoid circular dependency
 namespace internal_ {
 void __attribute__((section("code_l1"))) risc_context_switch();
+void disable_erisc_app();
 }
 #endif
 
@@ -82,6 +83,9 @@ inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32
         v[noc_index].which = debug_sanitize_get_which_riscv();
         v[noc_index].invalid = invalid;
     }
+#if defined(COMPILE_FOR_ERISC)
+    internal_::disable_erisc_app();
+#endif
 
     while(1) {
 #if defined(COMPILE_FOR_ERISC)
