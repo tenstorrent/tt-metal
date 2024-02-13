@@ -27,11 +27,14 @@ class TTPyUntilizeWithHalo(TTPyOp):
         sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig,
         halo_reader_patterns_cache,
         pad_val=0x0,
+        is_out_tiled=True,
     ):
         self.sliding_window_op_params = sliding_window_op_params
         self.device = device
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
-        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache)
+        self.set_op_configs(
+            device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache, is_out_tiled
+        )
         assert sliding_window_op_params_hash in halo_reader_patterns_cache
         utwh_kernel_configs = halo_reader_patterns_cache[sliding_window_op_params_hash]
 
@@ -81,7 +84,12 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
     # override abstract methods from base class TTPyOp
     def set_op_configs(
-        self, device, sliding_window_op_params_hash, sliding_window_op_params, halo_reader_patterns_cache
+        self,
+        device,
+        sliding_window_op_params_hash,
+        sliding_window_op_params,
+        halo_reader_patterns_cache,
+        is_out_tiled=True,
     ):
         if sliding_window_op_params_hash not in halo_reader_patterns_cache:
             stride_h = sliding_window_op_params.stride_h
@@ -106,9 +114,24 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 sliding_window_op_all_params, input_nchw_shape
             )
             sliding_window_output_shard_nhw_size = get_sliding_window_op_output_shard_nhw_size(
-                num_cores_nhw, input_n, input_h, input_w, stride_h, stride_w, pad_h, pad_w, window_h, window_w
+                num_cores_nhw,
+                input_n,
+                input_h,
+                input_w,
+                stride_h,
+                stride_w,
+                pad_h,
+                pad_w,
+                window_h,
+                window_w,
+                is_out_tiled,
             )
-            untilize_w_halo_input_nhw_size_to_shard_evenly = _nearest_y(input_n * input_h * input_w, num_cores_nhw * 32)
+            if is_out_tiled:
+                untilize_w_halo_input_nhw_size_to_shard_evenly = _nearest_y(
+                    input_n * input_h * input_w, num_cores_nhw * 32
+                )
+            else:
+                untilize_w_halo_input_nhw_size_to_shard_evenly = _nearest_y(input_n * input_h * input_w, num_cores_nhw)
             untilize_with_halo_input_shard_nhw_size = (int)(
                 untilize_w_halo_input_nhw_size_to_shard_evenly / num_cores_nhw
             )

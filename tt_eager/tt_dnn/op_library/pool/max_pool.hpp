@@ -133,7 +133,7 @@ Tensor max_pool2d_v2(const Tensor &input, const Tensor &reader_indices,
                   uint32_t nblocks = 1, bool use_multicore = true);
 
 namespace max_pool_helpers {
-uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw);
+uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw, uint32_t nbatch);
 }
 
 }  // namespace tt_metal
