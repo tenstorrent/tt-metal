@@ -57,43 +57,61 @@ std::tuple<CoreRange, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> get_decomp
     return std::make_tuple(all_cores, core_range, core_range_cliff, out_h_per_core, out_h_per_core_cliff);
 }
 
-uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw) {
+uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw, uint32_t nbatch) {
     uint32_t avail_ncores = grid_size.x * grid_size.y;
     uint32_t ncores;
-    switch (out_nhw) {
-        case 1024:  // test case
-            ncores = 32;
-            break;
-        case 2048:  // test case
-        case 4096:  // test case
-        case 8192:  // test case
-        case 16384:  // test case
-        case 32768:  // test case
-            ncores = 64;
-            break;
-        case 3136:  // nbatch = 1
-        case 6272:  // nbatch = 2
-        case 12544: // nbatch = 4
-        case 25088: // nbatch = 8
-        case 50176: // nbatch = 16
-        case 62720: // nbatch = 20
-            ncores = 98;
-            break;
-        case 784:   // test case
-            ncores = 49;
-            break;
-        default:
-            TT_ASSERT(false, "General case is not yet handled! Only RN50 shapes supported in multicore.");
-            uint32_t out_nhw_per_core = (uint32_t) ceil((float) out_nhw / avail_ncores);
-            ncores = out_nhw / out_nhw_per_core;
-            break;
-    }
+    // if (out_nhw % 660 == 0) {
+    //     // other shapes
+    //     if (nbatch <= 8) {
+    //         ncores = 66;
+    //     } else {
+    //         ncores = 96;
+    //     }
+    // } else {
+        // resnet50 shapes
+        switch (out_nhw) {
+            case 1024:  // test case
+                ncores = 32;
+                break;
+            case 2048:  // test case
+            case 4096:  // test case
+            case 8192:  // test case
+            case 16384:  // test case
+            case 32768:  // test case
+                ncores = 64;
+                break;
+            case 3136:  // nbatch = 1
+            case 6272:  // nbatch = 2
+            case 12544: // nbatch = 4
+            case 25088: // nbatch = 8
+            case 50176: // nbatch = 16
+            case 62720: // nbatch = 20
+                ncores = 98;
+                break;
+            case 784:   // test case
+                ncores = 49;
+                break;
+            default:
+                // TT_ASSERT(false, "General case is not yet handled! Only RN50 shapes supported in multicore.");
+                uint32_t out_nhw_per_core = (uint32_t) ceil((float) out_nhw / avail_ncores);
+                ncores = out_nhw / out_nhw_per_core;
+                while (avail_ncores > 0) {
+                    if (out_nhw % avail_ncores == 0 && (out_nhw / avail_ncores) % TILE_HEIGHT == 0) {
+                        ncores = avail_ncores;
+                        break;
+                    }
+                    --avail_ncores;
+                }
+                ncores = std::max(avail_ncores, (uint32_t) 1);
+                break;
+        }
+    // }
     return ncores;
 }
 
 // decompose along height = N * H * W
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
-get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw) {
+get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw, uint32_t nbatch) {
     std::set<CoreRange> all_cores, core_range, core_range_cliff;
     uint32_t avail_ncores = grid_size.x * grid_size.y;
     // // generic decomposition:
@@ -101,7 +119,7 @@ get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw) {
 
     // hardcoded for resnet shapes:
     uint32_t ncores = 0, out_nhw_per_core = 0, in_nhw_per_core = 0;
-    ncores = get_num_cores(grid_size, out_nhw);
+    ncores = get_num_cores(grid_size, out_nhw, nbatch);
 
     out_nhw_per_core = out_nhw / ncores;
     in_nhw_per_core = in_nhw / ncores;
@@ -181,7 +199,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
+    auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw, nbatch);
     if (input.memory_config().is_sharded()) {
         all_cores = input.shard_spec().value().grid;
         uint32_t ncores = all_cores.num_cores();
@@ -658,7 +676,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet({});
     uint32_t shard_size_per_core = input.shard_spec().value().shape[0];
-    uint32_t in_nhw_per_core = in_h * in_w / ncores;
+    uint32_t in_nhw_per_core = nbatch * in_h * in_w / ncores;
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = out_nhw / ncores;
 
@@ -666,8 +684,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     // TODO: support generic nblocks
     TT_ASSERT(out_nhw_per_core % nblocks == 0, "number of sticks per core ({}) should be divisible by nblocks ({})", out_nhw_per_core, nblocks);
-
-    uint32_t in_nhw_per_core_rem_mask = in_nhw_per_core - 1;    // NOTE: assuming in_nhw_per_core is power of 2
 
     // CBs
     uint32_t multi_buffering_factor = 2;
@@ -685,7 +701,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
     auto raw_in_cb_id = CB::c_in2;
-    // uint32_t raw_in_cb_npages = in_nhw_per_core;
     uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
     CircularBufferConfig raw_in_cb_config = CircularBufferConfig(
@@ -734,14 +749,13 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     TT_FATAL(output.memory_config().is_sharded());
     auto shard_shape = output.shard_spec().value().shape;
     uint32_t sharded_out_num_pages = output.shard_spec().value().shape[0];
-
     uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
     uint32_t sharded_out_cb_page_size = output.shard_spec().value().shape[1] * out_nbytes;    // there is just one row of channels after reduction
     CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
         .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
     auto cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
 
-    #if 0
+    #if 1
     {   // debug
         log_debug(LogOp, "OUTPUT SHARD: {} {}", shard_shape[0], shard_shape[1]);
         log_debug(LogOp, "OUTPUT CB: {} {}", sharded_out_cb_page_size, sharded_out_num_pages);
@@ -751,6 +765,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         log_debug(LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
         log_debug(LogOp, "in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
         log_debug(LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
+        log_debug(LogOp, "sharded_out_cb :: PS = {}, NP = {}", sharded_out_cb_page_size, sharded_out_num_pages);
         log_debug(LogOp, "in_addr: {}", src_dram_buffer->address());
         log_debug(LogOp, "in_reader_indices_addr: {}", reader_indices_buffer->address());
         log_debug(LogOp, "out_addr: {}", dst_dram_buffer->address());
@@ -782,7 +797,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         log_debug(LogOp, "ncores: {}", ncores);
         log_debug(LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
         log_debug(LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
-        log_debug(LogOp, "in_nhw_per_core_rem_mask: {}", in_nhw_per_core_rem_mask);
         log_debug(LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
         log_debug(LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
     }
