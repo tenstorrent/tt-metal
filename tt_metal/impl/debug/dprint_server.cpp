@@ -300,6 +300,27 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
         all_physical_printable_cores[CoreType::ETH].insert(physical_core);
     }
 
+    // Initialize all print buffers on all cores on the device to have print disabled magic. We
+    // will then write print enabled magic for only the cores the user has specified to monitor.
+    // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
+    // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
+    // flushed from the host.
+    for (auto &type_and_cores : all_physical_printable_cores) {
+        for (auto &core : type_and_cores.second) {
+            int hart_count = GetNumRiscs(device_id, core);
+            for (int hart_index = 0; hart_index < hart_count; hart_index++) {
+                WriteInitMagic(device_id, core, hart_index, false);
+            }
+        }
+    }
+
+    // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
+    // to the server.
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
+    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+            return;
+
     // Helper lambda to convert CoreType to string for printing purposes.
     auto core_type_to_str = [](CoreType core_type){
         switch(core_type) {
@@ -364,19 +385,6 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
         }
     }
 
-    // Initialize all print buffers on all cores on the device to have print disabled magic. We
-    // will then write print enabled magic for only the cores the user has specified to monitor.
-    // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
-    // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
-    // flushed from the host.
-    for (auto &type_and_cores : all_physical_printable_cores) {
-        for (auto &core : type_and_cores.second) {
-            int hart_count = GetNumRiscs(device_id, core);
-            for (int hart_index = 0; hart_index < hart_count; hart_index++) {
-                WriteInitMagic(device_id, core, hart_index, false);
-            }
-        }
-    }
     // Write print enable magic for the cores the user specified.
     uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
     for (auto &core : print_cores_sanitized) {
@@ -397,6 +405,12 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 } // AttachDevice
 
 void DebugPrintServerContext::DetachDevice(Device* device) {
+    // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
+    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+            return;
+
     device_to_core_range_lock_.lock();
     TT_ASSERT(device_to_core_range_.count(device) > 0, "Device {} not present in DPRINT server but tried removing it!", device->id());
     device_to_core_range_.erase(device);
@@ -750,13 +764,7 @@ void DprintServerAttach(Device* device) {
        "Device side profiler is running, cannot start print server"
     );
 
-    // Skip if RTOptions doesn't enable DPRINT for this device
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
-    if (!tt::llrt::OptionsG.get_dprint_all_chips())
-        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
-            return;
-
-    // If no server ir running, create one
+    // If no server is running, create one
     if (!DprintServerIsRunning())
         DebugPrintServerContext* ctx = new DebugPrintServerContext();
 
