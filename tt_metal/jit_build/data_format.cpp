@@ -261,7 +261,7 @@ const DataFormat get_single_pack_src_format(
     bool fp32_dest_acc_en,
     bool int_fpu_en,
     tt::ARCH arch) {
-    DataFormat pack_src_format;
+    DataFormat pack_src_format = DataFormat::Invalid;
     const ExpPrecision input_exp_width = get_exp_precison(input_format);
     const ExpPrecision output_exp_width = get_exp_precison(output_format);
     const ExpPrecision fp32_condition_exp_width = get_exp_precison(unpack_conditional_dst_format);

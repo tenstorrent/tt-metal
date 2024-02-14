@@ -228,7 +228,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
@@ -555,17 +555,17 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         program,
         reader_kernel,
         core,
-        ReaderDataMovementConfig{
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
+        ReaderDataMovementConfig(
+            reader_compile_time_args,
+            reader_defines));
 
     auto writer_id = CreateKernel(
         program,
         writer_kernel,
         core,
-        WriterDataMovementConfig{
-            .compile_args = writer_compile_time_args,
-            .defines = all_defines});
+        WriterDataMovementConfig(
+            writer_compile_time_args,
+            all_defines));
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
@@ -1090,7 +1090,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
@@ -1293,7 +1293,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         program,
         writer_kernel,
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,

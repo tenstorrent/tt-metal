@@ -4,6 +4,7 @@
 
 #pragma once
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <random>
 #include <vector>
@@ -51,10 +52,11 @@ class bfloat16 {
     }
 
     float to_float() const {
-        // move lower 16 to upper 16 (of 32)
+        // move lower 16 to upper 16 (of 32) and convert to float
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
-        // return 32 bits as float
-        return *reinterpret_cast<float*>(&uint32_data);
+        float f;
+        std::memcpy(&f, &uint32_data, sizeof(f));
+        return f;
     }
     uint16_t to_packed() const {
         return uint16_data;

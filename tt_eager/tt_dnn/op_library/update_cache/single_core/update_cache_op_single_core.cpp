@@ -18,7 +18,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx) {
     Program program{};
 
-    CoreRangeSet core({CoreRange{.start={0, 0}, .end={0, 0}}});
+    CoreRangeSet core({CoreRange({0, 0}, {0, 0})});
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
     uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);
@@ -107,13 +107,13 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         program,
         "tt_eager/tt_dnn/op_library/update_cache/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/update_cache/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
 operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx) {
     Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -237,13 +237,13 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     SetRuntimeArgs(
         program,

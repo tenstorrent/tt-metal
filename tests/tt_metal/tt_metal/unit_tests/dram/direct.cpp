@@ -376,21 +376,21 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 TEST_F(DeviceFixture, SingleCoreDirectDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 1 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+            unit_tests::dram::direct::reader_only(devices_.at(id), 1 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 2 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+            unit_tests::dram::direct::reader_only(devices_.at(id), 2 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 16 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+            unit_tests::dram::direct::reader_only(devices_.at(id), 16 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
     }
 }
 TEST_F(DeviceFixture, SingleCoreDirectDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 1 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+            unit_tests::dram::direct::writer_only(devices_.at(id), 1 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 2 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+            unit_tests::dram::direct::writer_only(devices_.at(id), 2 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 16 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+            unit_tests::dram::direct::writer_only(devices_.at(id), 16 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
     }
 }
 TEST_F(DeviceFixture, SingleCoreDirectDramReaderWriter) {
@@ -398,7 +398,7 @@ TEST_F(DeviceFixture, SingleCoreDirectDramReaderWriter) {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,
         .l1_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0}};
+        .core = CoreCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
         test_config.num_tiles = 1;
         ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
@@ -414,7 +414,7 @@ TEST_F(DeviceFixture, SingleCoreDirectDramReaderDatacopyWriter) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0}};
+        .core = CoreCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
         test_config.num_tiles = 1;
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));

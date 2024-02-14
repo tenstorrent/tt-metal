@@ -86,13 +86,13 @@ inline Tensor interleaved_to_sharded(
             ) {
                 TT_FATAL(grid.ranges().size() == 1);
                 auto bbox = grid.bounding_box();
-                grid_size = CoreCoord{.x = bbox.end.x + 1, .y = bbox.end.y + 1};
+                grid_size = CoreCoord{bbox.end.x + 1, bbox.end.y + 1};
                 grid_set = grid;
             }
         },
         grid
     );
-    auto shard_spec = ShardSpec{.shard_grid = grid_set, .shard_shape = shard_shape, .shard_orientation = shard_orientation};
+    ShardSpec shard_spec(grid_set,  shard_shape, shard_orientation);
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
     return operation::run(
                Sharded{
@@ -111,7 +111,7 @@ inline Tensor interleaved_to_sharded(
     std::optional<const DataType> output_dtype = std::nullopt) {
     TT_FATAL(sharded_mem_config.is_sharded());
     auto bbox = sharded_mem_config.shard_spec.value().grid.bounding_box();
-    auto grid_size = CoreCoord{.x = bbox.end.x + 1, .y = bbox.end.y + 1};
+    CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);
     return operation::run(
                Sharded{
                    .grid_size = grid_size,

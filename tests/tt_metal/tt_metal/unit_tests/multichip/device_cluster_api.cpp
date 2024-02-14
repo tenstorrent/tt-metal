@@ -48,7 +48,7 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
     }
 
     // Check conversion to noc coords
-    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {{.x = 9, .y = 6}, {.x = 1, .y = 6}};
+    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(9, 6), CoreCoord(1, 6)};
 
     std::vector<CoreCoord> chip_0_eth_logical_coords;
     std::copy(
@@ -62,7 +62,7 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
     std::sort(chip_0_eth_noc_coords_returned.begin(), chip_0_eth_noc_coords_returned.end());
     ASSERT_TRUE(chip_0_eth_noc_coords_returned == chip_0_eth_noc_coords_expected);
 
-    std::vector<CoreCoord> chip_1_eth_noc_coords_expected = {{.x = 9, .y = 0}, {.x = 1, .y = 0}};
+    std::vector<CoreCoord> chip_1_eth_noc_coords_expected = {CoreCoord(9, 0), CoreCoord(1, 0)};
 
     std::vector<CoreCoord> chip_1_eth_logical_coords;
     std::copy(
@@ -79,28 +79,28 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
 
 TEST_F(N300DeviceFixture, InvalidLogicalEthernetCore) {
     const auto& device_0 = this->devices_.at(0);
-    EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core({.x = 1, .y = 0}));
-    EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core({.x = 0, .y = 16}));
+    EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(1, 0)));
+    EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(0, 16)));
 }
 
 TEST_F(N300DeviceFixture, ValidateAllEthernetCoreMapping) {
     static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
-        {CoreCoord({.x = 0, .y = 0}), CoreCoord({.x = 9, .y = 0})},
-        {CoreCoord({.x = 0, .y = 1}), CoreCoord({.x = 1, .y = 0})},
-        {CoreCoord({.x = 0, .y = 2}), CoreCoord({.x = 8, .y = 0})},
-        {CoreCoord({.x = 0, .y = 3}), CoreCoord({.x = 2, .y = 0})},
-        {CoreCoord({.x = 0, .y = 4}), CoreCoord({.x = 7, .y = 0})},
-        {CoreCoord({.x = 0, .y = 5}), CoreCoord({.x = 3, .y = 0})},
-        {CoreCoord({.x = 0, .y = 6}), CoreCoord({.x = 6, .y = 0})},
-        {CoreCoord({.x = 0, .y = 7}), CoreCoord({.x = 4, .y = 0})},
-        {CoreCoord({.x = 0, .y = 8}), CoreCoord({.x = 9, .y = 6})},
-        {CoreCoord({.x = 0, .y = 9}), CoreCoord({.x = 1, .y = 6})},
-        {CoreCoord({.x = 0, .y = 10}), CoreCoord({.x = 8, .y = 6})},
-        {CoreCoord({.x = 0, .y = 11}), CoreCoord({.x = 2, .y = 6})},
-        {CoreCoord({.x = 0, .y = 12}), CoreCoord({.x = 7, .y = 6})},
-        {CoreCoord({.x = 0, .y = 13}), CoreCoord({.x = 3, .y = 6})},
-        {CoreCoord({.x = 0, .y = 14}), CoreCoord({.x = 6, .y = 6})},
-        {CoreCoord({.x = 0, .y = 15}), CoreCoord({.x = 4, .y = 6})},
+        {CoreCoord(0, 0), CoreCoord(9, 0)},
+        {CoreCoord(0, 1), CoreCoord(1, 0)},
+        {CoreCoord(0, 2), CoreCoord(8, 0)},
+        {CoreCoord(0, 3), CoreCoord(2, 0)},
+        {CoreCoord(0, 4), CoreCoord(7, 0)},
+        {CoreCoord(0, 5), CoreCoord(3, 0)},
+        {CoreCoord(0, 6), CoreCoord(6, 0)},
+        {CoreCoord(0, 7), CoreCoord(4, 0)},
+        {CoreCoord(0, 8), CoreCoord(9, 6)},
+        {CoreCoord(0, 9), CoreCoord(1, 6)},
+        {CoreCoord(0, 10), CoreCoord(8, 6)},
+        {CoreCoord(0, 11), CoreCoord(2, 6)},
+        {CoreCoord(0, 12), CoreCoord(7, 6)},
+        {CoreCoord(0, 13), CoreCoord(3, 6)},
+        {CoreCoord(0, 14), CoreCoord(6, 6)},
+        {CoreCoord(0, 15), CoreCoord(4, 6)},
     };
     const auto& device_0 = this->devices_.at(0);
     for (const auto& logical_core : device_0->ethernet_cores()) {
@@ -112,22 +112,22 @@ TEST_F(N300DeviceFixture, ValidateAllEthernetCoreMapping) {
 
 TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
     static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
-        {CoreCoord({.x = 0, .y = 0}), CoreCoord({.x = 9, .y = 0})},
-        {CoreCoord({.x = 0, .y = 1}), CoreCoord({.x = 1, .y = 0})},
-        {CoreCoord({.x = 0, .y = 2}), CoreCoord({.x = 8, .y = 0})},
-        {CoreCoord({.x = 0, .y = 3}), CoreCoord({.x = 2, .y = 0})},
-        {CoreCoord({.x = 0, .y = 4}), CoreCoord({.x = 7, .y = 0})},
-        {CoreCoord({.x = 0, .y = 5}), CoreCoord({.x = 3, .y = 0})},
-        {CoreCoord({.x = 0, .y = 6}), CoreCoord({.x = 6, .y = 0})},
-        {CoreCoord({.x = 0, .y = 7}), CoreCoord({.x = 4, .y = 0})},
-        {CoreCoord({.x = 0, .y = 8}), CoreCoord({.x = 9, .y = 6})},
-        {CoreCoord({.x = 0, .y = 9}), CoreCoord({.x = 1, .y = 6})},
-        {CoreCoord({.x = 0, .y = 10}), CoreCoord({.x = 8, .y = 6})},
-        {CoreCoord({.x = 0, .y = 11}), CoreCoord({.x = 2, .y = 6})},
-        {CoreCoord({.x = 0, .y = 12}), CoreCoord({.x = 7, .y = 6})},
-        {CoreCoord({.x = 0, .y = 13}), CoreCoord({.x = 3, .y = 6})},
-        {CoreCoord({.x = 0, .y = 14}), CoreCoord({.x = 6, .y = 6})},
-        {CoreCoord({.x = 0, .y = 15}), CoreCoord({.x = 4, .y = 6})},
+        {CoreCoord(0, 0), CoreCoord(9, 0)},
+        {CoreCoord(0, 1), CoreCoord(1, 0)},
+        {CoreCoord(0, 2), CoreCoord(8, 0)},
+        {CoreCoord(0, 3), CoreCoord(2, 0)},
+        {CoreCoord(0, 4), CoreCoord(7, 0)},
+        {CoreCoord(0, 5), CoreCoord(3, 0)},
+        {CoreCoord(0, 6), CoreCoord(6, 0)},
+        {CoreCoord(0, 7), CoreCoord(4, 0)},
+        {CoreCoord(0, 8), CoreCoord(9, 6)},
+        {CoreCoord(0, 9), CoreCoord(1, 6)},
+        {CoreCoord(0, 10), CoreCoord(8, 6)},
+        {CoreCoord(0, 11), CoreCoord(2, 6)},
+        {CoreCoord(0, 12), CoreCoord(7, 6)},
+        {CoreCoord(0, 13), CoreCoord(3, 6)},
+        {CoreCoord(0, 14), CoreCoord(6, 6)},
+        {CoreCoord(0, 15), CoreCoord(4, 6)},
     };
     const auto& device_0 = this->devices_.at(0);
     for (const auto& logical_core : device_0->ethernet_cores()) {
@@ -136,7 +136,7 @@ TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
             expected_mapping_logical_to_physical.at(logical_core));
     }
     // Check an invalid core type
-    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core({.x = 0, .y = 0}, CoreType::DRAM));
+    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::DRAM));
 }
 
 TEST_F(N300DeviceFixture, ValidateEthernetSockets) {

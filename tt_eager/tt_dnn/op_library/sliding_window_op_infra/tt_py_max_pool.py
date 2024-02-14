@@ -98,16 +98,15 @@ class TTPyMaxPool(TTPyOp):
         pad_val=0xF7FF,
         output_mem_config=None,
     ):
-        if len(reader_patterns_cache) == 0:
+        if "max_pool" not in reader_patterns_cache:
             reader_patterns_cache["max_pool"] = {}
+        if "halo" not in reader_patterns_cache:
             reader_patterns_cache["halo"] = {}
-        else:
-            assert len(reader_patterns_cache) == 2
-            assert "max_pool" in reader_patterns_cache and "halo" in reader_patterns_cache
+
         for key in reader_patterns_cache:
             assert (
-                key == "max_pool" or key == "halo"
-            ), f"reader_patterns_cache should have 1 of the following keys - 'max_pool' or 'halo'. Found key - {key}"
+                key == "max_pool" or key == "halo" or key == "conv"
+            ), f"reader_patterns_cache should have 1 of the following keys - 'conv', 'max_pool' or 'halo'. Found key - {key}"
 
         self.grid_size, self.shard_grid, self.ncores_nhw = determine_parallel_config(sliding_window_op_params)
         if isinstance(sliding_window_op_params, SlidingWindowOpParams):

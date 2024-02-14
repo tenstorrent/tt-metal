@@ -140,7 +140,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
 
     bool pass = true;
     // FIXME: Convert to config
-    CoreCoord core = {.x = 0, .y = 0};
+    CoreCoord core(0, 0);
     const uint32_t in0_cb_index = 0;
     const uint32_t in1_cb_index = 1;
     const uint32_t out_cb_index = 16;
@@ -268,7 +268,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
 
     bool pass = true;
     // FIXME: Convert to config
-    CoreCoord core = {.x = 0, .y = 0};
+    CoreCoord core(0, 0);
     const uint32_t in0_cb_index = 0;
     const uint32_t in1_cb_index = 1;
     const uint32_t out_cb_index = 16;
@@ -430,7 +430,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
 
     bool pass = true;
     // FIXME: Convert to config
-    CoreCoord core = {.x = 0, .y = 0};
+    CoreCoord core(0, 0);
     const uint32_t in0_cb_index = 0;
     const uint32_t in1_cb_index = 1;
     const uint32_t out_cb_index = 16;

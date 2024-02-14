@@ -68,10 +68,10 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    CoreRange all_cores{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1},
-    };
+    CoreRange all_cores(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}
+    );
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -100,12 +100,12 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;

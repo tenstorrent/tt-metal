@@ -6,6 +6,10 @@
 #include <filesystem>
 #include <thread>
 #include <string>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
 #include "jit_build/build.hpp"
 #include "jit_build/genfiles.hpp"
@@ -46,7 +50,6 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
     // Tools
     this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
     this->objcopy_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy ";
-    this->hex8tohex32_ = string("python3 ") + this->root_ + "tt_metal/hw/toolchain/hex8tohex32.py ";
 
     // Flags
     string common_flags;
@@ -481,14 +484,52 @@ void JitBuildState::elf_to_hex8(const string& log_file, const string& out_dir) c
 
 void JitBuildState::hex8_to_hex32(const string& log_file, const string& out_dir) const
 {
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.hex8tohex32_ + this->target_name_ + ".hex.tmp " + this->target_name_ + ".hex";
+    ZoneScoped;
+    auto write_data = [](std::ofstream& outf, std::vector<uint64_t>& data, uint64_t& ptr){
+        if (!data.empty()) {
+            outf << "@" << std::setfill('0') << std::setw(8) << std::hex << (ptr >> 2) << "\n";
+            for (size_t i = 0; i < data.size(); i += 4) {
+                for (int j = 3; j >= 0; --j) {
+                    outf << std::setfill('0') << std::setw(2) << std::hex << data[i + j];
+                }
+                outf << "\n";
+            }
+        }
+        data.clear();
+    };
 
-    log_debug(tt::LogBuildKernels, "    hex8tohex32 cmd: {}", cmd);
-    if (!tt::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "hex8tohex32.py", cmd, log_file);
+    auto pad_zeroes = [](std::vector<uint64_t>& data, uint32_t num){
+        for(unsigned int i = 0; i < num; i++){
+            data.push_back(0);
+        }
+    };
+
+    std::ifstream inf(out_dir + this->target_name_ + ".hex.tmp");
+    std::ofstream outf(out_dir + this->target_name_ + ".hex");
+    std::string line;
+    std::vector<uint64_t> data;
+    uint64_t ptr = 0;
+
+    while (std::getline(inf, line)) {
+        if (line[0] == '@') {
+            uint64_t addr = std::stol(line.substr(1), nullptr, 16);
+            if (addr > ptr + 4) {
+                write_data(outf, data, ptr);
+                ptr = addr;
+                pad_zeroes(data, (ptr % 4));
+                ptr -= ptr % 4;
+            } else {
+                pad_zeroes(data, (addr - ptr - data.size()));
+            }
+        } else {
+            std::istringstream iss(line);
+            std::string tok;
+            while (iss >> tok) {
+                data.push_back(std::stol(tok, nullptr, 16));
+            }
+        }
     }
+    write_data(outf, data, ptr);
 }
 
 // Given this elf (A) and a later elf (B):

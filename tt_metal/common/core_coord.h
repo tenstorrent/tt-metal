@@ -269,7 +269,8 @@ class CoreRangeSet {
         max_y = std::max ( max_y , cr.end.y );
       }
 
-      bool grid[max_y+1][max_x+1] = {};
+      bool grid[max_y + 1][max_x + 1];
+      memset(grid, 0, sizeof(grid));
 
       for (const auto & cr : crs )
         for (unsigned y = cr.start.y; y <= cr.end.y; y++)
@@ -374,7 +375,7 @@ class CoreRangeSet {
         min_y = std::min ( min_y, cr.start.y );
         max_y = std::max ( max_y, cr.end.y);
       }
-      return {.start = {.x = min_x, .y = min_y}, .end ={ .x = max_x, .y = max_y} };
+      return {{min_x, min_y},{max_x, max_y}};
     }
 
   private:

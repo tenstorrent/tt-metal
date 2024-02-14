@@ -103,7 +103,7 @@ void try_creating_more_than_max_num_semaphores(
 TEST_F(DeviceFixture, InitializeLegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         tt_metal::Program program = tt_metal::CreateProgram();
-        CoreRange core_range = {.start = {0, 0}, .end = {1, 1}};
+        CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::initialize_and_compile_program(devices_.at(id), program, core_range);
         unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), program, core_range);
     }
@@ -112,7 +112,7 @@ TEST_F(DeviceFixture, InitializeLegalSemaphores) {
 TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         tt_metal::Program program = tt_metal::CreateProgram();
-        CoreRange core_range = {.start = {0, 0}, .end = {1, 1}};
+        CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::initialize_and_compile_program(devices_.at(id), program, core_range);
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
             devices_.at(id), program, core_range);

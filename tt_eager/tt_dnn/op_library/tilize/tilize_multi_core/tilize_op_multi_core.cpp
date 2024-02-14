@@ -40,27 +40,27 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
         if (ncores_x_cliff == ncores_x) {
             // no cliff, all is perfectly divisible
             ncores_x_cliff = 0;
-            core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 1)});
-            all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 1)});
+            core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
+            all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
         } else if (ncores_x_cliff == 1) {
             // just one cliff core in the last row
             nblocks_per_core_cliff = 1;
             if (ncores_y > 1) {
-                core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
             }
-            core_range_cliff.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(0, ncores_y - 1)});
-            all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(0, ncores_y - 1)});
+            core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
+            all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
         } else if (ncores_x_cliff > 1) {
             // both normal and cliff cores in the last row
             nblocks_per_core_cliff = 1;
             if (ncores_y > 1) {
-                core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
             }
-            core_range.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-            core_range_cliff.insert(CoreRange{.start = CoreCoord(ncores_x_cliff - 1, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-            all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
+            core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+            core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+            all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
         } else {
             TT_ASSERT(false, "Something went really wrong in splitting blocks across cores {} {}!!", ncores_x, ncores_x_cliff);
         }
@@ -75,25 +75,25 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
             if (ncores_x_cliff == ncores_x) {
                 // no x_cliff row => all cores are equal
                 ncores_x_cliff = 0;
-                core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
             } else if (ncores_x_cliff == 1) {
                 // just 1 core as cliff in the last core row
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range_cliff.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(0, ncores_y - 1)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(0, ncores_y - 1)});
+                core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
             } else if (ncores_x_cliff < ncores_x) {
                 // last core row has last core as cliff, rest are normal
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-                core_range_cliff.insert(CoreRange{.start = CoreCoord(ncores_x_cliff - 1, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
             } else {
                 TT_ASSERT("Something went really wrong in calculating the core ranges {} {}", ncores_x, ncores_x_cliff);
             }
@@ -102,27 +102,27 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
             if (ncores_x_cliff == ncores_x) {
                 // ncores x is same throughout
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-                core_range_cliff.insert(CoreRange{.start = CoreCoord(ncores_x_cliff - 1, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
             } else if (ncores_x_cliff == 1) {
                 // last core row only has 1 core, as cliff
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range_cliff.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(0, ncores_y - 1)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(0, ncores_y - 1)});
+                core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
             } else if (ncores_x_cliff < ncores_x) {
                 if (ncores_y > 1) {
-                    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
-                    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
+                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
+                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
                 }
-                core_range.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 2, ncores_y - 1)});
-                core_range_cliff.insert(CoreRange{.start = CoreCoord(ncores_x_cliff - 1, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
-                all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_y - 1), .end = CoreCoord(ncores_x_cliff - 1, ncores_y - 1)});
+                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
+                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
+                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
             } else {
                 TT_ASSERT(false, "Something went very wrong in calculating core ranges (case 2)");
             }
@@ -201,8 +201,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         program,
         "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
-        ReaderDataMovementConfig{
-            .compile_args = reader_ct_args});
+        ReaderDataMovementConfig(
+            reader_ct_args));
 
     /** writer
      */
@@ -215,8 +215,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        WriterDataMovementConfig{
-            .compile_args = writer_ct_args});
+        WriterDataMovementConfig(
+            writer_ct_args));
 
     /** compute
      */
@@ -415,13 +415,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
         uint32_t(num_tiles_per_shard / num_tiles_per_row),
@@ -565,7 +565,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
         program,
         "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_pad_height_width_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_ct_args});
+        tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     /** writer
      */
@@ -578,8 +578,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
-        WriterDataMovementConfig{
-            .compile_args = writer_ct_args});
+        WriterDataMovementConfig(
+            writer_ct_args));
 
     /** compute
      */

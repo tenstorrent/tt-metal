@@ -3,6 +3,8 @@ include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_fast_dispatch/module.mk
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue/module.mk
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_frequent/module.mk
+include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/gtest_smoke/module.mk
+
 # Programming examples for external users
 include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
 
@@ -31,7 +33,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_datacopy \
 		 tests/tt_metal/test_datacopy_output_in_l1 \
 		 tests/tt_metal/test_dataflow_cb \
-		 tests/tt_metal/test_flatten \
 		 tests/tt_metal/test_transpose_hc \
 		 tests/tt_metal/test_transpose_wh \
 		 tests/tt_metal/test_multiple_programs \
@@ -68,11 +69,12 @@ TT_METAL_TESTS += \
 		 # tests/tt_metal/test_matmul_multi_core_multi_dram_in1_mcast \
 		 # tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast \
 		 # tests/tt_metal/test_matmul_single_tile \
+		 # tests/tt_metal/test_flatten \
 
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))
 
 TT_METAL_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES)
-TT_METAL_TESTS_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest
+TT_METAL_TESTS_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest -lm
 
 TT_METAL_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.o))
 TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))
@@ -80,7 +82,7 @@ TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))
 -include $(TT_METAL_TESTS_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-tests/tt_metal: $(TT_METAL_TESTS) programming_examples tests/tt_metal/unit_tests tests/tt_metal/unit_tests_fast_dispatch tests/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue tests/tt_metal/unit_tests_frequent
+tests/tt_metal: $(TT_METAL_TESTS) programming_examples tests/tt_metal/gtest_smoke tests/tt_metal/unit_tests tests/tt_metal/unit_tests_fast_dispatch tests/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue tests/tt_metal/unit_tests_frequent
 tests/tt_metal/all: $(TT_METAL_TESTS)
 tests/tt_metal/%: $(TESTDIR)/tt_metal/% ;
 

@@ -44,7 +44,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
     Device *device = output_grad.device();
     CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
+    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
 
     const auto
         [num_cores_to_be_used,
@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_cols_per_core;
+        uint32_t num_cols_per_core = 0;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_cols_per_core = num_cols_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {

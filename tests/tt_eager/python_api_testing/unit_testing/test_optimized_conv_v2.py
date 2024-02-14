@@ -45,6 +45,9 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
         (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False),
         # sd conv
         (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False),
+        # Small conv
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True),
+        # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, False), # Asserts #5323
     ),
 )
 @pytest.mark.parametrize(

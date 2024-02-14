@@ -63,6 +63,27 @@ void __attribute__((section("code_l1"))) risc_context_switch() {
     ncrisc_noc_counters_init();
 }
 
+FORCE_INLINE
+void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+        risc_context_switch();
+    }
+    eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
+    eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
+    eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);
+    eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
+}
+
+FORCE_INLINE
+void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+    while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+        risc_context_switch();
+    }
+    eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
+    eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
+    eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
+}
+
 void check_and_context_switch() {
     uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t end_time = start_time;
@@ -75,6 +96,7 @@ void check_and_context_switch() {
     // proceed
 }
 
+FORCE_INLINE
 void notify_dispatch_core_done(uint64_t dispatch_addr) {
     //  flush both nocs because ethernet kernels could be using different nocs to try to atomically increment semaphore
     //  in dispatch core
@@ -91,13 +113,13 @@ void disable_erisc_app() { flag_disable[0] = 0; }
 
 FORCE_INLINE
 void send_fd_packets() {
-    eth_send_packet(
+    internal_::eth_send_packet(
         0,
         (eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE) >> 4,
         ((eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE)) >> 4,
         (eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE) >> 4);
     routing_info->fd_buffer_msgs_sent = 1;
-    eth_send_packet(
+    internal_::eth_send_packet(
         0,
         ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
         ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
@@ -122,7 +144,7 @@ void wait_for_fd_packet() {
 FORCE_INLINE
 void ack_fd_packet() {
     routing_info->fd_buffer_msgs_sent = 0;
-    eth_send_packet(
+    internal_::eth_send_packet(
         0,
         ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
         ((uint32_t)(&(routing_info->fd_buffer_msgs_sent))) >> 4,
@@ -218,7 +240,7 @@ void eth_send_bytes(
     uint32_t num_bytes_per_send_word_size = 1) {
     uint32_t num_bytes_sent = 0;
     while (num_bytes_sent < num_bytes) {
-        eth_send_packet(
+        internal_::eth_send_packet(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
@@ -236,7 +258,7 @@ void eth_send_bytes(
  */
 FORCE_INLINE
 void eth_wait_for_receiver_done() {
-    eth_send_packet(
+    internal_::eth_send_packet(
         0,
         ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
         ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
@@ -270,7 +292,11 @@ void eth_wait_for_remote_receiver_done_and_get_local_receiver_data(
     uint32_t local_eth_l1_curr_src_addr,
     uint32_t size
 ) {
-    eth_send_packet(0, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4, 1);
+    internal_::eth_send_packet(
+        0,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
+        1);
     eth_noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
     noc_async_read(receiver_data_noc_addr, local_eth_l1_curr_src_addr, size);
     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
@@ -314,7 +340,7 @@ void eth_wait_for_bytes(uint32_t num_bytes) {
 FORCE_INLINE
 void eth_receiver_done() {
     erisc_info->user_buffer_bytes_sent = 0;
-    eth_send_packet(
+    internal_::eth_send_packet(
         0,
         ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,
         ((uint32_t)(&(erisc_info->user_buffer_bytes_sent))) >> 4,

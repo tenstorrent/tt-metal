@@ -17,7 +17,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Tensor &output) {
     Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -82,13 +82,13 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
         program,
         "tt_eager/tt_dnn/op_library/rotate_half/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/rotate_half/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::map<string, string> bcast_compute_defines = {
         {"BCAST_OP", "mul_tiles_bcast"},

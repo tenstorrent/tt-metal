@@ -114,7 +114,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             program,
             "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines});
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
         std::vector<uint32_t> reader_compile_time_args = {
@@ -131,7 +131,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             program,
             "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_transpose_wh_interleaved_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines});
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     }
 
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
-            WriterDataMovementConfig{.compile_args = writer_ct_args});
+            WriterDataMovementConfig(writer_ct_args));
     } else {
         bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
         std::vector<uint32_t> writer_compile_time_args = {
@@ -157,7 +157,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             program,
             "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     vector<uint32_t> compute_kernel_args_group_1 = {

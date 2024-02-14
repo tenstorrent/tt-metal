@@ -10,15 +10,13 @@ import tt_lib as ttl
 from tt_lib.utils import (
     is_close,
 )
-from models.utility_functions import skip_for_wormhole_b0
 
 from models.utility_functions import comp_pcc, pad_by_zero
 
-shapes = [[1, 1, 32, 32], [1, 1, 32, 128]]
+shapes = [[1, 1, 32, 32], [1, 1, 32, 128], [1, 2, 128, 128]]
 
 
 # still have to skip b/c of very low PCC in WH B0
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("shape", shapes)
 def test_softmax(shape, device):
     torch.manual_seed(1234)
@@ -35,7 +33,7 @@ def test_softmax(shape, device):
     assert passing
 
 
-@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
+@pytest.mark.parametrize("shape", shapes)
 def test_layernorm(shape, device):
     torch.manual_seed(1234)
     x = torch.randn(shape).bfloat16().float()

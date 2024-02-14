@@ -107,26 +107,26 @@ class DataMovementKernel : public Kernel {
 
     ~DataMovementKernel() {}
 
-    RISCV processor() const;
+    RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions& build_options) const;
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const;
-    void read_binaries(Device *device);
+    void set_build_options(JitBuildOptions& build_options) const override;
+    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
+    void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core) const;
+    bool configure(Device *device, const CoreCoord &logical_core) const override;
 
-    Config config() const { return this->config_; }
+    Config config() const override { return this->config_; }
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
    private:
     const DataMovementConfig config_;
 
-    uint8_t expected_num_binaries() const;
+    uint8_t expected_num_binaries() const override;
 
-    std::string config_hash() const;
+    std::string config_hash() const override;
 
-    std::pair<uint64_t, uint64_t> get_runtime_args_range() const;
+    std::pair<uint64_t, uint64_t> get_runtime_args_range() const override;
 };
 
 class EthernetKernel : public Kernel {
@@ -135,26 +135,26 @@ class EthernetKernel : public Kernel {
 
     ~EthernetKernel() {}
 
-    RISCV processor() const;
+    RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions& build_options) const;
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const;
-    void read_binaries(Device *device);
+    void set_build_options(JitBuildOptions& build_options) const override;
+    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
+    void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core) const;
+    bool configure(Device *device, const CoreCoord &logical_core) const override;
 
-    Config config() const { return this->config_; }
+    Config config() const override { return this->config_; }
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
    private:
     const experimental::EthernetConfig config_;
 
-    uint8_t expected_num_binaries() const;
+    uint8_t expected_num_binaries() const override;
 
-    std::string config_hash() const;
+    std::string config_hash() const override;
 
-    std::pair<uint64_t, uint64_t> get_runtime_args_range() const;
+    std::pair<uint64_t, uint64_t> get_runtime_args_range() const override;
 };
 
 class ComputeKernel : public Kernel {
@@ -163,26 +163,26 @@ class ComputeKernel : public Kernel {
 
     ~ComputeKernel() {}
 
-    RISCV processor() const;
+    RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions& build_options) const;
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const;
-    void read_binaries(Device *device);
+    void set_build_options(JitBuildOptions& build_options) const override;
+    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
+    void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core) const;
+    bool configure(Device *device, const CoreCoord &logical_core) const override;
 
-    Config config() const { return this->config_; }
+    Config config() const override { return this->config_; }
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
    private:
     const ComputeConfig config_;
 
-    uint8_t expected_num_binaries() const;
+    uint8_t expected_num_binaries() const override;
 
-    std::string config_hash() const;
+    std::string config_hash() const override;
 
-    std::pair<uint64_t, uint64_t> get_runtime_args_range() const;
+    std::pair<uint64_t, uint64_t> get_runtime_args_range() const override;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);

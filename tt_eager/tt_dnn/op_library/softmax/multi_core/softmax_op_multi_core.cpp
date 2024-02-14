@@ -125,16 +125,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
-        tt_metal::ReaderDataMovementConfig{
-            .compile_args = reader_compile_time_args,
-            .defines = softmax_defines
-    });
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args,
+            softmax_defines
+    ));
 
     auto writer_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
-        tt_metal::WriterDataMovementConfig{
-            .compile_args = writer_compile_time_args
-    });
+        tt_metal::WriterDataMovementConfig(
+            writer_compile_time_args
+    ));
 
     // for broadcasting in H direction we need to
     // NCHt, Nt, Wt
@@ -339,7 +339,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 } // scale_mask_softmax_multi_core
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
@@ -438,9 +438,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t num_cores_c = grid_size.x;
     uint32_t num_cores_r = grid_size.y;
     uint32_t num_cores = num_cores_c * num_cores_r;
-    CoreRange all_device_cores{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_device_cores(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
     // reader compile arg
     bool is_dram_mask = 0;
     if (mask.has_value()) {
@@ -482,10 +482,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm_rm_mask.cpp" : "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig{
-            .compile_args = reader_compile_time_args,
-            .defines = softmax_defines
-    });
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args,
+            softmax_defines
+    ));
     // compute kernel compile time args
     std::vector<uint32_t> compute_compile_time_args = {
         block_ht,
@@ -607,7 +607,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         const std::vector<Tensor>& output_tensors
     ) {
         auto in0_buffer = input_tensors.at(0).buffer();
-        auto mask_tensor = optional_input_tensors.at(0);
+        auto &mask_tensor = optional_input_tensors.at(0);
         auto out_buffer = output_tensors.size() == 1 ? output_tensors.at(0).buffer() : in0_buffer;
 
         UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
@@ -622,7 +622,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 } // scale_mask_softmax_sharded_multi_core
 
 }  // namespace tt_metal

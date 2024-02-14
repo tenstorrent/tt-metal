@@ -8,7 +8,6 @@ import torch
 
 import tt_lib as ttl
 
-from models.utility_functions import skip_for_wormhole_b0
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
@@ -52,7 +51,6 @@ def run_embeddings_tests(
     assert passing_pcc
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),

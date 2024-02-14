@@ -9,12 +9,13 @@ from loguru import logger
 from models.utility_functions import is_e75
 
 
+@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
-def test_demo(input_path, model_location_generator, device, use_program_cache):
+def test_demo(batch, input_path, model_location_generator, device, use_program_cache):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
 
@@ -33,18 +34,34 @@ def test_demo(input_path, model_location_generator, device, use_program_cache):
         11: "large head and neck",
     }
     NUM_RUNS = 10
-    measurements, answers = demo_json(input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
+    measurements, answers = demo_json(batch, input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
     logger.info(measurements)
 
     logger.info(answers)
 
-    for key, value in expected_answers.items():
-        assert value == answers[key]
+    for i in range(batch):
+        assert expected_answers[i] == answers[i]
 
 
-def test_demo_squadv2(model_location_generator, device, use_program_cache):
+@pytest.mark.parametrize(
+    "batch, exact, f1",
+    (
+        (
+            7,
+            78.57,
+            84.37,
+        ),
+        (
+            12,
+            80,
+            86,
+        ),
+    ),
+    ids=["batch_7", "batch_12"],
+)
+def test_demo_squadv2(batch, exact, f1, model_location_generator, device, use_program_cache):
     loop_count = 10
-    evals = demo_squadv2(model_location_generator, device, use_program_cache, loop_count)
+    evals = demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count)
 
-    assert evals["exact"] >= 80
-    assert evals["f1"] >= 86.6
+    assert evals["exact"] >= exact
+    assert evals["f1"] >= f1

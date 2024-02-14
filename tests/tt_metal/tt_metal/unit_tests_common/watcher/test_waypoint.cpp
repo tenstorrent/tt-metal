@@ -34,30 +34,18 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     auto brisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-        CoreRange{
-            .start = xy_start,
-            .end = xy_end
-        },
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        CoreRange(xy_start, xy_end),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto ncrisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-        CoreRange{
-            .start = xy_start,
-            .end = xy_end
-        },
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        CoreRange(xy_start, xy_end),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto trisc_kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-        CoreRange{
-            .start = xy_start,
-            .end = xy_end
-        },
-        ComputeConfig{}
-    );
+        CoreRange(xy_start, xy_end),
+        ComputeConfig{});
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.

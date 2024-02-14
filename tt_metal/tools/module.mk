@@ -9,7 +9,7 @@ TOOLS = \
 TOOLS_SRCS = $(addprefix tt_metal/, $(addsuffix .cpp, $(TOOLS)))
 
 TOOLS_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tools
-TOOLS_LDFLAGS = $(LDFLAGS) -lyaml-cpp -lstdc++fs -lhwloc
+TOOLS_LDFLAGS = $(LDFLAGS) -lyaml-cpp -lstdc++fs -lhwloc -lm
 
 TOOLS_DEPS = $(addprefix $(OBJDIR)/, $(TOOLS_SRCS:.cpp=.d))
 

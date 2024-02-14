@@ -46,6 +46,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
 
         case 2:
             ncores_h = 1;
+            ncores_per_batch_h = 1;
             nbatch_per_core_h = 1;
             ntiles_per_core_h = 1;
             switch (ntiles_h) {
@@ -114,8 +115,8 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
     std::set<CoreRange> all_cores;
     std::set<CoreRange> core_range;
 
-    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
-    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
+    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
+    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
 
     return std::make_tuple(ncores, ncores_h, ncores_w, all_cores, core_range, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h);
 }
@@ -194,11 +195,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     KernelHandle reader_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
-                                                        ReaderDataMovementConfig{.compile_args = reader_ct_args});
+                                                        ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
-                                                        WriterDataMovementConfig{.compile_args = writer_ct_args});
+                                                        WriterDataMovementConfig(writer_ct_args));
     // int32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
     log_rt_args(CoreCoord{0, 0}, reader_ct_args);
 

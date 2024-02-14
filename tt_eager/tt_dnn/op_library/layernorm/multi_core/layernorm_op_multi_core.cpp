@@ -34,12 +34,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
     Tensor& output,
+    LayerNormType norm_type,
     float eps,
-    bool rms_norm,
     MathFidelity fidelity,
     DataType im_data_format
 ) {
 
+    bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.shape();
     uint32_t W = shape[3], H = shape[2];
     uint32_t HW = H*W;
@@ -63,7 +64,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
     uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::DataFormat inb_data_format;
+    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (b) {
         inb_data_format = tt_metal::datatype_to_dataformat_converter(b.value().dtype());
@@ -188,10 +189,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<string, string> reader_defines;
-    std::map<string, string> eltwise_binary_defines;
+    std::map<string, string> compute_defines;
     if (b) {
         reader_defines["FUSE_PRE_ADD"] = "1";
-        eltwise_binary_defines["FUSE_PRE_ADD"] = "1";
+        compute_defines["FUSE_PRE_ADD"] = "1";
     }
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
@@ -200,19 +201,23 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         reader_defines["FUSE_BETA"] = "1";
     }
 
+    if (rms_norm) {
+        compute_defines["RMSNORM"] = "1";
+    }
+
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     auto reader_kernels_id = CreateKernel(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines}
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines)
     );
 
     auto writer_kernels_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args}
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
 
     vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value() };
@@ -221,9 +226,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     bool math_approx_mode = true;
     auto compute_kernels_id = CreateKernel(
         program,
-        rms_norm ? "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/rmsnorm.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm.cpp",
+        "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = eltwise_binary_defines}
+        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = compute_defines}
     );
 
     // Create circular buffers
@@ -231,15 +236,17 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     CreateCircularBuffer( program, all_cores, cb_src0_config );
     CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_t*out_single_tile_size, {{CB::c_out0, out_data_format}}).set_page_size(CB::c_out0, out_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_out0_config );
-    CircularBufferConfig cb_intermed1_config = CircularBufferConfig(im1_t*single_tile_size, {{CB::c_intermed1, cb_data_format}}).set_page_size(CB::c_intermed1, single_tile_size);
-    CreateCircularBuffer( program, all_cores,  cb_intermed1_config );
+    if (!rms_norm) {
+        CircularBufferConfig cb_intermed1_config = CircularBufferConfig(im1_t*single_tile_size, {{CB::c_intermed1, cb_data_format}}).set_page_size(CB::c_intermed1, single_tile_size);
+        CreateCircularBuffer( program, all_cores,  cb_intermed1_config );
+    }
     CircularBufferConfig cb_in2_config = CircularBufferConfig(in2_t*bfloat16_tile_size, {{CB::c_in2, DataFormat::Float16_b}}).set_page_size(CB::c_in2, bfloat16_tile_size);
     CreateCircularBuffer( program, all_cores, cb_in2_config );
     CircularBufferConfig cb_in3_config = CircularBufferConfig(in3_t*bfloat16_tile_size, {{CB::c_in3, DataFormat::Float16_b}}).set_page_size(CB::c_in3, bfloat16_tile_size);
     CreateCircularBuffer( program, all_cores, cb_in3_config );
     CircularBufferConfig cb_intermed2_config = CircularBufferConfig(im2_t*single_tile_size, {{CB::c_intermed2, cb_data_format}}).set_page_size(CB::c_intermed2, single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_intermed2_config );
-    if (!rms_norm) {
+    if (!(rms_norm && !b.has_value())) {
         CircularBufferConfig cb_intermed0_config = CircularBufferConfig(im0_t*single_tile_size, {{CB::c_intermed0, cb_data_format}}).set_page_size(CB::c_intermed0, single_tile_size);
         CreateCircularBuffer( program, all_cores, cb_intermed0_config );
     }
@@ -270,8 +277,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         // result = ln(x)*gamma + beta
         // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
         // b is buffered into c_in1
-        CircularBufferConfig c_intermed6_config = CircularBufferConfig(im6_t*single_tile_size, {{CB::c_intermed6, cb_data_format}}).set_page_size(CB::c_intermed6, single_tile_size);
-        CreateCircularBuffer( program, all_cores, c_intermed6_config );
+        if (!rms_norm) {
+            CircularBufferConfig c_intermed6_config = CircularBufferConfig(im6_t*single_tile_size, {{CB::c_intermed6, cb_data_format}}).set_page_size(CB::c_intermed6, single_tile_size);
+            CreateCircularBuffer( program, all_cores, c_intermed6_config );
+        }
         // c_in1 is input buffer for b
         CircularBufferConfig c_in1_config = CircularBufferConfig(in1_t*inb_single_tile_size, {{CB::c_in1, inb_data_format}}).set_page_size(CB::c_in1, inb_single_tile_size);
         CreateCircularBuffer( program, all_cores, c_in1_config);
@@ -351,23 +360,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-
-}  // namespace tt_metal
-
-
-
-namespace operations {
-
-using namespace tt_metal;
-
-namespace primary {
-
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const Tensor &a,
     const std::optional<const Tensor> b,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
     Tensor& output,
+    LayerNormType norm_type,
     float eps,
     MathFidelity fidelity,
     DataType im_data_format,
@@ -376,6 +375,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t block_ht,
     uint32_t block_wt
 ) {
+    bool rms_norm = norm_type == LayerNormType::RMSNORM;
     // convert data format
     tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -401,7 +401,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool mcast_1d = M == block_h;
     bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {.x=bbox.end.x + 1, .y=bbox.end.y+1};
+    CoreCoord grid_size = {bbox.end.x + 1, bbox.end.y+1};
     if (mcast_1d) {
         num_blocks = shard_spec.num_cores();
     } else if (row_wise) {
@@ -484,22 +484,22 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     CoreCoord start_core = {0, 0};
     CoreRangeSet all_cores = shard_spec.grid;
-    CoreRange sender_cores{.start=start_core, .end=start_core};
+    CoreRange sender_cores(start_core, start_core);
     CoreRangeSet all_to_all_cores({});
     CoreRangeSet all_to_all_workers_except_sender({});
     CoreRangeSet not_all_to_all_workers({});
     uint32_t num_cores_x_mcast, num_cores_y_mcast;
     if (mcast_1d) {
-        sender_cores = {.start=start_core, .end=start_core};
+        sender_cores = {start_core, start_core};
         all_to_all_cores = num_cores_to_corerange_set(start_core, num_cores_all_to_all, grid_size, row_wise);
         if (row_wise) {
             if (use_mcast) {
                 CoreCoord all_start_core;
                 CoreCoord end_core = sender_cores.end;
                 if (end_core.x == bbox.end.x) {
-                    all_start_core = {.x = 0, .y = end_core.y + 1};
+                    all_start_core = {0, end_core.y + 1};
                 } else {
-                    all_start_core = {.x = end_core.x + 1, .y = end_core.y};
+                    all_start_core = {end_core.x + 1, end_core.y};
                 }
                 all_to_all_workers_except_sender = num_cores_to_corerange_set(all_start_core, num_cores_all_to_all - 1, grid_size, row_wise);
             }
@@ -507,9 +507,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 CoreCoord none_start_core;
                 CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end;
                 if (end_core.x == bbox.end.x) {
-                    none_start_core = {.x = 0, .y = end_core.y + 1};
+                    none_start_core = {0, end_core.y + 1};
                 } else {
-                    none_start_core = {.x = end_core.x + 1, .y = end_core.y};
+                    none_start_core = {end_core.x + 1, end_core.y};
                 }
                 not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, grid_size, row_wise);
             }
@@ -518,19 +518,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 CoreCoord all_start_core;
                 CoreCoord end_core = sender_cores.end;
                 if (end_core.y == bbox.end.y) {
-                    all_start_core = {.x = end_core.x + 1, .y = 0};
+                    all_start_core = {end_core.x + 1, 0};
                 } else {
-                    all_start_core = {.x = end_core.x, .y = end_core.y + 1};
+                    all_start_core = {end_core.x, end_core.y + 1};
                 }
-                all_to_all_workers_except_sender = num_cores_to_corerange_set(CoreCoord{.x=start_core.x, .y=start_core.y + 1}, num_cores_all_to_all - 1, grid_size, row_wise);
+                all_to_all_workers_except_sender = num_cores_to_corerange_set(CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, grid_size, row_wise);
             }
             if (num_none_all_to_all_workers > 0) {
                 CoreCoord none_start_core;
                 CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end;
                 if (end_core.y == bbox.end.y) {
-                    none_start_core = {.x = end_core.x + 1, .y = 0};
+                    none_start_core = {end_core.x + 1, 0};
                 } else {
-                    none_start_core = {.x = end_core.x, .y = end_core.y + 1};
+                    none_start_core = {end_core.x, end_core.y + 1};
                 }
                 not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, grid_size, row_wise);
             }
@@ -540,39 +540,39 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     } else {
         if (row_wise) {
             sender_cores = {
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
-            all_to_all_cores = CoreRangeSet({CoreRange{
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
+            all_to_all_cores = CoreRangeSet({CoreRange(
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
-                    .end={(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
+                    {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
+                    {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
-                    .end = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                not_all_to_all_workers = CoreRangeSet({CoreRange(
+                    {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             }
             num_cores_x_mcast = num_cores_x;
             num_cores_y_mcast = 1;
         } else {
             sender_cores = {
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
-            all_to_all_cores = CoreRangeSet({CoreRange{
-                .start={(std::size_t) start_core.x, (std::size_t) start_core.y},
-                .end={(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
+            all_to_all_cores = CoreRangeSet({CoreRange(
+                {(std::size_t) start_core.x, (std::size_t) start_core.y},
+                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
-                    .end = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1}}});
+                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
+                    {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange{
-                    .start = {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
-                    .end = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1}}});
+                not_all_to_all_workers = CoreRangeSet({CoreRange(
+                    {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
+                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
             }
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;
@@ -595,6 +595,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (beta.has_value()) {
         reader_mcast_sender_defines["FUSE_BETA"] = "1";
         reader_mcast_receiver_defines["FUSE_BETA"] = "1";
+    }
+    if (rms_norm) {
+        reader_mcast_sender_defines["RMSNORM"] = "1";
+        reader_mcast_receiver_defines["RMSNORM"] = "1";
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
@@ -670,6 +674,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // writer defines
     std::map<string, string> writer_defines;
+    if (rms_norm) {
+        writer_defines["RMSNORM"] = 1;
+    }
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
         1,
@@ -741,9 +748,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         );
     }
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<string, string> compute_defines;
     if (b) {
-        eltwise_binary_defines["FUSE_PRE_ADD"] = "1";
+        compute_defines["FUSE_PRE_ADD"] = "1";
+    }
+    if (rms_norm) {
+        compute_defines["RMSNORM"] = "1";
+        std::cout<<'a'<<std::endl;
     }
     // compute kernel compile time args
     std::vector<uint32_t> top_row_compute_compile_time_args = {
@@ -790,14 +801,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm_sharded.cpp",
         all_to_all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = eltwise_binary_defines}
+        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = compute_defines}
     );
     if (num_none_all_to_all_workers > 0) {
         compute_kernels_id = CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm_sharded.cpp",
             not_all_to_all_workers,
-            tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = eltwise_binary_defines}
+            tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = compute_defines}
         );
     }
     // Create circular buffers
@@ -856,20 +867,22 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         .set_page_size(xmm_cb_index, single_tile_size);
     auto cb_xmm = tt_metal::CreateCircularBuffer(program, all_cores, xmm_cb_config);
     // ex_partial
-    uint32_t ex_cb_partial_index = CB::dataflow0;
-    tt_metal::CircularBufferConfig ex_cb_partial_config = tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial_index, cb_data_format}})
-		.set_page_size(ex_cb_partial_index, single_tile_size);
-    auto cb_ex_partial = tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
-    // ex
-    uint32_t ex_cb_index = CB::dataflow1;
-    tt_metal::CircularBufferConfig ex_cb_config = tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
-		.set_page_size(ex_cb_index, single_tile_size);
-    auto cb_ex = tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_config);
-    // ex_external
-    uint32_t ex_cb_external_index = CB::dataflow2;
-    tt_metal::CircularBufferConfig ex_cb_external_config = tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external_index, cb_data_format}})
-		.set_page_size(ex_cb_external_index, single_tile_size);
-    auto cb_ex_external = tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    if(!rms_norm) {
+        uint32_t ex_cb_partial_index = CB::dataflow0;
+        tt_metal::CircularBufferConfig ex_cb_partial_config = tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial_index, cb_data_format}})
+            .set_page_size(ex_cb_partial_index, single_tile_size);
+        auto cb_ex_partial = tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
+        // ex
+        uint32_t ex_cb_index = CB::dataflow1;
+        tt_metal::CircularBufferConfig ex_cb_config = tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
+            .set_page_size(ex_cb_index, single_tile_size);
+        auto cb_ex = tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_config);
+        // ex_external
+        uint32_t ex_cb_external_index = CB::dataflow2;
+        tt_metal::CircularBufferConfig ex_cb_external_config = tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external_index, cb_data_format}})
+            .set_page_size(ex_cb_external_index, single_tile_size);
+        auto cb_ex_external = tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    }
     // ex_partial2
     uint32_t ex_cb_partial2_index = CB::dataflow3;
     tt_metal::CircularBufferConfig ex_cb_partial2_config = tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
@@ -1122,11 +1135,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-} // namespace primary
-
-} // namespace operations
+}  // namespace tt_metal
 
 }  // namespace tt

@@ -24,167 +24,6 @@ namespace tt {
 namespace tt_metal {
 
 void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-
-    TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
-    auto& a = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    TT_FATAL(a.layout() == Layout::TILE);
-    TT_FATAL(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
-    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-
-    if (b.has_value()) {
-        TT_FATAL(b.value().layout() == Layout::TILE);
-        TT_FATAL(a.shape() == b.value().shape());
-        TT_FATAL(a.device() == b.value().device());
-        TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    }
-
-    if (gamma.has_value()) {
-        if (gamma.value().layout() == Layout::TILE) {
-            TT_FATAL(a.shape()[3] == gamma.value().shape()[3], fmt::format("{} != {}", a.shape()[3], gamma.value().shape()[3]));
-            TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().shape()[2] == TILE_HEIGHT);
-        } else {
-            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR);
-            TT_FATAL((gamma.value().shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
-            TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().dtype() == DataType::BFLOAT16);
-        }
-    }
-
-    if (beta.has_value()) {
-        if (beta.value().layout() == Layout::TILE) {
-            TT_FATAL(a.shape()[3] == beta.value().shape()[3]);
-            TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().shape()[2] == TILE_HEIGHT);
-        } else {
-            TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR);
-            TT_FATAL((beta.value().shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
-            TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().dtype() == DataType::BFLOAT16);
-        }
-    }
-
-    if (gamma.has_value() && beta.has_value()) {
-        TT_FATAL(gamma.value().layout() == beta.value().layout(), "Gamma and beta must have the same layout!");
-    }
-
-}
-
-std::vector<Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
-}
-
-std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
-}
-
-operation::ProgramWithCallbacks LayerNorm::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor> &output_tensors
-) const {
-    const auto& a = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    auto& output_tensor = output_tensors.at(0);
-
-    return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->eps, false, MathFidelity::HiFi4, DataType::BFLOAT16);
-}
-
-tt::stl::reflection::Attributes LayerNorm::attributes() const {
-    return {
-        {"eps", this->eps},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-
-void RMSNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
-    auto& a = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    TT_FATAL(a.layout() == Layout::TILE);
-    TT_FATAL(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
-    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    if (b.has_value()) {
-        TT_FATAL(b.value().layout() == Layout::TILE);
-        TT_FATAL(a.shape() == b.value().shape());
-        TT_FATAL(a.device() == b.value().device());
-        TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    }
-    if (gamma.has_value()) {
-        TT_FATAL(gamma.value().layout() == Layout::TILE);
-        TT_FATAL(a.shape()[3] == gamma.value().shape()[3]);
-        TT_FATAL(a.device() == gamma.value().device());
-        TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_FATAL(gamma.value().shape()[2] == TILE_HEIGHT);
-    }
-    if (beta.has_value()) {
-        TT_FATAL(beta.value().layout() == Layout::TILE);
-        TT_FATAL(a.shape()[3] == beta.value().shape()[3]);
-        TT_FATAL(a.device() == beta.value().device());
-        TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_FATAL(beta.value().shape()[2] == TILE_HEIGHT);
-    }
-
-}
-
-std::vector<Shape> RMSNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
-}
-
-std::vector<Tensor> RMSNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
-}
-
-operation::ProgramWithCallbacks RMSNorm::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor> &output_tensors
-) const {
-    const auto& a = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    auto& output_tensor = output_tensors.at(0);
-    return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->eps, true);
-
-}
-
-tt::stl::reflection::Attributes RMSNorm::attributes() const {
-    return {
-        {"eps", this->eps},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-}  // namespace tt_metal
-
-
-
-namespace operations {
-
-using namespace tt_metal;
-
-namespace primary {
-
-void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
@@ -216,7 +55,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
             TT_FATAL(gamma.value().dtype() == DataType::BFLOAT16);
         }
         if (beta.has_value()) {
-            TT_FATAL(gamma.value().layout() == beta.value().layout());
+            TT_FATAL(gamma.value().layout() == beta.value().layout(), "Gamma and beta must have the same layout!");
         }
     }
 
@@ -243,7 +82,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
-                std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormShardedMultiCoreProgramConfig>
+                std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
                 if (program_config.inplace) {
                     TT_FATAL(a.dtype() == program_config.out_data_format);
@@ -309,16 +148,16 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
         [&](const auto& program_config) -> std::vector<Tensor> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
-                std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormShardedMultiCoreProgramConfig>
+                std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
                 if (program_config.inplace) {
-                    return {input_tensors.at(0)};
+                    return {input_tensor};
                 } else {
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = input_tensor.shard_spec().value();
                     return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), program_config.out_data_format, Layout::TILE, input_tensor.device(), mem_config)};
                 }
-            } else if constexpr(std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormInterleavedMultiCoreProgramConfig>) {
+            } else if constexpr(std::is_same_v<ProgramConfigType, LayerNormInterleavedMultiCoreProgramConfig>) {
                 DataType out_data_format = program_config.out_data_format;
                 return operation::generic_create_output_tensors(*this, input_tensors, out_data_format, Layout::TILE, this->output_mem_config);
             } else {
@@ -343,7 +182,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
-                std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormShardedMultiCoreProgramConfig>
+                std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
                 MathFidelity fidelity = program_config.math_fidelity;
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
@@ -351,7 +190,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return layernorm_multi_core_sharded(
-                                            a, b, gamma, beta, output_tensor, this->eps,
+                                            a, b, gamma, beta, output_tensor, this->norm_type, this->eps,
                                             fidelity,
                                             program_config.im_data_format,
                                             program_config.compute_with_storage_grid_size,
@@ -360,27 +199,27 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                                             program_config.block_w
                                             );
             } else if constexpr (
-                std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormInterleavedMultiCoreProgramConfig>
+                std::is_same_v<ProgramConfigType, LayerNormInterleavedMultiCoreProgramConfig>
             ) {
                 MathFidelity fidelity = program_config.math_fidelity;
-                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->eps, false, fidelity, program_config.im_data_format);
+                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->norm_type, this->eps, fidelity, program_config.im_data_format);
             } else {
-                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->eps);
+                return layernorm_multi_core(a, b, gamma, beta, output_tensor, this->norm_type, this->eps);
             }
         },
         this->program_config
     );
 }
+
 tt::stl::reflection::Attributes LayerNorm::attributes() const {
     return {
+        {"norm_type", this->norm_type},
         {"eps", this->eps},
         {"output_mem_config", this->output_mem_config},
         {"program_config", this->program_config}
     };
 }
 
-} // namespace primary
-
-} // namespace operations
+}  // namespace tt_metal
 
 }  // namespace tt

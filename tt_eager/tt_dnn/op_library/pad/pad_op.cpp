@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
-    CoreRange cores = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cores({0, 0}, {0, 0});
     uint32_t cb_id = CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering
     uint32_t cb_pagesize = round_up(padded_row_size_nbytes, constants::TILE_WIDTH);
@@ -75,11 +75,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     KernelHandle reader_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         cores,
-                                                        ReaderDataMovementConfig{.compile_args = reader_ct_args});
+                                                        ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         cores,
-                                                        WriterDataMovementConfig{.compile_args = writer_ct_args});
+                                                        WriterDataMovementConfig(writer_ct_args));
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
 
     #if 0
@@ -213,11 +213,11 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     bfloat16 bfloat_zero = bfloat16(0.0f);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
     KernelHandle reader_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
                                                         core,
-                                                        ReaderDataMovementConfig{.compile_args = reader_ct_args});
+                                                        ReaderDataMovementConfig(reader_ct_args));
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
 
     #if 0
@@ -284,7 +284,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
     tt_metal::Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -354,7 +354,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
         program,
         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/pad_dims_rm_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = compile_time_args_vec});
+        tt_metal::ReaderDataMovementConfig(compile_time_args_vec));
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     tt_metal::Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -469,13 +469,13 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/pad/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     tt_metal::SetRuntimeArgs(
         program,

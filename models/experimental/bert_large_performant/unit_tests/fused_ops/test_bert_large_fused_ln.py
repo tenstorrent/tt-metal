@@ -110,7 +110,8 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
 
             ref_lnorm = torch.nn.functional.layer_norm(x + y, x.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
-            assert is_close(tt_got_back, ref_lnorm)
+            passing = is_close(tt_got_back, ref_lnorm)
+            assert passing
 
 
 import pytest

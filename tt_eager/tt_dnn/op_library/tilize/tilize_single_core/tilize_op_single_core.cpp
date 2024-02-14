@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
@@ -115,14 +115,14 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         program,
         "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Tilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block), // per_core_block_cnt
@@ -188,7 +188,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -318,14 +318,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         program,
         "tt_eager/tt_dnn/op_library/tilize/kernels/dataflow/reader_unary_pad_dims_split_rows.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Tilized writer
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block),

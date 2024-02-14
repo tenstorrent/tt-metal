@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt_metal::Device *device = output.device();
 
@@ -99,13 +99,13 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
         program,
         "tt_eager/tt_dnn/op_library/concat/kernels/dataflow/reader_concat_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> writer_kernel_args = {
         dst_buffer->address(),

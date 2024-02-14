@@ -8,10 +8,9 @@ import torch
 import tt_lib as ttl
 from models.utility_functions import comp_pcc
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 
-@skip_for_wormhole_b0()
 def test_eltwise_unary_chain(device):
     N = 1
     C = 2
@@ -49,7 +48,6 @@ def test_eltwise_unary_chain(device):
     assert passing
 
 
-@skip_for_wormhole_b0()
 def test_eltwise_binary_fused(device):
     N = 1
     C = 2

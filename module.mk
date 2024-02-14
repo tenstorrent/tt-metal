@@ -93,7 +93,7 @@ LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBD
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
-WARNINGS += -Wno-c++11-narrowing
+WARNINGS += -Wno-c++11-narrowing -Wno-c++2a-extensions
 LDFLAGS += -lstdc++
 else
 WARNINGS += -Wmaybe-uninitialized
@@ -106,10 +106,10 @@ ifneq (,$(filter "$(ARCH_NAME)","wormhole" "wormhole_b0"))
 endif
 
 set_up_kernels:
-	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short prepare
+	$(MAKE) -f $(TT_METAL_HOME)/tt_metal/hw/Makefile-runtime -C $(TT_METAL_HOME)/tt_metal/hw prepare
 
 set_up_kernels/clean:
-	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
+	$(MAKE) -f $(TT_METAL_HOME)/tt_metal/hw/Makefile-runtime -C $(TT_METAL_HOME)/tt_metal/hw clean
 
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER

@@ -4,12 +4,12 @@
 
 import torch
 import tt_lib as ttl
+import tt_lib.fallback_ops
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
 from loguru import logger
 import pytest
-import tt_lib.fallback_ops
 
 
 @pytest.mark.parametrize("on_device", [True, False])

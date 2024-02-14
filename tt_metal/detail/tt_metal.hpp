@@ -374,8 +374,10 @@ namespace tt::tt_metal{
                 const auto kernel = detail::GetKernel(program, kernel_id);
                 auto kernel_config = std::get<DataMovementConfig>(kernel->config());
                 auto noc_value = magic_enum::enum_integer(kernel_config.noc);
-                noc0_in_use, local_noc0_usage = noc_value == 0;
-                noc1_in_use, local_noc1_usage = noc_value == 1;
+                local_noc0_usage = noc_value == 0;
+                local_noc1_usage = noc_value == 1;
+                noc0_in_use = local_noc0_usage;
+                noc1_in_use = local_noc1_usage;
             };
 
             for (const auto &core_range : core_ranges.ranges()) {
@@ -411,7 +413,7 @@ namespace tt::tt_metal{
                 {
                     using T = std::decay_t<decltype(core_spec)>;
                     if constexpr (std::is_same_v<T, CoreCoord>) {
-                        return CoreRangeSet({CoreRange{.start=core_spec, .end=core_spec}});
+                        return CoreRangeSet({CoreRange(core_spec, core_spec)});
                     }
                     else if constexpr (std::is_same_v<T, CoreRange>) {
                         return CoreRangeSet({core_spec});

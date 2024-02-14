@@ -22,6 +22,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
+
+def rmsnorm(x, dim, gamma, beta, eps):
+    return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
+
+
 # only use certain tests for CI to reduce run time
 # grid_sizes = [(i, j) for i in range(1, 13) for j in range(1, 9)] # (1,1) to (12,8)
 grid_sizes = [[1, 1], [1, 8], [12, 1], [12, 8]]
@@ -55,7 +60,12 @@ per_core_ks = [32, 64, 128]
         "LN_GB",
     ],
 )
-def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k):
+@pytest.mark.parametrize(
+    "tt_lib_fn, ref_fn",
+    [(ttl.operations.primary.layernorm, torch.nn.functional.layer_norm), (ttl.operations.primary.rmsnorm, rmsnorm)],
+    ids=["LayerNorm", "RMSNorm"],
+)
+def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, tt_lib_fn, ref_fn):
     torch.manual_seed(1234)
 
     out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1)
@@ -134,7 +144,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k):
 
     if test_id == 0:
         logger.info("Running LN")
-        ttz = ttl.operations.primary.layernorm(
+        ttz = tt_lib_fn(
             in0_t_shard,
             epsf,
             output_mem_config=out_mem_config,
@@ -142,7 +152,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k):
         )
     if test_id == 1:
         logger.info("Running LN_G")
-        ttz = ttl.operations.primary.layernorm(
+        ttz = tt_lib_fn(
             in0_t_shard,
             epsf,
             gamma_t,
@@ -151,7 +161,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k):
         )
     if test_id == 2:
         logger.info("Running LN_GB")
-        ttz = ttl.operations.primary.layernorm(
+        ttz = tt_lib_fn(
             in0_t_shard,
             epsf,
             gamma_t,
@@ -167,7 +177,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k):
     tt_got_back = torch.Tensor(t2_data).reshape(in0_shape)
     tt_got_back = untilize(tt_got_back)
 
-    ref_lnorm = torch.nn.functional.layer_norm(in0 + in1, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
+    ref_lnorm = ref_fn(in0 + in1, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
     logger.info(output)
@@ -205,7 +215,15 @@ per_core_ks = [32, 64, 128]
         "add_LN_GB",
     ],
 )
-def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len, per_core_k):
+@pytest.mark.parametrize(
+    "tt_lib_fn, ref_fn",
+    [
+        (ttl.operations.primary.add_layernorm, torch.nn.functional.layer_norm),
+        (ttl.operations.primary.add_rmsnorm, rmsnorm),
+    ],
+    ids=["LayerNorm", "RMSNorm"],
+)
+def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len, per_core_k, tt_lib_fn, ref_fn):
     torch.manual_seed(1234)
 
     out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1)
@@ -284,7 +302,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
 
     if test_id == 0:
         logger.info("Running add_LN")
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = tt_lib_fn(
             in0_t_shard,
             in1_t_shard,
             epsf,
@@ -293,7 +311,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         )
     if test_id == 1:
         logger.info("Running add_LN_G")
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = tt_lib_fn(
             in0_t_shard,
             in1_t_shard,
             epsf,
@@ -303,7 +321,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         )
     if test_id == 2:
         logger.info("Running add_LN_GB")
-        ttz = ttl.operations.primary.add_layernorm(
+        ttz = tt_lib_fn(
             in0_t_shard,
             in1_t_shard,
             epsf,
@@ -320,7 +338,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
     tt_got_back = torch.Tensor(t2_data).reshape(in0_shape)
     tt_got_back = untilize(tt_got_back)
 
-    ref_lnorm = torch.nn.functional.layer_norm(in0 + in1, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
+    ref_lnorm = ref_fn(in0 + in1, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
     logger.info(output)

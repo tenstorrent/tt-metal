@@ -114,7 +114,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
 
-    const CoreRange all_cores{.start = start_core, .end = end_core};
+    const CoreRange all_cores(start_core, end_core);
 
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = in0_block_tiles * 2;  // double buffer

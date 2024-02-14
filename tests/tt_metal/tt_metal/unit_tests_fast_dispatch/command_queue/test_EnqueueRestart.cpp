@@ -15,7 +15,7 @@ TEST_F(CommandQueueFixture, TestEnqueueRestart) {
     GTEST_SKIP() << "Skipping restart test until restart support added back in";
 
     Program program;
-    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately

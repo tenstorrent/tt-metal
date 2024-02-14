@@ -19,7 +19,7 @@ class CommandQueueFixture : public ::testing::Test {
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
@@ -31,7 +31,9 @@ class CommandQueueFixture : public ::testing::Test {
     }
 
     void TearDown() override {
-        tt::tt_metal::CloseDevice(this->device_);
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+            tt::tt_metal::CloseDevice(this->device_);
+        }
     }
 };
 

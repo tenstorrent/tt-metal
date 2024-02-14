@@ -17,7 +17,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain) {
     Program program{};
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -54,13 +54,13 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args=reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_kernel_args = {
         num_tiles, // per_core_block_cnt

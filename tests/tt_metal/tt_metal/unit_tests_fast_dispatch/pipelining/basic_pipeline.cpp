@@ -2,10 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//////////////////////////////////////////////////////////////////////////////////////////
+// Tests data movement between N cores with proper use of semaphores for sync
+// Uses "reader_first_stage", "reader_intermediate_stage", "sender_intermediate_stage", "writer_last_stage" kernels
+// to create pipeline of cores.
+// No compute: uses blank compute kernel - "tt_metal/kernels/compute/blank.cpp"
+// Test can be config with different number of cores, tiles, block size, number of blocks in CB, IO data in DRAM,
+// and number of repetitions
+//////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
 #include "common/bfloat16.hpp"
-#include "command_queue_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -145,7 +153,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     // will make proper sems. For now, using the original code.
     map<CoreCoord, vector<uint32_t>> sems;
     for (auto core : cores) {
-        CoreRange cr = {.start = core, .end = core};
+        CoreRange cr(core, core);
 
         auto sender_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);
         auto receiver_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);

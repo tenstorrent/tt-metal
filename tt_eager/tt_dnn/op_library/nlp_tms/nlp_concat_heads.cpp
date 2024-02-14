@@ -48,12 +48,14 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
     uint32_t num_blocks = ashape[0] * ashape[2] / TILE_HEIGHT;
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores = CoreRangeSet({}), core_group_1 = CoreRangeSet({}), core_group_2 = CoreRangeSet({});
+    bool row_major = false;
     if (in_sharded) {
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.shape()[-2];
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
+        row_major = a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     } else {
         std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
@@ -90,12 +92,12 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
             program,
             "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = compile_time_args});
+            tt_metal::ReaderDataMovementConfig(compile_time_args));
         writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig{.compile_args = compile_time_args});
+            tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {
             // interleaved accessor args
@@ -114,13 +116,13 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
             program,
             "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
 
 
@@ -145,7 +147,6 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     }
 
-    bool row_major = false;
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
     if (in_sharded) {
         uint32_t nheads_first_risc = div_up(num_blocks_per_core_group_1, 2);

@@ -89,13 +89,13 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 		program,
 		reader_name,
 		all_device_cores,
-		tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+		tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
 	KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
 		program,
 		"tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
 		all_device_cores,
-		tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+		tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
 	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
 	auto bcast_kernel_id = tt_metal::CreateKernel(

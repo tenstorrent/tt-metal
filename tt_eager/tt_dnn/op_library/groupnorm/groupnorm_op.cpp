@@ -276,9 +276,9 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
-    CoreRange all_cores{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_cores(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
     // create a vector of cores, in either RM or CM
     std::vector<CoreCoord> core_coords;
     for (int i=0; i < num_cores_r * num_cores_c; ++i) {
@@ -319,15 +319,15 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     for (int i=0; i < num_batches / num_batches_per_core; ++i) {
         uint32_t core_index = core_index_offset;
         for (int j=0; j < num_groups / num_groups_per_core; ++j) {
-            mcast_sender_core_ranges.insert(CoreRange{core_coords[core_index]});
+            mcast_sender_core_ranges.insert(CoreRange(core_coords[core_index]));
             core_index += num_cores_per_group;
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
     for (int i=0; i < num_cores_r * num_cores_c; ++i) {
         // not found in mcast sender
-        if (mcast_sender_core_ranges.find(CoreRange{core_coords[i]}) == mcast_sender_core_ranges.end()) {
-            mcast_receiver_core_ranges.insert(CoreRange{core_coords[i]});
+        if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges.end()) {
+            mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
         }
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
@@ -337,7 +337,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     int group_index = -1;
     if (is_height_sharding) {
         for (int i=0; i < num_cores_r * num_cores_c; ++i) {
-            if (mcast_sender_core_ranges.find(CoreRange{core_coords[i]}) != mcast_sender_core_ranges.end()) {
+            if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges.end()) {
                 group_index += 1;
             }
             if (group_index >= mcast_groups.size()) {
@@ -348,7 +348,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     } else {
         for (int i=0; i < core_coords2D.size(); ++i) {
             for (int j=0; j < core_coords2D[i].size(); ++j) {
-                if (mcast_sender_core_ranges.find(CoreRange{core_coords2D[i][j]}) != mcast_sender_core_ranges.end()) {
+                if (mcast_sender_core_ranges.find(CoreRange(core_coords2D[i][j])) != mcast_sender_core_ranges.end()) {
                     group_index += 1;
                 }
                 if (group_index >= mcast_groups.size()) {
@@ -391,7 +391,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         program,
         "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/reader_mcast_sender_unary_sharded_gn.cpp",
         mcast_sender_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
+        tt_metal::ReaderDataMovementConfig(reader_mcast_sender_compile_time_args, reader_mcast_sender_defines)
     );
     KernelHandle reader_mcast_receiver_kernels_id = -1;
     if (use_mcast) {
@@ -399,7 +399,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
             program,
             "tt_eager/tt_dnn/op_library/groupnorm/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn.cpp",
             mcast_receiver_cores,
-            tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
+            tt_metal::ReaderDataMovementConfig(reader_mcast_receiver_compile_time_args, reader_mcast_receiver_defines)
         );
     }
 
@@ -464,7 +464,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         program,
         writer_kernel,
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
+        tt_metal::WriterDataMovementConfig(writer_mcast_sender_compile_time_args, writer_defines)
     );
     // defines
     std::map<string, string> eltwise_binary_defines;
@@ -762,7 +762,7 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 2, "Must have between 1 to 3 input tensors");

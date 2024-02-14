@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    CoreCoord single_core = {.x = 0, .y = 0};
+    CoreCoord single_core = {0, 0};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

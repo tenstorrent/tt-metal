@@ -360,11 +360,13 @@ def run_bert_question_and_answering_inference(
     return measurements, model_answers
 
 
+@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
 @pytest.mark.parametrize(
     "input_path, NUM_RUNS",
     (("models/demos/metal_BERT_large_11/demo/input_data.json", 1),),
 )
 def test_demo(
+    batch,
     input_path,
     NUM_RUNS,
     model_location_generator,
@@ -378,11 +380,11 @@ def test_demo(
 
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",
-        batch=12,
+        batch=batch,
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config(12, "BFLOAT8_B-SHARDED_BATCH12"),
+        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), "BFLOAT8_B-SHARDED"),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         NUM_RUNS=NUM_RUNS,
         input_path=input_path,
@@ -391,21 +393,22 @@ def test_demo(
     )
 
 
+@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
 @pytest.mark.parametrize(
     "loop_count",
     ((50),),
 )
-def test_demo_squadv2(model_location_generator, device, use_program_cache, loop_count):
+def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     return run_bert_question_and_answering_inference_squadv2(
         model_version="phiyodr/bert-large-finetuned-squad2",
-        batch=12,
+        batch=batch,
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config(12, "BFLOAT8_B-SHARDED_BATCH12"),
+        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), "BFLOAT8_B-SHARDED"),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         model_location_generator=model_location_generator,
         device=device,

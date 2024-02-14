@@ -38,8 +38,10 @@ using namespace tt;
 namespace {
 
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t val = bfloat_val << 16;
-    return *reinterpret_cast<float*>(&val);
+    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
+    float f;
+    std::memcpy(&f, &uint32_data, sizeof(f));
+    return f;
 }
 
 static inline uint32_t GetBaseAddr(int chip_id, const CoreCoord &core, int hart_id) {

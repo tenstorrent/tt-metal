@@ -245,7 +245,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log")) or (sfpu_op == "gelu")) {
         GTEST_SKIP();
     } else {
-        CoreRange core_range = {.start = {0, 0}, .end = {0, 0}};
+        CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .num_tiles = num_tiles,
@@ -260,7 +260,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
     }
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleDeviceSfpuParameterizedFixture,
     ::testing::Values(
@@ -293,7 +293,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, SfpuCompute) {
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
         GTEST_SKIP();
     } else {
-        CoreRange core_range = {.start = {0, 0}, .end = {0, 0}};
+        CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .num_tiles = num_tiles,
@@ -307,7 +307,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, SfpuCompute) {
         EXPECT_TRUE(run_sfpu_all_same_buffer(*this->cmd_queue, test_config));
     }
 }
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleDeviceSfpuParameterizedApproxFixture,
     ::testing::Values(
@@ -329,7 +329,7 @@ INSTANTIATE_TEST_CASE_P(
         std::make_tuple(4, "tanh")));
 
 TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCompute) {
-    CoreRange core_range = {.start = {0, 0}, .end = {1, 0}};
+    CoreRange core_range({0, 0}, {1, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
@@ -367,7 +367,7 @@ TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCom
 }
 
 TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxCompute) {
-    CoreRange core_range = {.start = {0, 0}, .end = {1, 0}};
+    CoreRange core_range({0, 0}, {1, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
@@ -420,7 +420,7 @@ TEST_F(CommandQueueFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
 
     int chip_id = 0;
     CoreCoord worker_grid_size = this->device_->logical_grid_size();
-    CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 2, worker_grid_size.y - 2}};
+    CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 
     CoreRangeSet core_set({core_range});
     test_config.cores = core_set;
@@ -459,7 +459,7 @@ TEST_F(CommandQueueFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
 
     int chip_id = 0;
     CoreCoord worker_grid_size = this->device_->logical_grid_size();
-    CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 2, worker_grid_size.y - 2}};
+    CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 
     CoreRangeSet core_set({core_range});
     test_config.cores = core_set;

@@ -194,7 +194,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0},
+        .core = CoreCoord(0, 0),
         .binary_op = "add"};
     test_config.num_tiles = 1;
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -206,7 +206,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0},
+        .core = CoreCoord(0, 0),
         .binary_op = "sub"};
     test_config.num_tiles = 1;
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -218,7 +218,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0},
+        .core = CoreCoord(0, 0),
         .binary_op = "mul"};
     test_config.num_tiles = 1;
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -230,7 +230,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0},
+        .core = CoreCoord(0, 0),
         .binary_op = "add"};
     test_config.num_tiles = 4;
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -242,7 +242,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0},
+        .core = CoreCoord(0, 0),
         .binary_op = "sub"};
     test_config.num_tiles = 4;
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -254,7 +254,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMul) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = {.x = 0, .y = 0},
+        .core = CoreCoord(0, 0),
         .binary_op = "mul"};
     test_config.num_tiles = 4;
     for (unsigned int id = 0; id < num_devices_; id++) {

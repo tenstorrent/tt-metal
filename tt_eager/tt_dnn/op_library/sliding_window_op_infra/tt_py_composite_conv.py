@@ -120,7 +120,7 @@ def determine_parallel_config(
         ]  # for 1d systolic array, we don't need to provide actual grid size because tensor sharding deterimines that automatically
         num_cores_nhw = actual_num_cores
         grid_size = [
-            max_grid_size["x"],
+            max_grid_size["x"] if num_cores_nhw >= max_grid_size["x"] else num_cores_nhw,
             math.ceil(num_cores_nhw / max_grid_size["x"]),
         ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
     else:
@@ -351,16 +351,15 @@ class TTPyCompositeConv(TTPyOp):
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
 
-        if len(reader_patterns_cache) == 0:
+        if "conv" not in reader_patterns_cache:
             reader_patterns_cache["conv"] = {}
+        if "halo" not in reader_patterns_cache:
             reader_patterns_cache["halo"] = {}
-        else:
-            assert len(reader_patterns_cache) == 2
-            assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
+
         for key in reader_patterns_cache:
             assert (
-                key == "conv" or key == "halo"
-            ), f"reader_patterns_cache should have 1 of the following keys only - conv or halo. Found key - {key}"
+                key == "conv" or key == "halo" or key == "max_pool"
+            ), f"reader_patterns_cache should have 1 of the following keys only - conv, max_pool or halo. Found key - {key}"
         if conv_blocking_and_parallelization_config_override is None:
             conv_blocking_and_parallelization_config_override = {}
         for key in conv_blocking_and_parallelization_config_override:
@@ -667,7 +666,7 @@ class TTPyCompositeConv(TTPyOp):
                 bias_untiled = bias_untiled.to_torch()
                 bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
                 bias_on_device = bias_.to(device) if move_weights_to_device else bias_
-                self.bias = bias_on_device
+            self.bias = bias_on_device
         else:
             self.weight = weight
             self.bias = bias

@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
+    CoreCoord core_grid_coord = {core_grid.x_, num_cores_y};
     const auto
         [num_cores_to_be_used,
          all_cores,
@@ -217,7 +217,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         }
     };
 
-    return {std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

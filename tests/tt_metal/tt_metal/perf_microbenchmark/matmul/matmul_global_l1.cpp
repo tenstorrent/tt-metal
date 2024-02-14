@@ -72,44 +72,36 @@ tt_metal::Program create_program_mcast_in0_in1(
   uint32_t num_cores_c = core_range.x;
   uint32_t num_cores_r = core_range.y;
 
-  CoreRange all_cores{
-      .start = {(std::size_t)start_core_x, (std::size_t)start_core_y},
-      .end = {(std::size_t)start_core_x + num_cores_c - 1,
-              (std::size_t)start_core_y + num_cores_r - 1}};
+  CoreRange all_cores(
+      {(std::size_t)start_core_x, (std::size_t)start_core_y},
+      {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-  CoreRange top_left_corner{
-      .start = {(std::size_t)start_core_x, (std::size_t)start_core_y},
-      .end = {(std::size_t)start_core_x, (std::size_t)start_core_y}};
+  CoreRange top_left_corner(
+      {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
 
-  CoreRange left_column{
-      .start = {(std::size_t)start_core_x, (std::size_t)start_core_y},
-      .end = {(std::size_t)start_core_x,
-              (std::size_t)start_core_y + num_cores_r - 1}};
+  CoreRange left_column(
+      {(std::size_t)start_core_x, (std::size_t)start_core_y},
+      {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
 
-  CoreRange top_row{
-      .start = {(std::size_t)start_core_x, (std::size_t)start_core_y},
-      .end = {(std::size_t)start_core_x + num_cores_c - 1,
-              (std::size_t)start_core_y}};
+  CoreRange top_row(
+      {(std::size_t)start_core_x, (std::size_t)start_core_y},
+      {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 
-  CoreRange all_except_left_column{
-      .start = {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
-      .end = {(std::size_t)start_core_x + num_cores_c - 1,
-              (std::size_t)start_core_y + num_cores_r - 1}};
+  CoreRange all_except_left_column(
+      {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
+      {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-  CoreRange all_except_top_row{
-      .start = {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
-      .end = {(std::size_t)start_core_x + num_cores_c - 1,
-              (std::size_t)start_core_y + num_cores_r - 1}};
+  CoreRange all_except_top_row(
+      {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
+      {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-  CoreRange in0_sender_in1_receiver{
-      .start = {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
-      .end = {(std::size_t)start_core_x,
-              (std::size_t)start_core_y + num_cores_r - 1}};
+  CoreRange in0_sender_in1_receiver(
+      {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
+      {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
 
-  CoreRange in0_receiver_in1_sender{
-      .start = {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
-      .end = {(std::size_t)start_core_x + num_cores_c - 1,
-              (std::size_t)start_core_y}};
+  CoreRange in0_receiver_in1_sender(
+      {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
+      {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 
   // Not exactly half-half; this seems to get slightly better perf for fused qkv
   // and selfout
@@ -118,27 +110,23 @@ tt_metal::Program create_program_mcast_in0_in1(
   uint32_t half_core = (num_cores_c) / 2;
   bool split_half = num_cores_c > 2;
 
-  CoreRange in0_receiver_in1_receiver_left_half{
-      .start = {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
-      .end = {(std::size_t)start_core_x + half_core,
-              (std::size_t)start_core_y + num_cores_r - 1}};
+  CoreRange in0_receiver_in1_receiver_left_half(
+      {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
+      {(std::size_t)start_core_x + half_core, (std::size_t)start_core_y + num_cores_r - 1});
 
-  CoreRange in0_receiver_in1_receiver_right_half{.start = {0, 0},
-                                                 .end = {0, 0}};
+  CoreRange in0_receiver_in1_receiver_right_half({0, 0}, {0, 0});
 
   if (split_half) {
-    in0_receiver_in1_receiver_right_half = {
-        .start = {(std::size_t)start_core_x + 1 + half_core,
-                  (std::size_t)start_core_y + 1},
-        .end = {(std::size_t)start_core_x + num_cores_c - 1,
-                (std::size_t)start_core_y + num_cores_r - 1}};
+    in0_receiver_in1_receiver_right_half = CoreRange(
+        {(std::size_t)start_core_x + 1 + half_core, (std::size_t)start_core_y + 1},
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
   }
 
   /* Uncomment if we don't checkerboard
-  CoreRange in0_receiver_in1_receiver{
-      .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-      .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t)
-  start_core_y + num_cores_r - 1}};
+  CoreRange in0_receiver_in1_receiver(
+      {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
+      {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t)
+  start_core_y + num_cores_r - 1});
   */
 
   /* Checkerboard logic
@@ -148,7 +136,7 @@ tt_metal::Program create_program_mcast_in0_in1(
   for (std::size_t y = start_core_y + 1; y < start_core_y + num_cores_r; y++) {
       for (std::size_t x = start_core_x + 1; x < start_core_x + num_cores_c;
   x++) { CoreCoord core_coord(x, y); CoreRange
-  dummy_core_range{.start=core_coord, .end=core_coord}; if (white) {
+  dummy_core_range(core_coord, core_coord); if (white) {
               in0_receiver_in1_receiver_ckb_white_set.insert(dummy_core_range);
               white = false;
           }

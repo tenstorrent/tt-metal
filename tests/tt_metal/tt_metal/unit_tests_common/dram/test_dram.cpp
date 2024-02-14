@@ -116,8 +116,6 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
         cfg.core_range,
         cfg.data_movement_cfg
     );
-    // log_info(tt::LogVerif, "Writing to buffer");
-    // EnqueueWriteBuffer(cq, input_dram_buffer, cfg.src_vec, false);
     fixture->WriteBuffer(device, input_dram_buffer, src_vec);
 
     tt_metal::SetRuntimeArgs(
@@ -132,14 +130,10 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
             (std::uint32_t)output_dram_noc_xy.x,
             (std::uint32_t)output_dram_noc_xy.y,
             cfg.dram_buffer_size});
-    // log_info(tt::LogVerif, "Lauching program");
+
     fixture->RunProgram(device, program);
-    // EnqueueProgram(cq, program, false);
-    // Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    // log_info(tt::LogVerif, "Reading buffer");
-    // EnqueueReadBuffer(cq, output_dram_buffer, result_vec, true);
     fixture->ReadBuffer(device, output_dram_buffer, result_vec);
     return result_vec == src_vec;
 }

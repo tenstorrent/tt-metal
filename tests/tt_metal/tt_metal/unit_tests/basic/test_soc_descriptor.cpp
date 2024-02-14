@@ -93,7 +93,7 @@ TEST_F(DeviceFixture, ValidateMetalSocDescriptors) {
             ASSERT_TRUE(harvested_rows.find(physical_harvested_core.y) != harvested_rows.end());
             tt_cxy_pair physical_chip_core(device_id, physical_harvested_core);
             tt_cxy_pair umd_chip_core = soc_desc.convert_to_umd_coordinates(physical_chip_core);
-            CoreCoord umd_harvested_core({.x = umd_chip_core.x, .y = umd_chip_core.y});
+            CoreCoord umd_harvested_core(umd_chip_core.x, umd_chip_core.y);
             bool found_harvested_core = std::find(soc_desc.harvested_workers.begin(), soc_desc.harvested_workers.end(), umd_harvested_core) != soc_desc.harvested_workers.end();
             ASSERT_TRUE(found_harvested_core);
             EXPECT_EQ(soc_desc.physical_cores.at(physical_harvested_core).type, CoreType::HARVESTED);
@@ -105,7 +105,7 @@ TEST_F(DeviceFixture, ValidateMetalSocDescriptors) {
             ASSERT_TRUE(harvested_rows.find(physical_worker_core.y) == harvested_rows.end());
             tt_cxy_pair physical_chip_core(device_id, physical_worker_core);
             tt_cxy_pair umd_chip_core = soc_desc.convert_to_umd_coordinates(physical_chip_core);
-            CoreCoord umd_worker_core({.x = umd_chip_core.x, .y = umd_chip_core.y});
+            CoreCoord umd_worker_core(umd_chip_core.x, umd_chip_core.y);
             bool found_worker_core = std::find(soc_desc.workers.begin(), soc_desc.workers.end(), umd_worker_core) != soc_desc.workers.end();
             ASSERT_TRUE(found_worker_core);
             EXPECT_EQ(soc_desc.physical_cores.at(physical_worker_core).type, CoreType::WORKER);

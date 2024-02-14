@@ -51,22 +51,22 @@ bool send_over_eth(
         receiver_core.str(),
         byte_size);
     std::vector<CoreCoord> eth_cores = {
-        {.x = 9, .y = 0},
-        {.x = 1, .y = 0},
-        {.x = 8, .y = 0},
-        {.x = 2, .y = 0},
-        {.x = 9, .y = 6},
-        {.x = 1, .y = 6},
-        {.x = 8, .y = 6},
-        {.x = 2, .y = 6},
-        {.x = 7, .y = 0},
-        {.x = 3, .y = 0},
-        {.x = 6, .y = 0},
-        {.x = 4, .y = 0},
-        {.x = 7, .y = 6},
-        {.x = 3, .y = 6},
-        {.x = 6, .y = 6},
-        {.x = 4, .y = 6}};
+        CoreCoord(9, 0),
+        CoreCoord(1, 0),
+        CoreCoord(8, 0),
+        CoreCoord(2, 0),
+        CoreCoord(9, 6),
+        CoreCoord(1, 6),
+        CoreCoord(8, 6),
+        CoreCoord(2, 6),
+        CoreCoord(7, 0),
+        CoreCoord(3, 0),
+        CoreCoord(6, 0),
+        CoreCoord(4, 0),
+        CoreCoord(7, 6),
+        CoreCoord(3, 6),
+        CoreCoord(6, 6),
+        CoreCoord(4, 6)};
 
     // Disable all eth core runtime app flags, zero out data write counter
     std::vector<uint32_t> run_test_app_flag = {0x0};
@@ -139,11 +139,11 @@ TEST_F(N300DeviceFixture, SingleEthCoreDirectSendChip0ToChip1) {
     ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 9, .y = 6};
-    CoreCoord sender_core_1 = {.x = 1, .y = 6};
+    CoreCoord sender_core_0 = CoreCoord(9, 6);
+    CoreCoord sender_core_1 = CoreCoord(1, 6);
 
-    CoreCoord receiver_core_0 = {.x = 9, .y = 0};
-    CoreCoord receiver_core_1 = {.x = 1, .y = 0};
+    CoreCoord receiver_core_0 = CoreCoord(9, 0);
+    CoreCoord receiver_core_1 = CoreCoord(1, 0);
 
     ASSERT_TRUE(
         unit_tests::erisc::direct_send::send_over_eth(device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE));
@@ -168,11 +168,11 @@ TEST_F(N300DeviceFixture, SingleEthCoreDirectSendChip1ToChip0) {
     ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 9, .y = 0};
-    CoreCoord sender_core_1 = {.x = 1, .y = 0};
+    CoreCoord sender_core_0 = CoreCoord(9, 0);
+    CoreCoord sender_core_1 = CoreCoord(1, 0);
 
-    CoreCoord receiver_core_0 = {.x = 9, .y = 6};
-    CoreCoord receiver_core_1 = {.x = 1, .y = 6};
+    CoreCoord receiver_core_0 = CoreCoord(9, 6);
+    CoreCoord receiver_core_1 = CoreCoord(1, 6);
 
     ASSERT_TRUE(
         unit_tests::erisc::direct_send::send_over_eth(device_1, device_0, sender_core_0, receiver_core_0, WORD_SIZE));
@@ -197,11 +197,11 @@ TEST_F(N300DeviceFixture, BidirectionalEthCoreDirectSend) {
     ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 9, .y = 6};
-    CoreCoord sender_core_1 = {.x = 1, .y = 6};
+    CoreCoord sender_core_0 = CoreCoord(9, 6);
+    CoreCoord sender_core_1 = CoreCoord(1, 6);
 
-    CoreCoord receiver_core_0 = {.x = 9, .y = 0};
-    CoreCoord receiver_core_1 = {.x = 1, .y = 0};
+    CoreCoord receiver_core_0 = CoreCoord(9, 0);
+    CoreCoord receiver_core_1 = CoreCoord(1, 0);
 
     ASSERT_TRUE(
         unit_tests::erisc::direct_send::send_over_eth(device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE));
@@ -243,10 +243,10 @@ TEST_F(N300DeviceFixture, RandomDirectSendTests) {
     ASSERT_TRUE(this->num_devices_ == 2);
 
     std::map<std::pair<int, CoreCoord>, std::pair<int, CoreCoord>> connectivity = {
-        {{0, {.x = 9, .y = 6}}, {1, {.x = 9, .y = 0}}},
-        {{1, {.x = 9, .y = 0}}, {0, {.x = 9, .y = 6}}},
-        {{0, {.x = 1, .y = 6}}, {1, {.x = 1, .y = 0}}},
-        {{1, {.x = 1, .y = 0}}, {0, {.x = 1, .y = 6}}}};
+        {{0, CoreCoord(9, 6)}, {1, CoreCoord(9, 0)}},
+        {{1, CoreCoord(9, 0)}, {0, CoreCoord(9, 6)}},
+        {{0, CoreCoord(1, 6)}, {1, CoreCoord(1, 0)}},
+        {{1, CoreCoord(1, 0)}, {0, CoreCoord(1, 6)}}};
     for (int i = 0; i < 1000; i++) {
         auto it = connectivity.begin();
         std::advance(it, rand() % (connectivity.size()));

@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
+    CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
     uint32_t num_cores_total = num_cores_x*num_cores_y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
@@ -179,13 +179,13 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
         program,
         "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args_vec});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args_vec});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
     auto all_runtime_args = get_unpad_runtime_args_rm(a, output, output_tensor_start,
                                                     num_cores_total, num_cores, num_cores_y, core_group_1, core_group_2,
@@ -369,7 +369,7 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cores_total = num_cores_x*num_cores_y;
-    CoreRange total_cores = {.start={0, 0}, .end={num_cores_x-1, num_cores_y-1}};
+    CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
@@ -409,13 +409,13 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
         program,
         "tt_eager/tt_dnn/op_library/unpad/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
 
 

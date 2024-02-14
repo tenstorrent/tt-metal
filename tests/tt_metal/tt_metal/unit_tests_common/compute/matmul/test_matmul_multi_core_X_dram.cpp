@@ -15,8 +15,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/matmul/matmul_utils.hpp"
-
+#include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram {
@@ -48,7 +47,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
-    const CoreRange all_cores{.start=start_core, .end=end_core};
+    const CoreRange all_cores(start_core, end_core);
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;
@@ -79,7 +78,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
                 auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
             }else{
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
-                CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+                CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
                 auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
                 auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
                 auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
@@ -407,7 +406,6 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
         in0_block_w, out_subblock_h, out_subblock_w
         );
 
-
     // CommandQueue& cq = device->command_queue();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -453,14 +451,12 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     log_info(LogTest, "Writing kernel runtime args to device complete");
 
     log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-    // EnqueueProgram(cq, program, false);
     fixture->RunProgram(device, program);
 
     log_info(LogTest, "Matmul test done");
     log_info(LogTest, "Gathering data back from dram and checking against golden");
 
     vector<uint32_t> result;
-    // EnqueueReadBuffer(cq, out_buffer, result, true);
     fixture->ReadBuffer(device, out_buffer, result);
     auto golden = select_columns(tensor.get_values(), M, K, N);
 

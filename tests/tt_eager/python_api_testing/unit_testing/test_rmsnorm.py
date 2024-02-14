@@ -15,7 +15,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 
 def rmsnorm(x, gamma, beta, eps):
@@ -101,10 +101,10 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_rmsnorm = rmsnorm(x, gamma.flatten(), beta.flatten(), epsf)
 
-        assert is_close(tt_got_back, ref_rmsnorm)
+        passing = is_close(tt_got_back, ref_rmsnorm)
+        assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
     (

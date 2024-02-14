@@ -536,7 +536,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         set_runtime_args(program, input_tensors.at(0), input_tensors.at(1), output_tensor);
     };
 
-    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace transformers

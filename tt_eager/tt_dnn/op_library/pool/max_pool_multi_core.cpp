@@ -45,15 +45,15 @@ std::tuple<CoreRange, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> get_decomp
     std::set<CoreRange> core_range, core_range_cliff;
     if (out_h_per_core_cliff == 0) {
         // no cliff, distribute evenly, corerange is full core rectangle
-        core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
+        core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
     } else {
         // all but last row
-        core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 2, ncores_h - 1)});
+        core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 2, ncores_h - 1)));
         // last row but last core, only the last core is cliff (1D, not 2D)
-        core_range.insert(CoreRange{.start = CoreCoord(0, ncores_h - 1), .end = CoreCoord(ncores_w - 2, ncores_h - 1)});
-        core_range_cliff.insert(CoreRange{.start = CoreCoord(ncores_w - 1, ncores_h - 1), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
+        core_range.insert(CoreRange(CoreCoord(0, ncores_h - 1), CoreCoord(ncores_w - 2, ncores_h - 1)));
+        core_range_cliff.insert(CoreRange(CoreCoord(ncores_w - 1, ncores_h - 1), CoreCoord(ncores_w - 1, ncores_h - 1)));
     }
-    CoreRange all_cores{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)};
+    CoreRange all_cores(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1));
     return std::make_tuple(all_cores, core_range, core_range_cliff, out_h_per_core, out_h_per_core_cliff);
 }
 
@@ -115,12 +115,12 @@ get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw) {
     uint32_t out_nhw_per_core_cliff = 0;
 
     // all but last row
-    core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
-    all_cores.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_w - 1, ncores_h - 1)});
+    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
+    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
     // last row
     if (ncores_cliff_h > 0) {
-        core_range.insert(CoreRange{.start = CoreCoord(0, ncores_h), .end = CoreCoord(ncores_cliff_w - 1, ncores_h)});
-        all_cores.insert(CoreRange{.start = CoreCoord(0, ncores_h), .end = CoreCoord(ncores_cliff_w - 1, ncores_h)});
+        core_range.insert(CoreRange(CoreCoord(0, ncores_h), CoreCoord(ncores_cliff_w - 1, ncores_h)));
+        all_cores.insert(CoreRange(CoreCoord(0, ncores_h), CoreCoord(ncores_cliff_w - 1, ncores_h)));
     }
 
     return std::make_tuple(ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff);
@@ -398,7 +398,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             0,                  // right_in_stick_end,
                                             0,                  // my_core
                                             };
-    auto reader_config = ReaderDataMovementConfig{.compile_args = reader_ct_args};
+    auto reader_config = ReaderDataMovementConfig(reader_ct_args);
     std::string reader_kernel_fname;
     if (input.memory_config().is_sharded()) {
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
@@ -418,7 +418,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         writer_defines["SHARDED_OUT"] = "1";
     }
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
-    auto writer_config = WriterDataMovementConfig{.compile_args = writer_ct_args, .defines = writer_defines};
+    auto writer_config = WriterDataMovementConfig(writer_ct_args, writer_defines);
     std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                         writer_kernel_fname,

@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     Program program{};
 
-    CoreRange core_range { .start = core, .end = core };
+    CoreRange core_range(core, core);
 
     Buffer *dst_dram_buffer = out.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -420,7 +420,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         program,                            // program
         reader_kernel,                      // file name
         core_range,                         // core
-        tt_metal::ReaderDataMovementConfig{.compile_args = {}, .defines = all_defines}
+        tt_metal::ReaderDataMovementConfig({}, all_defines)
     );
 
     // number of data elements along height of an in0 block
@@ -469,9 +469,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         program,                        // program
         writer_kernel,                  // file name
         core_range,                     // core
-        tt_metal::WriterDataMovementConfig{
-            .compile_args = writer_compile_time_args,
-            .defines = all_defines}
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, all_defines)
     );
 
     // Compute kernel

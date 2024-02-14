@@ -19,18 +19,18 @@ namespace tt {
 namespace tt_metal {
 
 std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRangeSet &all_cores, const CoreCoord &logical_controller) {
-    TT_ASSERT(0 < all_cores.ranges().size() <= 2);
-    CoreCoord logical_zero = {.x = 0, .y = 0};
+    TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
+    CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
 
     std::vector<CoreRange> logical_core_ranges;
     auto split_core_range_containing_controller = [&](const CoreRange &controller_core_range) {
         TT_ASSERT(controller_core_range.start == logical_controller);
-        CoreRange right_block = CoreRange{.start = CoreCoord{.x = logical_controller.x + 1, .y = logical_controller.y}, .end = controller_core_range.end};
-        CoreRange remaining_stick = CoreRange{
-            .start = CoreCoord{.x = logical_controller.x, .y = logical_controller.y + 1},
-            .end = CoreCoord{.x = logical_controller.x, .y = controller_core_range.end.y}
-        };
+        CoreRange right_block(CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end);
+        CoreRange remaining_stick = CoreRange(
+            CoreCoord(logical_controller.x, logical_controller.y + 1),
+            CoreCoord(logical_controller.x, controller_core_range.end.y)
+        );
 
         logical_core_ranges.push_back(right_block);
         logical_core_ranges.push_back(remaining_stick);
@@ -107,13 +107,13 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         DataMovementConfig{.compile_args = compile_time_args}
     );
 
-    const CoreCoord logical_controller = CoreCoord{.x = 0, .y = 0};
+    const CoreCoord logical_controller = CoreCoord{0, 0};
     CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
     std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(device, all_cores, logical_controller);
 
     std::vector<CoreRange> noc_multicast_regions;
     for (const auto &logical_cr : logical_multicast_regions) {
-        CoreRange noc_cr = {.start = device->worker_core_from_logical_core(logical_cr.start), .end = device->worker_core_from_logical_core(logical_cr.end)};
+        CoreRange noc_cr(device->worker_core_from_logical_core(logical_cr.start), device->worker_core_from_logical_core(logical_cr.end));
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 

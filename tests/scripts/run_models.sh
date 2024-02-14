@@ -38,6 +38,11 @@ env pytest models/experimental/bloom/tests -k bloom_gelu_forward
 env pytest models/experimental/bloom/tests -k bloom_merge_heads
 env pytest models/experimental/bloom/tests -k bloom_mlp
 
+# Currently hangs due to #4968
+# env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py -k batch_7-BFLOAT8_B-SHARDED
+# env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_7
+# env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_7
+
 env pytest models/experimental/synthetic_gradients/tests -k test_batchnorm1d
 env pytest models/experimental/synthetic_gradients/tests -k test_linear
 env pytest models/experimental/synthetic_gradients/tests -k test_block
@@ -111,8 +116,8 @@ env pytest models/experimental/stable_diffusion/tests/test_upblock_2d.py -k test
 env pytest models/experimental/stable_diffusion/tests -k test_unbatched_stable_diffusion #
 
 env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
-env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo
-env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2
+env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo -k batch_12
+env pytest models/demos/metal_BERT_large_11/tests/test_demo.py::test_demo_squadv2 -k batch_12
 
 env pytest models/experimental/llama_old/tests -k llama_attention
 

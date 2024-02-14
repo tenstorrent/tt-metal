@@ -153,10 +153,10 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t num_cores_c = num_cores_y;
     uint32_t num_cores_r = num_cores_x * num_cores_z;
 
-    CoreRange all_cores{
-        .start = {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        .end = {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1},
-    };
+    CoreRange all_cores(
+        {(std::size_t)start_core_x, (std::size_t)start_core_y},
+        {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1}
+    );
 
     bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -198,15 +198,13 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         program,
         "tt_eager/tt_dnn/op_library/split/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{
-            .compile_args = reader_compile_time_args});
+	tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/split/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{
-            .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

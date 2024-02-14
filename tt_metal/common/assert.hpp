@@ -136,6 +136,8 @@ template <typename... Ts>
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
     trace_message_ss << std::flush;
     Logger::get().flush();
+    if (std::getenv("TT_ASSERT_ABORT"))
+        abort();
     throw std::runtime_error(trace_message_ss.str());
 }
 
@@ -168,5 +170,11 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
 #endif
 
 #ifndef TT_FATAL
-#define TT_FATAL(condition, ...) do { if (not (condition)) tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, ##__VA_ARGS__); } while (0)
+#define TT_FATAL(condition, ...)                                                             \
+    do {                                                                                     \
+        if (not(condition)) {                                                                \
+            tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, ##__VA_ARGS__); \
+            __builtin_unreachable();                                                         \
+        }                                                                                    \
+    } while (0)
 #endif

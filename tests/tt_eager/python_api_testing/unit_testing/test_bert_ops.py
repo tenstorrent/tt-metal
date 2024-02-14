@@ -214,7 +214,7 @@ def test_bert_linear(
     assert passing
 
 
-@pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
 @pytest.mark.parametrize(

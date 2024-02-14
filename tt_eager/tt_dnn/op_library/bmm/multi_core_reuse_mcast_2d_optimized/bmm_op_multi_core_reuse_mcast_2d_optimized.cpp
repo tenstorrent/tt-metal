@@ -80,37 +80,37 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
-    CoreRange all_cores{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_cores(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
 
-    CoreRange top_left_corner{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x, (std::size_t) start_core_y}};
+    CoreRange top_left_corner(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x, (std::size_t) start_core_y});
 
-    CoreRange left_column{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange left_column(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
 
-    CoreRange top_row{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
+    CoreRange top_row(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
 
-    CoreRange all_except_left_column{
-        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_except_left_column(
+        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
 
-    CoreRange all_except_top_row{
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange all_except_top_row(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1});
 
-    CoreRange left_column_except_corner = {
-        .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange left_column_except_corner(
+        {(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
+        {(std::size_t) start_core_x, (std::size_t) start_core_y + num_cores_r - 1});
 
-    CoreRange top_row_except_corner = {
-        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y}};
+    CoreRange top_row_except_corner(
+        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y},
+        {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y});
 
     CoreRange in0_sender = left_column;
     CoreRange in0_sender_in1_receiver = left_column_except_corner;
@@ -140,18 +140,18 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     bool split_half = num_cores_c > 2 && !in0_is_sharded;
     uint32_t half_core = split_half ? (num_cores_c) / 2 : num_cores_c - 1;
 
-    CoreRange in0_receiver_in1_receiver_left_half{
-        .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x + half_core, (std::size_t) start_core_y + num_cores_r - 1}};
+    CoreRange in0_receiver_in1_receiver_left_half(
+        {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
+        {(std::size_t) start_core_x + half_core, (std::size_t) start_core_y + num_cores_r - 1});
 
-    CoreRange in0_receiver_in1_receiver_right_half{
-        .start={0, 0},
-        .end={0, 0}};
+    CoreRange in0_receiver_in1_receiver_right_half(
+        {0, 0},
+        {0, 0});
 
     if (split_half) {
          in0_receiver_in1_receiver_right_half = {
-             .start={(std::size_t) start_core_x + 1 + half_core, (std::size_t) start_core_y + 1},
-             .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+             {(std::size_t) start_core_x + half_core + 1, (std::size_t) start_core_y + 1},
+             {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
     }
 
     // Mcast args

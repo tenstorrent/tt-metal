@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -61,13 +61,13 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         program,
         "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -204,13 +204,13 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         program,
         "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/reshape/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
         core,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // No compute required, so using blank kernel
     vector<uint32_t> compute_args = {
