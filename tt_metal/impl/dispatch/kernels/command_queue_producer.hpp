@@ -273,7 +273,7 @@ void produce(
     }
 }
 
-template <uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
+template <bool forward_path, uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
 void produce_for_eth_src_router(
     volatile tt_l1_ptr uint32_t* command_ptr,
     uint32_t num_srcs,
@@ -306,7 +306,7 @@ void produce_for_eth_src_router(
         const uint32_t src_page_index = command_ptr[6];
 
         bool read_from_sysmem = (BufferType)src_buf_type == BufferType::SYSTEM_MEMORY;
-        if (!read_from_sysmem) {
+        if (forward_path & !read_from_sysmem) {
             // Data needs to come from target remote device
             continue;
         }
@@ -444,7 +444,6 @@ void transfer(
                 consumer_noc_encoding,
                 l1_consumer_fifo_limit_16B,
                 num_to_transfer);
-            noc_async_write_barrier();
             if (not read_local_buffer) {
                 multicore_cb_pop_front(
                     rx_db_cb_config,
@@ -454,6 +453,7 @@ void transfer(
                     num_to_transfer,
                     rx_db_cb_config->page_size_16B);
             }
+            noc_async_write_barrier();
             tx_db_cb_config->rd_ptr_16B += tx_db_cb_config->page_size_16B * num_to_transfer;
             if (tx_db_cb_config->rd_ptr_16B >= l1_fifo_limit_16B) {
                 tx_db_cb_config->rd_ptr_16B -= rx_db_cb_config->total_size_16B;
