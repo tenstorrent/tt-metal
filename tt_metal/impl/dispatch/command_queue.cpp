@@ -6,10 +6,12 @@
 
 #include <algorithm>  // for copy() and assign()
 #include <iterator>   // for back_inserter
+#include <memory>
 
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
 #include "llrt/watcher.hpp"
+#include "logger.hpp"
 #include "noc/noc_parameters.h"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -1108,6 +1110,15 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
 
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking) {
     detail::DispatchStateCheck(true);
+    cq.run_command(CommandQueueInterface{
+        .type = EnqueueCommandType::ENQUEUE_READ_BUFFER,
+        .blocking = blocking,
+        .buffer = buffer,
+        .dst = dst
+    });
+}
+
+void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking) {
     std::visit ( [&cq, dst, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
         std::shared_future<void> f;
@@ -1124,6 +1135,16 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
 void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer,
                                           const void* src, bool blocking) {
     detail::DispatchStateCheck(true);
+    cq.run_command(CommandQueueInterface{
+        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER,
+        .blocking = blocking,
+        .buffer = buffer,
+        .src = src
+    });
+}
+
+void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer,
+                                          const void* src, bool blocking) {
     std::visit ( [&cq, src, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
         // std::shared_future<void> f;
@@ -1141,9 +1162,18 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
 }
 
 void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
-    ZoneScoped;
-    TT_ASSERT(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
     detail::DispatchStateCheck(true);
+    TT_ASSERT(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
+    cq.run_command(CommandQueueInterface{
+        .type = EnqueueCommandType::ENQUEUE_PROGRAM,
+        .blocking = blocking,
+        .program = program,
+        .trace = trace
+    });
+}
+
+void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
+    ZoneScoped;
     std::visit ( [&cq, blocking, trace](auto&& program) {
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
@@ -1173,6 +1203,12 @@ void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Prog
 
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
+    cq.run_command(CommandQueueInterface{
+        .type = EnqueueCommandType::FINISH
+    });
+}
+
+void FinishImpl(CommandQueue& cq) {
     // std::shared_future<void> f;
     // cq.submit( [device = cq.device(), cq_id = cq.id()] {
         cq.device()->hw_command_queue(cq.id()).finish();
@@ -1233,4 +1269,127 @@ void EnqueueRestart(CommandQueue& cq) {
 
 }
 
+CommandQueue::CommandQueue(Device* device, uint32_t id) : device_ptr(device), cq_id(id) {
+    if (async_mode) {
+        start_worker();
+    }
+    tt::log_debug(tt::LogDispatch, "CQ{} async mode = {}", cq_id, async_mode ? "ENABLED" : "DISABLED");
+    TT_ASSERT(worker_queue.empty(), "CQ{} worker queue must be empty on construction", cq_id);
+}
+
+CommandQueue::~CommandQueue() {
+    if (async_mode) {
+        stop_worker();
+    }
+    TT_ASSERT(worker_queue.empty(), "CQ{} worker queue must be empty on destruction", cq_id);
+}
+
+void CommandQueue::wait_until_empty() {
+    if (async_mode) {
+        worker_queue.push(CommandQueueInterface{
+            .type = EnqueueCommandType::INVALID,
+            .token = true
+        });
+    }
+    while (true) {
+        if (worker_queue.empty()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+}
+
+void CommandQueue::start_worker() {
+    if (worker_state == CommandQueueState::RUNNING) {
+        return;  // worker already running, exit
+    }
+    worker_state = CommandQueueState::RUNNING;
+    worker_thread = std::make_unique<std::thread>(std::thread(&CommandQueue::run_worker, this));
+    tt::log_debug(tt::LogDispatch, "CQ{} started worker thread", cq_id);
+}
+
+void CommandQueue::stop_worker() {
+    if (worker_state == CommandQueueState::IDLE) {
+        return;  // worker already stopped, exit
+    }
+    worker_state = CommandQueueState::TERMINATE;
+    worker_thread->join();
+    worker_state = CommandQueueState::IDLE;
+    tt::log_debug(tt::LogDispatch, "CQ{} stopped worker thread", cq_id);
+}
+
+void CommandQueue::run_worker() {
+    // forever loop checking for commands in the worker queue
+    while (true) {
+        // if (worker_queue.empty()) {
+        //     std::this_thread::sleep_for(std::chrono::microseconds(10));
+        //     continue;
+        // } else {
+        //     run_command_impl(*worker_queue.pop());
+        // }
+        if (worker_queue.empty()) {
+            // log_info("CQ{} worker queue is empty", cq_id);
+            if (worker_state == CommandQueueState::TERMINATE) {
+                break;
+            }
+        } else {
+            auto command = worker_queue.pop();
+            if (command->token.has_value()) {
+                // acts like a flush
+            } else {
+                run_command_impl(*command);
+            }
+        }
+    }
+}
+
+void CommandQueue::run_command(const CommandQueueInterface& command) {
+    tt::log_debug(tt::LogDispatch, "CQ{} received command {} in {} mode", cq_id, command.type, async_mode ? "ASYNC" : "NORMAL");
+    if (async_mode) {
+        worker_queue.push(command);
+    } else {
+        run_command_impl(command);
+    }
+}
+
+void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
+    tt::log_debug(tt::LogDispatch, "CQ{} running command {}", cq_id, command.type);
+    switch (command.type) {
+        case EnqueueCommandType::ENQUEUE_READ_BUFFER:
+            TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
+            TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
+            TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
+            EnqueueReadBufferImpl(*this, command.buffer.value(), command.dst.value(), command.blocking.value());
+            break;
+        case EnqueueCommandType::ENQUEUE_WRITE_BUFFER:
+            TT_ASSERT(command.src.has_value(), "Must provide a src!");
+            TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
+            TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
+            EnqueueWriteBufferImpl(*this, command.buffer.value(), command.src.value(), command.blocking.value());
+            break;
+        case EnqueueCommandType::ENQUEUE_PROGRAM:
+            TT_ASSERT(command.program.has_value(), "Must provide a program!");
+            TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
+            EnqueueProgramImpl(*this, command.program.value(), command.blocking.value(), command.trace);
+            break;
+        case EnqueueCommandType::FINISH:
+            tt::log_debug(tt::LogDispatch, "CQ{} received FINISH", cq_id);
+            FinishImpl(*this);
+            break;
+        default:
+            TT_THROW("Invalid command type");
+    }
+}
+
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type) {
+    switch (type) {
+        case EnqueueCommandType::ENQUEUE_READ_BUFFER: os << "ENQUEUE_READ_BUFFER"; break;
+        case EnqueueCommandType::ENQUEUE_WRITE_BUFFER: os << "ENQUEUE_WRITE_BUFFER"; break;
+        case EnqueueCommandType::ENQUEUE_PROGRAM: os << "ENQUEUE_PROGRAM"; break;
+        case EnqueueCommandType::FINISH: os << "FINISH"; break;
+        default: tt::log_fatal("Invalid command type!");
+    }
+    return os;
+}

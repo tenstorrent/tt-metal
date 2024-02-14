@@ -12,13 +12,11 @@
 #include <fstream>
 
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "jit_build/build.hpp"
+#include "tt_metal/impl/dispatch/lock_free_queue.hpp"
 #include "tt_metal/common/base.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "common/env_lib.hpp"
 #include "noc/noc_parameters.h"
-#include "third_party/taskflow/taskflow/taskflow.hpp"
-#include "common/executor.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt::tt_metal {
@@ -466,59 +464,60 @@ class HWCommandQueue {
     friend void EnqueueTrace(Trace& trace, bool blocking);
     friend void EndTrace(Trace& trace);
     friend Trace BeginTrace(CommandQueue& cq);
-    friend void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
-    friend void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
-    friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer,
-                                          const void* src, bool blocking);
-    friend void Finish(CommandQueue & cq);
+    friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
+    friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
+    friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
+    friend void FinishImpl(CommandQueue & cq);
     friend class Trace;
 };
 
-class CommandQueue
-{
-    public:
-        CommandQueue () = delete;
-        CommandQueue ( Device * device, uint32_t id) : device_ptr(device), cq_id(id){}
-        ~CommandQueue() {}
 
-        template < class F >
-        tf::AsyncTask& submit ( F && func, std::reference_wrapper< std::shared_future< void > > event ){
-            std::lock_guard<std::mutex> lk(this->mutex);
-            std::tie(this->last, event.get()) = this->last.empty() ? detail::GetExecutor().dependent_async ( std::forward<F>(func) ) : detail::GetExecutor().dependent_async ( std::forward<F>(func), this->last);
-            return this->last;
-        }
+// Common interface for all command queue types
+struct CommandQueueInterface {
+    EnqueueCommandType type;
+    std::optional<bool> token;
+    std::optional<bool> blocking;
+    std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
+    std::optional<std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>>> program;
+    std::optional<const void*> src;
+    std::optional<void*> dst;
+    std::optional<std::reference_wrapper<Trace>> trace;
+};
 
-        //WARNING: Exceptions thrown by sub-tasks are retieved via future; the silent versions don't return a future object, and therefore exceptions are lost
-        template < class F >
-        void submit ( F && func){
-            std::lock_guard<std::mutex> lk(this->mutex);
-            this->last = this->last.empty() ? detail::GetExecutor().silent_dependent_async(std::forward<F>(func) ) : detail::GetExecutor().silent_dependent_async( std::forward<F>(func), this->last );
-        }
+class CommandQueue {
+   public:
+    CommandQueue() = delete;
+    CommandQueue(Device* device, uint32_t id);
+    ~CommandQueue();
 
-        // template < class F >
-        // auto& submit ( F && func){
-        //     std::lock_guard<std::mutex> lk(this->mutex);
-        //     this->last = this->last.has_value() ? detail::GetExecutor().silent_dependent_async((func), this->last.value()) : detail::GetExecutor().silent_dependent_async( func );
-        //     return this->last.value();
-        // }
+    Device* device() const { return this->device_ptr; }
+    uint32_t id() const { return this->cq_id; }
 
-        Device* device() const {
-            return this->device_ptr;
-        }
-        uint32_t id() const{
-            return this->cq_id;
-        }
+    void wait_until_empty();
 
-        void reset() {
-            std::lock_guard<std::mutex> lk(this->mutex);
-            this->last.reset();
-        }
+    void run_command(const CommandQueueInterface& command);
 
-    private:
-        std::mutex mutex;
-        tf::AsyncTask last;
-        uint32_t cq_id;
-        Device * device_ptr;
+   private:
+    enum class CommandQueueState {
+        IDLE = 0,
+        RUNNING = 1,
+        TERMINATE = 2,
+    };
+    bool async_mode = tt::parse_env("TT_METAL_ASYNC_QUEUES", false);
+
+    std::unique_ptr<std::thread> worker_thread;
+    CommandQueueState worker_state = CommandQueueState::IDLE;
+
+    LockFreeQueue<CommandQueueInterface> worker_queue;
+    uint32_t cq_id;
+    Device* device_ptr;
+
+    void start_worker();
+    void stop_worker();
+    void run_worker();
+    void run_command_impl(const CommandQueueInterface& command);
 };
 
 } // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type);
