@@ -9,7 +9,7 @@
 #include "logger.hpp"
 
 namespace tt {
-template <typename TimeUnit>
+template <typename TimeUnit = std::chrono::nanoseconds>
 struct ScopedTimer {
     using Clock = std::chrono::high_resolution_clock;
     using TimeInstant = std::chrono::time_point<Clock, std::chrono::nanoseconds>;
@@ -23,7 +23,7 @@ struct ScopedTimer {
         } else if constexpr (std::is_same_v<TimeUnit, std::chrono::seconds>) {
             return "s";
         } else {
-            return "time_unit";
+            return "ns";
         }
     }
 

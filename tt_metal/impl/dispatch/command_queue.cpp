@@ -1123,11 +1123,7 @@ void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper
         using T = std::decay_t<decltype(b)>;
         std::shared_future<void> f;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer> > ) {
-            // auto &t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, dst, blocking] {
-                cq.device()->hw_command_queue(cq.id()).enqueue_read_buffer(b, dst, blocking);
-            // }, f );
-            // f.get();
-            // t.reset();
+            cq.device()->hw_command_queue(cq.id()).enqueue_read_buffer(b, dst, blocking);
         }
     }, buffer);
 }
@@ -1147,17 +1143,11 @@ void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrappe
                                           const void* src, bool blocking) {
     std::visit ( [&cq, src, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
-        // std::shared_future<void> f;
-        // std::optional<std::reference_wrapper<tf::AsyncTask>> t;
         Device * device = cq.device();
         auto cq_id = cq.id();
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>> ) {
-            // t = cq.submit( [device = cq.device(), cq_id = cq.id(), b, src, blocking] {
             device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
-            // }, f );
         }
-    //    f.get();
-    //    if (t.has_value()) { t.value().get().reset(); }
     }, buffer);
 }
 
@@ -1177,27 +1167,19 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
     std::visit ( [&cq, blocking, trace](auto&& program) {
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
-        // std::shared_future<void> f;
-        // std::optional<std::reference_wrapper<tf::AsyncTask>> t;
         Device * device = cq.device();
         auto cq_id = cq.id();
         if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
-            // cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
             detail::CompileProgram(device, program);
             program.get().allocate_circular_buffers();
             detail::ValidateCircularBufferRegion(program, device);
             device->hw_command_queue(cq_id).enqueue_program(program, trace, blocking);
-            // });
         } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
-            // cq.submit( [device = cq.device(), cq_id = cq.id(), program, blocking, trace] {
             detail::CompileProgram(device, *program);
             program->allocate_circular_buffers();
             detail::ValidateCircularBufferRegion(*program, device);
             device->hw_command_queue(cq_id).enqueue_program(*program, trace, blocking);
-            // });
         }
-        // f.get();
-        // if (t.has_value()) { t.value().get().reset(); }
     }, program);
 }
 
@@ -1209,12 +1191,7 @@ void Finish(CommandQueue& cq) {
 }
 
 void FinishImpl(CommandQueue& cq) {
-    // std::shared_future<void> f;
-    // cq.submit( [device = cq.device(), cq_id = cq.id()] {
-        cq.device()->hw_command_queue(cq.id()).finish();
-    // }, f);
-    // f.get();
-    // cq.reset();
+    cq.device()->hw_command_queue(cq.id()).finish();
 }
 
 
@@ -1259,43 +1236,42 @@ namespace detail {
 void EnqueueRestart(CommandQueue& cq) {
     ZoneScoped;
     detail::DispatchStateCheck(true);
-    // std::shared_future<void> f;
-    // auto& t = cq.submit( [device = cq.device(), cq_id = cq.id()] {
-        cq.device()->hw_command_queue(cq.id()).restart();
-    // }, f);
-    // f.get();
-    // t.reset();
+    cq.device()->hw_command_queue(cq.id()).restart();
 }
 
 }
 
 CommandQueue::CommandQueue(Device* device, uint32_t id) : device_ptr(device), cq_id(id) {
-    if (async_mode) {
+    bool value = tt::parse_env("TT_METAL_ASYNC_QUEUES", false);
+    mode = value ? CommandQueueMode::ASYNC : CommandQueueMode::PASSTHROUGH;
+    if (async_mode()) {
         start_worker();
     }
-    tt::log_debug(tt::LogDispatch, "CQ{} async mode = {}", cq_id, async_mode ? "ENABLED" : "DISABLED");
-    TT_ASSERT(worker_queue.empty(), "CQ{} worker queue must be empty on construction", cq_id);
 }
 
 CommandQueue::~CommandQueue() {
-    if (async_mode) {
+    if (async_mode()) {
         stop_worker();
     }
     TT_ASSERT(worker_queue.empty(), "CQ{} worker queue must be empty on destruction", cq_id);
 }
 
 void CommandQueue::wait_until_empty() {
-    if (async_mode) {
-        worker_queue.push(CommandQueueInterface{
-            .type = EnqueueCommandType::INVALID,
-            .token = true
-        });
-    }
     while (true) {
         if (worker_queue.empty()) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+}
+
+void CommandQueue::set_mode(const CommandQueueMode& mode_) {
+    this->mode = mode_;
+    if (async_mode()) {
+        start_worker();
+    } else if (passthrough_mode()) {
+        wait_until_empty();
+        stop_worker();
     }
 }
 
@@ -1321,31 +1297,22 @@ void CommandQueue::stop_worker() {
 void CommandQueue::run_worker() {
     // forever loop checking for commands in the worker queue
     while (true) {
-        // if (worker_queue.empty()) {
-        //     std::this_thread::sleep_for(std::chrono::microseconds(10));
-        //     continue;
-        // } else {
-        //     run_command_impl(*worker_queue.pop());
-        // }
         if (worker_queue.empty()) {
-            // log_info("CQ{} worker queue is empty", cq_id);
             if (worker_state == CommandQueueState::TERMINATE) {
                 break;
             }
+            // TODO: profile this to see whether a sleep is needed
+            // std::this_thread::sleep_for(std::chrono::microseconds(10));
         } else {
             auto command = worker_queue.pop();
-            if (command->token.has_value()) {
-                // acts like a flush
-            } else {
-                run_command_impl(*command);
-            }
+            run_command_impl(*command);
         }
     }
 }
 
 void CommandQueue::run_command(const CommandQueueInterface& command) {
-    tt::log_debug(tt::LogDispatch, "CQ{} received command {} in {} mode", cq_id, command.type, async_mode ? "ASYNC" : "NORMAL");
-    if (async_mode) {
+    tt::log_trace(tt::LogDispatch, "CQ{} received {} in {} mode", cq_id, command.type, async_mode() ? "ASYNC" : "PASSTHROUGH");
+    if (async_mode()) {
         worker_queue.push(command);
     } else {
         run_command_impl(command);
@@ -1353,7 +1320,7 @@ void CommandQueue::run_command(const CommandQueueInterface& command) {
 }
 
 void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
-    tt::log_debug(tt::LogDispatch, "CQ{} running command {}", cq_id, command.type);
+    tt::log_trace(tt::LogDispatch, "CQ{} running {}", cq_id, command.type);
     switch (command.type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
@@ -1373,7 +1340,6 @@ void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
             EnqueueProgramImpl(*this, command.program.value(), command.blocking.value(), command.trace);
             break;
         case EnqueueCommandType::FINISH:
-            tt::log_debug(tt::LogDispatch, "CQ{} received FINISH", cq_id);
             FinishImpl(*this);
             break;
         default:

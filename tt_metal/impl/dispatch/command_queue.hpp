@@ -475,7 +475,6 @@ class HWCommandQueue {
 // Common interface for all command queue types
 struct CommandQueueInterface {
     EnqueueCommandType type;
-    std::optional<bool> token;
     std::optional<bool> blocking;
     std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
     std::optional<std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>>> program;
@@ -486,6 +485,10 @@ struct CommandQueueInterface {
 
 class CommandQueue {
    public:
+    enum class CommandQueueMode {
+        PASSTHROUGH = 0,
+        ASYNC = 1,
+    };
     CommandQueue() = delete;
     CommandQueue(Device* device, uint32_t id);
     ~CommandQueue();
@@ -493,9 +496,17 @@ class CommandQueue {
     Device* device() const { return this->device_ptr; }
     uint32_t id() const { return this->cq_id; }
 
+    // Blocking method to wait for all commands to drain from the queue
+    // Optional if used in passthrough mode (async_mode = false)
     void wait_until_empty();
 
+    // Schedule a command to be run on the device
+    // Blocking if in passthrough mode. Non-blocking if in async mode
     void run_command(const CommandQueueInterface& command);
+
+    // API for setting the mode of the command queue
+    // The environment env counterpart is `TT_METAL_ASYNC_QUEUES`
+    void set_mode(const CommandQueueMode& mode);
 
    private:
     enum class CommandQueueState {
@@ -503,8 +514,7 @@ class CommandQueue {
         RUNNING = 1,
         TERMINATE = 2,
     };
-    bool async_mode = tt::parse_env("TT_METAL_ASYNC_QUEUES", false);
-
+    CommandQueueMode mode;
     std::unique_ptr<std::thread> worker_thread;
     CommandQueueState worker_state = CommandQueueState::IDLE;
 
@@ -516,6 +526,9 @@ class CommandQueue {
     void stop_worker();
     void run_worker();
     void run_command_impl(const CommandQueueInterface& command);
+
+    bool async_mode() { return this->mode == CommandQueueMode::ASYNC; }
+    bool passthrough_mode() { return this->mode == CommandQueueMode::PASSTHROUGH; }
 };
 
 } // namespace tt::tt_metal
