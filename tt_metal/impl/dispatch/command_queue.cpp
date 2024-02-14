@@ -908,7 +908,7 @@ void HWCommandQueue::enqueue_program(
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
 
     if ((this->manager.get_issue_queue_write_ptr(this->id)) + host_data_and_device_command_size >=
-        this->manager.get_issue_queue_size(this->id)) {
+        this->manager.get_issue_queue_limit(this->id)) {
         TT_FATAL(
             host_data_and_device_command_size <= this->manager.get_issue_queue_size(this->id) - CQ_START,
             "EnqueueProgram command size too large");
