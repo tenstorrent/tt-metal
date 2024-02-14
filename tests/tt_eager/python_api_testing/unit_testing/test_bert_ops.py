@@ -412,263 +412,19 @@ def test_bert_linear_batch7(
     assert passing
 
 
-# def run_bert_linear_batch4(
-#     device,
-#     in0_sharded,
-#     out_sharded,
-#     in1_in_dram,
-#     M,
-#     K,
-#     N,
-#     fidelity,
-#     has_bias,
-#     activation,
-#     packer_l1_acc,
-#     fp32_acc_mode,
-#     function_level_defaults,
-# ):
-#     in0_shape = [1, 1, M, K]
-#     in1_shape = [1, 1, K, N]
-#     bias_shape = [1, 1, N]
-#     grid_size = (8, 4)
-
-#     in0_block_h = M // grid_size[1] // 32
-#     in0_block_w = K // grid_size[0] // 32
-#     out_block_h = M // grid_size[1] // 32
-#     out_block_w = N // grid_size[0] // 32
-
-#     if fp32_acc_mode == True:
-#         out_subblock_w = 4
-#         out_subblock_h = 1
-#     else:
-#         if out_block_w <= 8:
-#             out_subblock_w = out_block_w
-#             out_subblock_h = 8 // out_subblock_w
-#         else:
-#             out_subblock_h = 1
-#             out_subblock_w = 8 // out_subblock_h
-#             while out_block_w % out_subblock_w != 0:
-#                 out_subblock_w = out_block_w // 2
-
-#     logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
-#     logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
-#     logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
-#     logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
-
-#     interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
-#         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-#         buffer_type=ttl.tensor.BufferType.L1,
-#     )
-#     interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
-#         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-#         buffer_type=ttl.tensor.BufferType.DRAM,
-#     )
-#     sharded_mem_config = ttl.tensor.MemoryConfig(
-#         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-#         buffer_type=ttl.tensor.BufferType.L1,
-#     )
-
-#     in0 = torch.randn(in0_shape).bfloat16().float()
-#     in1 = torch.randn(in1_shape).bfloat16().float()
-#     bias = torch.randn(bias_shape).bfloat16().float()
-
-#     in0_t = torch2tt_tensor(
-#         in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-#     )
-#     in1_t = torch2tt_tensor(
-#         in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-#     )
-
-#     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
-#     bias_t = pad_by_zero(
-#         bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-#     )[0]
-
-#     if in0_sharded:
-#         in0_t = ttl.tensor.interleaved_to_sharded(
-#             in0_t,
-#             grid_size,
-#             [M // grid_size[1], K // grid_size[0]],
-#             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-#             ttl.tensor.ShardOrientation.ROW_MAJOR,
-#         )
-
-#     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-#         compute_with_storage_grid_size=grid_size,
-#         in0_block_w=in0_block_w,
-#         out_subblock_h=out_subblock_h,
-#         out_subblock_w=out_subblock_w,
-#         per_core_M=out_block_h,
-#         per_core_N=out_block_w,
-#         transpose_mcast=False,
-#         fused_activation=activation,
-#     )
-
-#     if has_bias:
-#         output_t = ttl.operations.primary.matmul(
-#             in0_t,
-#             in1_t,
-#             bias=bias_t,
-#             program_config=program_config,
-#             output_mem_config=output_mem_config,
-#             math_fidelity=fidelity,
-#             fp32_dest_acc_en=fp32_acc_mode,
-#             packer_l1_acc=packer_l1_acc,
-#         )
-#     else:
-#         output_t = ttl.operations.primary.matmul(
-#             in0_t,
-#             in1_t,
-#             program_config=program_config,
-#             output_mem_config=output_mem_config,
-#             math_fidelity=fidelity,
-#             fp32_dest_acc_en=fp32_acc_mode,
-#             packer_l1_acc=packer_l1_acc,
-#         )
-
-#     if out_sharded:
-#         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
-
-#     pt_out = in0 @ in1
-
-#     if has_bias:
-#         pt_out = pt_out + bias
-
-#     if activation != None:
-#         pt_out = torch.nn.functional.gelu(pt_out)
-#     tt_out = tt2torch_tensor(output_t)
-
-#     passing, output = comp_pcc(pt_out, tt_out)
-#     logger.info(output)
-#     assert passing
-
-
-# def not_fit_l1(M, K, N, fp32):
-#     return (M * K + K * N > 5000000) and (fp32 == True)
-
-
-# @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-# @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-# @pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
-# @pytest.mark.parametrize(
-#     "fidelity",
-#     [
-#         ttl.tensor.MathFidelity.LoFi,
-#     ],
-#     ids=["LoFi"],
-# )
-# @pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
-# @pytest.mark.parametrize(
-#     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
-#     [
-#         # in1-L1-fusedQKV
-#         (False, True, True, 1536, 1024, 3072, None),  # both sharded
-#         # in1-dram-fusedQKV
-#         (True, True, True, 1536, 1024, 3072, None),
-#         # in1-L1-selfout
-#         (False, True, True, 1536, 1024, 1024, None),
-#         # in1-dram-selfout
-#         (True, True, True, 1536, 1024, 1024, None),
-#         # in1-L1-ff1
-#         (False, True, True, 1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-#         # in1-dram-ff1
-#         (True, True, True, 1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-#         # in1-L1-ff1 - no Gelu
-#         (False, True, True, 1536, 1024, 4096, None),
-#         # in1-dram-ff1 - no Gelu
-#         (True, True, True, 1536, 1024, 4096, None),
-#         # in1-L1-ff2
-#         (False, True, True, 1536, 4096, 1024, None),
-#         # in1-dram-ff2
-#         (True, True, True, 1536, 4096, 1024, None),
-#     ],
-# )
-# def test_bert_linear_batch4(
-#     device,
-#     in0_sharded,
-#     out_sharded,
-#     in1_in_dram,
-#     M,
-#     K,
-#     N,
-#     fidelity,
-#     has_bias,
-#     activation,
-#     packer_l1_acc,
-#     fp32_acc_mode,
-#     function_level_defaults,
-# ):
-#     for i in range(1):
-#         logger.info(i)
-#         if not not_fit_l1(M, K, N, fp32_acc_mode):
-#             run_bert_linear_batch4(
-#                 device,
-#                 in0_sharded,
-#                 out_sharded,
-#                 in1_in_dram,
-#                 M,
-#                 K,
-#                 N,
-#                 fidelity,
-#                 has_bias,
-#                 activation,
-#                 packer_l1_acc,
-#                 fp32_acc_mode,
-#                 function_level_defaults,
-#             )
-#         else:
-#             logger.warning("L1 cannot fit large tensors in fp32 mode")
-
-
-@pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
-@pytest.mark.parametrize(
-    "packer_l1_acc",
-    [
-        False,
-    ],
-    ids=["no_pack_l1"],
-)
-@pytest.mark.parametrize(
-    "fp32_acc_mode",
-    [
-        True,
-    ],
-    ids=["fp32"],
-)
-@pytest.mark.parametrize(
-    "fidelity",
-    [
-        ttl.tensor.MathFidelity.LoFi,
-    ],
-    ids=["LoFi"],
-)
-@pytest.mark.parametrize(
-    "has_bias",
-    [
-        False,
-    ],
-    ids=["no_bias"],
-)
-@pytest.mark.parametrize(
-    "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
-    [
-        # # in1-L1-fusedQKV
-        (False, True, True, 1536, 1024, 3072, None),  # both sharded
-    ],
-)
-def test_bert_linear_batch7(
+def run_bert_linear_batch4(
     device,
-    fidelity,
     in0_sharded,
     out_sharded,
     in1_in_dram,
-    has_bias,
-    fp32_acc_mode,
-    packer_l1_acc,
     M,
     K,
     N,
+    fidelity,
+    has_bias,
     activation,
+    packer_l1_acc,
+    fp32_acc_mode,
     function_level_defaults,
 ):
     in0_shape = [1, 1, M, K]
@@ -778,6 +534,241 @@ def test_bert_linear_batch7(
     if has_bias:
         pt_out = pt_out + bias
 
+    if activation != None:
+        pt_out = torch.nn.functional.gelu(pt_out)
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+def not_fit_l1(M, K, N, fp32):
+    return (M * K + K * N > 5000000) and (fp32 == True)
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
+@pytest.mark.parametrize(
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.LoFi,
+    ],
+    ids=["LoFi"],
+)
+@pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
+@pytest.mark.parametrize(
+    "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
+    [
+        # in1-L1-fusedQKV
+        (False, True, True, 1536, 1024, 3072, None),  # both sharded
+        # in1-dram-fusedQKV
+        (True, True, True, 1536, 1024, 3072, None),
+        # in1-L1-selfout
+        (False, True, True, 1536, 1024, 1024, None),
+        # in1-dram-selfout
+        (True, True, True, 1536, 1024, 1024, None),
+        # in1-L1-ff1
+        (False, True, True, 1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        # in1-dram-ff1
+        (True, True, True, 1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        # in1-L1-ff1 - no Gelu
+        (False, True, True, 1536, 1024, 4096, None),
+        # in1-dram-ff1 - no Gelu
+        (True, True, True, 1536, 1024, 4096, None),
+        # in1-L1-ff2
+        (False, True, True, 1536, 4096, 1024, None),
+        # in1-dram-ff2
+        (True, True, True, 1536, 4096, 1024, None),
+    ],
+)
+def test_bert_linear_batch4(
+    device,
+    in0_sharded,
+    out_sharded,
+    in1_in_dram,
+    M,
+    K,
+    N,
+    fidelity,
+    has_bias,
+    activation,
+    packer_l1_acc,
+    fp32_acc_mode,
+    function_level_defaults,
+):
+    for i in range(1):
+        logger.info(i)
+        if not not_fit_l1(M, K, N, fp32_acc_mode):
+            run_bert_linear_batch4(
+                device,
+                in0_sharded,
+                out_sharded,
+                in1_in_dram,
+                M,
+                K,
+                N,
+                fidelity,
+                has_bias,
+                activation,
+                packer_l1_acc,
+                fp32_acc_mode,
+                function_level_defaults,
+            )
+        else:
+            logger.warning("L1 cannot fit large tensors in fp32 mode")
+
+
+@pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
+@pytest.mark.parametrize(
+    "packer_l1_acc",
+    [True, False],
+    ids=["pack_l1", "no_pack_l1"],
+)
+@pytest.mark.parametrize(
+    "fp32_acc_mode",
+    [
+        True,
+    ],
+    ids=["fp32"],
+)
+@pytest.mark.parametrize(
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.LoFi,
+        ttl.tensor.MathFidelity.HiFi4,
+    ],
+    ids=["LoFi", "HiFi4"],
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [True, False],
+    ids=["bias", "no_bias"],
+)
+@pytest.mark.parametrize(
+    "M, K, N, activation",
+    [
+        # not sharded due to L1 size
+        # small tensor test
+        (128, 256, 256, None),
+        (256, 256, 256, None),
+        (256, 512, 512, None),
+        # in1-dram-fusedQKV
+        (1536, 1024, 3072, None),
+        # in1-dram-selfout
+        (1536, 1024, 1024, None),
+        # in1-dram-ff1
+        (1536, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+        # in1-dram-ff1 - no Gelu
+        (1536, 1024, 4096, None),
+        # in1-dram-ff2
+        (1536, 4096, 1024, None),
+    ],
+)
+def test_bert_linear_batch4_fp32_input_output(
+    device,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    M,
+    K,
+    N,
+    activation,
+    function_level_defaults,
+):
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, N]
+    grid_size = (8, 4)
+
+    in0_block_h = M // grid_size[1] // 32
+    in0_block_w = K // grid_size[0] // 32
+    out_block_h = M // grid_size[1] // 32
+    out_block_w = N // grid_size[0] // 32
+
+    # full block too large to fit in L1
+    if in0_block_h * in0_block_w >= 48 or in0_block_w * out_block_w >= 48:
+        in0_block_w = in0_block_w // 2
+
+    if out_block_w < 4:
+        out_subblock_w = out_block_w
+        out_subblock_h = out_block_h // out_subblock_w
+    else:
+        out_subblock_w = 4
+        out_subblock_h = 1
+
+    logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
+    logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
+    logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
+    logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
+
+    interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.rand(in0_shape).float() * 1000.0
+    in1 = torch.rand(in1_shape).float() * 1000.0
+    bias = torch.rand(bias_shape).float() * 1000.0
+
+    in0_t = torch2tt_tensor(
+        in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.FLOAT32
+    )
+    in1_t = torch2tt_tensor(
+        in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.FLOAT32
+    )
+
+    output_mem_config = interleaved_mem_config_DRAM
+    bias_t = pad_by_zero(
+        bias, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.FLOAT32
+    )[0]
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=activation,
+    )
+
+    if has_bias:
+        output_t = ttl.operations.primary.matmul(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            output_mem_config=output_mem_config,
+            math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
+        )
+    else:
+        output_t = ttl.operations.primary.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            output_mem_config=output_mem_config,
+            math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
+        )
+
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out = pt_out + bias
     if activation != None:
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)

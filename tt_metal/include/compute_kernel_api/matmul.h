@@ -130,15 +130,15 @@ ALWI void mm_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, 
  */
 ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
+    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id) ));
     #else
     MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
     #endif
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
 
@@ -151,7 +151,7 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
     #else
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>()  ));
     // TODO(AP): ZM-only kernel
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
     #endif
