@@ -510,36 +510,36 @@ def test_resnet(device):
     assert "maxpool" in parameters
 
     assert "layer1" in parameters
-    assert "0" in parameters["layer1"]
-    assert "conv1" in parameters["layer1"]["0"]
-    assert "conv2" in parameters["layer1"]["0"]
-    assert "1" in parameters["layer1"]
-    assert "conv1" in parameters["layer1"]["1"]
-    assert "conv2" in parameters["layer1"]["1"]
+    assert 0 in parameters["layer1"]
+    assert "conv1" in parameters["layer1"][0]
+    assert "conv2" in parameters["layer1"][0]
+    assert 1 in parameters["layer1"]
+    assert "conv1" in parameters["layer1"][1]
+    assert "conv2" in parameters["layer1"][1]
 
     assert "layer2" in parameters
-    assert "0" in parameters["layer3"]
-    assert "conv1" in parameters["layer2"]["0"]
-    assert "conv2" in parameters["layer2"]["0"]
-    assert "1" in parameters["layer2"]
-    assert "conv1" in parameters["layer2"]["1"]
-    assert "conv2" in parameters["layer2"]["1"]
+    assert 0 in parameters["layer3"]
+    assert "conv1" in parameters["layer2"][0]
+    assert "conv2" in parameters["layer2"][0]
+    assert 1 in parameters["layer2"]
+    assert "conv1" in parameters["layer2"][1]
+    assert "conv2" in parameters["layer2"][1]
 
     assert "layer3" in parameters
-    assert "0" in parameters["layer3"]
-    assert "conv1" in parameters["layer3"]["0"]
-    assert "conv2" in parameters["layer3"]["0"]
-    assert "1" in parameters["layer3"]
-    assert "conv1" in parameters["layer3"]["1"]
-    assert "conv2" in parameters["layer3"]["1"]
+    assert 0 in parameters["layer3"]
+    assert "conv1" in parameters["layer3"][0]
+    assert "conv2" in parameters["layer3"][0]
+    assert 1 in parameters["layer3"]
+    assert "conv1" in parameters["layer3"][1]
+    assert "conv2" in parameters["layer3"][1]
 
     assert "layer4" in parameters
-    assert "0" in parameters["layer4"]
-    assert "conv1" in parameters["layer4"]["0"]
-    assert "conv2" in parameters["layer4"]["0"]
-    assert "1" in parameters["layer4"]
-    assert "conv1" in parameters["layer4"]["1"]
-    assert "conv2" in parameters["layer4"]["1"]
+    assert 0 in parameters["layer4"]
+    assert "conv1" in parameters["layer4"][0]
+    assert "conv2" in parameters["layer4"][0]
+    assert 1 in parameters["layer4"]
+    assert "conv1" in parameters["layer4"][1]
+    assert "conv2" in parameters["layer4"][1]
 
     assert "fc" in parameters
     assert "weight" in parameters["fc"]

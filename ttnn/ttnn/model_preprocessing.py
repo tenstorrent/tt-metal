@@ -207,7 +207,7 @@ def convert_torch_model_to_ttnn_model(
                     convert_to_ttnn=convert_to_ttnn,
                     custom_preprocessor=custom_preprocessor,
                     name=f"{name}.{index}" if name else f"{index}",
-                    ttnn_module_args=ttnn_module_args.get(child_name, index) if ttnn_module_args is not None else None,
+                    ttnn_module_args=ttnn_module_args[index] if ttnn_module_args is not None else None,
                 )
                 for index, child in enumerate(model.children())
             ]
@@ -252,12 +252,14 @@ def convert_torch_model_to_ttnn_model(
 
     parameters = {}
     for child_name, child in named_children:
+        if child_name.isdigit():
+            child_name = int(child_name)
         child_parameters = convert_torch_model_to_ttnn_model(
             child,
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
             name=f"{name}.{child_name}" if name else child_name,
-            ttnn_module_args=ttnn_module_args.get(child_name, None) if ttnn_module_args is not None else None,
+            ttnn_module_args=ttnn_module_args[child_name] if ttnn_module_args is not None else None,
         )
         if child_parameters:
             parameters[child_name] = child_parameters
@@ -441,9 +443,11 @@ def infer_ttnn_module_args(*, model, run_model):
                         dtype=ttnn.bfloat16,
                     )
                 else:
-                    ttnn_submodule_args = _infer_ttnn_module_args(operation.graph)
-                    if ttnn_submodule_args:
-                        ttnn_module_args[module_name] = ttnn_submodule_args
+                    ttnn_module_args[module_name] = _infer_ttnn_module_args(operation.graph)
+
+                if module_name.isdigit():
+                    ttnn_module_args[int(module_name)] = ttnn_module_args[module_name]
+
         return make_dot_access_dict(ttnn_module_args, ignore_types=(ModuleArgs,))
 
     ttnn_module_args = _infer_ttnn_module_args(graph)
@@ -581,7 +585,7 @@ def preprocess_model(
         model = move_to_device(model, device)
         logger.info(f"Moved model weights to device")
 
-    def _convert_configs_to_modules(model):
+    def _convert_ttnn_module_args_to_modules(model):
         if isinstance(model, ParameterDict):
             if "ttnn_module_args" in model:
                 if isinstance(model.ttnn_module_args, Conv2dArgs):
@@ -604,13 +608,15 @@ def preprocess_model(
                 else:
                     raise RuntimeError(f"Unsupported ttnn module args: {type(model.ttnn_module_args)}")
             else:
-                return make_parameter_dict({name: _convert_configs_to_modules(value) for name, value in model.items()})
+                return make_parameter_dict(
+                    {name: _convert_ttnn_module_args_to_modules(value) for name, value in model.items()}
+                )
         elif isinstance(model, ParameterList):
-            return ParameterList([_convert_configs_to_modules(value) for value in model])
+            return ParameterList([_convert_ttnn_module_args_to_modules(value) for value in model])
         else:
             return model
 
-    model = _convert_configs_to_modules(model)
+    model = _convert_ttnn_module_args_to_modules(model)
 
     return model
 
