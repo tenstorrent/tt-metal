@@ -138,7 +138,7 @@ ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_
     UNPACK(( llk_unpack_A_block<BroadcastType::NONE, false>(icb, start_itile, ntiles, false)  ));
     #endif
 
-    MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf, DST_ACCUM_MODE>(start_idst, ntiles)  ));
+    MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf, DST_ACCUM_MODE>(start_idst, ntiles, icb)  ));
 }
 
 }

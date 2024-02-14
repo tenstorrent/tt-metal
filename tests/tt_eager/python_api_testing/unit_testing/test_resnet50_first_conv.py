@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_act_tensor_special,
@@ -30,7 +30,6 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("untilize_out", (False,))
 @pytest.mark.parametrize("has_bias", (True,))
 @pytest.mark.parametrize("fuse_relu", (True,))
@@ -60,8 +59,8 @@ def test_resnet50_first_conv(
         pytest.skip(
             f"Skipping batch 8 on E75 because expected grid size is 12x9 but E75 grid size is {compute_grid_size}"
         )
-    if N != 8:
-        pytest.skip("Skipping non-batch 8 tests due to potential non-determinism")
+    if N == 2:
+        pytest.skip("Skipping batch 2 due to pcc error!")
     if N == 8 and is_wormhole_b0():
         pytest.skip("Parallelization unsupported for WH B0")
     if sharded_out and N != 8:
