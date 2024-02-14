@@ -6,6 +6,10 @@ import torch
 import pytest
 from loguru import logger
 
+import scipy
+from sklearn.metrics import top_k_accuracy_score
+import numpy as np
+
 import tt_lib
 
 from models.demos.llama2_70b.reference.llama import Llama
@@ -118,32 +122,28 @@ def run_test_LlamaModel_inference(
 
         tt_out = tt2torch_tensor(tt_out)
 
-        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
+        tt_out = tt_out.float()
+        pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
-        # TODO: Check KL divergence and top-5, top-1 accuracy
-        kl_divergence = torch.nn.functional.kl_div(tt_out, pytorch_out)
-        logger.info(f"KL Divergence: {kl_divergence}")
+
+        kl_divs = scipy.stats.entropy(
+            torch.nn.functional.softmax(pytorch_out, dim=-1), torch.nn.functional.softmax(tt_out, dim=-1), axis=-1
+        )
+        logger.info(f"Mean KL Divergence: {kl_divs.mean()}")
 
         # Write the code to check top-5 and top-1 accuracy. It should show the
         # percentage where the top-1 prediction in pytorch was in the top-5
         # predictions in tt.
+        reference_top1 = np.argmax(pytorch_out, axis=-1)
+        top1_acc = top_k_accuracy_score(reference_top1, tt_out, k=1, labels=np.arange(tt_out.shape[-1]))
+        top5_acc = top_k_accuracy_score(reference_top1, tt_out, k=5, labels=np.arange(tt_out.shape[-1]))
 
-        pt_top_1 = torch.argmax(pytorch_out, dim=-1)
-        tt_top_5 = torch.topk(tt_out, 5, dim=-1).indices
-
-        top_1_pct = torch.mean((pt_top_1 == tt_top_5[:, 0]).float())
-
-        n_correct = 0
-        for b in range(tt_top_5.shape[0]):
-            if pt_top_1[b] in tt_top_5[b]:
-                n_correct += 1
-        top_5_pct = n_correct / tt_top_5.shape[0]
-
-        logger.info(f"Top-1 Accuracy: {top_1_pct}")
-        logger.info(f"Top-5 Accuracy: {top_5_pct}")
+        logger.info(f"Mean Top-1: {top1_acc}")
+        logger.info(f"Mean Top-5: {top5_acc}")
 
         if does_pass:
             logger.info(f"[start_pos={start_pos}] Llama2-70b Decoder output Passed!")
@@ -192,7 +192,7 @@ def run_test_LlamaModel_inference(
 
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, n_layers",
-    (("decode", 32, 1, 128, 1),),
+    (("decode", 32, 1, 128, 5),),
     ids=["decode_batch32"],
 )
 @pytest.mark.parametrize(
