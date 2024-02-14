@@ -59,10 +59,14 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().dtype()) : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
     uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t gamma_single_tile_size = tt_metal::detail::TileSize(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = tt_metal::detail::TileSize(beta_cb_data_format);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
@@ -259,17 +263,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CreateCircularBuffer( program, all_cores, c_intermed5_config );
     }
     if (gamma.has_value()) {
-        uint32_t c_in5_page_size = gamma.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size;
-        DataFormat c_in5_df = gamma.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format;
-        CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * c_in5_page_size, {{CB::c_in5, c_in5_df}})
-            .set_page_size(CB::c_in5, c_in5_page_size);
+        CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * gamma_single_tile_size, {{CB::c_in5, gamma_cb_data_format}})
+            .set_page_size(CB::c_in5, gamma_single_tile_size);
         CreateCircularBuffer( program, all_cores, c_in5_config );
     }
     if (beta.has_value()) {
-        uint32_t c_in6_page_size = beta.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size;
-        DataFormat c_in6_df = beta.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format;
-        CircularBufferConfig c_in6_config = CircularBufferConfig(in6_t * c_in6_page_size, {{CB::c_in6, c_in6_df}})
-            .set_page_size(CB::c_in6, c_in6_page_size);
+        CircularBufferConfig c_in6_config = CircularBufferConfig(in6_t * beta_single_tile_size, {{CB::c_in6, beta_cb_data_format}})
+            .set_page_size(CB::c_in6, beta_single_tile_size);
         CreateCircularBuffer( program, all_cores, c_in6_config );
     }
     if (b) {
@@ -380,12 +380,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
-    tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().dtype()) : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_beta_single_tile_size = tt_metal::detail::TileSize(gamma_beta_cb_data_format);
+    uint32_t gamma_single_tile_size = tt_metal::detail::TileSize(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = tt_metal::detail::TileSize(beta_cb_data_format);
     // tensor shape
     const auto shape = a.shape();
     uint32_t M = a.volume() / shape[-1];
@@ -452,9 +454,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // in3 - eps
     uint32_t in3_CB_size = single_tile_size;
     // gamma
-    uint32_t in5_CB_size = in0_block_tiles * gamma_beta_single_tile_size / block_ht;
+    uint32_t in5_CB_size = in0_block_tiles * gamma_single_tile_size / block_ht;
     // beta
-    uint32_t in6_CB_size = in0_block_tiles * gamma_beta_single_tile_size / block_ht;
+    uint32_t in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
     // itermediate buffers change later
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
@@ -754,7 +756,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     if (rms_norm) {
         compute_defines["RMSNORM"] = "1";
-        std::cout<<'a'<<std::endl;
     }
     // compute kernel compile time args
     std::vector<uint32_t> top_row_compute_compile_time_args = {
@@ -843,15 +844,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // gamma
     if (gamma.has_value()) {
         uint32_t in5_cb_index = CB::c_in5;
-        tt_metal::CircularBufferConfig in5_cb_config = tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_beta_cb_data_format}})
-            .set_page_size(in5_cb_index, gamma_beta_single_tile_size);
+        tt_metal::CircularBufferConfig in5_cb_config = tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_cb_data_format}})
+            .set_page_size(in5_cb_index, gamma_single_tile_size);
         auto cb_in5 = tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
     }
     // beta
     if (beta.has_value()) {
         uint32_t in6_cb_index = CB::c_in6;
-        tt_metal::CircularBufferConfig in6_cb_config = tt_metal::CircularBufferConfig(in6_CB_size, {{in6_cb_index, gamma_beta_cb_data_format}})
-            .set_page_size(in6_cb_index, gamma_beta_single_tile_size);
+        tt_metal::CircularBufferConfig in6_cb_config = tt_metal::CircularBufferConfig(in6_CB_size, {{in6_cb_index, beta_cb_data_format}})
+            .set_page_size(in6_cb_index, beta_single_tile_size);
         auto cb_in6 = tt_metal::CreateCircularBuffer(program, all_cores, in6_cb_config);
     }
     // x

@@ -259,10 +259,11 @@ void MAIN {
                 unpack_reconfig_data_format_srca(cb_xmm, cb_fusion);
                 #endif
             }
-            if (do_gamma) {
+            if constexpr (do_gamma) {
                 if constexpr(do_beta == 0) {
                     pack_reconfig_data_format(cb_out);
                 }
+                unpack_reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short();
@@ -279,8 +280,13 @@ void MAIN {
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 REL();
             }
-            if (do_beta) {
+            if constexpr (do_beta) {
                 pack_reconfig_data_format(cb_out);
+                if constexpr(do_gamma) {
+                    unpack_reconfig_data_format_srcb(cb_gamma, cb_beta);
+                } else {
+                    unpack_reconfig_data_format_srcb(cb_ex2pe, cb_beta);
+                }
                 ACQ();
                 add_bcast_rows_init_short();
                 cb_reserve_back(cb_out, blk);
