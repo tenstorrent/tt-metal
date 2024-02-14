@@ -80,7 +80,7 @@ void kernel_main() {
         update_producer_consumer_sync_semaphores(((uint64_t)producer_noc_encoding << 32), ((uint64_t)eth_consumer_noc_encoding << 32), db_semaphore_addr, uint32_t(eth_get_semaphore(0)));
 
         // Fetch data and send to the consumer
-        produce_for_eth_src_router<consumer_cmd_base_addr, consumer_data_buffer_size>(
+        produce_for_eth_src_router<true, consumer_cmd_base_addr, consumer_data_buffer_size>(
             command_ptr,
             num_buffer_transfers,
             sharded_buffer_num_cores,

@@ -94,13 +94,11 @@ void kernel_main() {
                 consumer_cb_size);
 
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
-            uint32_t is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
             uint32_t producer_router_transfer_num_pages = header->producer_router_transfer_num_pages;
-            produce<signaller_cmd_base_addr, signaller_data_buffer_size>(
+            produce_for_eth_src_router<false, signaller_cmd_base_addr, signaller_data_buffer_size>(
                 command_ptr,
                 num_buffer_transfers,
-                is_sharded,
                 sharded_buffer_num_cores,
                 consumer_cb_size,   // use consumer metadata because dispatcher is "consumer" from the command's pov but is the "producer" for return path to completion queue via signaller
                 consumer_cb_num_pages,  // use consumer metadata because dispatcher is "consumer" from the command's pov but is the "producer" for return path to completion queue via signaller
