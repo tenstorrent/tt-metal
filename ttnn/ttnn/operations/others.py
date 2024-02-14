@@ -227,8 +227,7 @@ def softmax(
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         ttl_input_tensor = input_tensor.value
 
-        ttl_output_tensor = ttnn.Tensor(ttl_input_tensor).value
-        ttl.operations.primary.moreh_softmax(ttl_input_tensor, ttl_output_tensor, dim=dim_4D)
+        ttl_output_tensor = ttl.operations.primary.moreh_softmax(ttl_input_tensor, dim=dim_4D)
     output_tensor = ttnn.Tensor(ttl_output_tensor)
     output_tensor = ttnn.reshape(output_tensor, input_shape)
     return output_tensor
