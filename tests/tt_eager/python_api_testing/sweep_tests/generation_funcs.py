@@ -1723,3 +1723,23 @@ def gen_ttnn_rmsnorm_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_rand_exclude_range(size, range, low=0, high=100):
+    res = torch.Tensor(size=size).uniform_(low, high)
+
+    upper = range[1]
+    lower = range[0]
+    assert upper < high
+    assert lower > low
+
+    list_tensor = torch.flatten(res)
+
+    i = 0
+    for el in list_tensor:
+        while el >= lower and el <= upper:
+            list_tensor[i] = random.uniform(low, high)
+        i = i + 1
+    res = torch.reshape(list_tensor, size)
+
+    return res
