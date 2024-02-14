@@ -18,28 +18,44 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-void MorehSoftmax::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
-    TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
+void MorehSoftmax::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const
+{
+    // validate input tensor
     auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
+
+    // validate parameters
+    TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
+
+    if(output_tensors.empty() && output_tensors.at(0).has_value()){
+        // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
+        TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
+        return;
+    }
+    TT_ASSERT(input_tensors.size() == 1, "Must have 1 input tensors");
+    TT_ASSERT(output_tensors.size() == 1, "Must have 1 output tensors");
 }
+
 
 std::vector<Shape> MorehSoftmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {};
+    return {input_tensors.at(0).shape()};
 }
 
-std::vector<Tensor> MorehSoftmax::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return {};
+std::vector<Tensor> MorehSoftmax::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
+    const auto& output_shape = input_tensors.at(0).shape();
+
+    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).dtype(), Layout::TILE, this->output_mem_config)};
 }
 
-operation::ProgramWithCallbacks MorehSoftmax::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks MorehSoftmax::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     auto& input = input_tensors.at(0);
-    auto& output = input_tensors.at(1);
+    auto& output = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
@@ -116,66 +132,80 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
     return this->strategy;
 }
 
+
 Tensor moreh_softmax(
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const Tensor &input_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy) {
+    std::optional<Tensor> output_tensor,
+    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const MemoryConfig &output_mem_config) {
+
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    operation::run(
+    output_tensor = operation::run(
                MorehSoftmax{
                    .dim = dim,
                    .core_range = all_cores,
                    .op = MorehSoftmaxOp::SOFTMAX,
-                   .strategy = strategy},
-               {input_tensor, output_tensor},
-               {});
+                   .strategy = strategy,
+                   .output_mem_config = output_mem_config},
+               {input_tensor},
+               {},
+               {output_tensor}).at(0);
 
-    return output_tensor;
+    return output_tensor.value();
 }
 
 Tensor moreh_softmin(
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const Tensor &input_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy) {
+    std::optional<Tensor> output_tensor,
+    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const MemoryConfig &output_mem_config) {
+
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    operation::run(
+    output_tensor = operation::run(
                MorehSoftmax{
                    .dim = dim,
                    .core_range = all_cores,
                    .op = MorehSoftmaxOp::SOFTMIN,
-                   .strategy = strategy},
-               {input_tensor, output_tensor},
-               {});
-    return output_tensor;
+                   .strategy = strategy,
+                   .output_mem_config = output_mem_config},
+               {input_tensor},
+               {},
+               {output_tensor}).at(0);
+
+    return output_tensor.value();
 }
 
 Tensor moreh_logsoftmax(
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const Tensor &input_tensor,
     uint32_t dim,
-    const MorehSoftmaxOpParallelizationStrategy strategy) {
+    std::optional<Tensor> output_tensor,
+    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const MemoryConfig &output_mem_config) {
+
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    operation::run(
+    output_tensor = operation::run(
         MorehSoftmax{
             .dim = dim,
             .core_range = all_cores,
             .op = MorehSoftmaxOp::LOGSOFTMAX,
-            .strategy = strategy},
-        {input_tensor, output_tensor},
-        {});
+            .strategy = strategy,
+            .output_mem_config = output_mem_config},
+        {input_tensor},
+        {},
+        {output_tensor}).at(0);
 
-    return output_tensor;
+    return output_tensor.value();
 }
 
 }  // namespace primary
