@@ -42,23 +42,33 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
-    uint32_t ncores_w = device->compute_with_storage_grid_size().x;
+    uint32_t ncores_x = device->compute_with_storage_grid_size().x;
+    uint32_t ncores_nhw = ncores;
+
+    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        ncores_x = all_cores.ranges().begin()->end.x + 1;
+        ncores_nhw = all_cores.ranges().begin()->end.y + 1;
+        input_stick_nbytes = input_stick_nbytes / ncores_x;
+        output_stick_nbytes = output_stick_nbytes / ncores_x;
+    }
 
     // TODO: Support non-multiple case
-    TT_FATAL(input_nsticks % ncores == 0, "Input sticks should be divisible by number of cores");
-    TT_FATAL(output_nsticks % ncores == 0, "Output sticks should be divisible by number of cores");
-    uint32_t input_nsticks_per_core = input_nsticks / ncores;
-    uint32_t output_nsticks_per_core = output_nsticks / ncores;
+    TT_FATAL(input_nsticks % ncores_nhw == 0, "Input sticks should be divisible by number of cores");
+    TT_FATAL(output_nsticks % ncores_nhw == 0, "Output sticks should be divisible by number of cores");
+    uint32_t input_nsticks_per_core = input_nsticks / ncores_nhw;
+    uint32_t output_nsticks_per_core = output_nsticks / ncores_nhw;
 
     uint32_t in_w = input.shape()[2];
     uint32_t out_w = output.shape()[2];
 
     // extra limitation to avoid post upsample step of resharding
-    TT_ASSERT(input_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core should be divisible by input width. TODO to remove this restriction");
+    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_FATAL(input_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core should be divisible by input width. TODO to remove this restriction");
+    }
 
     // CBs
 
-    uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs
+    uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
 
     // input data is in a sharded CB
     uint32_t in_cb_id = CB::c_in0;
@@ -87,7 +97,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
     log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
-    log_debug(LogOp, "ncores: {}, ncores_w: {}", ncores, ncores_w);
+    log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
     log_debug(LogOp, "input_nsticks_per_core: {}, output_nsticks_per_core: {}", input_nsticks_per_core, output_nsticks_per_core);
 
     // Kernels
@@ -116,13 +126,24 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     writer_rt_args[6] = 0;  // set for each core below
 
     uint32_t start_input_stick_id = 0;
-    for (int32_t core = 0; core < ncores; ++core) {
-        CoreCoord core_coord(core % ncores_w, core / ncores_w); // logical
-
-        writer_rt_args[6] = start_input_stick_id;
-        SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-
-        start_input_stick_id += input_nsticks_per_core;
+    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        for (int32_t core = 0; core < ncores_nhw; ++core) {
+            for (int32_t core_x = 0; core_x < ncores_x; ++core_x) {
+                CoreCoord core_coord(core_x, core); // logical
+                writer_rt_args[6] = start_input_stick_id;
+                SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
+            }
+            start_input_stick_id += input_nsticks_per_core;
+        }
+    } else if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        for (int32_t core = 0; core < ncores_nhw; ++core) {
+            CoreCoord core_coord(core % ncores_x, core / ncores_x); // logical
+            writer_rt_args[6] = start_input_stick_id;
+            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
+            start_input_stick_id += input_nsticks_per_core;
+        }
+    } else {
+        TT_FATAL(false, "Unsupported memory layout");
     }
 
     auto override_runtime_args_callback = [writer_kernel, in_cb_id, out_cb_id](
@@ -135,8 +156,6 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
 
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
-
-        CoreCoord core = {0, 0};
 
         UpdateDynamicCircularBufferAddress(program, in_cb_id, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, out_cb_id, *dst_buffer);

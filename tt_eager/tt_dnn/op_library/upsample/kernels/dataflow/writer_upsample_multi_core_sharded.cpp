@@ -23,7 +23,7 @@ void kernel_main() {
 
     // cb_wait_front(in_cb_id, in_nsticks_local);
 
-    uint32_t in_stick_row = start_in_stick_id / in_w;    // assuming shard begins with a new row. TODO: generalize?
+    uint32_t in_stick_row_id = start_in_stick_id / in_w;    // assuming shard begins with a new row. TODO: generalize?
     uint32_t l1_write_addr_stick = l1_write_addr;
     // for each input stick
     for (uint32_t i = start_in_stick_id; i < start_in_stick_id + in_nsticks_local; ++ i) {
@@ -46,8 +46,8 @@ void kernel_main() {
         l1_write_addr_stick += stick_nbytes * scale_w;
 
         // if this is the end of a row, skip the next (scale_h - 1) rows
-        l1_write_addr_stick += (i == (in_w * (in_stick_row + 1) - 1)) * out_w * stick_nbytes * (scale_h - 1);
-        in_stick_row += (i == (in_w * (in_stick_row + 1) - 1));
+        l1_write_addr_stick += (i == (in_w * (in_stick_row_id + 1) - 1)) * out_w * stick_nbytes * (scale_h - 1);
+        in_stick_row_id += (i == (in_w * (in_stick_row_id + 1) - 1));
 
         noc_async_write_barrier();
         cb_push_back(out_cb_id, scale_h * scale_w);
