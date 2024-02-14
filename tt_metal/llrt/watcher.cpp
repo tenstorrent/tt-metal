@@ -466,9 +466,9 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
         dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
     }
 
-    // Dump state always available
-    // TODO(dma): See what makes sense for dumping launch/slave data from eth cores
+    // Ethernet cores don't use the launch message/sync reg
     if (!is_eth_core) {
+        // Dump state always available
         dump_run_mailboxes(f, core, &mbox_data->launch, &mbox_data->slave_sync);
         if (dump_all || OptionsG.get_watcher_dump_all()) {
             // Reading registers while running can cause hangs, only read if
@@ -477,10 +477,15 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
         }
     }
 
-    fprintf(f, "k_ids:%d|%d|%d",
+    // Eth core only reports erisc kernel id, uses the brisc field
+    if (is_eth_core) {
+        fprintf(f, "k_id:%d", mbox_data->launch.brisc_watcher_kernel_id);
+    } else {
+        fprintf(f, "k_ids:%d|%d|%d",
             mbox_data->launch.brisc_watcher_kernel_id,
             mbox_data->launch.ncrisc_watcher_kernel_id,
             mbox_data->launch.triscs_watcher_kernel_id);
+    }
 
     fprintf(f, "\n");
 
