@@ -259,6 +259,10 @@ autofunction:: tt_lib.operations.primary.matmul
 
 .. autofunction:: tt_lib.operations.primary.transformers.scale_mask_softmax_in_place
 
+.. autofunction:: tt_lib.operations.primary.moreh_mean
+
+.. autofunction:: tt_lib.operations.primary.moreh_mean_backward
+
 
 Enums
 =====
