@@ -147,7 +147,7 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
         # (2, 255, 384, 40, 40, 1, 1, 1, 1, 0, 0, 1, True, None), #1x1 conv not supported yet
         # (2, 255, 768, 20, 20, 1, 1, 1, 1, 0, 0, 1, True, None), #1x1 conv not supported yet
         # (2, 64, 3, 300, 300, 7, 7, 2, 2, 3, 3, 0, False, None),
-        # (2, 64, 64, 75, 75, 3, 3, 1, 1, 1, 1, 0, False, None), #5368
+        (2, 64, 64, 75, 75, 3, 3, 1, 1, 1, 1, 0, False, {"act_block_h": 32}),  # 5368 fixed after the added config
         (2, 128, 64, 75, 75, 3, 3, 2, 2, 1, 1, 0, False, None),
         # (2, 128, 64, 75, 75, 1, 1, 2, 2, 0, 0, 0, False, None), #1x1 conv not supported yet
         (2, 128, 128, 38, 38, 3, 3, 1, 1, 1, 1, 0, False, None),
@@ -203,13 +203,13 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
         # (2, 96, 48, 320, 320, 3, 3, 2, 2, 1, 1, 0, False, None), #5368
         # (2, 48, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, False, None), #5368
         # (2, 48, 48, 160, 160, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
-        # (2, 48, 48, 160, 160, 3, 3, 1, 1, 1, 1, 0, False, None), #5368
+        (2, 48, 48, 160, 160, 3, 3, 1, 1, 1, 1, 0, False, {"act_block_h": 32}),  # 5368 fixed after the added config
         # (2, 96, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
         # (2, 192, 96, 160, 160, 3, 3, 2, 2, 1, 1, 0, False, None), #5328
         # (2, 96, 192, 80, 80, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
         # (2, 96, 96, 80, 80, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
         # (2, 96, 96, 80, 80, 3, 3, 1, 1, 1, 1, 0, False, None), #5368
-        # //crash(2,384,192,80,80,3,3,2,2,1,1,0,False),
+        (2, 384, 192, 80, 80, 3, 3, 2, 2, 1, 1, 0, False, None),
         # (2, 192, 192, 80, 80, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
         # (2, 192, 384, 40, 40, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
         # (2, 192, 192, 40, 40, 1, 1, 1, 1, 0, 0, 0, False, None), #1x1 conv not supported yet
