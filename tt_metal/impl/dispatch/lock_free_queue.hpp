@@ -31,10 +31,9 @@ class LockFreeQueue {
         void push(const T& value) {
             std::shared_ptr<T> newData(std::make_shared<T>(value));
             Node* newNode = new Node;
-            newNode->data = newData;
-            newNode->next = nullptr;
-            Node* oldTail = tail.exchange(newNode);
-            oldTail->next = newNode;
+            tail.load()->data = newData;
+            tail.load()->next = newNode;
+            tail.store(newNode);
         }
 
         std::shared_ptr<T> pop() {
