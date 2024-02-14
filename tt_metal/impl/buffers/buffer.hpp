@@ -182,9 +182,7 @@ class Buffer {
 
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
-    uint64_t page_address(uint32_t page_index) const;
-
-    uint64_t core_address(uint32_t core_id) const;
+    uint64_t sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
     ShardSpecBuffer shard_spec() const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
@@ -194,6 +192,10 @@ class Buffer {
 
     std::vector<uint32_t> get_dev_page_to_host_page_mapping() const {
         return dev_page_to_host_page_mapping_;
+    }
+
+    std::vector<uint32_t> get_host_page_to_dev_page_mapping() const {
+        return host_page_to_dev_page_mapping_;
     }
 
     CoreCoord get_core_from_dev_page_id(uint32_t dev_page_id) const {
@@ -211,17 +213,11 @@ class Buffer {
     uint32_t get_bank_id_from_page_id (uint32_t page_id) const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         auto core_id = dev_page_to_core_mapping_[page_id];
-        return core_bank_indices_[core_id];
+        return this->core_bank_indices_[core_id];
     }
-
     std::vector<CoreCoord> all_cores() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return all_cores_;
-    }
-
-    std::vector< std::vector<uint32_t> > core_host_page_indices() const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_host_page_indices_;
     }
 
     uint32_t num_cores() const{
@@ -239,29 +235,17 @@ class Buffer {
         return core_to_core_id_;
     }
 
-    std::vector<uint32_t> host_pages_in_shard(uint32_t core_id) const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        return core_host_page_indices_[core_id];
-    }
-
-    std::vector<uint32_t> host_pages_in_shard(CoreCoord core) const
-    {
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto core_id = core_to_core_id_.at(core);
-        return core_host_page_indices_[core_id];
-    }
 
     std::vector<uint32_t> dev_pages_in_shard(const uint32_t & core_id) const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto host_pages= core_host_page_indices_[core_id];
-        std::vector<uint32_t> dev_pages;
-        dev_pages.reserve(host_pages.size());
-        for(auto host_page: host_pages){
-            dev_pages.push_back(dev_page_to_host_page_mapping_[host_page]);
+        std::vector<uint32_t> ret_vec;
+        for(uint32_t i=0; i<this->dev_page_to_core_mapping_.size() ; i++) {
+           if(this->dev_page_to_core_mapping_[i] == core_id) {
+             ret_vec.push_back(i);
+           }
         }
-        return dev_pages;
+        return ret_vec;
     }
 
     std::vector<uint32_t> dev_pages_in_shard(const CoreCoord & core) const
@@ -269,6 +253,12 @@ class Buffer {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         auto core_id = core_to_core_id_.at(core);
         return dev_pages_in_shard(core_id);
+    }
+
+    std::vector<uint32_t> get_host_page_to_local_shard_page_mapping() const
+    {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        return host_page_to_local_shard_page_mapping_;
     }
 
     std::string get_shard_info() const;
@@ -291,10 +281,14 @@ class Buffer {
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::vector< CoreCoord> all_cores_;
     std::vector< uint32_t> core_bank_indices_;
-    std::vector< std::vector<uint32_t> > core_host_page_indices_;
+
+    inline void set_mapping(const uint32_t & host_page, const uint32_t & dev_page_buffer, const uint32_t & dev_page_shard, const uint32_t & core_id);
     std::vector<uint32_t> dev_page_to_core_mapping_;
     std::vector<uint32_t> dev_page_to_host_page_mapping_;
+    std::vector<uint32_t> host_page_to_dev_page_mapping_;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
+    std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
+
 };
 
 }  // namespace tt_metal

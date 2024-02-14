@@ -1046,11 +1046,11 @@ def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h,
 # this tensor is easy to debug and visualize
 def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, page_height=32):
     torch_tensor = None
-    for row_idx in range(0, int(num_pages_height)):
+    for row_idx in range(num_pages_height):
         tile_row = None
-        for col_idx in range(0, int(num_pages_width)):
+        for col_idx in range(num_pages_width):
             tile_idx = col_idx + num_pages_width * row_idx
-            tile = torch.full((1, 1, page_width, page_height), tile_idx + 1, dtype=dtype)
+            tile = torch.full((1, 1, page_height, page_width), tile_idx + 1, dtype=dtype)
             if tile_row == None:
                 tile_row = tile
             else:
