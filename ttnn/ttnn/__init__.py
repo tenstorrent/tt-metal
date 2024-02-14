@@ -43,7 +43,7 @@ from ttnn.validation import validate_input_tensor
 
 from ttnn.decorators import register_operation
 
-from ttnn.device import open, close
+from ttnn.device import open, close, dump_device_memory_state
 
 from ttnn.program_cache import (
     enable_program_cache,
@@ -63,6 +63,7 @@ from ttnn.operations.core import (
     dump_tensor,
     unsqueeze_to_4D,
     squeeze,
+    clone,
 )
 
 from ttnn.operations.matmul import (

@@ -20,4 +20,8 @@ def close(device):
     del DEVICES[device.id()]
 
 
+def dump_device_memory_state(device):
+    ttl.device.DumpDeviceMemoryState(device)
+
+
 __all__ = []

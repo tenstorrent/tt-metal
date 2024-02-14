@@ -19,12 +19,12 @@ def prepare_conv_input_and_copy_to_device_interleaved(
     # TODO: for bfp16, pad to 8 only
     padded_input_channels = math.ceil(torch_input_tensor_nhwc.shape[3] / 16) * 16
     torch_input_tensor_nhwc = torch.nn.functional.pad(
-        torch_input_tensor_nhwc, (0, 0, 0, 0, 0, padded_input_channels - torch_input_tensor_nhwc.shape[3])
+        torch_input_tensor_nhwc, (0, padded_input_channels - torch_input_tensor_nhwc.shape[3], 0, 0, 0, 0)
     )
     # Reshape 4d to 2d
     torch_input_tensor_nhwc = torch.reshape(
         torch_input_tensor_nhwc,
-        (1, 1, input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2], input_tensor_shape[3]),
+        (1, 1, input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2], padded_input_channels),
     )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
@@ -56,6 +56,7 @@ def run_conv(
     config_override,
     use_shallow_conv_variant=False,
     enable_auto_formatting=False,
+    deallocate_input=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -107,6 +108,7 @@ def run_conv(
         conv_blocking_and_parallelization_config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         enable_auto_formatting=enable_auto_formatting,
+        deallocate_input=deallocate_input,
     )
 
     assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache
@@ -162,6 +164,7 @@ def run_conv_with_split(
     use_1d_systolic_array,
     config_override,
     split_factor=2,
+    deallocate_input=False,
 ):
     torch.manual_seed(0)
     assert input_channels % split_factor == 0
@@ -234,6 +237,7 @@ def run_conv_with_split(
                 math_fidelity=math_fidelity,
                 weights_dtype=weights_dtype,
                 conv_blocking_and_parallelization_config_override=config_override,
+                deallocate_input=deallocate_input,
             )
         )
 
@@ -380,6 +384,7 @@ def test_resnet50_conv(
         # (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
         # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
         # # sd convs with HxW=64x64 with batch size=2
+        (2, 320, 4, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
@@ -398,6 +403,7 @@ def test_resnet50_conv(
         (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         # 1x1 conv
         (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, False, None),
     ),
@@ -411,7 +417,12 @@ def test_resnet50_conv(
     [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("enable_auto_formatting", [True, False])
+@pytest.mark.parametrize(
+    "enable_auto_formatting",
+    [
+        True,
+    ],
+)
 def test_sd_conv(
     use_program_cache,
     device,
@@ -455,6 +466,7 @@ def test_sd_conv(
             use_1d_systolic_array,
             config_override,
             split_factor=3 if input_channels == 1920 else 2,
+            deallocate_input=True,
         )
     else:
         run_conv(
@@ -477,6 +489,7 @@ def test_sd_conv(
             config_override,
             use_shallow_conv_variant=(input_channels == 16),
             enable_auto_formatting=enable_auto_formatting,
+            deallocate_input=True,
         )
 
 

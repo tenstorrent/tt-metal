@@ -99,7 +99,6 @@ def test_resnet_block_2d_256x256(
         output_scale_factor=output_scale_factor,
         parameters=parameters,
         device=device,
-        convs_on_device=False,
     )
     ttnn_output = ttnn_to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

@@ -296,7 +296,7 @@ def determine_per_core_block_config(
         assert (
             "out_subblock_h" in config_override
         ), "out_subblock_h must also be provided as override config if out_subblock_w is provided"
-
+    print("act_block_h_ntiles=", act_block_h_ntiles)
     conv_blocking_config = ttl.tensor.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h_ntiles,
         act_block_w_ntiles=act_block_w_ntiles,
@@ -381,6 +381,7 @@ class TTPyCompositeConv(TTPyOp):
         move_weights_to_device=True,
         use_shallow_conv_variant=False,
         enable_auto_formatting=False,
+        deallocate_input=False,
     ):
         self.enable_auto_formatting = enable_auto_formatting
         self.use_shallow_conv_variant = use_shallow_conv_variant
@@ -484,6 +485,7 @@ class TTPyCompositeConv(TTPyOp):
 
         self.sliding_window_op_params = sliding_window_op_params
         self.move_utwh_output = move_utwh_output
+        self.deallocate_input = deallocate_input
 
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
@@ -683,6 +685,8 @@ class TTPyCompositeConv(TTPyOp):
             )
             assert weight.layout() == ttl.tensor.Layout.ROW_MAJOR
             assert weight.dtype() == weights_untiled_dtype
+            print("weight.shape()=", weight.shape())
+            print("weights_shape=", weights_shape)
             assert weight.shape() == weights_shape
             weight_untiled = weight.pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
             # for conv op, pad the weights to block shape
@@ -741,16 +745,28 @@ class TTPyCompositeConv(TTPyOp):
             )
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
-        def composite_conv(activation):
+        def composite_conv_with_deallocate_input(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
             return conv_(utwh_output)
 
-        def composite_conv_with_move_utwh_output(activation):
+        def composite_conv(activation):
+            # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
+            utwh_output = self.tt_py_untilize_with_halo_op(activation)
+            return conv_(utwh_output)
+
+        def composite_conv_with_move_utwh_output_with_deallocate_input(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
+            move_output = ttl.tensor.move_sharded(utwh_output)
+            utwh_output.deallocate()
+            return conv_(move_output)
+
+        def composite_conv_with_move_utwh_output(activation):
+            # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
+            utwh_output = self.tt_py_untilize_with_halo_op(activation)
             move_output = ttl.tensor.move_sharded(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)
@@ -771,11 +787,19 @@ class TTPyCompositeConv(TTPyOp):
         if self.use_matmul_for_1x1_conv:
             self.conv = conv1x1_as_matmul
         elif self.move_utwh_output:
-            self.conv = composite_conv_with_move_utwh_output
+            if self.deallocate_input:
+                self.conv = composite_conv_with_move_utwh_output_with_deallocate_input
+            else:
+                self.conv = composite_conv_with_move_utwh_output
         else:
-            self.conv = composite_conv
+            if self.deallocate_input:
+                self.conv = composite_conv_with_deallocate_input
+            else:
+                self.conv = composite_conv
 
     def __call__(self, activation):
+        print("Going to run conv with input shape-", self.input_tensor_shape)
+        print("with output shape = ", self.conv_output_shape)
         if self.enable_auto_formatting:
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)
