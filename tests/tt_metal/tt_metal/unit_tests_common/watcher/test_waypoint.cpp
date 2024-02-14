@@ -54,21 +54,22 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores().empty();
-    KernelHandle erisc_kid = 0;
+    // TODO: Change back to a single erisc_kid once the bug with CoreRange fast dispatch is fixed.
+    vector<KernelHandle> erisc_kids;
     if (has_eth_cores) {
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange{.start=core, .end=core});
+            auto erisc_kid = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+                core,
+                tt_metal::EthernetConfig{
+                    .noc = tt_metal::NOC::NOC_0
+                }
+            );
+            erisc_kids.push_back(erisc_kid);
         }
-        erisc_kid = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-            CoreRangeSet(eth_core_ranges),
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::RECEIVER,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
     }
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
@@ -107,10 +108,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             );
         }
     }
+    int idx = 0;
     for (const auto& core : device->get_active_ethernet_cores()) {
         SetRuntimeArgs(
             program,
-            erisc_kid,
+            erisc_kids[idx++],
             core,
             args
         );
