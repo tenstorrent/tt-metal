@@ -37,10 +37,14 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
         case Layout::TILE: {
             // TODO: Update to be generic for data type (issue 462)
             switch (dtype) {
-                case DataType::BFLOAT16:
-                case DataType::FLOAT32: {
+                case DataType::BFLOAT16: {
                     // Float is converted to bfloat16 before being written to device
                     uint32_t size_of_element = element_size_bytes_wrapper(DataType::BFLOAT16);
+                    page_size = constants::TILE_HW * size_of_element;
+                }
+                break;
+                case DataType::FLOAT32: {
+                    uint32_t size_of_element = element_size_bytes_wrapper(DataType::FLOAT32);
                     page_size = constants::TILE_HW * size_of_element;
                 }
                 break;
@@ -160,7 +164,7 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
-            (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::UINT32 || dtype == DataType::UINT16) &&
+            (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::UINT32 || dtype == DataType::UINT16) &&
             "Only BFLOAT16, BFLOAT8_B, UINT32, or UINT16 is supported on device!"
         );
     };
@@ -169,6 +173,7 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
             case DataType::UINT32:
             case DataType::UINT16:
             case DataType::BFLOAT16:
+            case DataType::FLOAT32:
                 break;
             case DataType::BFLOAT8_B:
                 TT_ASSERT(layout == Layout::TILE && "Only TILE layout is supported for BFLOAT8_B dtype!");
