@@ -93,7 +93,12 @@ class Tensor {
      Buffer *buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
      DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->storage_).buffer; }
 
-     Device *device() const { return this->buffer()->device(); }
+     Device *device() const {
+         auto buffer = this->buffer();
+         if (buffer == nullptr)
+             TT_THROW("Cannot get the device from a tensor without an allocated buffer");
+         return buffer->device();
+     }
      const MemoryConfig memory_config() const {
          return std::visit(
              [](const auto &storage) -> MemoryConfig {
