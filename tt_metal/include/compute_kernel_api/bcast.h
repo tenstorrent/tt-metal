@@ -64,11 +64,7 @@ ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
-    #else
     MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(icb0, icb1, idst) ));
-    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -112,8 +108,8 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
         MATH(( llk_math_eltwise_binary_init<tBcastOp, tBcastDim>() ));
 
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_init<tBcastDim>(icb0, icb1) ));
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb0, icb1) ));
+    UNPACK(( llk_unpack_AB_init<tBcastDim>(icb0, icb1) ));
     // TODO(AP): running this specific init after common AB init causes a hang
 
     // clone of general init for AB TODO(AP): commonize
@@ -121,8 +117,8 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
     //UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
     //UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
 
-    PACK(( llk_pack_init() ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
+    PACK(( llk_pack_init() ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
@@ -215,24 +211,15 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1)
  */
 ALWI void add_bcast_rows_init_short_post_matmul(uint32_t icb0 = 0, uint32_t icb1 = 1)
 {
-    #ifdef ARCH_GRAYSKULL
-    // math
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW, MATH_FIDELITY>() ));
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
-
-    // unpacker
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1) ));
 
-    // packer
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
-    #else
-    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
-    // FIXME: API Update needed in compute kernel?
-    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1) ));
     #endif
-
 }
 
 /**
