@@ -38,10 +38,11 @@ def download_artifacts(token, artifacts_url, output_path):
                 with open(output_path, "wb") as file:
                     file.write(artifact_response.content)
                 logger.info(f"{artifacts_url} downloaded successfully.")
+                return True
             else:
                 raise RuntimeError("Failed to download the artifact.")
         else:
-            raise RuntimeError("No artifacts found.  Is there a run in progress?")
+            return False
     else:
         raise RuntimeError("Failed to fetch artifacts list.")
 
@@ -179,8 +180,11 @@ def download_from_pipeline(token, directory_for_html_pages):
         temp_dir_path = pathlib.Path(temp_dir)
         recent_zip = temp_dir_path / "recent.zip"
         prior_zip = temp_dir_path / "prior.zip"
-        download_artifacts(token, most_recent_artifact_url, output_path=recent_zip)
-        download_artifacts(token, prior_artifact_url, output_path=prior_zip)
+        downloaded = download_artifacts(token, most_recent_artifact_url, output_path=recent_zip)
+        if downloaded:
+            downloaded = download_artifacts(token, prior_artifact_url, output_path=prior_zip)
+        if not downloaded:
+            return
         diff_results(recent_zip, prior_zip, directory_for_html_pages, commit_hash)
 
 
