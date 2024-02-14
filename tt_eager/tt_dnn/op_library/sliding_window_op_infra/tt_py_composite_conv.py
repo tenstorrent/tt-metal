@@ -345,8 +345,10 @@ class TTPyCompositeConv(TTPyOp):
         move_weights_to_device=True,
         use_shallow_conv_variant=False,
         enable_auto_formatting=False,
+        deallocate_activation=True,
     ):
         self.enable_auto_formatting = enable_auto_formatting
+        self.deallocate_activation = deallocate_activation
         self.use_shallow_conv_variant = use_shallow_conv_variant
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
@@ -695,13 +697,15 @@ class TTPyCompositeConv(TTPyOp):
         def composite_conv(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            activation.deallocate()
+            if self.deallocate_activation:
+                activation.deallocate()
             return conv_(utwh_output)
 
         def composite_conv_with_move_utwh_output(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            activation.deallocate()
+            if self.deallocate_activation:
+                activation.deallocate()
             move_output = ttl.tensor.move_sharded(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)

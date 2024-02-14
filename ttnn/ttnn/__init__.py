@@ -51,6 +51,7 @@ import ttnn.tracer
 
 from ttnn.decorators import (
     register_operation,
+    query_all_registered_operations,
     enable_debug_decorator,
     override_pcc_of_debug_decorator,
     disable_validate_decorator,
@@ -121,8 +122,7 @@ from ttnn.operations.unary import (
     asinh,
     acosh,
     atanh,
-    logical_not_unary,
-    logical_noti,
+    logical_not,
     logit,
     clone,
 )
@@ -134,6 +134,8 @@ from ttnn.operations.binary import (
     subtract,
     mul,
     multiply,
+    add_and_apply_activation,
+    add_and_apply_activation_,
 )
 
 

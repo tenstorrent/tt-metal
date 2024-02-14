@@ -37,7 +37,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "asinh": torch.asinh,
             "acosh": torch.acosh,
             "atanh": torch.atanh,
-            "logical_not_unary": torch.logical_not,
+            "logical_not": torch.logical_not,
             "clone": torch.clone,
         }
         torch_function = name_to_torch_function[name]
@@ -121,21 +121,13 @@ TTL_UNARY_FUNCTIONS = [
     ("asinh", ttl.tensor.asinh),
     ("acosh", ttl.tensor.acosh),
     ("atanh", ttl.tensor.atanh),
-    ("logical_not_unary", ttl.tensor.logical_not_unary),
+    ("logical_not", ttl.tensor.logical_not_unary),
     ("clone", ttl.tensor.clone),
 ]
 
 
 for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
     register_ttl_unary_function(unary_function_name, ttl_unary_function)
-
-
-def torch_logical_noti(x, *args, **kwargs):
-    import torch
-
-    immediate = kwargs.pop("immediate")
-    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
-    return result
 
 
 def _is_scalar(value):
@@ -147,7 +139,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         import torch
 
         name_to_torch_function = {
-            "logical_noti": torch_logical_noti,
             "logit": torch.logit,
         }
         torch_function = name_to_torch_function[name]
@@ -216,7 +207,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
 
 
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("logical_noti", ttl.tensor.logical_noti, "logical noti", "immediate"),
     ("logit", ttl.tensor.logit, "logit", "eps"),
 ]
 

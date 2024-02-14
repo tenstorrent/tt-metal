@@ -343,7 +343,7 @@ def attention_softmax_(
     """
     attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
 
-    Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax. In-Place.
+    In-Place divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
     Args:
         * :attr:`input_tensor`: Input Tensor

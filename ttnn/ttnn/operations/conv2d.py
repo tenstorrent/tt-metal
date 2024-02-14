@@ -42,6 +42,7 @@ class Conv2d:
         move_weights_to_device: bool = True,
         use_shallow_conv_variant: bool = False,
         enable_auto_formatting: bool = False,
+        deallocate_activation: bool = False,
     ):
         assert (
             padding_mode == "zeros"
@@ -111,6 +112,7 @@ class Conv2d:
             move_weights_to_device=move_weights_to_device,
             use_shallow_conv_variant=use_shallow_conv_variant,
             enable_auto_formatting=enable_auto_formatting,
+            deallocate_activation=deallocate_activation,
         )
 
     @ttnn.register_operation(name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: True)
