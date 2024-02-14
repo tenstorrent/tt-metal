@@ -37,6 +37,7 @@ namespace detail {
 static Device* get_device(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
     for (auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
+            TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device");
             return input_tensor.device();
         }
     }

@@ -161,8 +161,8 @@ void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
     const auto ashape = input_tensor_a.shape();
     const auto bshape = input_tensor_b.shape();
@@ -259,8 +259,8 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
     const auto ashape = input_tensor_a.shape();
     const auto bshape = input_tensor_b.shape();
