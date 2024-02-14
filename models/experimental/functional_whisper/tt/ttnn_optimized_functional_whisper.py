@@ -16,7 +16,7 @@ WHISPER_DTYPE = ttnn.bfloat8_b
 
 
 def gelu(tensor):
-    return ttnn.gelu(tensor)
+    return ttnn.gelu(tensor, memory_config=WHISPER_MEMORY_CONFIG)
 
 
 def dropout(hidden_states, p, training):
@@ -52,16 +52,21 @@ def calculate_key_values(config, key_value_states, *, parameters):
     fused_qkv = ttnn.reshape(fused_qkv, shape=(bsz, tgt_len, 2, config.encoder_attention_heads, head_size))
     key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :]
 
-    key_states = ttnn.permute(key_states, (0, 2, 1, 3))
+    key_states = ttnn.permute(key_states, (0, 2, 3, 1))
     value_states = ttnn.permute(value_states, (0, 2, 1, 3))
     key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
     value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
 
     desired_shape = ttnn.Shape(
+        [bsz, config.encoder_attention_heads, head_size, tgt_len],
+        [bsz, config.encoder_attention_heads, head_size, tgt_len_padded],
+    )
+    key_states = ttnn.reshape(key_states, shape=desired_shape)
+
+    desired_shape = ttnn.Shape(
         [bsz, config.encoder_attention_heads, tgt_len, head_size],
         [bsz, config.encoder_attention_heads, tgt_len_padded, head_size],
     )
-    key_states = ttnn.reshape(key_states, shape=desired_shape)
     value_states = ttnn.reshape(value_states, shape=desired_shape)
 
     return key_states, value_states
@@ -86,28 +91,23 @@ def split_query_key_value_and_split_heads(
     config, fused_qkv: ttnn.Tensor
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     head_size = config.d_model // config.encoder_attention_heads
-    batch_size, *_, seq_length, three_times_hidden_size = fused_qkv.shape
-    batch_size, *_, padded_seq_length, three_times_hidden_size = fused_qkv.shape.padded()
-    hidden_size = three_times_hidden_size // 3
-    encoder_attention_heads = hidden_size // head_size
+    batch_size, *_, seq_length, _ = fused_qkv.shape
+    batch_size, *_, padded_seq_length, _ = fused_qkv.shape.padded()
 
-    fused_qkv = ttnn.to_layout(fused_qkv, layout=ttnn.ROW_MAJOR_LAYOUT)
-    fused_qkv = ttnn.reshape(fused_qkv, shape=(batch_size, seq_length, 3, encoder_attention_heads, head_size))
-    query_states, key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :], fused_qkv[..., 2, :, :]
-    query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-    key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-    value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-
-    query_states = ttnn.to_layout(query_states, ttnn.TILE_LAYOUT)
-    key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
-    value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
+    query_states, key_states, value_states = ttnn.transformer.split_query_key_value_and_split_heads(
+        fused_qkv, num_heads=config.encoder_attention_heads
+    )
 
     desired_shape = ttnn.Shape(
-        [batch_size, encoder_attention_heads, seq_length, head_size],
-        [batch_size, encoder_attention_heads, padded_seq_length, head_size],
+        [batch_size, config.encoder_attention_heads, seq_length, head_size],
+        [batch_size, config.encoder_attention_heads, padded_seq_length, head_size],
+    )
+    desired_key_shape = ttnn.Shape(
+        [batch_size, config.encoder_attention_heads, head_size, seq_length],
+        [batch_size, config.encoder_attention_heads, head_size, padded_seq_length],
     )
     query_states = ttnn.reshape(query_states, shape=desired_shape)
-    key_states = ttnn.reshape(key_states, shape=desired_shape)
+    key_states = ttnn.reshape(key_states, shape=desired_key_shape)
     value_states = ttnn.reshape(value_states, shape=desired_shape)
     return query_states, key_states, value_states
 
@@ -131,74 +131,25 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
         query_states = ttnn.to_layout(query_states, ttnn.TILE_LAYOUT)
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
-        padded_key_value_tgt_len = key_states.shape.padded()[2]
-        key_value_tgt_len = key_states.shape[2]
     else:
         query_states, key_states, value_states = calculate_query_key_values(
             config, hidden_states, parameters=parameters
         )
-        padded_key_value_tgt_len = padded_tgt_len
-        key_value_tgt_len = tgt_len
 
     query_states *= scaling
 
-    proj_shape = ttnn.Shape(
-        [bsz * config.encoder_attention_heads, tgt_len, head_size],
-        [bsz * config.encoder_attention_heads, padded_tgt_len, head_size],
-    )
-    query_states = ttnn.reshape(query_states, shape=proj_shape)
-
-    proj_shape = ttnn.Shape(
-        [bsz * config.encoder_attention_heads, key_value_tgt_len, head_size],
-        [bsz * config.encoder_attention_heads, padded_key_value_tgt_len, head_size],
-    )
-    key_states = ttnn.reshape(key_states, shape=proj_shape)
-    value_states = ttnn.reshape(value_states, shape=proj_shape)
-
-    key_states = ttnn.permute(key_states, (0, 2, 1))
     attn_weights = query_states @ key_states
 
     if attention_mask is not None:
-        bsz, *_, padded_tgt_len, src_len = attention_mask.shape.padded()
-        bsz, *_, tgt_len, unpadded_src_len = attention_mask.shape
-        attn_weights = (
-            ttnn.reshape(
-                attn_weights,
-                shape=ttnn.Shape(
-                    [bsz, config.encoder_attention_heads, tgt_len, unpadded_src_len],
-                    [bsz, config.encoder_attention_heads, padded_tgt_len, src_len],
-                ),
-            )
-            + attention_mask
-        )
-        attn_weights = ttnn.reshape(
-            attn_weights,
-            shape=ttnn.Shape(
-                [bsz * config.encoder_attention_heads, tgt_len, unpadded_src_len],
-                [bsz * config.encoder_attention_heads, padded_tgt_len, src_len],
-            ),
-        )
+        attn_weights = attn_weights + attention_mask
 
     # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
-    attn_weights = ttnn.softmax(attn_weights, dim=-1)
+    attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
 
     attn_probs = dropout(attn_weights, p=0, training=False)
     attn_output = attn_probs @ value_states
-    attn_output = ttnn.reshape(
-        attn_output,
-        shape=ttnn.Shape(
-            [bsz, config.encoder_attention_heads, tgt_len, head_size],
-            [bsz, config.encoder_attention_heads, padded_tgt_len, head_size],
-        ),
-    )
 
-    attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-    attn_output = ttnn.to_layout(attn_output, ttnn.ROW_MAJOR_LAYOUT)
-    attn_output = ttnn.reshape(
-        attn_output,
-        shape=ttnn.Shape([bsz, tgt_len, config.d_model], [bsz, tgt_len, config.d_model]),
-    )
-    attn_output = ttnn.to_layout(attn_output, ttnn.TILE_LAYOUT)
+    attn_output = ttnn.transformer.concatenate_heads(attn_output)
     attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
 
@@ -209,6 +160,7 @@ def encoder_layer(config, hidden_states, *, parameters):
         hidden_states,
         weight=parameters.self_attn_layer_norm.weight,
         bias=parameters.self_attn_layer_norm.bias,
+        memory_config=WHISPER_MEMORY_CONFIG,
     )
 
     hidden_states = whisper_attention(config, hidden_states, attention_mask=None, parameters=parameters.self_attn)
@@ -220,6 +172,7 @@ def encoder_layer(config, hidden_states, *, parameters):
         hidden_states,
         weight=parameters.final_layer_norm.weight,
         bias=parameters.final_layer_norm.bias,
+        memory_config=WHISPER_MEMORY_CONFIG,
     )
     hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
     hidden_states = gelu(hidden_states)

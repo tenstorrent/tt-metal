@@ -345,22 +345,24 @@ def test_ttnn_whisper(device, ttnn_model):
         device=device,
     )
 
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-        config=config,
-        input_features=input_features,
-        input_ids=decoder_input_ids,
-        attention_mask=attention_mask,
-        parameters=ttnn_parameters,
-        device=device,
-    )
+    with ttnn.tracer.trace():
+        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+            config=config,
+            input_features=input_features,
+            input_ids=decoder_input_ids,
+            attention_mask=attention_mask,
+            parameters=ttnn_parameters,
+            device=device,
+        )
 
-    last_hidden_state = ttnn_model.whisper(
-        config,
-        input_embeds,
-        decoder_hidden_states,
-        decoder_attention_mask=decoder_attention_mask,
-        parameters=ttnn_parameters,
-    )
-    last_hidden_state = ttnn.to_torch(last_hidden_state)
+        last_hidden_state = ttnn_model.whisper(
+            config,
+            input_embeds,
+            decoder_hidden_states,
+            decoder_attention_mask=decoder_attention_mask,
+            parameters=ttnn_parameters,
+        )
+        last_hidden_state = ttnn.to_torch(last_hidden_state)
+    ttnn.tracer.visualize(last_hidden_state, file_name="whisper.svg")
 
     assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.97)

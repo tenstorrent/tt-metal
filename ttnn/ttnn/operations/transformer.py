@@ -421,6 +421,7 @@ def concatenate_heads(
 
     """
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
+    batch_size, num_heads, padded_sequence_size, padded_head_size = input_tensor.shape.padded()
 
     ttl_input_tensor = input_tensor.value
     ttl_output_tensor = ttl.tensor.nlp_concat_heads(
@@ -428,7 +429,13 @@ def concatenate_heads(
         memory_config,
     )
     output_tensor = ttnn.Tensor(ttl_output_tensor)
-    output_tensor = ttnn.reshape(output_tensor, (batch_size, sequence_size, num_heads * head_size))
+    output_tensor = ttnn.reshape(
+        output_tensor,
+        ttnn.Shape(
+            (batch_size, sequence_size, num_heads * head_size),
+            (batch_size, padded_sequence_size, num_heads * padded_head_size),
+        ),
+    )
 
     return output_tensor
 
