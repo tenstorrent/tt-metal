@@ -302,7 +302,9 @@ namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles) {
     // Reconfigure input
-    copy_tile_matmul_partials_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    //Safe functions
+    UNPACK(( llk_unpack_reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id) ));
+    copy_tile_to_dst_init_short();
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
     tile_regs_acquire();
     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -310,8 +312,9 @@ FORCE_INLINE void reload_from_cb_to_dst(uint32_t in1_cb_id, uint32_t mm_partials
     }
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_init_short();
+    //Safe functions
     unpack_reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    mm_init_short();
 }
 
 void MAIN {
