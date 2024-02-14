@@ -18,17 +18,35 @@ def rms_decomp(x, norm_weight, eps):
     return norm_out
 
 
-def tt_all_reduce(tensors):
+def tt_all_reduce(tensors, output_mem_config=None):
     """
     reduction on a list of tensors
     """
+    if len(tensors) == 1:
+        return tensors[0]
     base_tensor = tensors[0]
     for tensor in tensors[1:]:
-        base_tensor = tt_lib.tensor.add(base_tensor, tensor)
+        # base_tensor = tt_lib.tensor.add(base_tensor, tensor, output_mem_config=output_mem_config)  Cbinding doesnt support this optional argument passed in as None
+        if output_mem_config is not None:
+            base_tensor = tt_lib.tensor.add(base_tensor, tensor, output_mem_config)
+        else:
+            base_tensor = tt_lib.tensor.add(base_tensor, tensor)
     dev = base_tensor.device()
     # Emulate replication on all chips
     res_pt = tt2torch_tensor(base_tensor)
     res = [torch2tt_tensor(res_pt.clone(), dev) for _ in range(len(tensors))]
+    return res
+
+
+def tt_all_gather(tensors, dim=-1):
+    # Needs to be on DRAM
+    all_gathered_output = tt_lib.tensor.concat(tensors, dim=dim)
+
+    # Emulate replication on all chips
+    dev = all_gathered_output.device()
+    res_pt = tt2torch_tensor(all_gathered_output)
+    res = [torch2tt_tensor(res_pt.clone(), dev) for _ in range(len(tensors))]
+
     return res
 
 
