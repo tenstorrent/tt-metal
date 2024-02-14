@@ -29,12 +29,12 @@ class BasicBlock:
         ttnn.deallocate(conv1)
 
         if self.downsample is not None:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             identity = self.downsample(x)
             ttnn.deallocate(x)
 
-        out = ttnn.add_and_apply_activation(
-            conv2, identity, activation="relu", memory_config=ttnn.get_memory_config(conv2)
-        )
+        identity = ttnn.reshape(identity, conv2.shape)
+        out = ttnn.add_and_apply_activation(conv2, identity, activation="relu", memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(conv2)
         if x != identity:
             ttnn.deallocate(identity)
