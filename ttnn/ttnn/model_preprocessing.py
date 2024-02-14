@@ -55,7 +55,6 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
         weight=weight,
         bias=bias,
         reader_patterns_cache=None,
-        conv_blocking_and_parallelization_config_override=None,
         move_weights_to_device=False,
         device=None,
     )
@@ -427,6 +426,8 @@ def infer_ttnn_module_args(*, model, run_model):
                         dtype=ttnn.bfloat16,
                         weights_dtype=ttnn.bfloat16,
                         use_1d_systolic_array=True,
+                        enable_auto_formatting=False,
+                        conv_blocking_and_parallelization_config_override={},
                     )
                 elif isinstance(operation.module, torch.nn.MaxPool2d):
                     ttnn_module_args[module_name] = MaxPool2dArgs(

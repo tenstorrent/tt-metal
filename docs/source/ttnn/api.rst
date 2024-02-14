@@ -65,8 +65,7 @@ Pointwise Unary
    ttnn/asinh
    ttnn/acosh
    ttnn/atanh
-   ttnn/logical_not_unary
-   ttnn/logical_noti
+   ttnn/logical_not
    ttnn/logit
    ttnn/clone
 
@@ -80,6 +79,8 @@ Pointwise Binary
    ttnn/mul
    ttnn/sub
    ttnn/pow
+   ttnn/add_and_apply_activation
+   ttnn/add_and_apply_activation_
 
 Pointwise Relational
 ====================

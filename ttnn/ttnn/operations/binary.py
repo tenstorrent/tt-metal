@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union
+from typing import Union, Optional
 
-import math
 import sys
 
 import tt_lib as ttl
@@ -498,5 +497,150 @@ ttnn.Tensor.__radd__ = add
 ttnn.Tensor.__sub__ = sub
 ttnn.Tensor.__mul__ = mul
 ttnn.Tensor.__rmul__ = mul
+
+
+def _add_and_apply_activation_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        can_be_a_scalar=False,
+    )
+
+
+def _torch_add_and_apply_activation(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, activation=None, **_):
+    import torch
+
+    input_tensor_a = ttnn.to_torch(input_tensor_a)
+    input_tensor_b = ttnn.to_torch(input_tensor_b)
+
+    output_tensor = input_tensor_a + input_tensor_b
+
+    if activation is None:
+        return output_tensor
+    elif activation == "relu":
+        return torch.relu(output_tensor)
+    else:
+        raise ValueError(f"Unknown activation: {activation}")
+
+
+@ttnn.register_operation(
+    name="ttnn.add_and_apply_activation",
+    validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
+    torch_function=_torch_add_and_apply_activation,
+)
+def add_and_apply_activation(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    activation: Optional[str] = None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+) -> ttnn.Tensor:
+    r"""
+    add_and_apply_activation(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, activation: Optional[str] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+    Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and optionally applies an activation function to the output tensor.
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+
+    Keyword args:
+        :attr:`activation`: (Optional[str]): activation to apply to the output tensor
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+        :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+
+
+    """
+
+    fused_activations = []
+    if activation is not None:
+        activations_map = {
+            "relu": [ttl.tensor.FusibleActivation.RELU],
+        }
+        fused_activations = activations_map[activation]
+
+    input_tensor_a = input_tensor_a.value
+    input_tensor_b = input_tensor_b.value
+    output = ttl.tensor.add_without_autoformat(
+        input_tensor_a,
+        input_tensor_b,
+        fused_activations=fused_activations,
+        output_mem_config=memory_config,
+        output_dtype=dtype,
+        in_place=False,
+    )
+    return ttnn.Tensor(output)
+
+
+@ttnn.register_operation(
+    name="ttnn.add_and_apply_activation_",
+    validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
+    torch_function=_torch_add_and_apply_activation,
+)
+def add_and_apply_activation_(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    activation: Optional[str] = None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+) -> ttnn.Tensor:
+    r"""
+    add_and_apply_activation_(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, activation: Optional[str] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+    Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` in-place of :attr:`input_tensor_a` and optionally applies an activation function to the output tensor.
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+
+    Keyword args:
+        :attr:`activation`: (Optional[str]): activation to apply to the output tensor
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+        :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+
+
+    """
+
+    fused_activations = []
+    if activation is not None:
+        activations_map = {
+            "relu": [ttl.tensor.FusibleActivation.RELU],
+        }
+        fused_activations = activations_map[activation]
+
+    input_tensor_a = input_tensor_a.value
+    input_tensor_b = input_tensor_b.value
+    output = ttl.tensor.add_without_autoformat(
+        input_tensor_a,
+        input_tensor_b,
+        fused_activations=fused_activations,
+        output_mem_config=memory_config,
+        output_dtype=dtype,
+        in_place=True,
+    )
+    return ttnn.Tensor(output)
+
 
 __all__ = []

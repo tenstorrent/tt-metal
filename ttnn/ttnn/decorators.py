@@ -140,9 +140,20 @@ def document_input_tensors(name, function, validate_input_tensors):
     function.__doc__ = f"{doc}\n"
 
 
+REGISTERED_OPERATIONS = set()
+
+
+def query_all_registered_operations():
+    return sorted(REGISTERED_OPERATIONS)
+
+
 def register_operation(
     *, name, validate_input_tensors, torch_function=None, is_using_fallback=lambda *args, **kwargs: False
 ):
+    if name in REGISTERED_OPERATIONS:
+        raise RuntimeError(f"{name} is already registered")
+    REGISTERED_OPERATIONS.add(name)
+
     def operation_decorator(function):
         document_input_tensors(name, function, validate_input_tensors)
 

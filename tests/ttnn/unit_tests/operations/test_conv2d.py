@@ -107,6 +107,7 @@ def run_conv(
         conv_blocking_and_parallelization_config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         enable_auto_formatting=enable_auto_formatting,
+        deallocate_activation=True,
     )
 
     assert "conv" in reader_patterns_cache and "halo" in reader_patterns_cache

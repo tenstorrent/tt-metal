@@ -170,25 +170,10 @@ def run_unary_test_float_key(device, h, w, scalar, ttnn_function, torch_function
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-def torch_logical_noti(x, *args, **kwargs):
-    import torch
-
-    immediate = kwargs.pop("scalar")
-    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
-    return result
-
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logical_not_unary(device, h, w):
-    run_unary_test(device, h, w, ttnn.logical_not_unary, torch.logical_not)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_noti(device, h, w, scalar):
-    run_unary_test_float_key(device, h, w, scalar, ttnn.logical_noti, torch_logical_noti)
+def test_logical_not(device, h, w):
+    run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
 
 
 @pytest.mark.parametrize("scalar", [1, 2])

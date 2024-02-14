@@ -22,16 +22,21 @@ class BasicBlock:
         identity = x
 
         # Relu and bn1 are fused with conv1
-        out = self.conv1(x)
+        conv1 = self.conv1(x)
 
         # Relu and bn2 are fused with conv1
-        out = self.conv2(out)
+        conv2 = self.conv2(conv1)
+        ttnn.deallocate(conv1)
 
         if self.downsample is not None:
             identity = self.downsample(x)
+            ttnn.deallocate(x)
 
-        # out = ttnn.add(out, identity, memory_config=ttnn.get_memory_config(out))
-        # out = ttnn.to_memory_config(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # out = self.relu(out)
+        out = ttnn.add_and_apply_activation(
+            conv2, identity, activation="relu", memory_config=ttnn.get_memory_config(conv2)
+        )
+        ttnn.deallocate(conv2)
+        if x != identity:
+            ttnn.deallocate(identity)
 
         return out
