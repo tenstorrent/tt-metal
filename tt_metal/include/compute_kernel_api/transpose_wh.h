@@ -27,18 +27,16 @@ namespace ckernel {
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(true, true, icb) ));
-
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
-    PACK(( llk_pack_init() ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
+    PACK(( llk_pack_init() ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
     UNPACK(( llk_setup_operands() ));
-
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)  ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<>(0, true) ));
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)  ));
 }
 
 /**

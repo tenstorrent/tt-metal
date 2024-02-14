@@ -27,8 +27,8 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
-    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>(ocb) ));
 
@@ -50,8 +50,8 @@ ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t bl
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<SYNC>() ));
 
-    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>(ocb) ));
 }
