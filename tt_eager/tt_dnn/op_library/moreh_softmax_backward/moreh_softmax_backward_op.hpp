@@ -70,10 +70,11 @@ struct MorehSoftmaxBackward {
     const CoreRange core_range;  // unused for now
     const MorehSoftmaxBackwardOp op;
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy;
+    const MemoryConfig output_mem_config;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     MorehSoftmaxBackwardOpParallelizationStrategy get_parallelization_strategy(
@@ -88,23 +89,26 @@ struct MorehSoftmaxBackward {
 Tensor moreh_softmax_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
-    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
+    std::optional<Tensor> input_grad_tensor = std::nullopt,
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor moreh_softmin_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
-    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
+    std::optional<Tensor> input_grad_tensor = std::nullopt,
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor moreh_logsoftmax_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
-    const Tensor &input_grad_tensor,
     uint32_t dim,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE);
+    std::optional<Tensor> input_grad_tensor = std::nullopt,
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 }  // namespace operations
