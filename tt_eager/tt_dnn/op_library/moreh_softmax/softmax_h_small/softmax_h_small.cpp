@@ -147,10 +147,11 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
-        TT_ASSERT(input_buffers.size() == 2);
+        TT_ASSERT(input_buffers.size() == 1);
+        TT_ASSERT(output_buffers.size() == 1);
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto dst_dram_buffer = input_buffers.at(1);
+        auto dst_dram_buffer = output_buffers.at(0);
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};
