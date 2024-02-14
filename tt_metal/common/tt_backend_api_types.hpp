@@ -30,15 +30,28 @@ enum class DataFormat : uint8_t {
     Bfp4_b = 7,
     Bfp2_b = 15,
     Lf8 = 10,
-    UInt16 = 12,
+    Fp8_e4m3 = 0x1A,
+    UInt16 = 9,
     Int8 = 14,
+    UInt8 = 30,
     Tf32 = 4,
-    UInt32 = 8,
+    Int32 = 8,
+    UInt32 = 12,
     RawUInt8 = 0xf0,
     RawUInt16 = 0xf1,
     RawUInt32 = 0xf2,
     Invalid = 0xff
 };
+
+/**
+ * @brief Evaluates to true if the data format is an integer type.
+ */
+inline bool is_integer_format(DataFormat format) {
+    return (
+        (format == DataFormat::Int32) || (format == DataFormat::Int8) ||
+        (format == DataFormat::UInt16) || (format == DataFormat::UInt8) ||
+        (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
+}
 
 inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
     switch (format) {

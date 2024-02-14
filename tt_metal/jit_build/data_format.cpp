@@ -1,7 +1,6 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #include "data_format.hpp"
 #include <unordered_map>
 #include <set>
@@ -22,8 +21,11 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::RawUInt8,
     DataFormat::Tf32,
     DataFormat::Lf8,
+    DataFormat::Fp8_e4m3,
     DataFormat::Int8,
-    // DataFormat::Int32,
+    DataFormat::UInt8,
+    DataFormat::Int32,
+    DataFormat::UInt16,
 };
 
 static const std::unordered_map<DataFormat, DataFormat> CONVERT_EXP_WIDTH = {
@@ -70,9 +72,10 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_OPERANDS; i++) {
         // Special case where Float32 can pair with any exponent precision, skip checking
-        if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32)
-        || (data_format[i] == DataFormat::RawUInt16) || (data_format[i] == DataFormat::RawUInt8)
-        || (data_format[i] == DataFormat::UInt16) || (data_format[i] == DataFormat::UInt32)) {
+        if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
+            (data_format[i] == DataFormat::Int32) || (data_format[i] == DataFormat::RawUInt16) ||
+            (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16) ||
+            (data_format[i] == DataFormat::UInt32)) {
             continue;
         }
 
@@ -261,7 +264,12 @@ const DataFormat get_single_pack_src_format(
     bool fp32_dest_acc_en,
     bool int_fpu_en,
     tt::ARCH arch) {
-    DataFormat pack_src_format = DataFormat::Invalid;
+
+    if(input_format == DataFormat::Fp8_e4m3) {
+        TT_FATAL(arch == tt::ARCH::BLACKHOLE, "Fp8 E4M3 mode only available in Blackhole");
+    }
+
+    DataFormat pack_src_format;
     const ExpPrecision input_exp_width = get_exp_precison(input_format);
     const ExpPrecision output_exp_width = get_exp_precison(output_format);
     const ExpPrecision fp32_condition_exp_width = get_exp_precison(unpack_conditional_dst_format);
@@ -277,6 +285,8 @@ const DataFormat get_single_pack_src_format(
         }
     } else if ((input_format == DataFormat::Invalid) || (output_format == DataFormat::Invalid)) {
         pack_src_format =  DataFormat::Invalid;
+    } else if (input_format == DataFormat::Fp8_e4m3) {
+        pack_src_format =  DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
         TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Dest Fp32 mode is not supported for arch grayskull");
 
@@ -286,6 +296,10 @@ const DataFormat get_single_pack_src_format(
             pack_src_format = output_format;
         } else if(output_format == DataFormat::Float16){
             pack_src_format = DataFormat::Float16_b;
+        } else if(output_format == DataFormat::Int32){
+            pack_src_format = DataFormat::Int32;
+        } else if(output_format == DataFormat::UInt16){
+            pack_src_format = DataFormat::UInt16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", output_format);
         }
@@ -293,11 +307,13 @@ const DataFormat get_single_pack_src_format(
         TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
         // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
-        // if (tt::is_integer_format(output_format)) {
-        //     pack_src_format = output_format;
-        // } else {
-        //     pack_src_format = DataFormat::Float32;
-        // }
+        if (tt::is_integer_format(output_format)) {
+            pack_src_format = output_format;
+        } else {
+            pack_src_format = DataFormat::Float32;
+        }
+    } else if (tt::is_integer_format(output_format)) {
+        pack_src_format = output_format;
     } else if ( (!is_input_or_output_float32 && input_exp_width == output_exp_width ) || condition_exp_float32_match_output || output_format == DataFormat::Float32) {
         if (is_input_or_output_float32) {
             //Assert that pack_src_format has same exp width as input format
