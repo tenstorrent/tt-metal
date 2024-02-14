@@ -160,7 +160,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
             block_sharding = num_cores_nhw == num_cores_w
             if not block_sharding:
-                assert num_cores_w == 12
+                assert num_cores_w == 12 or num_cores_w == 8
                 if num_cores_nhw >= num_cores_w:
                     num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
                     assert num_cores_h >= num_cores_height_excluding_remainder_last_row

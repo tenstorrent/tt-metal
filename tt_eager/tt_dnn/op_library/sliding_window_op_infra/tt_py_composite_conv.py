@@ -99,6 +99,7 @@ def determine_parallel_config(
     input_height,
     input_width,
     sliding_window_op_params,
+    device,
     config_override={},
 ):
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
@@ -107,8 +108,8 @@ def determine_parallel_config(
     conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
     conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
     conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
-    # max grid size of grayskull is (12,9). TODO: pass this as an argument
-    max_grid_size = {"x": 12, "y": 9}
+    device_grid_size = device.compute_with_storage_grid_size()
+    max_grid_size = {"x": device_grid_size.x, "y": device_grid_size.y}
     if is_1d_systolic:
         max_num_cores = max_grid_size["x"] * max_grid_size["y"]
         actual_num_cores = find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
@@ -387,6 +388,7 @@ class TTPyCompositeConv(TTPyOp):
             input_height,
             input_width,
             sliding_window_op_params,
+            device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
 
