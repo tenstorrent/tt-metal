@@ -10,33 +10,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt::tt_metal;
-class CommandQueueFixture : public ::testing::Test {
-   protected:
-    tt::ARCH arch_;
-    Device* device_;
-    uint32_t pcie_id;
-    std::unique_ptr<CommandQueue> cmd_queue;
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-
-        const int device_id = 0;
-        this->device_ = tt::tt_metal::CreateDevice(device_id);
-        this->cmd_queue = std::make_unique<CommandQueue> ( device_, 0);
-        this->pcie_id = 0;
-    }
-
-    void TearDown() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-            tt::tt_metal::CloseDevice(this->device_);
-        }
-    }
-};
-
 
 class CommandQueueMultiDeviceFixture : public ::testing::Test {
    protected:
@@ -100,6 +73,33 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
         if (eth_cores.size() == 0) {
             GTEST_SKIP();
         }
+    }
+
+    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
+
+    std::vector<tt::tt_metal::Device*> devices_;
+    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    tt::ARCH arch_;
+    size_t num_devices_;
+};
+
+class CommandQueueSingleCardFixture : public ::testing::Test {
+   protected:
+    void SetUp() override {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            GTEST_SKIP();
+        }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+
+        const chip_id_t mmio_device_id = 0;
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        for (const auto &[id, device] : reserved_devices_) {
+            devices_.push_back(device);
+        }
+
+        num_devices_ = reserved_devices_.size();
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
