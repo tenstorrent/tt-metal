@@ -60,8 +60,10 @@ void multicore_eth_cb_pop_front(
 
 FORCE_INLINE
 void eth_db_acquire(volatile uint32_t *semaphore, uint64_t noc_encoding) {
+    DEBUG_STATUS('D', 'B', 'A', 'W');
     while (semaphore[0] == 0 and routing_info->routing_enabled and erisc_info->launch_user_kernel == 0) {
     }
+    DEBUG_STATUS('D', 'B', 'A', 'D');
 }
 
 void __attribute__((section("code_l1"))) risc_init() {
@@ -81,6 +83,7 @@ void __attribute__((section("code_l1"))) router_init() {
 }
 
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
+    DEBUG_STATUS('I');
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();
@@ -89,14 +92,14 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
-    DEBUG_STATUS('I');
     ncrisc_noc_full_sync();
+    DEBUG_STATUS('R', 'E', 'W');
     while (routing_info->routing_enabled != 1) {
         internal_::risc_context_switch();
     }
+    DEBUG_STATUS('R', 'E', 'D');
 
     router_init();
-    DEBUG_STATUS('R', 'I');
 
     volatile tt_l1_ptr uint32_t *eth_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
@@ -114,11 +117,12 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         if (erisc_info->launch_user_kernel == 1) {
+            DEBUG_STATUS('R');
             kernel_profiler::init_profiler();
             kernel_profiler::mark_time(CC_MAIN_START);
-            DEBUG_STATUS('K');
             kernel_init();
             kernel_profiler::mark_time(CC_MAIN_END);
+            DEBUG_STATUS('D');
         }
         if (my_routing_mode == EthRouterMode::FD_SRC) {
             eth_db_acquire(eth_db_semaphore_addr, ((uint64_t)eth_router_noc_encoding << 32));
@@ -172,9 +176,11 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
 
             // Block until consumer can accept new command
             // `num_pages_transferred` tracks whether the remote command processor received all the data
+            DEBUG_STATUS('C', 'N', 'C', 'W');
             while (eth_db_semaphore_addr[0] == 0 and num_pages_transferred == 0) {
                 internal_::risc_context_switch();
             } // Check that there is space in consumer to send command
+            DEBUG_STATUS('C', 'N', 'C', 'D');
 
             // Send the full command header
             constexpr uint32_t consumer_cmd_base_addr = L1_UNRESERVED_BASE;

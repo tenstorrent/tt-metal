@@ -42,5 +42,8 @@ void watcher_server_clear_error_flag();
 // Helper function to clear the watcher log file
 void watcher_clear_log();
 
+// Helper function to get the current watcher log file name/path
+string watcher_get_log_file_name();
+
 } // namespace llrt
 } // namespace tt

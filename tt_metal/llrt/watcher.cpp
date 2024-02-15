@@ -68,6 +68,7 @@ static std::atomic<bool> enabled = false;
 static std::mutex watch_mutex;
 static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
 static string logfile_path = "";
+static string logfile_name = "watcher.log";
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
 static std::vector<string> kernel_names;
@@ -104,7 +105,7 @@ static FILE * create_file(const string& log_path) {
     FILE *f;
 
     const char *fmode = OptionsG.get_watcher_append()? "a" : "w";
-    string fname = log_path + "watcher.log";
+    string fname = log_path + watcher::logfile_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
     }
@@ -446,8 +447,9 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
     // Ethernet cores have a different mailbox base addr
     bool is_eth_core = tt::llrt::is_ethernet_core(core, wdev->device_id_);
     uint64_t mailbox_addr = MEM_MAILBOX_BASE;
-    if (is_eth_core)
+    if (is_eth_core) {
         mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
+    }
 
     std::vector<uint32_t> data;
     data = read_hex_vec_from_core(wdev->device_id_, core, mailbox_addr, sizeof(mailboxes_t));
@@ -775,6 +777,10 @@ void watcher_server_clear_error_flag() {
 
 void watcher_clear_log() {
     watcher::logfile = watcher::create_file(watcher::logfile_path);
+}
+
+string watcher_get_log_file_name() {
+    return watcher::logfile_path + watcher::logfile_name;
 }
 
 } // namespace llrt

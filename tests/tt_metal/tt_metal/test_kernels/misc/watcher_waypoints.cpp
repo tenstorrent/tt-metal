@@ -9,7 +9,7 @@
 // for a set number of cycles.
 void hacky_sync(uint32_t sync_num, uint32_t wait_cycles, uint32_t sync_addr) {
     volatile tt_l1_ptr uint32_t* sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_addr);
-#if defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC)
     riscv_wait(wait_cycles);
 #if defined(COMPILE_FOR_BRISC)
     // ERISC doesn't have to sync, doesn't have the L1 buffer
@@ -23,7 +23,7 @@ void hacky_sync(uint32_t sync_num, uint32_t wait_cycles, uint32_t sync_addr) {
 /*
  * A test for the watcher waypointing feature.
 */
-#if defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
@@ -41,7 +41,7 @@ void MAIN {
     hacky_sync(3, sync_wait_cycles, sync_address);
     DEBUG_STATUS('C', 'C', 'C', 'C');
     hacky_sync(4, sync_wait_cycles, sync_address);
-#if defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 }
 #else
 }
