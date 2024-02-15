@@ -81,14 +81,23 @@ class TtLlamaQKV_optimized(torch.nn.Module):
 
             # Concatenate Q, K, V for the current device
             qkv = torch.cat(qkv_interleaved, dim=-1)
+
+            # pad 6 heads per group so that we can use 64 cores
+            qkv = torch.cat([qkv, torch.zeros(qkv.shape[0], self.n_local_kv_heads * 6 * self.head_dim)], dim=-1)
+
             # Append the processed tensor to the list, assuming torch2tt_tensor is a defined method
             self.qkv_list.append(
+                # tt_lib.tensor.pad(
                 torch2tt_tensor(
                     qkv,
                     self.devices[i],
                     tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
                     tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
-                )
+                ),
+                # output_tensor_shape = [1, 1, self.hidden_size, self.head_dim*self.n_local_kv_heads*16],
+                # input_tensor_start = [0,0,0,0],
+                # pad_value = 0,
+                # )
             )
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
@@ -121,15 +130,27 @@ class TtLlamaQKV_optimized(torch.nn.Module):
                 output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
             )
 
+            qkv_proj = tt_lib.tensor.sharded_to_interleaved(
+                qkv_proj, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            )
+
+            qkv_proj = tt_lib.tensor.unpad(
+                qkv_proj,
+                output_tensor_start=[0, 0, 0, 0],
+                output_tensor_end=[0, 0, self.max_batch_size - 1, self.head_dim * self.n_local_kv_heads * 10 - 1],
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                # output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            )
+
             attn_output.append(qkv_proj)
 
             x[i].deallocate(True)
 
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
-            for i in range(len(attn_output)):
-                attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
-                    attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-                )
+            # for i in range(len(attn_output)):
+            #     attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+            #         attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            #     )
             for i in range(len(attn_output)):
                 attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
                     attn_output[i], sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
