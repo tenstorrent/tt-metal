@@ -11,6 +11,7 @@
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_dnn/op_library/fold/fold_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
@@ -290,6 +291,22 @@ namespace tt::tt_metal::detail{
                 "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
                 "pad_value", "Value to pad input tensor", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("fold", &fold,
+            py::arg("input").noconvert(), py::arg("stride_h"), py::arg("stride_w"), R"doc(
+            Fold TT Tensor.
+
+            Input tensor must be on TT accelerator device, in ROW_MAJOR.
+
+            Output tensor will be on TT accelerator device, in ROW_MAJOR.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input tensor", "Tensor", "Tensor of shape [N, H, W, C]", "Yes"
+                "stride_h", "Stride along the H-dimension", "int", "", "Yes"
+                "stride_w", "Stride along the W-dimension", "int", "", "Yes"
         )doc");
 
         // *** broadcast and reduce ***
