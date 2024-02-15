@@ -307,7 +307,7 @@ def resnetBlock2D(
             # reallocate_halo_output=(out_channels, out_channels, input_height, input_width) == (640, 640, 64, 64)
         )
 
-        run_ttnn_conv_with_pre_and_post_tensor_formatting(
+        hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
             device, conv2, hidden_states, batch_size, input_height, input_width, out_channels
         )
     else:
