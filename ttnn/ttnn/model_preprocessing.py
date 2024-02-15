@@ -56,7 +56,6 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
         bias=bias,
         reader_patterns_cache=None,
         move_weights_to_device=False,
-        device=None,
     )
 
     parameters = {}
@@ -383,7 +382,7 @@ class MaxPool2dArgs(ModuleArgs):
         return super().__repr__()
 
 
-def infer_ttnn_module_args(*, model, run_model):
+def infer_ttnn_module_args(*, model, run_model, device):
     if run_model is None:
         return None
 
@@ -430,6 +429,7 @@ def infer_ttnn_module_args(*, model, run_model):
                         use_1d_systolic_array=True,
                         enable_auto_formatting=False,
                         conv_blocking_and_parallelization_config_override={},
+                        device=device,
                     )
                 elif isinstance(operation.module, torch.nn.MaxPool2d):
                     ttnn_module_args[module_name] = MaxPool2dArgs(
@@ -468,14 +468,14 @@ def merge_ttnn_module_args_into_parameters(parameters: dict, ttnn_module_args: d
 
 
 def _initialize_model_and_preprocess_parameters(
-    *, initialize_model, run_model, convert_to_ttnn, custom_preprocessor, prefix
+    *, initialize_model, run_model, convert_to_ttnn, custom_preprocessor, device, prefix
 ):
     model = initialize_model()
     if model.training:
         logger.warning("Putting the model in eval mode")
         model.eval()
 
-    ttnn_module_args = infer_ttnn_module_args(model=model, run_model=run_model)
+    ttnn_module_args = infer_ttnn_module_args(model=model, run_model=run_model, device=device)
     parameters = convert_torch_model_to_ttnn_model(
         model,
         convert_to_ttnn=convert_to_ttnn,
@@ -532,6 +532,7 @@ def preprocess_model(
             run_model=run_model,
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
+            device=device,
             prefix=prefix,
         )
 
@@ -569,6 +570,7 @@ def preprocess_model(
                 run_model=run_model,
                 convert_to_ttnn=convert_to_ttnn,
                 custom_preprocessor=custom_preprocessor,
+                device=device,
                 prefix=prefix,
             )
 
@@ -600,7 +602,6 @@ def preprocess_model(
                         bias=model.bias if "bias" in model else None,
                         reader_patterns_cache=reader_patterns_cache,
                         using_parameters_cache=True,
-                        device=device,
                     )
                 elif isinstance(model.ttnn_module_args, MaxPool2dArgs):
                     return ttnn.MaxPool2d(
