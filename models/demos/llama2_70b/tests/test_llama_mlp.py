@@ -145,7 +145,7 @@ def run_test_LlamaMLP_inference(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED", "BFLOAT8_B-SHARDED"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT8_B-DRAM"))
 def test_LlamaMLP_inference(
     model_version,
     batch,

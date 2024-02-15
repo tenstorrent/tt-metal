@@ -152,7 +152,7 @@ def run_test_LlamaNorm(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaNorm_inference(
     model_version,
     batch,

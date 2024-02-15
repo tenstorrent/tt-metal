@@ -9,9 +9,7 @@ from loguru import logger
 import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
 from models.demos.llama2_70b.reference.llama.model import apply_rotary_emb, precompute_freqs_cis
-from models.demos.llama2_70b.tt.model_config import (
-    get_model_config,
-)
+from models.demos.llama2_70b.tt.model_config import get_model_config
 from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
