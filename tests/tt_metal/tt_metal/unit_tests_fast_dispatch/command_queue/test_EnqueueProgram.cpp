@@ -325,9 +325,6 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueue) {
         EnqueueProgram(*this->cmd_queue, program, false);
         Finish(*this->cmd_queue);
     }
-
-    // Block until CQ is drained, without it it's unsafe to exit the scope
-    this->cmd_queue->wait_until_empty();
 }
 
 }

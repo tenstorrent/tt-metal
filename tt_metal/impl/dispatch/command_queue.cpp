@@ -1186,7 +1186,8 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandQueueInterface{
-        .type = EnqueueCommandType::FINISH
+        .type = EnqueueCommandType::FINISH,
+        .blocking = true
     });
 }
 
@@ -1257,12 +1258,18 @@ CommandQueue::~CommandQueue() {
 }
 
 void CommandQueue::wait_until_empty() {
+    log_trace(tt::LogDispatch, "CQ{} WFI start", cq_id);
+    // Insert a token command to flush all prior commands
+    worker_queue.push(CommandQueueInterface{
+        .type = EnqueueCommandType::INVALID
+    });
     while (true) {
         if (worker_queue.empty()) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
+    log_trace(tt::LogDispatch, "CQ{} WFI complete", cq_id);
 }
 
 void CommandQueue::set_mode(const CommandQueueMode& mode_) {
@@ -1301,8 +1308,7 @@ void CommandQueue::run_worker() {
             if (worker_state == CommandQueueState::TERMINATE) {
                 break;
             }
-            // TODO: profile this to see whether a sleep is needed
-            // std::this_thread::sleep_for(std::chrono::microseconds(10));
+            std::this_thread::yield();
         } else {
             auto command = worker_queue.pop();
             run_command_impl(*command);
@@ -1311,16 +1317,19 @@ void CommandQueue::run_worker() {
 }
 
 void CommandQueue::run_command(const CommandQueueInterface& command) {
-    tt::log_trace(tt::LogDispatch, "CQ{} received {} in {} mode", cq_id, command.type, async_mode() ? "ASYNC" : "PASSTHROUGH");
+    log_trace(tt::LogDispatch, "CQ{} received {} in {} mode", cq_id, command.type, async_mode() ? "ASYNC" : "PASSTHROUGH");
     if (async_mode()) {
         worker_queue.push(command);
+        if (command.blocking.has_value() && *command.blocking == true) {
+            wait_until_empty();
+        }
     } else {
         run_command_impl(command);
     }
 }
 
 void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
-    tt::log_trace(tt::LogDispatch, "CQ{} running {}", cq_id, command.type);
+    log_trace(tt::LogDispatch, "CQ{} running {}", cq_id, command.type);
     switch (command.type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
@@ -1342,9 +1351,12 @@ void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
         case EnqueueCommandType::FINISH:
             FinishImpl(*this);
             break;
+        case EnqueueCommandType::INVALID:
+            break;
         default:
             TT_THROW("Invalid command type");
     }
+    // log_trace(tt::LogDispatch, "CQ{} running {} complete", cq_id, command.type);
 }
 
 }  // namespace tt::tt_metal
