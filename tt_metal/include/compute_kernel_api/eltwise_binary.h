@@ -35,7 +35,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb=16)
     MATH(( llk_math_pack_sync_init<SYNC>() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
-    PACK(( llk_pack_init() ));
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
 }
