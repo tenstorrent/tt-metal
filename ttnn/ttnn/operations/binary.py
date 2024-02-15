@@ -6,8 +6,6 @@ from typing import Union, Optional
 
 import sys
 
-import tt_lib as ttl
-
 import ttnn
 
 
@@ -46,11 +44,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
     ) -> ttnn.Tensor:
         original_shape = input_tensor.shape
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-
-        ttl_output_tensor = ttl_binary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)
-
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttl_binary_function(input_tensor, parameter, output_mem_config=memory_config)
         output_tensor = ttnn.reshape(output_tensor, original_shape)
         return output_tensor
 
@@ -63,7 +57,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
 TTL_BINARY_FUNCTIONS = [
     (
         "pow",
-        ttl.tensor.pow,
+        ttnn.ttl.tensor.pow,
         r"""pow(input_tensor: ttnn.Tensor, exponent: Union[ttnn.Tensor, float, int]) -> ttnn.Tensor
 
         Takes the power of each element in input with exponent and returns a tensor with the result.
@@ -252,18 +246,12 @@ def sub(
 
     original_shape = input_tensor_a.shape
     input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-    ttl_input_tensor_a = input_tensor_a.value
-
-    if ttl_input_tensor_a.storage_type() != ttl.tensor.StorageType.DEVICE:
-        raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.sub_unary(
-                ttl_input_tensor_a,
-                input_tensor_b * alpha,
-                output_mem_config=memory_config,
-            )
+        output_tensor = ttnn.ttl.tensor.sub_unary(
+            input_tensor_a,
+            input_tensor_b * alpha,
+            output_mem_config=memory_config,
         )
         return ttnn.reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, ttnn.Tensor):
@@ -276,58 +264,45 @@ def sub(
             *_, height_b, width_b = input_shape_b
 
         input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-        ttl_input_tensor_b = input_tensor_b.value
-        if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
-            raise RuntimeError("input_tensor_a must be on device!")
     else:
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
-    ttl_input_tensor_b = input_tensor_b.value
-
     if alpha != 1:
-        ttl_input_tensor_b = ttl.tensor.mul_unary(
-            ttl_input_tensor_b,
+        input_tensor_b = ttnn.ttl.tensor.mul_unary(
+            input_tensor_b,
             alpha,
             output_mem_config=memory_config,
         )
 
     if height_b == 1 and width_b == 1:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                ttl.tensor.BcastOpMath.SUB,
-                ttl.tensor.BcastOpDim.HW,
-                output_mem_config=memory_config,
-            )
+        output_tensor = ttnn.ttl.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.ttl.tensor.BcastOpMath.SUB,
+            ttnn.ttl.tensor.BcastOpDim.HW,
+            output_mem_config=memory_config,
         )
     elif height_b == 1:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                ttl.tensor.BcastOpMath.SUB,
-                ttl.tensor.BcastOpDim.H,
-                output_mem_config=memory_config,
-            )
+        output_tensor = ttnn.ttl.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.ttl.tensor.BcastOpMath.SUB,
+            ttnn.ttl.tensor.BcastOpDim.H,
+            output_mem_config=memory_config,
         )
     elif width_b == 1:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                ttl.tensor.BcastOpMath.SUB,
-                ttl.tensor.BcastOpDim.W,
-                output_mem_config=memory_config,
-            )
+        output_tensor = ttnn.ttl.tensor.bcast(
+            input_tensor_a,
+            input_tensor_b,
+            ttnn.ttl.tensor.BcastOpMath.SUB,
+            ttnn.ttl.tensor.BcastOpDim.W,
+            output_mem_config=memory_config,
         )
     else:
-        output_tensor = ttnn.Tensor(
-            ttl.tensor.sub(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                output_mem_config=memory_config,
-            )
+        output_tensor = ttnn.ttl.tensor.sub(
+            input_tensor_a,
+            input_tensor_b,
+            output_mem_config=memory_config,
         )
 
     output_tensor = ttnn.reshape(output_tensor, original_shape)
@@ -415,17 +390,15 @@ def mul(
 
     ttl_input_tensor_a = input_tensor_a.value
 
-    if not ttnn.has_storage_type_of(input_tensor_a, ttl.tensor.StorageType.DEVICE):
+    if not ttnn.has_storage_type_of(input_tensor_a, ttnn.ttl.tensor.StorageType.DEVICE):
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
         return ttnn.reshape(
-            ttnn.Tensor(
-                ttl.tensor.mul_unary(
-                    ttl_input_tensor_a,
-                    input_tensor_b,
-                    output_mem_config=memory_config,
-                )
+            ttnn.ttl.tensor.mul_unary(
+                ttl_input_tensor_a,
+                input_tensor_b,
+                output_mem_config=memory_config,
             ),
             original_shape,
         )
@@ -445,46 +418,40 @@ def mul(
 
     if height_b == 1 and width_b == 1:
         return ttnn.reshape(
-            ttnn.Tensor(
-                ttl.tensor.bcast(
-                    ttl_input_tensor_a,
-                    ttl_input_tensor_b,
-                    ttl.tensor.BcastOpMath.MUL,
-                    ttl.tensor.BcastOpDim.HW,
-                    output_mem_config=memory_config,
-                ),
-                original_shape,
-            )
+            ttnn.ttl.tensor.bcast(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttnn.ttl.tensor.BcastOpMath.MUL,
+                ttnn.ttl.tensor.BcastOpDim.HW,
+                output_mem_config=memory_config,
+            ),
+            original_shape,
         )
     elif height_b == 1:
         return ttnn.reshape(
-            ttnn.Tensor(
-                ttl.tensor.bcast(
-                    ttl_input_tensor_a,
-                    ttl_input_tensor_b,
-                    ttl.tensor.BcastOpMath.MUL,
-                    ttl.tensor.BcastOpDim.H,
-                    output_mem_config=memory_config,
-                )
+            ttnn.ttl.tensor.bcast(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttnn.ttl.tensor.BcastOpMath.MUL,
+                ttnn.ttl.tensor.BcastOpDim.H,
+                output_mem_config=memory_config,
             ),
             original_shape,
         )
     elif width_b == 1:
         return ttnn.reshape(
-            ttnn.Tensor(
-                ttl.tensor.bcast(
-                    ttl_input_tensor_a,
-                    ttl_input_tensor_b,
-                    ttl.tensor.BcastOpMath.MUL,
-                    ttl.tensor.BcastOpDim.W,
-                    output_mem_config=memory_config,
-                )
+            ttnn.ttl.tensor.bcast(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttnn.ttl.tensor.BcastOpMath.MUL,
+                ttnn.ttl.tensor.BcastOpDim.W,
+                output_mem_config=memory_config,
             ),
             original_shape,
         )
 
     return ttnn.reshape(
-        ttnn.Tensor(ttl.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config)),
+        ttnn.ttl.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config),
         original_shape,
     )
 
@@ -573,13 +540,13 @@ def add_and_apply_activation(
     fused_activations = []
     if activation is not None:
         activations_map = {
-            "relu": [ttl.tensor.FusibleActivation.RELU],
+            "relu": [ttnn.ttl.tensor.FusibleActivation.RELU],
         }
         fused_activations = activations_map[activation]
 
     input_tensor_a = input_tensor_a.value
     input_tensor_b = input_tensor_b.value
-    output = ttl.tensor.add_without_autoformat(
+    output = ttnn.ttl.tensor.add_without_autoformat(
         input_tensor_a,
         input_tensor_b,
         fused_activations=fused_activations,
@@ -587,7 +554,7 @@ def add_and_apply_activation(
         output_dtype=dtype,
         in_place=False,
     )
-    return ttnn.Tensor(output)
+    return output
 
 
 @ttnn.register_operation(
@@ -626,13 +593,11 @@ def add_and_apply_activation_(
     fused_activations = []
     if activation is not None:
         activations_map = {
-            "relu": [ttl.tensor.FusibleActivation.RELU],
+            "relu": [ttnn.ttl.tensor.FusibleActivation.RELU],
         }
         fused_activations = activations_map[activation]
 
-    input_tensor_a = input_tensor_a.value
-    input_tensor_b = input_tensor_b.value
-    output = ttl.tensor.add_without_autoformat(
+    output = ttnn.ttl.tensor.add_without_autoformat(
         input_tensor_a,
         input_tensor_b,
         fused_activations=fused_activations,
@@ -640,7 +605,7 @@ def add_and_apply_activation_(
         output_dtype=dtype,
         in_place=True,
     )
-    return ttnn.Tensor(output)
+    return output
 
 
 __all__ = []

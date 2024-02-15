@@ -518,12 +518,15 @@ def preprocess_model(
         * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
     """
 
+    if not ttnn.TTNN_ENABLE_MODEL_CACHE:
+        logger.warning("ttnn model cache can be enabled using TTNN_ENABLE_MODEL_CACHE=True")
+
     if convert_to_ttnn is None:
 
         def convert_to_ttnn(model, full_name):
             return True
 
-    if model_name is None:
+    if model_name is None or not ttnn.TTNN_ENABLE_MODEL_CACHE:
         model = _initialize_model_and_preprocess_parameters(
             initialize_model=initialize_model,
             run_model=run_model,

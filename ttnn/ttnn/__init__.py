@@ -2,11 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pathlib
 
 TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
 MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
 TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
+
+
+def get_bool_env_var(name, default):
+    variable = os.environ.get("TTNN_ENABLE_MODEL_CACHE", f"{default}")
+    if variable == "True":
+        return True
+    elif variable == "False":
+        return False
+    else:
+        raise RuntimeError(f'The value has to be either "True" or "False"')
+
+
+TTNN_ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
 
 import tt_lib as ttl
 import ttnn._ttnn
@@ -56,6 +70,8 @@ from ttnn.decorators import (
     override_pcc_of_debug_decorator,
     disable_validate_decorator,
 )
+
+import ttnn.ttl as ttl
 
 from ttnn.device import open, close
 

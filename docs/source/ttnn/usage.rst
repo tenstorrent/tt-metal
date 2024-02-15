@@ -18,6 +18,7 @@ Basic Examples
     tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
     torch_output_tensor = ttnn.to_torch(tensor)
 
+
 2. Running an operation on the device
 --------------------------------------
 
@@ -36,7 +37,29 @@ Basic Examples
 
     ttnn.close(device)
 
-3. Enabling program cache
+
+3. Using __getitem__ to slice the tensor
+----------------------------------------
+
+.. code-block:: python
+
+    # Note that this not a view, unlike torch tensor
+
+    import torch
+    import ttnn
+
+    device_id = 0
+    device = ttnn.open(device_id)
+
+    torch_input_tensor = torch.rand(3, 96, 128, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = input_tensor[:1, 32:64, 32:64] # this particular slice will run on the device
+    torch_output_tensor = ttnn.to_torch(output_tensor)
+
+    ttnn.close(device)
+
+
+4. Enabling program cache
 --------------------------------------
 
 .. code-block:: python
@@ -74,7 +97,7 @@ Basic Examples
     ttnn.close(device)
 
 
-4. Debugging intermediate tensors
+5. Debugging intermediate tensors
 ---------------------------------
 
 .. code-block:: python
@@ -95,9 +118,7 @@ Basic Examples
     ttnn.close(device)
 
 
-
-
-5. Tracing the graph of operations
+6. Tracing the graph of operations
 ----------------------------------
 
 .. code-block:: python
@@ -117,43 +138,22 @@ Basic Examples
 
     ttnn.close(device)
 
-6. Registering a function as ttnn operation
--------------------------------------------
+
+7. Using ttl operation in ttnn
+------------------------------
 
 .. code-block:: python
 
     import torch
     import ttnn
-    import tt_lib as ttl
 
-    # Do not pass in or return "tt_lib.tensor.Tensor" from ttnn-registered functions
-
-    def _new_operation_validate_input_tensors(operation_name, input_tensor: ttnn.Tensor):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-    @ttnn.register_operation(name="new_operation", validate_input_tensors=_new_operation_validate_input_tensors)
-    def new_operation(input_tensor: ttnn.Tensor):
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl.tensor.exp(ttl_input_tensor)
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
-        return ttnn.reshape(output_tensor, original_shape)
 
     device_id = 0
     device = ttnn.open(device_id)
 
-    torch_input_tensor = torch.rand(2, 4, dtype=torch.float32)
+    torch_input_tensor = torch.rand(1, 1, 2, 4, dtype=torch.float32)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = new_operation(input_tensor)
+    output_tensor = ttnn.ttl.tensor.exp(input_tensor) # equivalent to ttnn.Tensor(ttl.tensor.exp(input_tensor.value))
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
     ttnn.close(device)
