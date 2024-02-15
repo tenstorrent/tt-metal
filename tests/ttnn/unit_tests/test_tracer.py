@@ -92,20 +92,20 @@ def test_ttnn_functional_bert(device, use_program_cache, model_name, batch_size,
     else:
         raise ValueError(f"Unknown functional_bert: {functional_bert}")
 
+    parameters = preprocess_model_parameters(
+        model_name=tt_model_name,
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
+            model_name, torchscript=False
+        ).eval(),
+        custom_preprocessor=functional_bert.custom_preprocessor,
+        device=device,
+    )
+
     with trace():
         input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
         torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
         torch_attention_mask = (
             torch.zeros(1, sequence_size) if functional_bert == ttnn_optimized_functional_bert else None
-        )
-
-        parameters = preprocess_model_parameters(
-            model_name=tt_model_name,
-            initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-                model_name, torchscript=False
-            ).eval(),
-            custom_preprocessor=functional_bert.custom_preprocessor,
-            device=device,
         )
 
         ttnn_bert_inputs = functional_bert.preprocess_inputs(

@@ -308,3 +308,39 @@ def test_height_sharded_matmul(device):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("batch_size", [1, 8])
+def test_matmul_with_core_grid(device, batch_size):
+    torch.manual_seed(0)
+
+    m = 384
+    k = 1024
+    n = 1024
+
+    torch_input_tensor_a = torch.randn((batch_size, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if batch_size == 1:
+        with pytest.raises(RuntimeError) as exception:
+            output_tensor = ttnn.matmul(
+                input_tensor_a,
+                input_tensor_b,
+                core_grid=(batch_size, 6),
+            )
+        assert "ttnn.matmul: ttl.operations.primary.matmul failed" in str(exception.value)
+    else:
+        output_tensor = ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            core_grid=(batch_size, 6),
+        )
+
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

@@ -6,6 +6,8 @@ import math
 import pathlib
 from typing import Union, Tuple, Optional
 
+from loguru import logger
+
 import tt_lib as ttl
 
 import ttnn
@@ -24,26 +26,107 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 
 
 @ttnn.register_operation(name="ttnn.ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors)
-def __getitem__(self: ttnn.Tensor, slices) -> ttnn.Tensor:
-    if self.layout != ttnn.ROW_MAJOR_LAYOUT:
-        raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
+def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
+    input_rank = len(input_tensor.shape)
+    input_dtype = input_tensor.dtype
+    input_layout = input_tensor.layout
+    if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+        input_device = input_tensor.device
+    else:
+        input_device = None
+
+    if isinstance(slices, slice):
+        slices = (slices,)
+
+    if isinstance(slices, tuple):
+        if len(slices) > input_rank:
+            raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
+        while len(slices) < input_rank:
+            slices = slices + (slice(None, None, None),)
+
+    def are_valid_device_slices(slices):
+        if not isinstance(slices, tuple):
+            return False
+
+        def is_valid_slice(s, multiple_of=1):
+            if not isinstance(s, slice):
+                return False
+            if s.start is not None and s.start % multiple_of != 0:
+                return False
+            if s.stop is not None and s.stop % multiple_of != 0:
+                return False
+            if s.step is not None and s.stop != 1:
+                return False
+            if s.start is not None and s.end is not None:
+                if s.stop - s.start:
+                    return False
+            return True
+
+        if len(slices) < 2:
+            breakpoint()
+            return False
+
+        *batch_slices, height_slice, width_slice = slices
+
+        for batch_slice in batch_slices:
+            if not is_valid_slice(batch_slice):
+                return False
+
+        if not is_valid_slice(height_slice, ttnn.TILE_SIZE):
+            return False
+        if not is_valid_slice(width_slice, ttnn.TILE_SIZE):
+            return False
+
+        return True
+
+    # TODO(arakhmati): add support for running ROW_MAJOR_LAYOUT slicing on device. The underlying op already supports it.
+    if (
+        ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE)
+        and input_layout == ttnn.TILE_LAYOUT
+        and input_rank <= 4
+        and are_valid_device_slices(slices)
+    ):
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+
+        while len(slices) != 4:
+            slices = (slice(None, None, None),) + slices
+        slice_start = [s.start if s.start is not None else 0 for s in slices]
+        slice_end = [
+            (s.stop if s.stop is not None else input_tensor.shape[index]) - 1 for index, s in enumerate(slices)
+        ]
+        ttl_input_tensor = input_tensor.value
+        ttl_output_tensor = ttl.tensor.unpad(ttl_input_tensor, slice_start, slice_end)
+
+        output = ttnn.Tensor(ttl_output_tensor)
+        output_shape = tuple(output.shape)[-input_rank:]
+        return ttnn.reshape(output, shape=output_shape)
+    elif not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        logger.warning(
+            'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because the tensor is on device and the slicing using unpad is not supported!'
+        )
+    elif input_layout != ttnn.TILE_LAYOUT:
+        logger.warning(
+            f'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because input layout {input_layout} is not TILE_LAYOUT!'
+        )
+    elif input_rank > 4:
+        logger.warning(
+            f'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because input rank {input_rank} is greater than 4!'
+        )
+    elif not are_valid_device_slices(slices):
+        logger.warning(
+            f'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because slices {slices} are not valid device slices!'
+        )
 
     def torch_getitem(tensor, slices):
-        return tensor[slices].clone()
+        return tensor[slices]
 
-    if ttnn.has_storage_type_of(self, ttl.tensor.StorageType.DEVICE):
-        device = self.device
-    else:
-        device = None
-    layout = self.layout
-
-    tensor = self
-    tensor = ttnn.to_torch(tensor)
-    tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
-        tensor, slices
+    output_tensor = input_tensor
+    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
+        output_tensor, slices
     )
-    tensor = ttnn.from_torch(tensor, dtype=self.dtype, layout=layout, device=device)
-    return tensor
+    output_tensor = ttnn.from_torch(output_tensor, dtype=input_dtype, layout=input_layout, device=input_device)
+    return output_tensor
 
 
 ttnn.Tensor.__getitem__ = __getitem__
@@ -132,6 +215,10 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
         *_, new_height, new_width = tuple(shape.padded())
         if new_height % ttnn.TILE_SIZE == 0 and new_width % ttnn.TILE_SIZE == 0:
             return ttnn_reshape(input_tensor, shape)
+        else:
+            raise RuntimeError(
+                "Unable to reshape a tensor in TILE_LAYOUT to non-tile height and width! Please convert the tensor to ROW_MAJOR_LAYOUT first."
+            )
 
     if (
         ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE)

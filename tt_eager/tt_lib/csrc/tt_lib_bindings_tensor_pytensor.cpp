@@ -298,11 +298,9 @@ Tensor convert_python_tensor_to_tt_tensor(
                 }
                 else if constexpr (std::is_same_v<T, DeviceStorage>) {
                     TT_THROW("Device tensor cannot be converted to torch");
-                }
-                else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                     return storage.buffer;
-                }
-                else {
+                } else {
                     raise_unsupported_storage<T>();
                 }
             },
@@ -330,6 +328,9 @@ Tensor convert_python_tensor_to_tt_tensor(
         auto tensor = frombuffer(buffer, "dtype"_a=torch_dtype);
         tensor = tensor.attr("reshape")(torch_shape);
         tensor = tensor.attr("contiguous")();
+        if (tt_tensor.storage_type() == StorageType::BORROWED) {
+            tensor = tensor.attr("clone")();
+        }
         return tensor;
     }
 
@@ -815,9 +816,11 @@ Tensor convert_python_tensor_to_tt_tensor(
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
-            .def("cpu", [](const Tensor &self, bool blocking) {
-                return self.cpu(blocking);
-            }, py::arg("blocking") = true, R"doc(
+            .def(
+                "cpu",
+                [](const Tensor &self, bool blocking) { return self.cpu(blocking); },
+                py::arg("blocking") = true,
+                R"doc(
                 Move TT Tensor from TT accelerator device to host device.
 
                 .. code-block:: python
@@ -1250,6 +1253,15 @@ Tensor convert_python_tensor_to_tt_tensor(
                 .. code-block:: python
 
                     memory_config = tt_tensor.memory_config()
+
+            )doc")
+            .def(
+                "is_allocated", [](const Tensor &self) { return self.is_allocated(); }, R"doc(
+                Check if TT Tensor is allocated.
+
+                .. code-block:: python
+
+                    is_sharded = tt_tensor.is_sharded()
 
             )doc")
             .def(
