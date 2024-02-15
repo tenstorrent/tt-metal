@@ -33,7 +33,7 @@ def test_register_ttl_tensor_exp(device, height, width):
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
-def test_register_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
+def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
@@ -53,7 +53,7 @@ def test_register_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
-def test_register_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
+def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
@@ -75,7 +75,7 @@ def test_register_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_
 @pytest.mark.parametrize("k_size, n_size", [[64, 64], [64, 256]])
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("input_b_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_sharded_matmul_1d_in1(
+def test_ttl_operations_primary_matmul_1d(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
     grid_size = device.compute_with_storage_grid_size()

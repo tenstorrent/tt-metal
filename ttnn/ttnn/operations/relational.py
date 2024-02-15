@@ -254,4 +254,11 @@ for relational_function_name, ttl_relational_function, name in TTL_RELATIONAL_FU
 for relational_function_name, ttl_relational_function, name in TTL_RELATIONAL_FUNCTIONS_ZERO:
     register_ttl_relational_function_zero(relational_function_name, ttl_relational_function, name)
 
+ttnn.Tensor.__eq__ = getattr(THIS_MODULE, "eq")
+ttnn.Tensor.__ne__ = getattr(THIS_MODULE, "ne")
+ttnn.Tensor.__gt__ = getattr(THIS_MODULE, "gt")
+ttnn.Tensor.__ge__ = getattr(THIS_MODULE, "gte")
+ttnn.Tensor.__lt__ = getattr(THIS_MODULE, "lt")
+ttnn.Tensor.__le__ = getattr(THIS_MODULE, "lte")
+
 __all__ = []
