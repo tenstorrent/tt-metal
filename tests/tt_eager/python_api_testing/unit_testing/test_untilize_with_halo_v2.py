@@ -277,7 +277,7 @@ def test_generate_all_configs_and_references(
         conv_params[i] for i in range(10)
     ]
 
-    if test_max_pool and batch_size > 8:
+    if test_max_pool and batch_size > 16:
         pytest.skip(f"Skipping maxpool config with batch_size = {batch_size} due to mem limitations")
 
     compute_grid_size = device.compute_with_storage_grid_size()
