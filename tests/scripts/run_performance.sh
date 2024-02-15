@@ -46,6 +46,8 @@ run_perf_models() {
 
     env pytest "tests/ttnn/integration_tests/roberta/test_performance.py" -m $pipeline_type
 
+    env pytest "tests/ttnn/integration_tests/stable_diffusion/test_performance.py" -m $pipeline_type
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
