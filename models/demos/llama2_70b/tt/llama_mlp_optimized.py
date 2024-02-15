@@ -7,7 +7,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_reduce
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
 
 
 class TtLlamaMLP_optimized(nn.Module):
@@ -137,7 +137,7 @@ class TtLlamaMLP_optimized(nn.Module):
             hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
                 hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
-        hidden_states = tt_all_gather(hidden_states, dim=-1)
+        hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
         # Put AllGather results in L1
         for i in range(len(hidden_states)):
             hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
