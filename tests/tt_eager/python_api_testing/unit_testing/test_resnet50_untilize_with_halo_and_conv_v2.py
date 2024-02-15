@@ -16,7 +16,6 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
     _nearest_y,
     format_tensor,
 )
-from models.utility_functions import skip_for_wormhole_b0
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
     TTPyCompositeConv,
@@ -412,7 +411,6 @@ hardcoded_conv_blocking_and_parallelization_config = {
 }
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("N", (8, 16, 20), ids=["batch_8", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
@@ -497,13 +495,6 @@ def test_resnet50_conv(
         conv_input_shape_nhwc = conv_input_pyt_nhwc.shape
         conv_weight_pyt = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
         conv_bias_pyt = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float()
-        out_golden = torch.nn.functional.conv2d(
-            conv_input_pyt,
-            conv_weight_pyt,
-            bias=conv_bias_pyt.reshape(-1),
-            stride=(stride_h, stride_w),
-            padding=(pad_h, pad_w),
-        )
 
         is_1x1_conv = R == 1 and S == 1 and stride_h == 1 and stride_w == 1 and pad_h == 0 and pad_w == 0
 
@@ -539,6 +530,18 @@ def test_resnet50_conv(
         assert per_core_out_matrix_h % 32 == 0
         per_core_out_matrix_h_ntiles = (int)(per_core_out_matrix_h / 32)
         per_core_weight_matrix_w_ntiles = (int)(per_core_weight_matrix_w / 32)
+
+        compute_grid_size = device.compute_with_storage_grid_size()
+        if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+            pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+        out_golden = torch.nn.functional.conv2d(
+            conv_input_pyt,
+            conv_weight_pyt,
+            bias=conv_bias_pyt.reshape(-1),
+            stride=(stride_h, stride_w),
+            padding=(pad_h, pad_w),
+        )
 
         config_override = {
             "act_block_w": act_block_w,

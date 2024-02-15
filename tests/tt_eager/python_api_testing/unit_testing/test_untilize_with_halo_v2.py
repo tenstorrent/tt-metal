@@ -29,8 +29,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tt_lib.utils import _nearest_y
 import tt_lib as ttl
 
-from models.utility_functions import skip_for_wormhole_b0
-
 from loguru import logger
 
 
@@ -48,7 +46,6 @@ def plot_diff(vals, fid, nsticks, stick_len):
     plt.close()
 
 
-@skip_for_wormhole_b0()
 # conv params - output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
 @pytest.mark.parametrize(
     "conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool",
@@ -282,6 +279,10 @@ def test_generate_all_configs_and_references(
 
     if test_max_pool and batch_size > 8:
         pytest.skip(f"Skipping maxpool config with batch_size = {batch_size} due to mem limitations")
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
     torch.set_printoptions(threshold=10000, edgeitems=50, linewidth=400)  ##, sci_mode=False)
 
