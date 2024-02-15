@@ -100,6 +100,13 @@ class TtLlamaMLP_optimized(nn.Module):
             print("w1:0 shape:", self.w1_list[0].shape())
             print("x:0 shape:", x[0].shape())
 
+        # FOR BRINGUP! Inputs are interleaved so shard them
+        x_sharded = [
+            tt_lib.tensor.interleaved_to_sharded(t, sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"])
+            for t in x
+        ]
+        x = x_sharded
+
         hidden_states = []
 
         for i in range(len(x)):
@@ -148,10 +155,13 @@ class TtLlamaMLP_optimized(nn.Module):
                 output_dtype=self.model_config["FF2_MM_OUTPUT_DTYPE"],
             )
 
-        for i in range(len(hidden_states)):
-            print("w2_output shape:", hidden_states[i].shape())
-        # mlp_output = tt_all_gather(hidden_states, dim=-1)
-        return hidden_states
+        # FOR BRINGUP! Outputs are sharded. Interleave them
+        hidden_states_interleaved = [
+            tt_lib.tensor.sharded_to_interleaved(t, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            for t in hidden_states
+        ]
+
+        return hidden_states_interleaved
 
     # All Reduce forward pass
     # def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:

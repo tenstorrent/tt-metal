@@ -8,7 +8,7 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
-from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, rms_decomp
+from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, rms_decomp, tt_all_gather
 
 
 class TtLlamaModel(nn.Module):
@@ -40,12 +40,13 @@ class TtLlamaModel(nn.Module):
 
         self.norm_list = []
         for i in range(self.num_devices):
-            attn_norm = torch2tt_tensor(
+            output_norm = tt_lib.tensor.Tensor(
                 # Expand to size of input since we decomped norm
-                self.state_dict[norm_str].unsqueeze(0).expand(batch, -1),
-                self.devices[i],
-            )
-            self.norm_list.append(attn_norm)
+                self.state_dict[norm_str].reshape([1, 1, -1, 32]),
+                self.model_config["LN_F_WEIGHTS_DTYPE"],
+            ).to(devices[i], self.model_config["LN_F_WEIGHTS_MEMCFG"])
+
+            self.norm_list.append(output_norm)
 
         self.layers = [
             TtLlamaDecoder(
@@ -114,10 +115,11 @@ class TtLlamaModel(nn.Module):
         assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
         assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
 
+        x_fractured = torch.chunk(x, self.num_devices, dim=-1)
         xs, rot_mats, attn_masks = [], [], []
         for i in range(self.num_devices):
             device = self.devices[i]
-            xs.append(torch2tt_tensor(x.clone(), device))
+            xs.append(torch2tt_tensor(x_fractured[i], device))
             rot_mats.append(torch2tt_tensor(rot_mat.clone(), device))
             attn_masks.append(torch2tt_tensor(attn_mask.clone(), device))
         return (
@@ -146,11 +148,29 @@ class TtLlamaModel(nn.Module):
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks)
 
+        ### Gather fractured layers output
+        xs_replicated = tt_all_gather(xs, dim=-1)
+
         ### Duplicate layernorm
         norm_out_replicated = []
         for i in range(self.num_devices):
-            norm_out = rms_decomp(xs[i], self.norm_list[i], self.norm_eps)
-            norm_out_replicated.append(norm_out)
+            # TODO: Delete xs after consuming by rmsnorm
+            x = xs_replicated[i]
+            # RMSNorm must execute on sharded input
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+            )
+            x_norm = tt_lib.operations.primary.rmsnorm(
+                x,
+                self.norm_eps,
+                self.norm_list[i],
+                output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+                program_config=self.model_config["LN_F_PROGCFG"],
+            )
+            # Spill input and output back to DRAM
+            x = tt_lib.tensor.sharded_to_interleaved(x, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            x_norm = tt_lib.tensor.sharded_to_interleaved(x_norm, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            norm_out_replicated.append(x_norm)
 
         ### Each device does an LM head fracture
         lm_head_out = []
