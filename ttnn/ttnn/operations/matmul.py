@@ -117,6 +117,11 @@ def matmul(
         * :attr:`input_tensor_a` (ttnn.Tensorensor): the first tensor to be multiplied
         * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
 
+    Keyword Arguments:
+        * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
+        * :attr:`dtype` (ttnn.DataType): the data type of the output tensor. Defaults to None
+        * :attr:`core_grid` (Tuple[int, int]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
+
     Example::
 
         >>> # vector x vector
@@ -458,6 +463,13 @@ def linear(
     Arguments:
         * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied
         * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
+
+    Keyword Arguments:
+        * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. Defaults to None
+        * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
+        * :attr:`dtype` (Optional[ttnn.DataType]): the data type of the output tensor. Defaults to None
+        * :attr:`core_grid` (Optional[Tuple[int, int]]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
+        * :attr:`activation` (Optional[str]): the activation function to be applied. Defaults to None
 
     Example::
         >>> # batched matrix x broadcasted matrix
