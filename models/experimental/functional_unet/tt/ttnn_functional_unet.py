@@ -13,6 +13,7 @@ class UNet:
     ) -> None:
         self.c1 = parameters.c1
         self.c1_2 = parameters.c1_2
+        self.p1 = parameters.p1
 
     def __call__(self, x):
         identity = x
@@ -22,6 +23,7 @@ class UNet:
 
         # Relu and bn2 are fused with conv1
         out = self.c1_2(out)
+        out = self.p1(out)
 
         # out = ttnn.add(out, identity, memory_config=ttnn.get_memory_config(out))
         # out = ttnn.to_memory_config(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -35,7 +37,7 @@ class UNet:
 
         input_tensor = self.c1.copy_input_to_device(input_tensor)
         output_tensor = self(input_tensor)
-        output_tensor = self.c1_2.copy_output_from_device(output_tensor)
+        output_tensor = self.p1.copy_output_from_device(output_tensor)
         # output_tensor = self.c1_2.copy_output_from_device(input_tensor)
 
         output_tensor = ttnn.to_torch(output_tensor)
