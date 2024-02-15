@@ -237,7 +237,7 @@ def run_test_LlamaQKV(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaQKV_inference(
     model_version,
     batch,
