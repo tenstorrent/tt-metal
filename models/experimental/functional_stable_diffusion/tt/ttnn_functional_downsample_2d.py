@@ -9,6 +9,9 @@ from typing import Optional
 import torch.nn as nn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+)
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -127,36 +130,19 @@ def downsample_2d(
     assert hidden_states.shape[1] == in_channels
 
     if conv_on_device:
-        hidden_states = ttnn_to_torch(hidden_states)
-        hidden_states = hidden_states.permute((0, 2, 3, 1))
-        # Reshape 4d to 2d
-        # breakpoint()
-        hidden_states = torch.reshape(
-            hidden_states,
-            (1, 1, batch_size * input_height * input_width, in_channels),
+        hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv, hidden_states, batch_size, input_height, input_width, out_channels
         )
-        hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16)
-        hidden_states = ttnn.to_device(hidden_states, device)
-
-        hidden_states = ttnn.pad_to_tile(hidden_states)
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        print("Running conv in downsample")
-        hidden_states = conv(hidden_states)
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        hidden_states = ttnn.from_device(hidden_states)
-        hidden_states = ttnn.to_torch(hidden_states)
-        hidden_states = torch.reshape(hidden_states, (batch_size, input_height, input_width, out_channels))
-        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
     else:
         hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))
         hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
         hidden_states = conv(hidden_states)
         hidden_states = tt_to_torch_tensor(hidden_states)
 
-    hidden_states = ttnn.to_device(
-        ttnn.to_layout(ttnn.from_torch(hidden_states, ttnn.bfloat16), ttnn.TILE_LAYOUT),
-        device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+        hidden_states = ttnn.to_device(
+            ttnn.to_layout(ttnn.from_torch(hidden_states, ttnn.bfloat16), ttnn.TILE_LAYOUT),
+            device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     return hidden_states

@@ -10,6 +10,11 @@ from models.utility_functions import (
 )
 import torch
 from typing import Optional, Dict
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    pre_process_input,
+    post_process_output,
+)
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -164,20 +169,7 @@ def resnetBlock2D(
                 )
             )
         # breakpoint()
-        hidden_states = ttnn_to_torch(hidden_states)
-        hidden_states = hidden_states.permute((0, 2, 3, 1))
-        # Reshape 4d to 2d
-        hidden_states_2d_height = batch_size * input_height * input_width
-        hidden_states = torch.reshape(
-            hidden_states,
-            (1, 1, hidden_states_2d_height, in_channels),
-        )
-
-        hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16)
-        hidden_states = ttnn.to_device(hidden_states, device)
-
-        hidden_states = ttnn.pad_to_tile(hidden_states)
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        hidden_states = pre_process_input(device, hidden_states)
         if conv1_split_chunks == 1:
             hidden_states = [hidden_states]
         else:
@@ -268,11 +260,7 @@ def resnetBlock2D(
         print("hidden states shape after add with temb=", hidden_states.shape.padded())
         print("hidden states shape after add with temb unpadded =", hidden_states.shape)
     if convs_on_device:
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        hidden_states = ttnn_to_torch(hidden_states)
-        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-        hidden_states = torch.reshape(hidden_states, (batch_size, out_channels, input_height, input_width))
-        hidden_states = torch_to_ttnn(hidden_states, device=device)
+        hidden_states = post_process_output(device, hidden_states, batch_size, input_height, input_width, out_channels)
     hidden_states = ttnn.group_norm(
         hidden_states, num_groups=groups, weight=parameters.norm2.weight, bias=parameters.norm2.bias, epsilon=eps
     )
@@ -319,25 +307,9 @@ def resnetBlock2D(
             # reallocate_halo_output=(out_channels, out_channels, input_height, input_width) == (640, 640, 64, 64)
         )
 
-        hidden_states = ttnn_to_torch(hidden_states)
-        hidden_states = hidden_states.permute((0, 2, 3, 1))
-        # Reshape 4d to 2d
-        hidden_states = torch.reshape(
-            hidden_states,
-            (1, 1, batch_size * input_height * input_width, out_channels),
+        run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv2, hidden_states, batch_size, input_height, input_width, out_channels
         )
-        hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16)
-        hidden_states = ttnn.to_device(hidden_states, device)
-
-        hidden_states = ttnn.pad_to_tile(hidden_states)
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        print("Running conv2 in resblock")
-        hidden_states = conv2(hidden_states)
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        hidden_states = ttnn.from_device(hidden_states)
-        hidden_states = ttnn.to_torch(hidden_states)
-        hidden_states = torch.reshape(hidden_states, (batch_size, input_height, input_width, out_channels))
-        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
     else:
         parameters.conv2.weight = torch_to_tt_tensor_rm(parameters.conv2.weight, device, put_on_device=False)
         parameters.conv2.bias = torch_to_tt_tensor_rm(parameters.conv2.bias, device, put_on_device=False)
@@ -355,7 +327,7 @@ def resnetBlock2D(
         hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
         hidden_states = conv2(hidden_states)
         hidden_states = tt_to_torch_tensor(hidden_states)
-    hidden_states = torch_to_ttnn(hidden_states, device=device)
+        hidden_states = torch_to_ttnn(hidden_states, device=device)
 
     use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
     if use_in_shortcut:

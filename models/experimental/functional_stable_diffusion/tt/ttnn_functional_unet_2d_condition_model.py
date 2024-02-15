@@ -27,6 +27,9 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_at
 )
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_downblock_2d import downblock2d
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+)
 
 
 def permute_conv_weights(weight, bias):
@@ -180,6 +183,7 @@ def UNet2DConditionModel(
         sample = torch_to_tt_tensor_rm(sample, device)
         sample = conv_in(sample)
         sample = tt_to_torch_tensor(sample)
+        sample = torch_to_ttnn(sample, device=device)
     else:
         # breakpoint()
         parameters.conv_in.bias = torch.reshape(parameters.conv_in.bias, (1, 1, 1, parameters.conv_in.bias.shape[-1]))
@@ -212,31 +216,9 @@ def UNet2DConditionModel(
             use_shallow_conv_variant=False,
             enable_auto_formatting=True,
         )
-        sample = ttnn_to_torch(sample)
-        sample = sample.permute((0, 2, 3, 1))
-        # Reshape 4d to 2d
-        # breakpoint()
-        padded_input_channels = math.ceil(sample.shape[3] / 16) * 16
-        sample = torch.nn.functional.pad(sample, (0, padded_input_channels - sample.shape[3], 0, 0, 0, 0))
-        sample = torch.reshape(
-            sample,
-            (1, 1, batch_size * input_height * input_width, padded_input_channels),
+        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv_in, sample, batch_size, input_height, input_width, out_channels
         )
-        sample = ttnn.from_torch(sample, ttnn.bfloat16)
-        sample = ttnn.to_device(sample, device)
-
-        sample = ttnn.pad_to_tile(sample)
-        # breakpoint()
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
-        print("Running conv2 in resblock")
-        sample = conv_in(sample)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
-        sample = ttnn.from_device(sample)
-        sample = ttnn.to_torch(sample)
-        sample = torch.reshape(sample, (batch_size, input_height, input_width, out_channels))
-        sample = torch.permute(sample, (0, 3, 1, 2))
-
-    sample = torch_to_ttnn(sample, device=device)
 
     # con_in completes
 
