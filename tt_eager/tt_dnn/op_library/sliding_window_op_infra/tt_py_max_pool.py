@@ -244,14 +244,8 @@ class TTPyMaxPool(TTPyOp):
 
             sliding_window_op_sharded_input_top_left_indices = (
                 generate_sliding_window_op_sharded_input_top_left_indices(
-                    data_top_left_indices, req_conv_input_shard_start_end
+                    data_top_left_indices, req_conv_input_shard_start_end, pad_tile=True, pad_last_core=True
                 )
-            )
-
-            # Pad indices for last core if not equal to other cores
-            indices_length_per_core = len(sliding_window_op_sharded_input_top_left_indices[0])
-            sliding_window_op_sharded_input_top_left_indices[-1].extend(
-                [0] * (indices_length_per_core - len(sliding_window_op_sharded_input_top_left_indices[-1]))
             )
 
             indices_torch_dtype = torch.int16
