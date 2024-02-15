@@ -36,6 +36,11 @@ class TtLlamaQKV_optimized(torch.nn.Module):
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
 
+        assert self.num_devices == 4 or self.num_devices == 8
+        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
+        assert self.n_heads % self.num_devices == 0
+        assert self.n_kv_heads % self.num_devices == 0
+
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
 
@@ -45,30 +50,38 @@ class TtLlamaQKV_optimized(torch.nn.Module):
         wk_str = f"{layer_name}.attention.wk.weight"
         wv_str = f"{layer_name}.attention.wv.weight"
 
-        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
-        assert self.n_heads % self.num_devices == 0
-        assert self.n_kv_heads % self.num_devices == 0
-
         self.qkv_list = []
-
         for i in range(self.num_devices):
-            wq = torch.transpose(
-                torch.chunk(self.state_dict[wq_str], self.num_devices)[i],
-                -2,
-                -1,
-            )
-            wk = torch.transpose(
-                torch.chunk(self.state_dict[wk_str], self.num_devices)[i],
-                -2,
-                -1,
-            )
-            wv = torch.transpose(
-                torch.chunk(self.state_dict[wv_str], self.num_devices)[i],
-                -2,
-                -1,
-            )
-            qkv = torch.cat([wq, wk, wv], dim=-1)
+            # Chunk weights
+            wq_chunks = torch.chunk(self.state_dict[wq_str], self.n_heads, dim=0)
+            wk_chunks = torch.chunk(self.state_dict[wk_str], self.n_kv_heads, dim=0)
+            wv_chunks = torch.chunk(self.state_dict[wv_str], self.n_kv_heads, dim=0)
 
+            # Select chunks for the current device
+            wq_selected = torch.cat(wq_chunks[i * self.n_local_heads : (i + 1) * self.n_local_heads], dim=0)
+            wk_selected = torch.cat(wk_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
+            wv_selected = torch.cat(wv_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
+
+            # Transpose the selected chunks
+            wq = torch.transpose(wq_selected, -2, -1)
+            wk = torch.transpose(wk_selected, -2, -1)
+            wv = torch.transpose(wv_selected, -2, -1)
+
+            # Create interleaved qkv list
+            n_repeat = self.n_heads // self.n_kv_heads
+            qkv_interleaved = [
+                [
+                    wq[..., i * n_repeat * self.head_dim : (i + 1) * n_repeat * self.head_dim],
+                    wk[..., i * self.head_dim : (i + 1) * self.head_dim],
+                    wv[..., i * self.head_dim : (i + 1) * self.head_dim],
+                ]
+                for i in range(self.n_local_kv_heads)
+            ]
+            qkv_interleaved = [item for sublist in qkv_interleaved for item in sublist]
+
+            # Concatenate Q, K, V for the current device
+            qkv = torch.cat(qkv_interleaved, dim=-1)
+            # Append the processed tensor to the list, assuming torch2tt_tensor is a defined method
             self.qkv_list.append(
                 torch2tt_tensor(
                     qkv,
@@ -100,16 +113,15 @@ class TtLlamaQKV_optimized(torch.nn.Module):
 
         for i in range(len(x)):
             print("qkv fused weighs shape:", self.qkv_list[i].shape())
-
-            attn_output.append(
-                tt_lib.operations.primary.matmul_1d(
-                    x[i],
-                    self.qkv_list[i],
-                    program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                )
+            qkv_proj = tt_lib.operations.primary.matmul_1d(
+                x[i],
+                self.qkv_list[i],
+                program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
+                output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
             )
+
+            attn_output.append(qkv_proj)
 
             x[i].deallocate(True)
 
@@ -155,11 +167,11 @@ class TtLlamaQKV_optimized(torch.nn.Module):
                 value_layer[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
 
-        query_layer = tt_all_gather_torch(query_layer, dim=1)
-        key_layer = tt_all_gather_torch(key_layer, dim=1)
-        value_layer = tt_all_gather_torch(value_layer, dim=1)
+        query_layer_allgather = tt_all_gather_torch(query_layer, dim=1)
+        key_layer_allgather = tt_all_gather_torch(key_layer, dim=1)
+        value_layer_allgather = tt_all_gather_torch(value_layer, dim=1)
 
-        return query_layer[0], key_layer[0], value_layer[0]
+        return query_layer_allgather[0], key_layer_allgather[0], value_layer_allgather[0]
 
 
 class PytorchLlamaQKVModel(torch.nn.Module):
@@ -261,9 +273,10 @@ def run_test_LlamaQKV(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@pytest.mark.parametrize("n_devices", (8, 4))
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc, n_devices",
-    (("llama-2-70B", 32, 1, 0.98, 8),),
+    "model_version, batch, seq_len, pcc",
+    (("llama-2-70B", 32, 1, 0.98),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaQKV_inference(
