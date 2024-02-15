@@ -47,7 +47,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
 
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.c1_2)
-        parameters["p1"] = ttnn_module_args.p1
+        parameters["p1"] = {}
 
         # print("parameters['p1']: ", parameters["p1"])
 
