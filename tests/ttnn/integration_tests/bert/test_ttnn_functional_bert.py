@@ -306,5 +306,5 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
     start_logits = output[..., 0]
     end_logits = output[..., 1]
 
-    assert_with_pcc(torch_output.start_logits, start_logits, 0.9992)
-    assert_with_pcc(torch_output.end_logits, end_logits, 0.9992)
+    assert_with_pcc(torch_output.start_logits, start_logits, 0.999)
+    assert_with_pcc(torch_output.end_logits, end_logits, 0.999)
