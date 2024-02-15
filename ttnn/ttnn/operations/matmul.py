@@ -299,22 +299,25 @@ def matmul(
                 output_dtype=dtype,
             )
         else:
-            ttl_output_tensor = ttl.operations.primary.matmul(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
-                    in0_block_w=in0_block_w,  # k
-                    out_subblock_h=out_subblock_h,  # m
-                    out_subblock_w=out_subblock_w,  # n
-                    per_core_M=per_core_M,
-                    per_core_N=per_core_N,
-                    transpose_mcast=False,
-                    fused_activation=None,
-                ),
-                output_mem_config=memory_config,
-                output_dtype=dtype,
-            )
+            try:
+                ttl_output_tensor = ttl.operations.primary.matmul(
+                    ttl_input_tensor_a,
+                    ttl_input_tensor_b,
+                    program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                        in0_block_w=in0_block_w,  # k
+                        out_subblock_h=out_subblock_h,  # m
+                        out_subblock_w=out_subblock_w,  # n
+                        per_core_M=per_core_M,
+                        per_core_N=per_core_N,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                    ),
+                    output_mem_config=memory_config,
+                    output_dtype=dtype,
+                )
+            except Exception as e:
+                raise RuntimeError(f"ttnn.matmul: ttl.operations.primary.matmul failed. {e}")
 
         output_tensor = ttnn.Tensor(ttl_output_tensor)
 
@@ -597,30 +600,32 @@ def linear(
             else:
                 raise RuntimeError(f"{activation} is not supported as activation function")
 
-            ttl_output_tensor = ttl.operations.primary.matmul(
-                ttl_input_tensor_a,
-                ttl_input_tensor_b,
-                bias=ttl_bias,
-                program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
-                    in0_block_w=in0_block_w,  # k
-                    out_subblock_h=out_subblock_h,  # m
-                    out_subblock_w=out_subblock_w,  # n
-                    per_core_M=per_core_M,
-                    per_core_N=per_core_N,
-                    transpose_mcast=False,
-                    fused_activation=fused_activation,
-                ),
-                output_mem_config=memory_config,
-                output_dtype=dtype,
-            )
+            try:
+                ttl_output_tensor = ttl.operations.primary.matmul(
+                    ttl_input_tensor_a,
+                    ttl_input_tensor_b,
+                    bias=ttl_bias,
+                    program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                        in0_block_w=in0_block_w,  # k
+                        out_subblock_h=out_subblock_h,  # m
+                        out_subblock_w=out_subblock_w,  # n
+                        per_core_M=per_core_M,
+                        per_core_N=per_core_N,
+                        transpose_mcast=False,
+                        fused_activation=fused_activation,
+                    ),
+                    output_mem_config=memory_config,
+                    output_dtype=dtype,
+                )
+            except Exception as e:
+                raise RuntimeError(f"ttnn.linear: ttl.operations.primary.matmul failed. {e}")
 
         output_tensor = ttnn.Tensor(ttl_output_tensor)
 
     else:
         if activation is not None:
             raise RuntimeError("activation must be None")
-
         ttl_bias = bias.value if bias is not None else None
         ttl_output_tensor = ttl.operations.primary.matmul(
             ttl_input_tensor_a,

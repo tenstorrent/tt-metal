@@ -45,6 +45,7 @@ def test_to_layout_2D(device, h, w, on_device, from_layout, to_layout, start_wit
     assert output_tensor.layout == to_layout
 
     if on_device:
+        assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
         output_tensor = ttnn.from_device(output_tensor)
         assert not ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
 

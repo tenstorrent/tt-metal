@@ -7,9 +7,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 import time
 from typing import Any, Union, Tuple, Optional
+from loguru import logger
 
 import graphviz
 from pyrsistent import PClass, field
+
+logger.disable("torchtrail")
 
 import torchtrail
 from torchtrail.tracer import (
