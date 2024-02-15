@@ -19,20 +19,41 @@ from models.experimental.functional_unet.tt import ttnn_functional_unet
 import ttnn
 
 
+def update_ttnn_module_args(ttnn_module_args):
+    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256
+    # ttnn_module_args["enable_auto_formatting"] = ttnn_module_args.kernel_size < (7, 7)
+
+
 def custom_preprocessor(model, name, ttnn_module_args):
     parameters = {}
     if isinstance(model, UNet):
         # ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1_2["activation"] = "relu"  # Fuse relu with conv1
+        ttnn_module_args.c1["deallocate_activation"] = True  #
+        ttnn_module_args.c1_2["deallocate_activation"] = True  #
         ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
         ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
 
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.c1, model.b1)
         conv2_weight, conv2_bias = fold_batch_norm2d_into_conv2d(model.c1_2, model.b1_2)
 
+        update_ttnn_module_args(ttnn_module_args.c1)
+        update_ttnn_module_args(ttnn_module_args.c1_2)
+
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.c1_2)
+
+    #        if model.downsample is not None:
+    #            downsample_weight, downsample_bias = fold_batch_norm2d_into_conv2d(
+    #                model.downsample[0], model.downsample[1]
+    #            )
+    #            update_ttnn_module_args(ttnn_module_args.downsample[0])
+    #            parameters["downsample"] = preprocess_conv2d(
+    #                downsample_weight, downsample_bias, ttnn_module_args.downsample[0]
+    #            )
+    #            ttnn_module_args["downsample"] = ttnn_module_args.downsample[0]
+
     return parameters
 
 
@@ -64,7 +85,8 @@ class UNet(nn.Module):
         self.b1_2 = nn.BatchNorm2d(16)
         self.r1_2 = nn.ReLU(inplace=True)
 
-    #        self.p1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.p1 = nn.MaxPool2d(kernel_size=2, stride=2)
+
     #        self.c2 = conv_block(16, 16)
     #        self.p2 = nn.MaxPool2d(kernel_size=2, stride=2)
     #        self.c3 = conv_block(16, 32)
@@ -92,7 +114,7 @@ class UNet(nn.Module):
         c1_2 = self.c1_2(r1)
         b1_2 = self.b1_2(c1_2)
         r1_2 = self.r1_2(b1_2)
-        #        p1 = self.p1(r1_2)
+        p1 = self.p1(r1_2)
         #        c2 = self.c2(p1)
         #        p2 = self.p2(c2)
         #        c3 = self.c3(p2)
@@ -114,7 +136,8 @@ class UNet(nn.Module):
         #        output = self.output_layer(c8)
 
         # return output
-        return r1_2
+        # return r1_2
+        return p1
 
 
 # Example usage
@@ -131,7 +154,7 @@ model_graph = draw_graph(
     input_size=(2, 3, 1056, 160),
     dtypes=[torch.float32],
     expand_nested=True,
-    graph_name="unetSeqEdit",
+    graph_name="unetSeqEdit2",
     depth=2,
     directory=".",
 )
@@ -144,7 +167,11 @@ torch.manual_seed(0)
 
 # torch_model = BasicBlock(inplanes=64, planes=64, stride=1).eval()
 torch_model = UNet()
-
+print("\n\n\n\nthe torch model type is: ")
+print(type(torch_model))
+print("\n\n\n\n")
+for layer in torch_model.children():
+    print(layer)
 new_state_dict = {}
 # new_state_dict = torch_model.state_dict()
 for name, parameter in torch_model.state_dict().items():
@@ -170,6 +197,10 @@ parameters = preprocess_model(
     reader_patterns_cache=reader_patterns_cache,
     device=device,
 )
+
+print("\n\n\n")
+print("the parameters now are: ")
+print(parameters)
 ttnn_model = ttnn_functional_unet.UNet(parameters)
 #
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
