@@ -218,8 +218,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(::detail::GetCommandQueue(device), program, false);
-            Finish(::detail::GetCommandQueue(device));
+            EnqueueProgram(device->command_queue(), program, false);
+            Finish(device->command_queue());
             auto t_end = std::chrono::steady_clock::now();
             unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
