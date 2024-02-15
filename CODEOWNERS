@@ -36,10 +36,10 @@ tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @
 
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
-tt_metal/host_api.hpp @abhullar-tt @TT-billteng @davorchap
-tt_metal/impl/device/ @TT-billteng
-tt_metal/impl/buffers/ @TT-billteng @tarafdarTT
-tt_metal/impl/program/ @TT-billteng
+tt_metal/host_api.hpp @abhullar-tt @davorchap
+# tt_metal/impl/device/ @TT-billteng
+tt_metal/impl/buffers/ @tarafdarTT
+# tt_metal/impl/program/ @TT-billteng
 # tt_metal/impl/ @abhullar-tt @TT-billteng
 # tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
 
@@ -48,7 +48,7 @@ tt_metal/impl/dispatch/ @DrJessop @pgkeller
 tt_metal/impl/dispatch/**/module.mk @DrJessop @tt-rkim @pgkeller
 tt_metal/kernels/dataflow/dispatch/ @DrJessop @tarafdarTT @pgkeller
 docs/source/frameworks/tt_dispatch.rst @DrJessop @pgkeller
-docs/source/tt_metal/apis/host_apis/ @TT-billteng
+# docs/source/tt_metal/apis/host_apis/ @TT-billteng
 
 # metal - fw, llks, risc-v
 # tt_metal/hw/ckernels/ @davorchap
@@ -131,4 +131,4 @@ tests/**/*test*conv*.py @tt-nshanker
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati @eyonland @cfjchu @xanderchin
-scripts/profiler/ @mo-tenstorrent @TT-billteng
+scripts/profiler/ @mo-tenstorrent
