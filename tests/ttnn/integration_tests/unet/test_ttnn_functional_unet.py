@@ -145,13 +145,14 @@ torch.manual_seed(0)
 # torch_model = BasicBlock(inplanes=64, planes=64, stride=1).eval()
 torch_model = UNet()
 
-# new_state_dict = {}
-new_state_dict = torch_model.state_dict()
-# for name, parameter in torch_model.state_dict().items():
-#    if isinstance(parameter, torch.FloatTensor):
-#        new_state_dict[name] = torch.rand_like(parameter)
-# print("new_state_dict keys: ", new_state_dict.keys())
-# print("\n\n\n\n")
+new_state_dict = {}
+# new_state_dict = torch_model.state_dict()
+for name, parameter in torch_model.state_dict().items():
+    if isinstance(parameter, torch.FloatTensor):
+        # new_state_dict[name] = torch.rand_like(parameter)
+        new_state_dict[name] = parameter + 100.0
+print("new_state_dict keys: ", new_state_dict.keys())
+print("\n\n\n\n")
 # print("new_state_dict[c1.0.weight]: ", new_state_dict["c1.0.weight"])
 torch_model.load_state_dict(new_state_dict)
 
