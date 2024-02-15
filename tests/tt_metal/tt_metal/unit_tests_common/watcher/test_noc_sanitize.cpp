@@ -96,7 +96,8 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     try {
         fixture->RunProgram(device, program);
     } catch (std::runtime_error& e) {
-        const string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See built/watcher.log for details.";
+        string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
+        expected += tt::llrt::watcher_get_log_file_name();
         const string error = string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
