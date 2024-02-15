@@ -20,8 +20,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import (
-    is_wormhole_b0,
-    skip_for_wormhole_b0,
     pad_and_fold_conv_activation_for_unity_stride,
     pad_and_fold_conv_filters_for_unity_stride,
 )
@@ -35,7 +33,6 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("has_bias", (True,))
 @pytest.mark.parametrize("fuse_relu", (True,))
 @pytest.mark.parametrize(
@@ -57,8 +54,6 @@ def test_resnet50_first_conv(
         )
     if N != 8:
         pytest.skip("Skipping non-batch 8 tests due to potential non-determinism")
-    if N == 8 and is_wormhole_b0():
-        pytest.skip("Parallelization unsupported for WH B0")
 
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
