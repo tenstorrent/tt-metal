@@ -7,7 +7,9 @@ import numpy
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
-def generate_sliding_window_op_sharded_input_top_left_indices(data_top_left_indices, conv_shard_start_end):
+def generate_sliding_window_op_sharded_input_top_left_indices(
+    data_top_left_indices, conv_shard_start_end, pad_tile=False, pad_last_core=False
+):
     # data_top_left_indices point to the global input tensor (padded)
     # conv_shard_start_end has the start and end index (inclusive) for each shard in the global input tensor
     # generate local indices (top left position in the sliding window) in the conv sharded input
@@ -23,6 +25,22 @@ def generate_sliding_window_op_sharded_input_top_left_indices(data_top_left_indi
             for index in data_top_left_indices[conv_output_shard_start : conv_output_shard_end + 1]
         ]
         conv_sharded_input_top_left_indices.append(local_top_left_indices)
+
+    if pad_tile:
+        # Pad indices for last core if not equal to other cores
+        for i in range(len(conv_sharded_input_top_left_indices)):
+            tile_size = 32
+            extend = len(conv_sharded_input_top_left_indices[i]) % tile_size
+            if extend != 0:
+                conv_sharded_input_top_left_indices[i].extend([0] * (tile_size - extend))
+
+    if pad_last_core:
+        # Pad indices for last core if not equal to other cores
+        indices_length_per_core = len(conv_sharded_input_top_left_indices[0])
+        conv_sharded_input_top_left_indices[-1].extend(
+            [0] * (indices_length_per_core - len(conv_sharded_input_top_left_indices[-1]))
+        )
+
     return conv_sharded_input_top_left_indices
 
 
