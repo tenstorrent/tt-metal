@@ -166,6 +166,7 @@ acosh
 addexp
 addr
 agrebenisan
+andi
 api
 apis
 arg
@@ -355,6 +356,7 @@ numpy
 ocb
 oct
 onboarding
+ori
 parallelization
 parallelizes
 param
@@ -364,6 +366,7 @@ performant
 phiyodr
 phyiscally
 png
+polygamma
 pragma
 pre
 prelu
@@ -382,6 +385,7 @@ quickstart
 randint
 randn
 rb
+rdiv
 recip
 reconfig
 regs
@@ -392,6 +396,7 @@ resnet
 riscv
 rms
 rmsg
+rpow
 rsqrt
 rst
 rsub
@@ -444,6 +449,7 @@ sudo
 svg
 sys
 tanh
+tanhshrink
 teardown
 tensix
 tensor's
@@ -456,8 +462,10 @@ toctree
 todo
 tracy
 transp
+tril
 trisc
 triscs
+triu
 tt
 ttDNN
 ttl

@@ -42,6 +42,12 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
             "erfinv": torch.erfinv,
             "exp2": torch.exp2,
             "expm1": torch.expm1,
+            "rad2deg": torch.rad2deg,
+            "recip": torch.reciprocal,
+            "sqrt": torch.sqrt,
+            "square": torch.square,
+            "tril": torch.tril,
+            "triu": torch.triu,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -125,6 +131,12 @@ TTL_MATH_OP_FUNCTIONS_UNARY = [
     ("erfinv", ttl.tensor.erfinv, "erfinv"),
     ("exp2", ttl.tensor.exp2, "exp2"),
     ("expm1", ttl.tensor.expm1, "expm1"),
+    ("rad2deg", ttl.tensor.rad2deg, "rad2deg"),
+    ("recip", ttl.tensor.recip, "reciprocal"),
+    ("sqrt", ttl.tensor.sqrt, "sqrt"),
+    ("square", ttl.tensor.square, "square"),
+    ("tril", ttl.tensor.tril, "tril"),
+    ("triu", ttl.tensor.triu, "triu"),
 ]
 
 
@@ -402,5 +414,97 @@ TTL_LERP_FUNCTION = [
 
 for lerp_function_name, ttl_lerp_function, op_name in TTL_LERP_FUNCTION:
     register_ttl_lerp_function(lerp_function_name, ttl_lerp_function, op_name)
+
+def _is_scalar(value):
+    return isinstance(value, (int, float))
+
+
+def register_ttl_math_unary_function_with_float(name, ttl_math_unary_function, op_name, param):
+    def _torch_math_unary(input_tensor: ttnn.Tensor, parameter, **_):
+        import torch
+
+        name_to_torch_function = {
+            "polygamma": torch_polygamma,
+        }
+        torch_function = name_to_torch_function[name]
+        input_tensor = ttnn.to_torch(input_tensor)
+
+        if name == "polygamma":
+            return torch_function(input_tensor, scalar=parameter)
+        else:
+            return torch_function(input_tensor, parameter)
+
+    def _math_unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+        ttnn.validate_input_tensor(
+            operation_name,
+            input_tensor,
+            ranks=(2, 3, 4),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            layouts=(ttnn.TILE_LAYOUT,),
+            can_be_on_device=True,
+            can_be_on_cpu=False,
+        )
+
+    @ttnn.register_operation(
+        name=f"ttnn.{name}",
+        validate_input_tensors=_math_unary_validate_input_tensors,
+        torch_function=_torch_math_unary,
+    )
+    def math_unary_function(
+        input_tensor: ttnn.Tensor, parameter: float, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    ) -> ttnn.Tensor:
+        original_shape = input_tensor.shape
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor.value
+
+        if not isinstance(input_tensor, ttnn.Tensor):
+            raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+        if not _is_scalar(parameter):
+            raise TypeError("Expected second argument to be a scalar")
+
+        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+            raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor.value
+
+        ttl_output_tensor = ttl_math_unary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)
+
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttnn.reshape(output_tensor, original_shape)
+        return output_tensor
+
+    math_unary_function.__name__ = f"ttnn.{(name)}"
+    math_unary_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
+        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
+
+        .. math::
+            {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
+
+        Args:
+            * :attr:`input_tensor`
+            * :attr:`{param}`
+
+        Example::
+
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.{(name)}(tensor, {param})
+
+        """
+    setattr(THIS_MODULE, name, math_unary_function)
+
+
+TTL_MATH_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
+    ("polygamma", ttl.tensor.polygamma, "polygamma", "n"),
+]
+
+for math_unary_function_name, ttl_math_unary_function, name, param in TTL_MATH_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
+    register_ttl_math_unary_function_with_float(math_unary_function_name, ttl_math_unary_function, name, param)
+
+
+def torch_polygamma(x, *args, **kwargs):
+    n = kwargs.pop("scalar")
+    return torch.special.polygamma(n, x)
+
 
 __all__ = []

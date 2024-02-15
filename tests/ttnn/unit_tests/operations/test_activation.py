@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def run_activation_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.99):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
@@ -98,6 +98,12 @@ def test_swish(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_softplus(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.softplus, F.softplus)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_tanhshrink(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.tanhshrink, F.tanhshrink)
 
 
 def torch_heaviside(x, *args, **kwargs):
@@ -214,3 +220,27 @@ def torch_clip(x, *args, **kwargs):
 @pytest.mark.parametrize("w", [128])
 def test_scalarBC_clip(device, h, w, scalar1, scalar2):
     run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn.clip, torch_clip)
+
+
+def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch_function(torch_input_tensor_a, value=scalar1, threshold=scalar2)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor_a, scalar1, scalar2)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("value", [-0.5, -0.1, -5.5])
+@pytest.mark.parametrize("threshold", [-0.5, 1.5, 27.5])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_threshold(device, h, w, value, threshold):
+    run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold, F.threshold)

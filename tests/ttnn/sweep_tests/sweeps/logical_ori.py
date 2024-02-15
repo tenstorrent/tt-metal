@@ -20,7 +20,7 @@ parameters = {
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT],
-    "scalar": [1, 2, 3],
+    "scalar": [1, -1, -5, 10],
 }
 
 
@@ -30,6 +30,12 @@ def skip(**_) -> Tuple[bool, Optional[str]]:
 
 def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
     return False, None
+
+
+def torch_logical_ori(x, *args, **kwargs):
+    value = kwargs.pop("immediate")
+    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
+    return result
 
 
 def run(
@@ -50,13 +56,13 @@ def run(
     high = 100
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
-    torch_output_tensor = torch.logit(torch_input_tensor, scalar)
+    torch_output_tensor = torch_logical_ori(torch_input_tensor, immediate=scalar)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.logit(input_tensor, scalar, memory_config=output_memory_config)
+    output_tensor = ttnn.logical_ori(input_tensor, scalar, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.999)
