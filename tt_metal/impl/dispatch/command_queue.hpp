@@ -534,7 +534,8 @@ class CommandQueue {
     bool passthrough_mode() { return this->mode == CommandQueueMode::PASSTHROUGH; }
 
     static CommandQueueMode get_mode() {
-        int value = parse_env<int>("TT_METAL_ASYNC_QUEUES", static_cast<int>(CommandQueueMode::PASSTHROUGH));
+        // Envvar is used for bringup and debug only. Will be removed in the future and should not be relied on in production.
+        int value = parse_env<int>("TT_METAL_CQ_ASYNC_MODE", static_cast<int>(CommandQueueMode::PASSTHROUGH));
         return static_cast<CommandQueue::CommandQueueMode>(value);
     }
 };
