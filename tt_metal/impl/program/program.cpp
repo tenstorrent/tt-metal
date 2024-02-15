@@ -360,7 +360,9 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();
     }
-
+    else {
+        circular_buffer->assign_global_address();
+    }
     // Mark which buffer indices are being used on each core the circular buffer is used on
     for (const CoreRange &core_range : core_range_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
@@ -701,7 +703,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
         for (size_t i = 0; i < kernel_ids.size(); i++) {
             KernelHandle kernel_id = kernel_ids[i];
             vector<RISCV> sub_kernels;
-            const Kernel* kernel = detail::GetKernel(program, kernel_id);
+            std::shared_ptr<Kernel> kernel = detail::GetKernel(program, kernel_id);
             if (kernel->processor() == RISCV::COMPUTE) {
                 sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
             } else {
@@ -763,7 +765,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
             if (kernel_group.erisc_id)
                 kernel_ids.push_back(kernel_group.erisc_id.value());
             for (KernelHandle kernel_id : kernel_ids) {
-                const Kernel* kernel = detail::GetKernel(program, kernel_id);
+                auto kernel = detail::GetKernel(program, kernel_id);
 
                 for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
                     kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
@@ -780,7 +782,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     // want to send host data first because of the higher latency to pull
     // in host data.
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        Kernel* kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = detail::GetKernel(program, kernel_id);
         uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
         const auto& kernel_core_type = kernel->get_kernel_core_type();
         for (const auto& core_coord : kernel->cores_with_runtime_args()) {
@@ -911,7 +913,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     update_program_pages_with_new_page();  // sets src to 0 since unicast signals begins in new page
     for (const KernelGroup& kernel_group : kernel_group_unicast) {
         if (kernel_group.get_core_type() == CoreType::ETH) {
-            const Kernel* kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
+            auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
             for (const auto& logical_eth_core : kernel->logical_cores()) {
                 uint32_t dst_noc =
                     get_noc_unicast_encoding(device->physical_core_from_logical_core(logical_eth_core, CoreType::ETH));
@@ -970,7 +972,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     align_program_page_idx_to_new_page();
     for (KernelGroup& kernel_group : kernel_group_unicast) {
         if (kernel_group.get_core_type() == CoreType::ETH) {
-            const Kernel* kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
+            auto kernel = detail::GetKernel(program, kernel_group.erisc_id.value());
             for (const auto& logical_eth_core : kernel->logical_cores()) {
                 program_pages[program_page_idx] = 1;
                 program_page_idx += 4;  // 16 byte L1 alignment

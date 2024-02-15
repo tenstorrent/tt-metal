@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -18,8 +19,8 @@ namespace tt::tt_metal::detail{
         return program.add_kernel(kernel);
     }
 
-    inline Kernel* GetKernel(const Program &program, KernelHandle kernel_id) {
-        return program.kernels_.at(kernel_id).get();
+    inline std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id) {
+        return program.kernels_.at(kernel_id);
     }
 
     inline std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id) {

@@ -8,6 +8,7 @@
 #include "tt_metal/common/math.hpp"
 #include "common/assert.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 #include "llrt/llrt.hpp"
 
@@ -191,15 +192,7 @@ void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
     // L1 buffers are allocated top down!
     bool bottom_up = this->buffer_type_ == BufferType::DRAM;
-    if(is_sharded(this->buffer_layout_)){
-        this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_,
-                                                this->page_size_, this->buffer_type_, bottom_up,
-                                                this->num_cores());
-    }
-    else{
-        this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_, this->page_size_, this->buffer_type_, bottom_up, std::nullopt);
-    }
-
+    detail::AllocateBuffer(this, bottom_up);
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -268,9 +261,11 @@ void Buffer::deallocate() {
     if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0) {
         return;
     }
+    // Mark as deallocated
     this->size_ = 0;
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    allocator::deallocate_buffer(*this->device_->allocator_, this->address_, this->buffer_type_);
+    // Asynchronously deallocate
+    detail::DeallocateBuffer(this);
 }
 
 Buffer::~Buffer() {
@@ -307,5 +302,4 @@ bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
 }
 
 }  // namespace tt_metal
-
 }  // namespace tt

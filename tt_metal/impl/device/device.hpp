@@ -174,6 +174,7 @@ class Device {
     SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
     HWCommandQueue& hw_command_queue(size_t cq_id = 0);
     CommandQueue& command_queue(size_t cq_id = 0);
+    bool using_slow_dispatch() const;
     void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
@@ -186,6 +187,7 @@ class Device {
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
     void initialize_and_launch_firmware();
     void initialize_command_queue();
+    void initialize_synchronous_sw_cmd_queue();
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
@@ -223,6 +225,7 @@ class Device {
     uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
+    bool using_fast_dispatch = false;
 };
 
 }  // namespace tt_metal

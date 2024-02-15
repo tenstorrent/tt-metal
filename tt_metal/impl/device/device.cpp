@@ -510,12 +510,13 @@ void Device::configure_command_queue_programs() {
             }
         }
     }
-    detail::ConfigureDeviceWithProgram(this, command_queue_program);
+    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::initialize_command_queue() {
     TT_ASSERT(this->is_mmio_capable() or (not this->is_mmio_capable() and this->num_hw_cqs() == 1), "Only support one hardware command queue for fast dispatch on remote device");
+    using_fast_dispatch = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     sw_command_queues_.resize(num_hw_cqs());
@@ -536,6 +537,16 @@ void Device::initialize_command_queue() {
                 tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(logical_dispatch_core), &msg);
             }
         }
+    }
+}
+
+void Device::initialize_synchronous_sw_cmd_queue() {
+    // Initialize a single Software Command Queue for SD, using passthrough mode.
+    // This queue is used for all host bound functions using the Software CQ in SD mode.
+    sw_command_queues_.resize(num_hw_cqs());
+    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+        sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
+        sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
     }
 }
 
@@ -566,6 +577,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
         this->initialize_command_queue();
     } else {
         detail::DispatchStateCheck(false);
+        this->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(this->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
@@ -799,10 +811,14 @@ HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
 }
 
 CommandQueue& Device::command_queue(size_t cq_id) {
-    detail::DispatchStateCheck(true);
+    detail::DispatchStateCheck(using_fast_dispatch);
     TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *sw_command_queues_[cq_id];
+}
+
+bool Device::using_slow_dispatch() const {
+    return not (this->using_fast_dispatch);
 }
 }  // namespace tt_metal
 

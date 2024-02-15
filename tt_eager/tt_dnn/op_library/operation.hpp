@@ -9,6 +9,7 @@
 #include <tensor/tensor.hpp>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/program.hpp" /* Need this for GetKernel, which is used in CQ Set/Update Runtime Args Functions */
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"

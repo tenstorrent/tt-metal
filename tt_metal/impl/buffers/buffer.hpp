@@ -6,13 +6,13 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/core_coord.h"
+#include "common/bfloat16.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include <map>
 #include <optional>
-
 
 namespace tt {
 
@@ -153,13 +153,14 @@ class Buffer {
     Buffer& operator=(Buffer &&other);
 
     ~Buffer();
-
     Device *device() const { return device_; }
 
     uint32_t size() const { return static_cast<uint32_t>(size_); }
 
     // Returns address of buffer in the first bank
     uint32_t address() const { return static_cast<uint32_t>(address_); }
+
+    void set_address(uint64_t addr) { address_ = addr; }
 
     uint32_t page_size() const { return page_size_; }
 
@@ -296,6 +297,13 @@ class Buffer {
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
     std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
 };
+
+using HostDataType = std::variant<
+    const std::shared_ptr<std::vector<uint16_t>>,
+    const std::shared_ptr<std::vector<uint32_t>>,
+    const std::shared_ptr<std::vector<float>>,
+    const std::shared_ptr<std::vector<bfloat16>>,
+    const void*>;
 
 }  // namespace tt_metal
 

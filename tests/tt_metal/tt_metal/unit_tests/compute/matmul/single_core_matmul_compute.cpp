@@ -205,12 +205,12 @@ bool single_tile_matmul(tt_metal::Device* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        1.0f, 1.0f, byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
         1.0f / 32.0f,
         1.0f / 32.0f,
-        byte_size / bfloat16::SIZEOF,
+        byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     // Setup the weights such that final result is the original input.
 
@@ -259,8 +259,8 @@ bool single_tile_matmul(tt_metal::Device* device) {
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-        dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); });
+    pass &= is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+        dest_buffer_data, packed_golden, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.015f); });
     return pass;
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
@@ -354,20 +354,20 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        1.0f, 1.0f, in0_byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / bfloat16::SIZEOF,
+        in1_byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    auto packed_golden = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
         1.0f * K,
         1.0f * K,
-        (out_byte_size) / bfloat16::SIZEOF,
+        (out_byte_size) / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////
@@ -414,14 +414,14 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     int failed_index;
-    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
+    pass &= is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
         dest_buffer_data,
         packed_golden,
-        [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
+        [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.015f); },
         &failed_index);
     if (not pass) {
         log_info("Failed Index={}", failed_index);
-        print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
+        print_vector_fixed_numel_per_row(unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;
 }
@@ -532,20 +532,20 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        1.0f, 1.0f, in0_byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / bfloat16::SIZEOF,
+        in1_byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    auto packed_golden = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
         1.0f * K,
         1.0f * K,
-        (out_byte_size) / bfloat16::SIZEOF,
+        (out_byte_size) / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////
@@ -592,14 +592,14 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     int failed_index;
-    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
+    pass &= is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
         dest_buffer_data,
         packed_golden,
-        [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
+        [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.015f); },
         &failed_index);
     if (not pass) {
         log_info("Failed Index={}", failed_index);
-        print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
+        print_vector_fixed_numel_per_row(unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;
 }
