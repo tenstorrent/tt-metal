@@ -90,8 +90,8 @@ int main(int argc, char** argv) {
             // Execute application
             {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueWriteBuffer(::detail::GetCommandQueue(device), buffer, src_vec, false);
-                Finish(::detail::GetCommandQueue(device));
+                EnqueueWriteBuffer(device->command_queue(), buffer, src_vec, false);
+                Finish(device->command_queue());
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 h2d_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
 
             {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueReadBuffer(::detail::GetCommandQueue(device), buffer, result_vec, true);
+                EnqueueReadBuffer(device->command_queue(), buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 d2h_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

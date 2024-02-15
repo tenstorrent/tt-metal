@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreCoord start_core = {0, 0};
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
-        const CoreRange all_cores{.start = start_core, .end = end_core};
+        const CoreRange all_cores(start_core, end_core);
 
         log_info(LogTest, "core range {},{} - {},{}", start_core.x, start_core.y, end_core.x, end_core.y);
 
@@ -216,8 +216,8 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
-        EnqueueProgram(::detail::GetCommandQueue(device), program, false);
-        Finish(::detail::GetCommandQueue(device));
+        EnqueueProgram(device->command_queue(), program, false);
+        Finish(device->command_queue());
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
