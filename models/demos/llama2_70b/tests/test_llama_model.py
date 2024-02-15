@@ -200,7 +200,7 @@ def run_test_LlamaModel_inference(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))  # , "BFLOAT8_B-SHARDED"))
 def test_LlamaModel_inference(
     model_version,
     llm_mode,
