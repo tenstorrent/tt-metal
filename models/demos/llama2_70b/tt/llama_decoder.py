@@ -8,8 +8,10 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor
 from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
-from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
-from models.demos.llama2_70b.tt.llama_common import rms_decomp
+
+# from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
+from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather
 
 
 class TtLlamaDecoder(nn.Module):
@@ -32,22 +34,24 @@ class TtLlamaDecoder(nn.Module):
         self.attn_norm_list = []
         self.ffn_norm_list = []
         for i in range(self.num_devices):
-            attn_norm = torch2tt_tensor(
+            attn_norm = tt_lib.tensor.Tensor(
                 # Expand to size of input since we decomped norm
-                self.state_dict[attn_norm_str].unsqueeze(0).expand(batch, -1),
-                self.devices[i],
-            )
-            ffn_norm = torch2tt_tensor(
+                self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]),
+                self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
+            ).to(devices[i], self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
+
+            ffn_norm = tt_lib.tensor.Tensor(
                 # Expand to size of input since we decomped norm
-                self.state_dict[ffn_norm_str].unsqueeze(0).expand(batch, -1),
-                self.devices[i],
-            )
+                self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32]),
+                self.model_config["LN_MLP_WEIGHTS_DTYPE"],
+            ).to(devices[i], self.model_config["LN_MLP_WEIGHTS_MEMCFG"])
+
             self.attn_norm_list.append(attn_norm)
             self.ffn_norm_list.append(ffn_norm)
 
         self.attention = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
 
-        self.mlp = TtLlamaMLP(
+        self.mlp = TtLlamaMLP_optimized(
             devices,
             state_dict,
             base_url,
@@ -67,34 +71,72 @@ class TtLlamaDecoder(nn.Module):
         start_pos: int,
         attn_masks: list,
     ) -> tt_lib.tensor.Tensor:
-        ### Duplicate layernorm
+        ### xs (residual stream) is fractured on all chips
+
+        ### Duplicate inputs for layernorm
+        xs_replicated = tt_all_gather(xs, dim=-1)
+
         attn_norm_replicated = []
         for i in range(self.num_devices):
-            x = xs[i]
-            x_attn_norm = rms_decomp(x, self.attn_norm_list[i], self.norm_eps)
+            x = xs_replicated[i]
+            # RMSNorm must execute on sharded input
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+            )
+            x_attn_norm = tt_lib.operations.primary.rmsnorm(
+                x,
+                self.norm_eps,
+                self.attn_norm_list[i],
+                output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                program_config=self.model_config["LN_ATTN_PROGCFG"],
+            )
+            # Spill input and output back to DRAM
+            x = tt_lib.tensor.sharded_to_interleaved(x, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            x_attn_norm = tt_lib.tensor.sharded_to_interleaved(
+                x_attn_norm, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            )
             attn_norm_replicated.append(x_attn_norm)
 
+        # attn_outs is fractured
         attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks)
 
-        ### Duplicate residual
-        attn_resid_replicated = []
+        ### Fractured residual add
+        attn_resid_fractures = []
         for i in range(self.num_devices):
             attn_resid = tt_lib.tensor.add(attn_outs[i], xs[i])
-            attn_resid_replicated.append(attn_resid)
+            attn_resid_fractures.append(attn_resid)
+
+        ### Duplicate attention residual on all chips
+        attn_resid_replicated = tt_all_gather(attn_resid_fractures, dim=-1)
 
         ### Duplicate layernorm
         ffn_norm_replicated = []
         for i in range(self.num_devices):
             x = attn_resid_replicated[i]
-            x_ffn_norm = rms_decomp(x, self.ffn_norm_list[i], self.norm_eps)
+            # RMSNorm must execute on sharded input
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+            )
+            x_ffn_norm = tt_lib.operations.primary.rmsnorm(
+                x,
+                self.norm_eps,
+                self.ffn_norm_list[i],
+                output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
+                program_config=self.model_config["LN_MLP_PROGCFG"],
+            )
+            # Spill input and output back to DRAM
+            x = tt_lib.tensor.sharded_to_interleaved(x, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            x_ffn_norm = tt_lib.tensor.sharded_to_interleaved(
+                x_ffn_norm, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            )
             ffn_norm_replicated.append(x_ffn_norm)
 
         ffn_out = self.mlp(ffn_norm_replicated)
 
         ### Duplicate residual
-        ffn_resid_replicated = []
+        ffn_resid_fractured = []
         for i in range(self.num_devices):
-            ffn_resid = tt_lib.tensor.add(ffn_out[i], attn_resid_replicated[i])
-            ffn_resid_replicated.append(ffn_resid)
+            ffn_resid = tt_lib.tensor.add(ffn_out[i], attn_resid_fractures[i])
+            ffn_resid_fractured.append(ffn_resid)
 
-        return ffn_resid_replicated
+        return ffn_resid_fractured

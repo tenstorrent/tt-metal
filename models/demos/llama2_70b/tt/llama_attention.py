@@ -11,12 +11,12 @@ from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
-    tt_all_reduce,
+    tt_all_gather,
 )
 
 
 class TtLlamaAttention(nn.Module):
-    def __init__(self, device, state_dict, base_url, layer_num, model_config, configuration):
+    def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration):
         super().__init__()
 
         self.state_dict = state_dict
@@ -42,38 +42,50 @@ class TtLlamaAttention(nn.Module):
         wv_str = f"{layer_name}.attention.wv.weight"
         wo_str = f"{layer_name}.attention.wo.weight"
 
-        self.wq = torch2tt_tensor(
-            torch.transpose(
-                self.state_dict[wq_str],
-                -2,
-                -1,
-            ),
-            self.device,
-        )
-        self.wk = torch2tt_tensor(
-            torch.transpose(
-                self.state_dict[wk_str],
-                -2,
-                -1,
-            ),
-            self.device,
-        )
-        self.wv = torch2tt_tensor(
-            torch.transpose(
-                self.state_dict[wv_str],
-                -2,
-                -1,
-            ),
-            self.device,
-        )
-        self.wo = torch2tt_tensor(
-            torch.transpose(
-                self.state_dict[wo_str],
-                -2,
-                -1,
-            ),
-            self.device,
-        )
+        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
+        assert self.n_heads % self.num_devices == 0
+        assert self.n_kv_heads % self.num_devices == 0
+
+        self.wq_list = []
+        self.wk_list = []
+        self.wv_list = []
+        self.wo_list = []
+        self.layer_past_list = []
+
+        for i in range(self.num_devices):
+            wq = torch2tt_tensor(
+                torch.transpose(
+                    torch.chunk(self.state_dict[wq_str], self.num_devices)[i],
+                    -2,
+                    -1,
+                ),
+                self.devices[i],
+            )
+            wk = torch2tt_tensor(
+                torch.transpose(
+                    torch.chunk(self.state_dict[wk_str], self.num_devices)[i],
+                    -2,
+                    -1,
+                ),
+                self.devices[i],
+            )
+            wv = torch2tt_tensor(
+                torch.transpose(
+                    torch.chunk(self.state_dict[wv_str], self.num_devices)[i],
+                    -2,
+                    -1,
+                ),
+                self.devices[i],
+            )
+
+            wo = torch2tt_tensor(
+                torch.transpose(
+                    torch.chunk(self.state_dict[wo_str], self.num_devices)[i],
+                    -2,
+                    -1,
+                ),
+                self.devices[i],
+            )
 
             cache_k = torch.zeros(
                 (
@@ -91,9 +103,15 @@ class TtLlamaAttention(nn.Module):
                     self.head_dim,
                 )
             )
-        )
-        layer_past = [cache_k, cache_v]
-        self.layer_past = [torch2tt_tensor(lp, device) for lp in layer_past]
+            layer_past = [cache_k, cache_v]
+            layer_past = [torch2tt_tensor(lp, self.devices[i]) for lp in layer_past]
+
+            # add to the list
+            self.wq_list.append(wq)
+            self.wk_list.append(wk)
+            self.wv_list.append(wv)
+            self.wo_list.append(wo)
+            self.layer_past_list.append(layer_past)
 
     def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
         cos, sin = tt_precompute_freqs(dhead, end)
@@ -162,6 +180,7 @@ class TtLlamaAttention(nn.Module):
         attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
         padded_layer_past_len = nearest_32(start_pos + 1)
+        dense_inputs = []
         dense_outputs = []
         for i in range(self.num_devices):
             x = xs[i]
@@ -171,7 +190,6 @@ class TtLlamaAttention(nn.Module):
             wq = self.wq_list[i]
             wk = self.wk_list[i]
             wv = self.wv_list[i]
-            wo = self.wo_list[i]
             layer_past = self.layer_past_list[i]
             ###
             # QKV matmuls
@@ -279,15 +297,17 @@ class TtLlamaAttention(nn.Module):
                 # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
 
+            dense_inputs.append(attn_output)
+
+        # All gather input to dense
+        dense_inputs_replicated = tt_all_gather(dense_inputs, dim=-1)
+
+        for i in range(self.num_devices):
             dense_out = tt_lib.tensor.matmul(
-                attn_output,
-                wo,
+                dense_inputs_replicated[i],
+                self.wo_list[i],
             )  # seqlen, 1, batch, hidden_size
 
             dense_outputs.append(dense_out)
 
-        # return the sum of the outputs
-        if len(dense_outputs) > 1:
-            return tt_all_reduce(dense_outputs)
-        else:
-            return dense_outputs
+        return dense_outputs
