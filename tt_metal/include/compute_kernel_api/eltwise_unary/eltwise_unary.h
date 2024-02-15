@@ -24,7 +24,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb = 16)
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
-    PACK(( llk_pack_init() ));
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
 

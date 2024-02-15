@@ -41,7 +41,7 @@ ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_c
     MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
-    PACK(( llk_pack_init()  ));
+    PACK(( llk_pack_init(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>()  ));
 
@@ -143,13 +143,13 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
     PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
-    PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>()  ));
+    PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::ColMajor, false>()  ));
     // TODO(AP): ZM-only kernel
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
     #else
-    PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
+    PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
     // TODO(AP): ZM-only kernel
