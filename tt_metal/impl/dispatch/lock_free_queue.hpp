@@ -5,6 +5,8 @@
 #include <atomic>
 #include <memory>
 
+#include "tt_metal/common/assert.hpp"
+
 template<typename T>
 class LockFreeQueue {
     private:
@@ -39,7 +41,7 @@ class LockFreeQueue {
         std::shared_ptr<T> pop() {
             Node* oldHead = pop_head();
             if (!oldHead) {
-                throw std::runtime_error("Queue is empty");
+                TT_THROW("Queue is empty");
             }
             std::shared_ptr<T> result(oldHead->data);
             delete oldHead;

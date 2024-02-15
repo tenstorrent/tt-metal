@@ -29,7 +29,7 @@ using std::tuple;
 using std::unique_ptr;
 
 // Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_RESTART, INVALID };
+enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_RESTART, FLUSH, INVALID };
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
@@ -473,7 +473,7 @@ class HWCommandQueue {
 
 
 // Common interface for all command queue types
-struct CommandQueueInterface {
+struct CommandInterface {
     EnqueueCommandType type;
     std::optional<bool> blocking;
     std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
@@ -502,11 +502,14 @@ class CommandQueue {
 
     // Schedule a command to be run on the device
     // Blocking if in passthrough mode. Non-blocking if in async mode
-    void run_command(const CommandQueueInterface& command);
+    void run_command(const CommandInterface& command);
 
     // API for setting the mode of the command queue
     // The environment env counterpart is `TT_METAL_ASYNC_QUEUES`
     void set_mode(const CommandQueueMode& mode);
+
+    // Reference to the underlying hardware command queue, non-const because side-effects are allowed
+    HWCommandQueue& hw_command_queue();
 
    private:
     enum class CommandQueueState {
@@ -514,21 +517,26 @@ class CommandQueue {
         RUNNING = 1,
         TERMINATE = 2,
     };
-    CommandQueueMode mode;
+    CommandQueueMode mode = CommandQueue::get_mode();
     std::unique_ptr<std::thread> worker_thread;
     CommandQueueState worker_state = CommandQueueState::IDLE;
 
-    LockFreeQueue<CommandQueueInterface> worker_queue;
+    LockFreeQueue<CommandInterface> worker_queue;
     uint32_t cq_id;
     Device* device_ptr;
 
     void start_worker();
     void stop_worker();
     void run_worker();
-    void run_command_impl(const CommandQueueInterface& command);
+    void run_command_impl(const CommandInterface& command);
 
     bool async_mode() { return this->mode == CommandQueueMode::ASYNC; }
     bool passthrough_mode() { return this->mode == CommandQueueMode::PASSTHROUGH; }
+
+    static CommandQueueMode get_mode() {
+        int value = parse_env<int>("TT_METAL_ASYNC_QUEUES", static_cast<int>(CommandQueueMode::PASSTHROUGH));
+        return static_cast<CommandQueue::CommandQueueMode>(value);
+    }
 };
 
 } // namespace tt::tt_metal
