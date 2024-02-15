@@ -161,8 +161,16 @@ from ttnn.operations.unary import (
     acosh,
     atanh,
     logical_not,
+    logical_andi,
+    logical_ori,
+    logical_xori,
     logit,
     clone,
+    signbit,
+    rpow,
+    rdiv,
+    rsub,
+    transpose,
 )
 
 from ttnn.operations.binary import (
@@ -219,6 +227,8 @@ from ttnn.operations.activation import (
     softsign,
     swish,
     softplus,
+    tanhshrink,
+    threshold,
 )
 
 from ttnn.operations.math import (
@@ -247,6 +257,13 @@ from ttnn.operations.math import (
     hypot,
     squared_difference,
     lerp,
+    polygamma,
+    rad2deg,
+    recip,
+    sqrt,
+    square,
+    tril,
+    triu,
 )
 
 from ttnn.operations.normalization import (

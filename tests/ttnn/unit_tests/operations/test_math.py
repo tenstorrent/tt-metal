@@ -103,14 +103,32 @@ def test_abs(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+def test_rad2deg(device, h, w):
+    run_math_unary_test(device, h, w, ttnn.rad2deg, torch.rad2deg)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_cbrt(device, h, w):
     run_math_unary_test(device, h, w, ttnn.cbrt, torch_cbrt, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+def test_tril(device, h, w):
+    run_math_unary_test(device, h, w, ttnn.tril, torch.tril)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_deg2rad(device, h, w):
     run_math_unary_test(device, h, w, ttnn.deg2rad, torch.deg2rad)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sqrt(device, h, w):
+    run_math_unary_test(device, h, w, ttnn.sqrt, torch.sqrt)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -136,17 +154,48 @@ def test_erfc(device, h, w):
 def test_erfinv(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erfinv, torch.erfinv, pcc=0.999)
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_square(device, h, w):
+    run_math_unary_test(device, h, w, ttnn.square, torch.square)
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_exp2(device, h, w):
     run_math_unary_test(device, h, w, ttnn.exp2, torch.exp2, pcc=0.98)
 
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_expm1(device, h, w):
     run_math_unary_test(device, h, w, ttnn.expm1, torch.expm1, pcc=0.99)
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_triu(device, h, w):
+    run_math_unary_test(device, h, w, ttnn.triu, torch.triu)
+
+
+def run_math_unary_test_recip(device, h, w, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    low = -100
+    high = 100
+
+    torch_input_tensor = torch.empty((h, w), dtype=torch.bfloat16).uniform_(low, high) + 0.0001
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_recip(device, h, w):
+    run_math_unary_test_recip(device, h, w, ttnn.recip, torch.reciprocal, pcc=0.999)
 
 
 def run_math_unary_test_range(device, h, w, ttnn_function, torch_function, pcc=0.9999):
@@ -183,3 +232,28 @@ def torch_multigammaln(x, *args, **kwargs):
 @pytest.mark.parametrize("w", [5])
 def test_multigammaln(device, h, w):
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, torch_multigammaln, pcc=0.999)
+
+
+def run_math_test_polygamma(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    low = 1
+    high = 10
+
+    torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(scalar, torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor, scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("scalar", [1, 2, 5, 10])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_polygamma(device, h, w, scalar):
+    run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, torch.polygamma, pcc=0.999)
