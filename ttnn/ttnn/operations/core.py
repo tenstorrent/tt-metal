@@ -25,7 +25,7 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-@ttnn.register_operation(name="ttnn.ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors)
+@ttnn.register_operation(name="ttnn.Tensor.__getitem__", validate_input_tensors=_getitem_validate_input_tensors)
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
     input_dtype = input_tensor.dtype
@@ -41,29 +41,29 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     if isinstance(slices, tuple):
         if len(slices) > input_rank:
             raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
-        while len(slices) < input_rank:
-            slices = slices + (slice(None, None, None),)
 
     def are_valid_device_slices(slices):
         if not isinstance(slices, tuple):
             return False
 
-        def is_valid_slice(s, multiple_of=1):
-            if not isinstance(s, slice):
+        if len(slices) != input_rank:
+            return False
+
+        def is_valid_slice(_slice, multiple_of=1):
+            if not isinstance(_slice, slice):
                 return False
-            if s.start is not None and s.start % multiple_of != 0:
+            if _slice.start is not None and _slice.start % multiple_of != 0:
                 return False
-            if s.stop is not None and s.stop % multiple_of != 0:
+            if _slice.stop is not None and _slice.stop % multiple_of != 0:
                 return False
-            if s.step is not None and s.stop != 1:
+            if _slice.step is not None and _slice.stop != 1:
                 return False
-            if s.start is not None and s.end is not None:
-                if s.stop - s.start:
+            if _slice.start is not None and _slice.stop is not None:
+                if (_slice.stop - _slice.start) % multiple_of != 0:
                     return False
             return True
 
         if len(slices) < 2:
-            breakpoint()
             return False
 
         *batch_slices, height_slice, width_slice = slices
@@ -90,9 +90,10 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
 
         while len(slices) != 4:
             slices = (slice(None, None, None),) + slices
-        slice_start = [s.start if s.start is not None else 0 for s in slices]
+        slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
         slice_end = [
-            (s.stop if s.stop is not None else input_tensor.shape[index]) - 1 for index, s in enumerate(slices)
+            (_slice.stop if _slice.stop is not None else input_tensor.shape[index]) - 1
+            for index, _slice in enumerate(slices)
         ]
         ttl_input_tensor = input_tensor.value
         ttl_output_tensor = ttl.tensor.unpad(ttl_input_tensor, slice_start, slice_end)
@@ -102,20 +103,14 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         return ttnn.reshape(output, shape=output_shape)
     elif not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
         logger.warning(
-            'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because the tensor is on device and the slicing using unpad is not supported!'
+            "ttnn.Tensor.__getitem__:vusing torch because the tensor is on device and the slicing using unpad is not supported!"
         )
     elif input_layout != ttnn.TILE_LAYOUT:
-        logger.warning(
-            f'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because input layout {input_layout} is not TILE_LAYOUT!'
-        )
+        logger.warning(f"ttnn.Tensor.__getitem__: using torch because input layout {input_layout} is not TILE_LAYOUT!")
     elif input_rank > 4:
-        logger.warning(
-            f'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because input rank {input_rank} is greater than 4!'
-        )
+        logger.warning(f"ttnn.Tensor.__getitem__: using torch because input rank {input_rank} is greater than 4!")
     elif not are_valid_device_slices(slices):
-        logger.warning(
-            f'Running: "ttnn.ttnn.Tensor.__getitem__" using torch because slices {slices} are not valid device slices!'
-        )
+        logger.warning(f"ttnn.Tensor.__getitem__: using torch because slices {slices} are not valid device slices!")
 
     def torch_getitem(tensor, slices):
         return tensor[slices]

@@ -69,8 +69,12 @@ def split_query_key_value_and_split_heads(
         [batch_size, encoder_attention_heads, seq_length, head_size],
         [batch_size, encoder_attention_heads, padded_seq_length, head_size],
     )
+    key_desired_shape = ttnn.Shape(
+        [batch_size, encoder_attention_heads, head_size, seq_length],
+        [batch_size, encoder_attention_heads, head_size, padded_seq_length],
+    )
     query_states = ttnn.reshape(query_states, shape=desired_shape)
-    key_states = ttnn.reshape(key_states, shape=desired_shape)
+    key_states = ttnn.reshape(key_states, shape=key_desired_shape)
     value_states = ttnn.reshape(value_states, shape=desired_shape)
     return query_states, key_states, value_states
 

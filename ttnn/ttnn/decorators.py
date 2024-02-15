@@ -143,8 +143,19 @@ def document_input_tensors(name, function, validate_input_tensors):
 REGISTERED_OPERATIONS = set()
 
 
-def query_all_registered_operations():
-    return sorted(REGISTERED_OPERATIONS)
+def query_all_registered_operations(include_ttl=False):
+    sorted_operations = sorted(REGISTERED_OPERATIONS)
+
+    ttnn_operations = [
+        operation
+        for operation in sorted_operations
+        if operation.startswith("ttnn.") and not operation.startswith("ttnn.ttl.")
+    ]
+    ttl_operations = [operation for operation in sorted_operations if operation.startswith("ttnn.ttl.")]
+    if include_ttl:
+        return ttnn_operations + ttl_operations
+    else:
+        return ttnn_operations
 
 
 def register_operation(
@@ -212,3 +223,47 @@ def register_operation(
         return call_wrapper
 
     return operation_decorator
+
+
+def register_ttl_operation_as_ttnn_operation(name, function):
+    def get_input_tensors(arg):
+        if isinstance(arg, ttnn.Tensor):
+            yield arg
+        elif isinstance(arg, (list, tuple)):
+            for element in arg:
+                yield from get_input_tensors(element)
+        elif isinstance(arg, dict):
+            for value in arg.values():
+                yield from get_input_tensors(value)
+
+    def validate_input_tensors(operation_name, *args, **kwargs):
+        input_tensors = list(get_input_tensors(args)) + list(get_input_tensors(kwargs))
+        for input_tensor in input_tensors:
+            if len(input_tensor.shape) != 4:
+                raise ValueError(f"{operation_name}: Expected 4D tensor, got {input_tensor.shape}")
+            if not input_tensor.value.is_allocated():
+                raise ValueError(f"{operation_name}: Expected allocated tensor, got {input_tensor}")
+
+    def preprocess_arg(arg):
+        if isinstance(arg, ttnn.Tensor):
+            return arg.value
+        elif isinstance(arg, (list, tuple)):
+            return type(arg)([preprocess_arg(element) for element in arg])
+        elif isinstance(arg, dict):
+            return {key: preprocess_arg(value) for key, value in arg.items()}
+        else:
+            return arg
+
+    @wraps(function)
+    def wrapper(*function_args, **function_kwargs):
+        function_args = preprocess_arg(function_args)
+        function_kwargs = preprocess_arg(function_kwargs)
+        output = function(*function_args, **function_kwargs)
+        return ttnn.Tensor(output)
+
+    wrapper = register_operation(
+        name=name,
+        validate_input_tensors=validate_input_tensors,
+    )(wrapper)
+
+    return wrapper

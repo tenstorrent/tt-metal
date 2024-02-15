@@ -1,4 +1,4 @@
-personal_ws-1.1 en 484 
+personal_ws-1.1 en 485
 ABI
 ADDI
 API
@@ -261,6 +261,7 @@ gdb
 gdb's
 gelu
 genindex
+getitem
 gez
 grayskull
 grey

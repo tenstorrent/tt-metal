@@ -17,9 +17,8 @@ What is the difference between :doc:`ttnn </ttnn/about>` and :doc:`tt_lib </ttnn
 
 It utilizes :doc:`tt_lib </ttnn/dependencies/tt_lib>` data structures and operations and provides a user-friendly interface to them.
 
-The reason why that is done is because :doc:`tt_lib </ttnn/dependencies/tt_lib>` is meant to be fast-paced and to allow the user to be as flexible with the APIs as needed.
-
-However that poses a challenge for users as many operations only work in very specific cases. And in addition to that, the APIs of many operations are not stable.
+:doc:`tt_lib </ttnn/dependencies/tt_lib>` is meant to be fast-paced and to allow the user to be as flexible with the APIs as needed,
+while :doc:`ttnn </ttnn/about>` is meant to be more stable and intuitive.
 
 Here are key features that :doc:`ttnn </ttnn/about>` provides that aren't available in :doc:`tt_lib </ttnn/dependencies/tt_lib>`:
     * Support for N-D tensors.
@@ -31,7 +30,7 @@ Here are key features that :doc:`ttnn </ttnn/about>` provides that aren't availa
     * Ability to compare the result of each operation to the equivalent `PyTorch <https://pytorch.org/>`_ operation. Very useful for debugging.
 
 
-In case :doc:`ttnn </ttnn/about>` doesn't provide an operation that is needed, then the tensor can be easily convert to :doc:`tt_lib </ttnn/dependencies/tt_lib>` tensor:
+In case :doc:`ttnn </ttnn/about>` doesn't provide an operation that is needed, then the tensor can be easily converted to :doc:`tt_lib </ttnn/dependencies/tt_lib>` tensor:
 
 .. code-block:: python
 
