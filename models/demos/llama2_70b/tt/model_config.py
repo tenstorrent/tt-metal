@@ -298,6 +298,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             ),
         )
     elif num_devices == 8:
+        # Unpadded version
         model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
@@ -318,6 +319,27 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 False,
             ),
         )
+        # Padded version
+        # model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        #     ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        #     ttl.tensor.BufferType.L1,
+        #     ttl.tensor.ShardSpec(
+        #         ttl.tensor.CoreRangeSet(
+        #             {
+        #                 ttl.tensor.CoreRange(
+        #                     ttl.tensor.CoreCoord(0, 0),
+        #                     ttl.tensor.CoreCoord(7, 7),
+        #                 ),
+        #             }
+        #         ),
+        #         [
+        #             32,
+        #             128,
+        #         ],
+        #         ttl.tensor.ShardOrientation.ROW_MAJOR,
+        #         False,
+        #     ),
+        # )
     model_config["LN_ATTN_PROGCFG"] = ttl.operations.primary.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         subblock_w=8,
@@ -341,6 +363,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     # ATTN Module
 
     # LLama2 Fused QKV Matmul Config
+    model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 1:
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
@@ -352,27 +375,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
-        )
-
-        model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
-                [
-                    32,
-                    320,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
         )
     elif num_devices == 4:
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -386,27 +388,8 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=None,
             mcast_in0=True,
         )
-        model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            # ttl.tensor.ShardSpec(
-            #     ttl.tensor.CoreRangeSet(
-            #         {
-            #             ttl.tensor.CoreRange(
-            #                 ttl.tensor.CoreCoord(0, 0),
-            #                 ttl.tensor.CoreCoord(7, 1),
-            #             ),
-            #         }
-            #     ),
-            #     [
-            #         32,
-            #         160,
-            #     ],
-            #     ttl.tensor.ShardOrientation.ROW_MAJOR,
-            #     False,
-            # ),
-        )
     elif num_devices == 8:
+        # Unpadded version
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=32,
@@ -418,26 +401,18 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=None,
             mcast_in0=True,
         )
-        model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
-                        ),
-                    }
-                ),
-                [
-                    32,
-                    160,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+        # Padded version
+        # model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        #     compute_with_storage_grid_size=(8, 8),
+        #     in0_block_w=4,
+        #     out_subblock_h=1,
+        #     out_subblock_w=1,
+        #     per_core_M=1,
+        #     per_core_N=1,
+        #     fuse_batch=True,
+        #     fused_activation=None,
+        #     mcast_in0=True,
+        # )
 
     # Split QKV Matmul Config
     model_config["WQ_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
