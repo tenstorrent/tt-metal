@@ -1110,7 +1110,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
 
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking) {
     detail::DispatchStateCheck(true);
-    cq.run_command(CommandQueueInterface{
+    cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_READ_BUFFER,
         .blocking = blocking,
         .buffer = buffer,
@@ -1123,7 +1123,7 @@ void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper
         using T = std::decay_t<decltype(b)>;
         std::shared_future<void> f;
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer> > ) {
-            cq.device()->hw_command_queue(cq.id()).enqueue_read_buffer(b, dst, blocking);
+            cq.hw_command_queue().enqueue_read_buffer(b, dst, blocking);
         }
     }, buffer);
 }
@@ -1131,7 +1131,7 @@ void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper
 void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer,
                                           const void* src, bool blocking) {
     detail::DispatchStateCheck(true);
-    cq.run_command(CommandQueueInterface{
+    cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER,
         .blocking = blocking,
         .buffer = buffer,
@@ -1143,10 +1143,8 @@ void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrappe
                                           const void* src, bool blocking) {
     std::visit ( [&cq, src, blocking](auto&& b) {
         using T = std::decay_t<decltype(b)>;
-        Device * device = cq.device();
-        auto cq_id = cq.id();
         if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>> ) {
-            device->hw_command_queue(cq_id).enqueue_write_buffer(b, src, blocking);
+            cq.hw_command_queue().enqueue_write_buffer(b, src, blocking);
         }
     }, buffer);
 }
@@ -1154,7 +1152,7 @@ void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrappe
 void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
     detail::DispatchStateCheck(true);
     TT_ASSERT(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
-    cq.run_command(CommandQueueInterface{
+    cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_PROGRAM,
         .blocking = blocking,
         .program = program,
@@ -1168,39 +1166,37 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
         Device * device = cq.device();
-        auto cq_id = cq.id();
         if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
             detail::CompileProgram(device, program);
             program.get().allocate_circular_buffers();
             detail::ValidateCircularBufferRegion(program, device);
-            device->hw_command_queue(cq_id).enqueue_program(program, trace, blocking);
+            cq.hw_command_queue().enqueue_program(program, trace, blocking);
         } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
             detail::CompileProgram(device, *program);
             program->allocate_circular_buffers();
             detail::ValidateCircularBufferRegion(*program, device);
-            device->hw_command_queue(cq_id).enqueue_program(*program, trace, blocking);
+            cq.hw_command_queue().enqueue_program(*program, trace, blocking);
         }
     }, program);
 }
 
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
-    cq.run_command(CommandQueueInterface{
+    cq.run_command(CommandInterface{
         .type = EnqueueCommandType::FINISH,
         .blocking = true
     });
 }
 
 void FinishImpl(CommandQueue& cq) {
-    cq.device()->hw_command_queue(cq.id()).finish();
+    cq.hw_command_queue().finish();
 }
 
 
 Trace BeginTrace(CommandQueue& cq) {
     // Resets the command queue state
-    Device * device = cq.device();
-    device->hw_command_queue(cq.id()).restart();
-    return Trace(device->hw_command_queue(cq.id()));
+    cq.hw_command_queue().restart();
+    return Trace(cq.hw_command_queue());
 }
 
 void EndTrace(Trace& trace) {
@@ -1237,14 +1233,12 @@ namespace detail {
 void EnqueueRestart(CommandQueue& cq) {
     ZoneScoped;
     detail::DispatchStateCheck(true);
-    cq.device()->hw_command_queue(cq.id()).restart();
+    cq.hw_command_queue().restart();
 }
 
 }
 
 CommandQueue::CommandQueue(Device* device, uint32_t id) : device_ptr(device), cq_id(id) {
-    bool value = tt::parse_env("TT_METAL_ASYNC_QUEUES", false);
-    mode = value ? CommandQueueMode::ASYNC : CommandQueueMode::PASSTHROUGH;
     if (async_mode()) {
         start_worker();
     }
@@ -1254,22 +1248,27 @@ CommandQueue::~CommandQueue() {
     if (async_mode()) {
         stop_worker();
     }
-    TT_ASSERT(worker_queue.empty(), "CQ{} worker queue must be empty on destruction", cq_id);
+    TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", cq_id);
+}
+
+HWCommandQueue& CommandQueue::hw_command_queue() {
+    return device()->hw_command_queue(this->cq_id);
 }
 
 void CommandQueue::wait_until_empty() {
-    log_trace(tt::LogDispatch, "CQ{} WFI start", cq_id);
-    // Insert a token command to flush all prior commands
-    worker_queue.push(CommandQueueInterface{
-        .type = EnqueueCommandType::INVALID
+    log_trace(LogDispatch, "CQ{} WFI start", cq_id);
+    // Insert a flush token to push all prior commands to completion
+    // Necessary to avoid implementing a peek and pop on the lock-free queue
+    this->worker_queue.push(CommandInterface{
+        .type = EnqueueCommandType::FLUSH
     });
     while (true) {
-        if (worker_queue.empty()) {
+        if (this->worker_queue.empty()) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
-    log_trace(tt::LogDispatch, "CQ{} WFI complete", cq_id);
+    log_trace(LogDispatch, "CQ{} WFI complete", cq_id);
 }
 
 void CommandQueue::set_mode(const CommandQueueMode& mode_) {
@@ -1283,44 +1282,44 @@ void CommandQueue::set_mode(const CommandQueueMode& mode_) {
 }
 
 void CommandQueue::start_worker() {
-    if (worker_state == CommandQueueState::RUNNING) {
+    if (this->worker_state == CommandQueueState::RUNNING) {
         return;  // worker already running, exit
     }
-    worker_state = CommandQueueState::RUNNING;
-    worker_thread = std::make_unique<std::thread>(std::thread(&CommandQueue::run_worker, this));
+    this->worker_state = CommandQueueState::RUNNING;
+    this->worker_thread = std::make_unique<std::thread>(std::thread(&CommandQueue::run_worker, this));
     tt::log_debug(tt::LogDispatch, "CQ{} started worker thread", cq_id);
 }
 
 void CommandQueue::stop_worker() {
-    if (worker_state == CommandQueueState::IDLE) {
+    if (this->worker_state == CommandQueueState::IDLE) {
         return;  // worker already stopped, exit
     }
-    worker_state = CommandQueueState::TERMINATE;
-    worker_thread->join();
-    worker_state = CommandQueueState::IDLE;
+    this->worker_state = CommandQueueState::TERMINATE;
+    this->worker_thread->join();
+    this->worker_state = CommandQueueState::IDLE;
     tt::log_debug(tt::LogDispatch, "CQ{} stopped worker thread", cq_id);
 }
 
 void CommandQueue::run_worker() {
     // forever loop checking for commands in the worker queue
     while (true) {
-        if (worker_queue.empty()) {
-            if (worker_state == CommandQueueState::TERMINATE) {
+        if (this->worker_queue.empty()) {
+            if (this->worker_state == CommandQueueState::TERMINATE) {
                 break;
             }
             std::this_thread::yield();
         } else {
-            auto command = worker_queue.pop();
+            auto command = this->worker_queue.pop();
             run_command_impl(*command);
         }
     }
 }
 
-void CommandQueue::run_command(const CommandQueueInterface& command) {
-    log_trace(tt::LogDispatch, "CQ{} received {} in {} mode", cq_id, command.type, async_mode() ? "ASYNC" : "PASSTHROUGH");
+void CommandQueue::run_command(const CommandInterface& command) {
+    log_trace(LogDispatch, "CQ{} received {} in {} mode", cq_id, command.type, async_mode() ? "ASYNC" : "PASSTHROUGH");
     if (async_mode()) {
-        worker_queue.push(command);
-        if (command.blocking.has_value() && *command.blocking == true) {
+        this->worker_queue.push(command);
+        if (command.blocking.has_value() and *command.blocking == true) {
             wait_until_empty();
         }
     } else {
@@ -1328,8 +1327,8 @@ void CommandQueue::run_command(const CommandQueueInterface& command) {
     }
 }
 
-void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
-    log_trace(tt::LogDispatch, "CQ{} running {}", cq_id, command.type);
+void CommandQueue::run_command_impl(const CommandInterface& command) {
+    log_trace(LogDispatch, "CQ{} running {}", cq_id, command.type);
     switch (command.type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
@@ -1351,12 +1350,13 @@ void CommandQueue::run_command_impl(const CommandQueueInterface& command) {
         case EnqueueCommandType::FINISH:
             FinishImpl(*this);
             break;
-        case EnqueueCommandType::INVALID:
+        case EnqueueCommandType::FLUSH:
+            // Used by CQ to push prior commands
             break;
         default:
             TT_THROW("Invalid command type");
     }
-    // log_trace(tt::LogDispatch, "CQ{} running {} complete", cq_id, command.type);
+    // log_trace(LogDispatch, "CQ{} running {} complete", cq_id, command.type);
 }
 
 }  // namespace tt::tt_metal
