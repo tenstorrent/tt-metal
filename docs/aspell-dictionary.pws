@@ -4,6 +4,7 @@ ADDI
 API
 APIs
 AnotherVecType
+AssignGlobalBufferToProgram
 BFLOAT
 BNT
 BRISC
@@ -78,6 +79,7 @@ GetRuntimeArgs
 Grayskull
 HW
 HiFi
+HostDataType
 InstantiateTrace
 InterleavedBufferConfig
 Jupyter
@@ -131,6 +133,7 @@ RISCs
 ReadFromDevice
 ReduceDim
 ResNet
+RuntimeArgs
 SETPRECISION
 SETW
 SFP
@@ -161,6 +164,7 @@ UnaryOpType
 UpdateCircularBufferPageSize
 UpdateCircularBufferTotalSize
 UpdateDynamicCircularBufferAddress
+UpdateRuntimeArgs
 VC
 VCs
 WH
@@ -301,6 +305,7 @@ hw
 hypot
 icb
 idst
+idx
 ie
 ifrom
 init

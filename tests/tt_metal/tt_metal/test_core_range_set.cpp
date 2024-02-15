@@ -26,7 +26,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-                    tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                    auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core));
                     // Check that compute kernel compile time args are mapped to the correct cores
                     if (kernel->processor() == tt::RISCV::COMPUTE) {

@@ -64,7 +64,7 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
 bool verify_result_data_movement(
     Device *device, const Program &program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args) {
     bool pass = true;
-    auto get_runtime_arg_addr = [](Kernel *kernel) {
+    auto get_runtime_arg_addr = [](std::shared_ptr<Kernel> kernel) {
         uint32_t arg_base = 0;
         switch (kernel->processor()) {
             case tt::RISCV::BRISC: {
@@ -80,7 +80,7 @@ bool verify_result_data_movement(
 
     EXPECT_TRUE(
         program.num_kernels() == 1);
-    tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, 0);
+    auto kernel = tt_metal::detail::GetKernel(program, 0);
     auto processor = kernel->processor();
     auto rt_arg_addr = get_runtime_arg_addr(kernel);
 
@@ -149,7 +149,7 @@ bool verify_result_compute(
         KernelType kern_type = KernelType::DATA_MOVEMENT,
         uint32_t buffer_addr = 0) {
     bool pass = true;
-    auto get_runtime_arg_addr = [](Kernel *kernel) {
+    auto get_runtime_arg_addr = [](std::shared_ptr<Kernel> kernel) {
         uint32_t result_base = 0;
         switch (kernel->processor()) {
             case tt::RISCV::BRISC: {
@@ -169,7 +169,7 @@ bool verify_result_compute(
 
     EXPECT_TRUE(
         program.num_kernels() == 1);
-    tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, 0);
+    auto kernel = tt_metal::detail::GetKernel(program, 0);
     auto processor = kernel->processor();
     auto rt_arg_addr = get_runtime_arg_addr(kernel);
     auto rt_result_addr = get_runtime_arg_addr(kernel);

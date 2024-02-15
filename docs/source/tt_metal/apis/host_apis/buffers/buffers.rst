@@ -6,3 +6,4 @@ Buffers
   CircularBuffers
   CreateSemaphore
   DeallocateBuffer
+  AssignGlobalBufferToProgram

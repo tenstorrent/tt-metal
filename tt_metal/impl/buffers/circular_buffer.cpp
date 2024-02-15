@@ -4,9 +4,10 @@
 
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
+#include "host_api.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
-
+#include "tt_metal/detail/tt_metal.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -37,6 +38,10 @@ CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBu
         if (df_set and ps_set) {
             this->buffer_indices_.insert(buffer_index);
         }
+    }
+
+    if (globally_allocated()) {
+        globally_allocated_address_ = config.globally_allocated_address().value();
     }
 }
 
@@ -83,8 +88,12 @@ uint32_t CircularBuffer::address() const {
         TT_THROW("Circular buffer has not been allocated, cannot request address at this time!");
     }
 
-    return this->globally_allocated() ? config_.globally_allocated_address().value()
+    return this->globally_allocated() ? globally_allocated_address_
                                       : locally_allocated_address_.value();
+}
+
+void CircularBuffer::assign_global_address() {
+    detail::GetBufferAddress(config_.shadow_global_buffer, &globally_allocated_address_);
 }
 
 }  // namespace tt_metal

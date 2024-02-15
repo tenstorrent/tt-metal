@@ -38,58 +38,58 @@ const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
 };
 
-bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
+tt::test_utils::df::bfloat16 sfpu_function(const string& op_name, const tt::test_utils::df::bfloat16& input) {
     if (op_name == "relu") {
-        return bfloat16(fmaxf(input.to_float(), 0.0f));
+        return tt::test_utils::df::bfloat16(fmaxf(input.to_float(), 0.0f));
     } else if (op_name == "exponential") {
-        return bfloat16(std::exp(input.to_float()));
+        return tt::test_utils::df::bfloat16(std::exp(input.to_float()));
     } else if (op_name == "reciprocal") {
-        return bfloat16(1 / input.to_float());
+        return tt::test_utils::df::bfloat16(1 / input.to_float());
     } else if (op_name == "gelu") {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
         auto x = input.to_float();
         auto x3 = x * x * x;
         float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
-        return bfloat16(result);
+        return tt::test_utils::df::bfloat16(result);
     } else if (op_name == "sqrt") {
-        return bfloat16(sqrtf(input.to_float()));
+        return tt::test_utils::df::bfloat16(sqrtf(input.to_float()));
     } else if (op_name == "sigmoid") {
         auto x = input.to_float();
         float result = 1 / (1 + std::exp(-x));
-        return bfloat16(result);
+        return tt::test_utils::df::bfloat16(result);
     } else if (op_name == "log") {
-        return bfloat16(logf(input.to_float()));
+        return tt::test_utils::df::bfloat16(logf(input.to_float()));
     } else if (op_name == "tanh") {
-        return bfloat16(std::tanh(input.to_float()));
+        return tt::test_utils::df::bfloat16(std::tanh(input.to_float()));
     } else {
         TT_THROW("Unsupported op_name in test");
-        return bfloat16(0.0f);
+        return tt::test_utils::df::bfloat16(0.0f);
     }
 }
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const string& op_name, const int seed) {
     if ((op_name == "sqrt") or (op_name == "log")) {
-        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
+        return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(0.0001f, 4.0f, numel, seed);
     } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
-        auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
-        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+        auto possible_values = vector<tt::test_utils::df::bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
+        return generate_packed_random_vector_from_vector<uint32_t, tt::test_utils::df::bfloat16>(possible_values, numel, seed);
     } else {
-        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
+        return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(-1.0f, 1.0f, numel, seed);
     }
 }
 
 bool is_close_packed_sfpu_output(const vector<uint32_t>& vec_a, const vector<uint32_t>& vec_b, const string& op_name) {
     if (op_name == "tanh") {
-        return is_close_packed_vectors<bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
+        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
     } else if ((op_name == "gelu") or (op_name == "relu")) {
-        return is_close_packed_vectors<bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.15f); });
+        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.15f); });
     } else if ((op_name == "exponential")) {
-        return is_close_packed_vectors<bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
+        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
     } else {
-        return is_close_packed_vectors<bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.06f, 0.006f); });
+        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.06f, 0.006f); });
     }
 }
 
@@ -136,15 +136,15 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
-        byte_size / bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+        byte_size / tt::test_utils::df::bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
-    auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
-    std::vector<bfloat16> golden(input.size());
-    std::transform(input.begin(), input.end(), golden.begin(), [&](const bfloat16& val) {
+    auto input = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input);
+    std::vector<tt::test_utils::df::bfloat16> golden(input.size());
+    std::transform(input.begin(), input.end(), golden.begin(), [&](const tt::test_utils::df::bfloat16& val) {
         return sfpu_util::sfpu_function(test_config.sfpu_op, val);
     });
-    std::vector<uint32_t> packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    std::vector<uint32_t> packed_golden = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
 
     // Same runtime args for every core
     vector<uint32_t> reader_rt_args = {

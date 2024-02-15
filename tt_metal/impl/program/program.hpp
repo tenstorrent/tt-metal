@@ -5,6 +5,7 @@
 #pragma once
 
 #include <bitset>
+#include <memory>
 #include <optional>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
@@ -26,7 +27,7 @@ namespace tt_metal {
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
     KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel);
-    Kernel *GetKernel(const Program &program, KernelHandle kernel_id);
+    std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
 }
 
@@ -76,9 +77,9 @@ class Program {
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
     KernelGroup * kernels_on_core(const CoreCoord &core);
-
     std::vector<KernelGroup>& get_kernel_groups();
-
+    inline void add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(buf); }
+    inline void release_buffers() { owned_buffer_pool = {}; }
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange &cr) const;
@@ -104,6 +105,9 @@ class Program {
     void allocate_circular_buffers();
 
    private:
+    // Buffers temporarily owned by the program
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+
     ProgramDeviceMap program_device_map;
 
     // The buffer that holds the kernel/binaries/etc for this program
@@ -163,7 +167,7 @@ class Program {
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
     friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel);
-    friend Kernel *detail::GetKernel(const Program &program, KernelHandle kernel_id);
+    friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
     KernelHandle add_kernel(std::shared_ptr<Kernel> kernel);

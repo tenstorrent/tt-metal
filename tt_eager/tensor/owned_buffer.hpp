@@ -34,6 +34,7 @@ struct Buffer {
 
     inline bool is_allocated() const{ return bool(this->shared_vector_); }
     inline const std::vector<T>& get() const { return *this->shared_vector_; }
+    inline const std::shared_ptr<std::vector<T>> get_ptr() const noexcept { return this->shared_vector_; }
     inline void reset() { this->shared_vector_.reset(); }
 
     inline void* data() noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }

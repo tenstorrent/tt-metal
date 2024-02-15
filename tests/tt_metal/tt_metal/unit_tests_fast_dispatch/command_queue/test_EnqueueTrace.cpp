@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <memory>
 
 #include "command_queue_fixture.hpp"
 #include "common/env_lib.hpp"
 #include "gtest/gtest.h"
+#include "impl/program/program.hpp"
 #include "logger.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
@@ -20,9 +22,9 @@ struct TestBufferConfig {
     BufferType buftype;
 };
 
-Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
+Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
-
+    Device* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -52,26 +54,30 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
-    vector<uint32_t> writer_rt_args = {
-        output.address(),
+    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
+    std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
+
+    *writer_runtime_args = {
+        &output,
         (uint32_t)output.noc_coordinates().x,
         (uint32_t)output.noc_coordinates().y,
         output.num_pages()
     };
-    SetRuntimeArgs(program, writer_kernel, worker, writer_rt_args);
+
+    *reader_runtime_args = {
+        &input,
+        (uint32_t)input.noc_coordinates().x,
+        (uint32_t)input.noc_coordinates().y,
+        input.num_pages()
+    };
+
+    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
+    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{16, tt::DataFormat::Float16_b}})
             .set_page_size(16, 2048);
 
     CreateCircularBuffer(program, core_range, output_cb_config);
-    vector<uint32_t> reader_rt_args = {
-        input.address(),
-        (uint32_t)input.noc_coordinates().x,
-        (uint32_t)input.noc_coordinates().y,
-        input.num_pages()
-    };
-    SetRuntimeArgs(program, reader_kernel, worker, reader_rt_args);
-
     return program;
 }
 
@@ -84,7 +90,10 @@ constexpr bool kNonBlocking = false;
 vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
 TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
-    CommandQueue command_queue(this->device_, 0, CommandQueue::CommandQueueMode::ASYNC);
+    // Get command queue from device for this test, since its running in async mode
+    CommandQueue& command_queue = this->device_->command_queue();
+    auto current_mode = CommandQueue::default_mode();
+    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer interm(this->device_, 2048, 2048, BufferType::DRAM);
@@ -158,32 +167,35 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     for (auto i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
+    command_queue.set_mode(current_mode);
 }
 
 TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
-    CommandQueue command_queue(this->device_, 0);
+    CommandQueue& command_queue = this->device_->command_queue();
+    auto current_mode = CommandQueue::default_mode();
+    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
 
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+    std::shared_ptr<Buffer> input = std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM);
+    std::shared_ptr<Buffer> output = std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM);
 
     uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
     uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
-    vector<Buffer> interm_buffers;
+    vector<std::shared_ptr<Buffer>> interm_buffers;
     vector<Program> programs;
 
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
 
     for (int i = 0; i < num_programs; i++) {
-        interm_buffers.push_back(Buffer(this->device_, 2048, 2048, BufferType::DRAM));
+        interm_buffers.push_back(std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM));
         if (i == 0) {
-            programs.push_back(create_simple_unary_program(input, interm_buffers[i]));
+            programs.push_back(create_simple_unary_program(*input, *(interm_buffers[i])));
         } else if (i == (num_programs - 1)) {
-            programs.push_back(create_simple_unary_program(interm_buffers[i - 1], output));
+            programs.push_back(create_simple_unary_program(*(interm_buffers[i - 1]), *output));
         } else {
-            programs.push_back(create_simple_unary_program(interm_buffers[i - 1], interm_buffers[i]));
+            programs.push_back(create_simple_unary_program(*(interm_buffers[i - 1]), *(interm_buffers[i])));
         }
     }
 
@@ -235,7 +247,7 @@ TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
-
+    command_queue.set_mode(current_mode);
 }
 
 } // end namespace basic_tests

@@ -120,18 +120,18 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0.1f, 2.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        -1.0f, 1.0f, byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        0.1f, 2.0f, byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    auto input0 = unpack_vector<bfloat16, uint32_t>(packed_input0);
-    auto input1 = unpack_vector<bfloat16, uint32_t>(packed_input1);
-    std::vector<bfloat16> golden(input0.size());
+    auto input0 = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input0);
+    auto input1 = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input1);
+    std::vector<tt::test_utils::df::bfloat16> golden(input0.size());
     std::transform(
-        input0.begin(), input0.end(), input1.begin(), golden.begin(), [&](const bfloat16& lhs, const bfloat16& rhs) {
+        input0.begin(), input0.end(), input1.begin(), golden.begin(), [&](const tt::test_utils::df::bfloat16& lhs, const tt::test_utils::df::bfloat16& rhs) {
             if (test_config.binary_op == "add") {
                 return (lhs.to_float() + rhs.to_float());
             } else if (test_config.binary_op == "sub") {
@@ -143,7 +143,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
                 return 0.0f;
             }
         });
-    auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    auto packed_golden = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -184,8 +184,8 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-        dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); });
+    pass &= is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+        dest_buffer_data, packed_golden, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.015f); });
     return pass;
 }
 }  // namespace unit_tests::compute::binary
