@@ -26,6 +26,7 @@ def update_ttnn_module_args(ttnn_module_args):
 
 def custom_preprocessor(model, name, ttnn_module_args):
     parameters = {}
+    print("ttnn_module_args: ", ttnn_module_args)
     if isinstance(model, UNet):
         # ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1["activation"] = "relu"  # Fuse relu with conv1
@@ -34,7 +35,10 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c1_2["deallocate_activation"] = True  #
         ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
         ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        print("\n\n\n\nttnn_module_args.p1: ")
+        print(ttnn_module_args.p1)
 
+        print("the type of ttnn_module_args.p1 is: ", type(ttnn_module_args.p1))
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.c1, model.b1)
         conv2_weight, conv2_bias = fold_batch_norm2d_into_conv2d(model.c1_2, model.b1_2)
 
@@ -43,6 +47,9 @@ def custom_preprocessor(model, name, ttnn_module_args):
 
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.c1_2)
+        parameters["p1"] = ttnn_module_args.p1
+
+        # print("parameters['p1']: ", parameters["p1"])
 
     #        if model.downsample is not None:
     #            downsample_weight, downsample_bias = fold_batch_norm2d_into_conv2d(
@@ -205,4 +212,6 @@ ttnn_model = ttnn_functional_unet.UNet(parameters)
 #
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
 #
+print("torch_output_tensor.size: ", torch_output_tensor.size())
+print("ttnn_output_tensor.size: ", output_tensor.size())
 assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
