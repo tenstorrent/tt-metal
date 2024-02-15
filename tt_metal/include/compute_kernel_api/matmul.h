@@ -30,27 +30,15 @@ namespace ckernel {
 ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose=0) {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
-
-    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose) ));
+
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
-    #else
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, false) ));
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, false) ));
-    #endif
     MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
     PACK(( llk_pack_init(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>()  ));
-
-    // TODO(AP): ZM-only kernel
-    PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
-}
-
-ALWI void mm_init_once() {
-
+    PACK(( llk_pack_dest_init<SYNC, false, DST_ACCUM_MODE>()  ));
 }
 
 /**
@@ -87,13 +75,8 @@ ALWI void matmul_tiles(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set    | False    |
  */
 ALWI void mm_init_short(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, const uint32_t transpose=0) {
-    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose)  ));
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)  ));
-    #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, false)  ));
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, false) ));
-    #endif
 }
 
 /**
@@ -130,31 +113,16 @@ ALWI void mm_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, 
  */
 ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose = 0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
 
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id, transpose) ));
-    #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
-    #endif
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
     MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
-
-    #ifdef ARCH_GRAYSKULL
-    PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>(out_cb_id)  ));
+    PACK(( llk_pack_init<false, false>(out_cb_id)  ));
     PACK(( llk_setup_outputs()  ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::ColMajor, false>()  ));
-    // TODO(AP): ZM-only kernel
-    PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
-    #else
-    PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>(out_cb_id)  ));
-    PACK(( llk_setup_outputs()  ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>()  ));
-    // TODO(AP): ZM-only kernel
-    PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
-    #endif
+    PACK(( llk_pack_dest_init<SYNC, false, DST_ACCUM_MODE>()  ));
 }
 
 /**
@@ -179,12 +147,7 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
  */
 ALWI void matmul_block(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst, const uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
     UNPACK(( llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim) ));
-
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
-    #else
-    MATH(( llk_math_matmul<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
-    #endif
+    MATH(( llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
 }
 
 /**
@@ -204,12 +167,7 @@ ALWI void matmul_block(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile
  */
 ALWI void mm_block_init_short(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, const uint32_t transpose=0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
-
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)  ));
-    #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)  ));
-    #endif
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)  ));
 }
 
 /**

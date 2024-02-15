@@ -22,7 +22,7 @@
 * LLK PACK
 *************************************************************************/
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false>
 inline void llk_pack_mop_config(const uint32_t output) {
 
     const std::uint32_t output_id = get_output_id(output);
@@ -31,7 +31,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
     const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, false>(
+    _llk_pack_mop_config_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
         pack_dst_format[output_id],
         face_r_dim,
         num_faces,
@@ -99,7 +99,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -108,7 +108,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_init_<untilize, zero_output, FaceLayout, false>(
+    _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
         pack_dst_format[output_id],
         face_r_dim,
         num_faces,
@@ -233,26 +233,26 @@ inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en>();
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
+template <DstSync Dst, bool untilize = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<Dst, FaceLayout, untilize>(
+    _llk_init_packer_dest_offset_registers_<Dst, DstTileFaceLayout::RowMajor, untilize>(
         face_r_dim,
         narrow_tile
     );
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<Dst, FaceLayout, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_dest_init_<Dst, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
         face_r_dim,
         narrow_tile
     );
@@ -276,7 +276,7 @@ inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
     _llk_pack_debug_dump_seek_(offset);
 }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 
     const std::uint32_t output_id = get_output_id(new_output);
@@ -285,7 +285,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         cb_interface[output_id].fifo_page_size,
@@ -296,7 +296,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     );
 }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -304,10 +304,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     if((pack_dst_format[old_output_id] != pack_dst_format[new_output_id])
        && (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid)
        && (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout>(new_output);
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(new_output);
     } else if constexpr (is_tile_dim_reconfig_en) {
         // Same format but different tile dims
-        llk_pack_mop_config<false, false, FaceLayout, false>(new_output);
+        llk_pack_mop_config<false, false>(new_output);
     }
 }
 

@@ -10,7 +10,7 @@
  * LLK MATMUL
  *************************************************************************/
 
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
+template <int NUM_FIDELITY_PHASES>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -40,12 +40,13 @@ inline void llk_math_matmul_init(
         kt_dim);
 }
 
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
+template <int NUM_FIDELITY_PHASES>
 inline void llk_math_matmul(
-    uint dst_index,
+    const uint dst_index,
     const bool transpose = false,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
+
     _llk_math_matmul_<NUM_FIDELITY_PHASES, DstTileFaceLayout::RowMajor>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
 }
