@@ -7,7 +7,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_reduce
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather
 
 
 class TtLlamaMLP(nn.Module):
@@ -70,7 +70,7 @@ class TtLlamaMLP(nn.Module):
                         -1,
                     ),
                     self.num_devices,
-                    dim=-2,
+                    dim=-1,
                 )[i],
                 self.devices[i],
             )
@@ -80,30 +80,31 @@ class TtLlamaMLP(nn.Module):
             self.w2_list.append(w2)
 
     def forward(self, xs):
+        w2_inputs = []
         w2_outputs = []
         for i in range(self.num_devices):
-            x = xs[i]
-            w1 = self.w1_list[i]
-            w3 = self.w3_list[i]
-            w2 = self.w2_list[i]
             w1_out = tt_lib.tensor.matmul(
-                x,
-                w1,
+                xs[i],
+                self.w1_list[i],
             )
             w1_sigmoid = tt_lib.tensor.silu(w1_out)
 
             w3_out = tt_lib.tensor.matmul(
-                x,
-                w3,
+                xs[i],
+                self.w3_list[i],
             )
 
             w2_in = tt_lib.tensor.mul(w1_sigmoid, w3_out)
+            w2_inputs.append(w2_in)
+
+        w2_in_replicated = tt_all_gather(w2_inputs, dim=-1)
+
+        for i in range(self.num_devices):
             w2_out = tt_lib.tensor.matmul(
-                w2_in,
-                w2,
+                w2_in_replicated[i],
+                self.w2_list[i],
             )
 
             w2_outputs.append(w2_out)
 
-        mlp_outputs = tt_all_reduce(w2_outputs)
-        return mlp_outputs
+        return w2_outputs

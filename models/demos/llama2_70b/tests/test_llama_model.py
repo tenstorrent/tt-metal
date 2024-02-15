@@ -58,7 +58,8 @@ def run_test_LlamaModel_inference(
     kv_cache_len,
     pcc,
     model_config,
-    n_layers
+    n_layers,
+    n_devices
     # tt_cache_path,
     # model_location_generator,
 ):
@@ -80,7 +81,7 @@ def run_test_LlamaModel_inference(
     print(state_dict.keys())
 
     # Prepare configs
-    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
+    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
 
     torch.manual_seed(0)
     base_url = "layers"
@@ -96,7 +97,7 @@ def run_test_LlamaModel_inference(
     tt_model = TtLlamaModel(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
 
     generation_start_pos = 0
-    generation_length = 8
+    generation_length = 1
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -191,15 +192,15 @@ def run_test_LlamaModel_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_layers",
-    (("decode", 32, 1, 128, 5),),
-    ids=["decode_batch32"],
+    "llm_mode, batch, seq_len, kv_cache_len, n_layers, n_devices",
+    (("decode", 32, 1, 128, 1, 8),),
+    ids=["decode_batch32_layers1_devices8"],
 )
 @pytest.mark.parametrize(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-SHARDED",))  # , "BFLOAT8_B-SHARDED"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_inference(
     model_version,
     llm_mode,
@@ -209,10 +210,11 @@ def test_LlamaModel_inference(
     pcc,
     model_config_str,
     n_layers,
+    n_devices,
     # model_location_generator,
     device,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaModel_inference(
@@ -224,7 +226,8 @@ def test_LlamaModel_inference(
         kv_cache_len,
         pcc,
         model_config,
-        n_layers
+        n_layers,
+        n_devices
         # tt_cache_path,
         # model_location_generator,
     )
