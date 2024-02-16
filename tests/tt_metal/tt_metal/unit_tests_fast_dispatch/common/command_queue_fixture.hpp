@@ -27,13 +27,10 @@ class CommandQueueFixture : public ::testing::Test {
 
         this->device_ = tt::tt_metal::CreateDevice(device_id);
         this->cmd_queue = std::make_unique<CommandQueue> ( device_, 0);
-
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     }
 
     void TearDown() override {
         if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
             tt::tt_metal::CloseDevice(this->device_);
         }
     }

@@ -72,7 +72,7 @@ void kernel_main() {
                 num_buffer_transfers,
                 is_sharded,
                 sharded_buffer_num_cores,
-                producer_noc_encoding,
+                (uint64_t(producer_noc_encoding) << 32),
                 producer_consumer_transfer_num_pages);
         }
 

@@ -12,7 +12,6 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_producer.hpp"
-// #include "debug/dprint.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -186,7 +185,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             //                                      and in that case we weren't sending the cmd at all (because of is_program continue below)
                  // send cmd even if there is no data associated
                 internal_::send_fd_packets(); // TODO: AL, is this right?
-                // DPRINT << "src sent first" << ENDL();
             // }
 
             for (uint32_t i = 0; i < num_buffer_transfers; i++) {
@@ -219,11 +217,11 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                     multicore_eth_cb_pop_front(
                         eth_db_cb_config, remote_src_db_cb_config, ((uint64_t)relay_src_noc_encoding << 32), num_to_write);
                     num_pages_tunneled += num_to_write;
+                    // DPRINT << "src-num-remaining: " << (uint32_t)(num_pages - num_pages_tunneled) << ENDL();
                     num_to_write = min(num_pages - num_pages_tunneled, producer_consumer_transfer_num_pages);
                 }
                 command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
             }
-            // DPRINT << "src done" << ENDL();
             noc_semaphore_inc(((uint64_t)relay_src_noc_encoding << 32) | get_semaphore(0), 1);
             noc_async_write_barrier();  // Barrier for now
         } else if (routing_info->routing_mode == EthRouterMode::FD_DST) {
@@ -265,7 +263,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                     consumer_cb_size);
                 relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, ((uint64_t)relay_dst_noc_encoding << 32));
 
-                // DPRINT << "dst relayed command" << ENDL();
                 update_producer_consumer_sync_semaphores(((uint64_t)eth_router_noc_encoding << 32), ((uint64_t)relay_dst_noc_encoding << 32), eth_db_semaphore_addr, get_semaphore(0));
          //   }
 
@@ -311,8 +308,8 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                 uint32_t src_addr = eth_db_cb_config->rd_ptr_16B << 4;
                 uint64_t dst_noc_addr = ((uint64_t)relay_dst_noc_encoding << 32) | (eth_db_cb_config->wr_ptr_16B << 4);
                 while (!cb_consumer_space_available(eth_db_cb_config, num_pages_to_tx));
-                // DPRINT << "dst sent " << num_pages_to_tx << ENDL();
                 noc_async_write(src_addr, dst_noc_addr, page_size * num_pages_to_tx);
+                internal_::ack_fd_packet();
                 multicore_cb_push_back(
                     eth_db_cb_config,
                     remote_dst_db_cb_config,
@@ -320,7 +317,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                     l1_consumer_fifo_limit_16B,
                     num_pages_to_tx
                 );
-                internal_::ack_fd_packet();
                 eth_db_cb_config->rd_ptr_16B += eth_db_cb_config->page_size_16B * num_pages_to_tx;
                 if (eth_db_cb_config->rd_ptr_16B >= local_fifo_limit_16B) {
                     eth_db_cb_config->rd_ptr_16B -= local_cb_size_16B;
@@ -330,8 +326,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
               }
               command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION; // jump to buffer transfer region
             }
-            // DPRINT << "dst done" << ENDL();
-
         } else {
             internal_::risc_context_switch();
         }
