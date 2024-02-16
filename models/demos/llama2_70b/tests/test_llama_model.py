@@ -65,7 +65,7 @@ def run_test_LlamaModel_inference(
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
+    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
@@ -97,7 +97,7 @@ def run_test_LlamaModel_inference(
     tt_model = TtLlamaModel(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
 
     generation_start_pos = 0
-    generation_length = 1
+    generation_length = 2
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -193,7 +193,7 @@ def run_test_LlamaModel_inference(
 
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, n_layers, n_devices",
-    (("decode", 32, 1, 128, 1, 8),),
+    (("decode", 32, 1, 128, 2, 8),),
     ids=["decode_batch32_layers1_devices8"],
 )
 @pytest.mark.parametrize(

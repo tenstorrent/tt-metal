@@ -95,11 +95,6 @@ class TtLlamaMLP_optimized(nn.Module):
             self.w3_list.append(w3)
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        if len(x) > 1:
-            print("num devices:", self.num_devices)
-            print("w1:0 shape:", self.w1_list[0].shape())
-            print("x:0 shape:", x[0].shape())
-
         # FOR BRINGUP! Inputs are interleaved so shard them
         x_sharded = [
             tt_lib.tensor.interleaved_to_sharded(t, sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"])
@@ -145,8 +140,6 @@ class TtLlamaMLP_optimized(nn.Module):
             )
 
         for i in range(len(hidden_states)):
-            print("w2_input shape:", hidden_states[i].shape())
-            print("self.w2_list[i]:", self.w2_list[i].shape())
             hidden_states[i] = tt_lib.operations.primary.matmul_1d(
                 hidden_states[i],
                 self.w2_list[i],

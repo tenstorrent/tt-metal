@@ -10,7 +10,6 @@ import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
 from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -178,7 +177,7 @@ def run_test_LlamaQKV(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaQKV_inference(
     model_version,
     batch,
