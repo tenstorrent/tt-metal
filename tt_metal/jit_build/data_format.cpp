@@ -24,7 +24,7 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Fp8_e4m3,
     DataFormat::Int8,
     DataFormat::UInt8,
-    DataFormat::Int32,
+    DataFormat::UInt32,
     DataFormat::UInt16,
 };
 
@@ -73,9 +73,8 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
     for (int i = 0; i < NUM_OPERANDS; i++) {
         // Special case where Float32 can pair with any exponent precision, skip checking
         if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
-            (data_format[i] == DataFormat::Int32) || (data_format[i] == DataFormat::RawUInt16) ||
-            (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16) ||
-            (data_format[i] == DataFormat::UInt32)) {
+            (data_format[i] == DataFormat::UInt32) || (data_format[i] == DataFormat::RawUInt16) ||
+            (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16)) {
             continue;
         }
 
@@ -86,7 +85,7 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
             if(last_valid_format != DataFormat::Invalid) {
                 TT_FATAL(is_exp_b_format(data_format[i]) == is_exp_b_format(last_valid_format),
                     "All input data-formats must have the same exponent format.");
-                // dump_data_formats(data_format);
+                //dump_data_formats(data_format);
                 last_valid_format = data_format[i];
 
             } else {
@@ -166,7 +165,7 @@ void check_valid_in_out_data_formats(DataFormat input_formats[NUM_OPERANDS], Dat
     DataFormat last_valid_input_format = check_consistent_format_within_operand(input_formats);
     DataFormat last_valid_param_format = check_consistent_format_within_operand(param_formats);
     if (last_valid_input_format != DataFormat::Invalid && last_valid_param_format != DataFormat::Invalid) {
-        TT_FATAL(is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_param_format),
+        TT_FATAL((is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_param_format)),
             "Input format = {} and Param format = {} must have same exp width", last_valid_input_format, last_valid_param_format);
     }
 
@@ -176,6 +175,10 @@ void check_valid_in_out_data_formats(DataFormat input_formats[NUM_OPERANDS], Dat
         TT_FATAL(is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_intermed_format),
             "Input format = {} and Intermed format = {} must have same exp width", last_valid_input_format, last_valid_intermed_format);
     }
+
+    // MT: Why is this check not enabled?
+    // DataFormat last_out_valid_format = check_valid_formats_within_operand(output_formats);
+    // TT_FATAL((last_out_valid_format != DataFormat::Invalid), "Output format not found");
 }
 
 std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS]) {
@@ -296,15 +299,16 @@ const DataFormat get_single_pack_src_format(
             pack_src_format = output_format;
         } else if(output_format == DataFormat::Float16){
             pack_src_format = DataFormat::Float16_b;
-        } else if(output_format == DataFormat::Int32){
-            pack_src_format = DataFormat::Int32;
+        } else if(output_format == DataFormat::UInt32){
+            pack_src_format = DataFormat::UInt32;
         } else if(output_format == DataFormat::UInt16){
             pack_src_format = DataFormat::UInt16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", output_format);
         }
     } else if (int_fpu_en) {
-        TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
+        TT_FATAL(false, "Integer math is not supported");
+        // TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
         // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
         if (tt::is_integer_format(output_format)) {
