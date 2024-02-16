@@ -167,8 +167,6 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-
     vector<uint32_t> sem_vector;
     uint32_t sem_buffer_size = program_config.num_sems * L1_ALIGNMENT;
 
@@ -295,16 +293,16 @@ namespace basic_tests {
 namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
-    Program program;
-
-    CoreRange cr({0, 0}, {0, 0});
-    CoreRangeSet cr_set({cr});
-    // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
-    // added separately
-    auto dummy_reader_kernel = CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
     for (Device *device : devices_) {
+        Program program;
+
+        CoreRange cr({0, 0}, {0, 0});
+        CoreRangeSet cr_set({cr});
+        // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+        // added separately
+        auto dummy_reader_kernel = CreateKernel(
+            program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
         EnqueueProgram(device->command_queue(), program, false);
         Finish(device->command_queue());
     }
@@ -377,18 +375,18 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    Program program;
-    CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
-        .set_page_size(intermediate_cb, single_tile_size)
-        .set_page_size(out_cb, single_tile_size);
-    auto cb = CreateCircularBuffer(program, cr_set, cb_config);
-
-    local_test_functions::initialize_dummy_kernels(program, cr_set);
-
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0,0);
 
     for (Device *device : devices_) {
+        Program program;
+        CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
+            .set_page_size(intermediate_cb, single_tile_size)
+            .set_page_size(out_cb, single_tile_size);
+        auto cb = CreateCircularBuffer(program, cr_set, cb_config);
+
+        local_test_functions::initialize_dummy_kernels(program, cr_set);
+
         EnqueueProgram(device->command_queue(), program, false);
 
         Finish(device->command_queue());
@@ -441,39 +439,39 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-    Program program;
-
-    CoreRange cr({0, 0}, {0, 0});
-    CoreRangeSet cr_set({cr});
-    // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
-    // added separately
-    auto dummy_reader_kernel = CreateKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
     for (Device *device : devices_) {
+        Program program;
+
+        CoreRange cr({0, 0}, {0, 0});
+        CoreRangeSet cr_set({cr});
+        // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+        // added separately
+        auto dummy_reader_kernel = CreateKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
         EnqueueProgram(device->command_queue(), program, false);
         Finish(device->command_queue());
     }
 }
 
 TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
-
-    Program program;
-
-    CoreRange cr({0, 0}, {0, 0});
-    CoreRangeSet cr_set({cr});
-
-    auto compute_kernel_id = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
-        cr_set,
-        tt::tt_metal::ComputeConfig{});
-
-
-    std::vector<uint32_t> initial_runtime_args = {101, 202};
-    SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
     for (Device *device : devices_) {
+        Program program;
+
+        CoreRange cr({0, 0}, {0, 0});
+        CoreRangeSet cr_set({cr});
+
+        auto compute_kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
+            cr_set,
+            tt::tt_metal::ComputeConfig{});
+
+
+        std::vector<uint32_t> initial_runtime_args = {101, 202};
+        SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
+
         EnqueueProgram(device->command_queue(), program, false);
         Finish(device->command_queue());
 
