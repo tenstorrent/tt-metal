@@ -54,7 +54,7 @@ def run_test_FalconDecoder_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    model_name = model_location_generator(model_version, model_subdir="Falcon", low_cpu_mem_usage=True)
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
@@ -66,7 +66,7 @@ def run_test_FalconDecoder_inference(
     decoder_input = (torch.rand(batch, seq_len, configuration.hidden_size) * 2) - 1
     base_url = "transformer.h"
     max_position_embeddings = 2048
-    head_dim = configuration.hidden_size // configuration.n_head
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True
     user_id = 0
 
@@ -84,7 +84,7 @@ def run_test_FalconDecoder_inference(
 
         tt_decoder_input = torch2tt_tensor(decoder_input.unsqueeze(1), device)
         tt_attention_mask = torch2tt_tensor(
-            (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1),
+            (attention_mask_bool * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
             device,
         )
         tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
@@ -116,7 +116,9 @@ def run_test_FalconDecoder_inference(
             dim=-1,
         )
         tt_attention_mask = torch2tt_tensor(
-            (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(-1, configuration.n_head, -1, -1),
+            (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
+                -1, configuration.num_attention_heads, -1, -1
+            ),
             device,
         )
         tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
