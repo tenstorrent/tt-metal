@@ -8,7 +8,7 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
-from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, rms_decomp, tt_all_gather
+from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, rms_decomp, tt_all_gather_torch
 
 
 class TtLlamaModel(nn.Module):
@@ -68,11 +68,6 @@ class TtLlamaModel(nn.Module):
                 self.devices[i],
             )
             self.lm_head_list.append(lm_head)
-
-        # self.output = torch2tt_tensor(
-        #     torch.transpose(self.state_dict[lm_head_str], -2, -1),
-        #     self.device,
-        # )
 
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
@@ -149,7 +144,7 @@ class TtLlamaModel(nn.Module):
             xs = layer(xs, rot_mats, start_pos, attn_masks)
 
         ### Gather fractured layers output
-        xs_replicated = tt_all_gather(xs, dim=-1)
+        xs_replicated = tt_all_gather_torch(xs, dim=-1)
 
         ### Duplicate layernorm
         norm_out_replicated = []
@@ -175,9 +170,14 @@ class TtLlamaModel(nn.Module):
         ### Each device does an LM head fracture
         lm_head_out = []
         for i in range(self.num_devices):
-            out = tt_lib.tensor.matmul(norm_out_replicated[i], self.lm_head_list[i])
+            # out = tt_lib.tensor.matmul(norm_out_replicated[i], self.lm_head_list[i])
+            out = tt_lib.operations.primary.matmul_1d(
+                norm_out_replicated[i], self.lm_head_list[i], fp32_dest_acc_en=True, packer_l1_acc=True
+            )
             lm_head_out.append(out)
 
+        ret = tt_all_gather_torch(lm_head_out, dim=-1)
+        ret = ret[0]
         ### Concat LM head results to return 1 tensor
-        ret = tt_lib.tensor.concat(lm_head_out, dim=-1)
+        # ret = tt_lib.tensor.concat(lm_head_out, dim=-1)
         return ret

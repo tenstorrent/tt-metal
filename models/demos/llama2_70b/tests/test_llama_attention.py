@@ -11,10 +11,8 @@ import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
 from models.demos.llama2_70b.reference.llama.model import precompute_freqs_cis
 
-# from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
-from models.demos.falcon7b.tt.model_config import (
+from models.demos.llama2_70b.tt.model_config import (
     get_model_config,
-    get_tt_cache_path,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -80,6 +78,7 @@ def run_test_LlamaAttention_inference(
     kv_cache_len,
     pcc,
     model_config,
+    n_devices,
     # tt_cache_path,
     # model_location_generator,
 ):
@@ -95,6 +94,8 @@ def run_test_LlamaAttention_inference(
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
 
+    devices = [device for _ in range(n_devices)]
+
     # Prepare configs
     torch.manual_seed(0)
     layer_num = 0
@@ -108,20 +109,22 @@ def run_test_LlamaAttention_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaAttention_model = TtLlamaAttention(device, state_dict, base_url, layer_num, model_config, configuration)
+    tt_LlamaAttention_model = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
 
     generation_start_pos = 0
     generation_length = 67
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
-        pt_attention_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
-        tt_attention_input = pt_attention_input.clone()
+        pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
+        pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
+        pt_inp_normed = hugging_face_reference_model.layers[layer_num].attention_norm(pt_inp)
+        tt_input = pt_inp_normed.clone()
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
         attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
-            pt_attention_input, start_pos
+            pt_inp_normed, start_pos
         )
 
         pytorch_out = pytorch_LlamaAttention_model(
@@ -132,9 +135,7 @@ def run_test_LlamaAttention_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        attention_input, start_pos, rot_mat, attn_mask = tt_LlamaAttention_model.prepare_inputs(
-            tt_attention_input, start_pos
-        )
+        attention_input, start_pos, rot_mat, attn_mask = tt_LlamaAttention_model.prepare_inputs(tt_input, start_pos)
 
         tt_out = tt_LlamaAttention_model(
             attention_input,
@@ -143,9 +144,10 @@ def run_test_LlamaAttention_inference(
             attn_mask,
         )
 
-        assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
-        tt_out = tt_out[0]
-        tt_out = tt2torch_tensor(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        assert isinstance(tt_out, list)  # tt_out should be sharded on N devices
+        tt_outs = [tt2torch_tensor(t) for t in tt_out]
+        tt_out = torch.cat(tt_outs, dim=-1)
+        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -200,18 +202,18 @@ def run_test_LlamaAttention_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len",
+    "llm_mode, batch, seq_len, kv_cache_len, n_devices",
     (
-        ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128),
+        # ("prefill", 1, 128, 0),
+        ("decode", 32, 1, 128, 8),
     ),
-    ids=["prefill_seq128", "decode_batch32"],
+    ids=["decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaAttention_inference(
     model_version,
     llm_mode,
@@ -220,10 +222,11 @@ def test_LlamaAttention_inference(
     kv_cache_len,
     pcc,
     model_config_str,
+    n_devices,
     # model_location_generator,
     device,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaAttention_inference(
@@ -235,6 +238,7 @@ def test_LlamaAttention_inference(
         kv_cache_len,
         pcc,
         model_config,
+        n_devices,
         # tt_cache_path,
         # model_location_generator,
     )

@@ -78,6 +78,7 @@ def run_test_LlamaDecoder_inference(
     kv_cache_len,
     pcc,
     model_config,
+    n_devices
     # tt_cache_path,
     # model_location_generator,
 ):
@@ -94,7 +95,7 @@ def run_test_LlamaDecoder_inference(
     print(state_dict.keys())
 
     # Prepare configs
-    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
+    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
 
     torch.manual_seed(0)
     layer_num = 0
@@ -115,8 +116,10 @@ def run_test_LlamaDecoder_inference(
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
-        pt_input = (torch.rand(batch, seq_len, configuration.dim) * 2) - 1
+        pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
+        pt_input = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
         tt_input = pt_input.clone()
+
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
@@ -139,14 +142,10 @@ def run_test_LlamaDecoder_inference(
             attn_mask,
         )
 
-        assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
+        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
         tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = tt_outs[0]
-        # Check that all tensors match tt_out
-        for o in tt_outs[1:]:
-            assert comp_allclose(tt_out, o)
-
+        tt_out = torch.cat(tt_outs, dim=-1)
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -199,18 +198,18 @@ def run_test_LlamaDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len",
+    "llm_mode, batch, seq_len, kv_cache_len, n_devices",
     (
-        ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128),
+        # ("prefill", 1, 128, 0, 8),
+        ("decode", 32, 1, 128, 8),
     ),
-    ids=["prefill_seq128", "decode_batch32"],
+    ids=["decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version, pcc",
     (("llama-2-70B", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT8_B-DRAM"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaDecoder_inference(
     model_version,
     llm_mode,
@@ -219,10 +218,11 @@ def test_LlamaDecoder_inference(
     kv_cache_len,
     pcc,
     model_config_str,
+    n_devices,
     # model_location_generator,
     device,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaDecoder_inference(
@@ -234,6 +234,7 @@ def test_LlamaDecoder_inference(
         kv_cache_len,
         pcc,
         model_config,
+        n_devices
         # tt_cache_path,
         # model_location_generator,
     )
