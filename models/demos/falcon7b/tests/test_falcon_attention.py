@@ -67,7 +67,7 @@ def run_test_FalconAttention_inference(
     layer_num = 0
     base_url = "transformer.h"
     max_position_embeddings = 2048
-    head_dim = configuration.hidden_size // configuration.n_head
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
 
     # Generate input, attention_mask, and kv_cache --------------------------------------
     # TODO: Generate attention_mask on device
@@ -83,7 +83,7 @@ def run_test_FalconAttention_inference(
 
         tt_attention_input = torch2tt_tensor(attention_input.unsqueeze(1), device)
         tt_attention_mask = torch2tt_tensor(
-            (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1),
+            (attention_mask_bool * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
             device,
         )
         tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
@@ -118,7 +118,7 @@ def run_test_FalconAttention_inference(
         tt_attention_mask = torch2tt_tensor(
             (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
                 -1,
-                configuration.n_head,
+                configuration.num_attention_heads,
                 -1,
                 -1
                 # -1, 71, -1, -1
@@ -154,7 +154,7 @@ def run_test_FalconAttention_inference(
         base_url,
         layer_num,
         configuration.hidden_size,
-        configuration.n_head,
+        configuration.num_attention_heads,
         # 4544,
         # 71,
         max_position_embeddings,
