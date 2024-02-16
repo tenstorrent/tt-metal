@@ -5,6 +5,7 @@
 from typing import Tuple, Union
 
 import tt_lib as ttl
+import ttnn
 
 from ttnn.types import (
     DEVICE_STORAGE_TYPE,
@@ -41,14 +42,14 @@ def has_padding(tensor):
 
 
 def create_sharded_memory_config(
-    grid: Union[Tuple[int, int], Tuple[Tuple[int, int], Tuple[int, int]]],
-    shard_shape: Tuple[int, int],
+    grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
+    shard_shape: ttnn.ShardShape,
     strategy: ShardStrategy,
     orientation: ShardOrientation = DEFAULT_SHARD_ORIENTATION,
     halo: bool = False,
 ) -> MemoryConfig:
     """
-    create_sharded_memory_config(grid: Tuple[int, int], shard_shape: Tuple[int, int], sharding_strategy: ShardStrategy, shard_orientation: ShardOrientation, halo: bool) -> MemoryConfig
+    create_sharded_memory_config(grid: Union[ttnn.CoreGrid, ttnn.CoreRange], shard_shape: ttnn.ShardShape, strategy: ShardStrategy, orientation: ShardOrientation = DEFAULT_SHARD_ORIENTATION, halo: bool = False) -> MemoryConfig
 
     Creates a MemoryConfig object with a sharding spec, required for sharded ops.
     Currently sharding only supports L1 tensors.
@@ -64,6 +65,13 @@ def create_sharded_memory_config(
     Example::
         >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, False)
     """
+
+    if not isinstance(grid, (ttnn.CoreGrid, ttnn.CoreRange)):
+        raise RuntimeError("Invalid grid type")
+
+    if not isinstance(shard_shape, ttnn.ShardShape):
+        raise RuntimeError("Invalid shard shape")
+
     if strategy == ShardStrategy.BLOCK:
         tensor_memory_layout = TensorMemoryLayout.BLOCK_SHARDED
     elif strategy == ShardStrategy.WIDTH:
@@ -81,6 +89,9 @@ def create_sharded_memory_config(
         raise RuntimeError("Invalid shard orientation")
 
     shard_grid = None
+    if isinstance(grid, ttnn.CoreGrid):
+        grid = (grid.y, grid.x)
+
     if isinstance(grid[0], Tuple):
         grid_coord_1 = ttl.tensor.CoreCoord(grid[0][1] - 1, grid[0][0] - 1)
         grid_coord_2 = ttl.tensor.CoreCoord(grid[1][1] - 1, grid[0][0])
@@ -93,7 +104,8 @@ def create_sharded_memory_config(
     else:
         grid_coord = ttl.tensor.CoreCoord(grid[1] - 1, grid[0] - 1)
         shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
+
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, (shard_shape.y, shard_shape.x), shard_orientation, halo)
     mem_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return mem_config
 
