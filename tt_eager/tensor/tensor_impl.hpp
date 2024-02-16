@@ -70,14 +70,15 @@ std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_
         return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
     } else if constexpr (std::is_same_v<DataType, float>) {
         std::vector<uint32_t> uint32_data;
-        assert(data_to_pack.size() % 2 == 0);
-        for (auto i = 0; i < data_to_pack.size(); i += 2) {
-            auto float_val1 = data_to_pack[i];
-            auto float_val2 = data_to_pack[i + 1];
-            auto bfloat_val1 = bfloat16(float_val1);
-            auto bfloat_val2 = bfloat16(float_val2);
-            auto uint32_val = pack_two_bfloat16_into_uint32({bfloat_val1, bfloat_val2});
-            uint32_data.push_back(uint32_val);
+        union float_uint32_convert {
+            uint32_t u;
+            float f;
+            float_uint32_convert() : u(0) {}
+        };
+        for (auto i = 0; i < data_to_pack.size(); i ++) {
+            float_uint32_convert a;
+            a.f = data_to_pack[i];
+            uint32_data.push_back(a.u);
         }
         return uint32_data;
     } else {
@@ -99,13 +100,16 @@ std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
     } else if constexpr (std::is_same_v<DataType, bfloat16>) {
         return unpack_uint32_vec_into_bfloat16_vec(data_to_unpack);
     } else if constexpr (std::is_same_v<DataType, float>) {
+        union float_uint32_convert {
+            uint32_t u;
+            float f;
+            float_uint32_convert() : u(0) {}
+        };
         std::vector<float> float_data;
         for (auto i = 0; i < data_to_unpack.size(); i++) {
-            auto unpacked = unpack_two_bfloat16_from_uint32(data_to_unpack[i]);
-            auto float_val1 = unpacked.first.to_float();
-            auto float_val2 = unpacked.second.to_float();
-            float_data.push_back(float_val1);
-            float_data.push_back(float_val2);
+            float_uint32_convert a;
+            a.u = data_to_unpack[i];
+            float_data.push_back(a.f);
         }
         return float_data;
     } else {
@@ -127,7 +131,7 @@ constexpr inline uint32_t packed_buffer_size_bytes(uint32_t volume_unpacked_data
 // Specialization for float because it gets converted to bfloat16 before being packed
 template <>
 constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpacked_data) {
-    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(bfloat16);
+    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 

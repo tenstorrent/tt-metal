@@ -247,7 +247,7 @@ inline void llk_pack_reduce_config_v2(uint32_t output) {
     }
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
 inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
     const std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id();

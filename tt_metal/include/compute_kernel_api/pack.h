@@ -76,7 +76,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
  */
 ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
 {
-    PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
+    PACK((  llk_matmul_pack<false, SYNC, false, DST_ACCUM_MODE>(ifrom_dst, icb, ntiles)  ));
 }
 
 /**
