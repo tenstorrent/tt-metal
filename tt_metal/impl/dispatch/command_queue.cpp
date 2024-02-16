@@ -1239,24 +1239,24 @@ void EnqueueRestart(CommandQueue& cq) {
 }
 
 CommandQueue::CommandQueue(Device* device, uint32_t id) : device_ptr(device), cq_id(id) {
-    if (async_mode()) {
-        start_worker();
+    if (this->async_mode()) {
+        this->start_worker();
     }
 }
 
 CommandQueue::~CommandQueue() {
-    if (async_mode()) {
-        stop_worker();
+    if (this->async_mode()) {
+        this->stop_worker();
     }
-    TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", cq_id);
+    TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", this->cq_id);
 }
 
 HWCommandQueue& CommandQueue::hw_command_queue() {
-    return device()->hw_command_queue(this->cq_id);
+    return this->device()->hw_command_queue(this->cq_id);
 }
 
 void CommandQueue::wait_until_empty() {
-    log_trace(LogDispatch, "CQ{} WFI start", cq_id);
+    log_trace(LogDispatch, "CQ{} WFI start", this->cq_id);
     // Insert a flush token to push all prior commands to completion
     // Necessary to avoid implementing a peek and pop on the lock-free queue
     this->worker_queue.push(CommandInterface{
@@ -1268,16 +1268,16 @@ void CommandQueue::wait_until_empty() {
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
-    log_trace(LogDispatch, "CQ{} WFI complete", cq_id);
+    log_trace(LogDispatch, "CQ{} WFI complete", this->cq_id);
 }
 
 void CommandQueue::set_mode(const CommandQueueMode& mode_) {
     this->mode = mode_;
-    if (async_mode()) {
-        start_worker();
+    if (this->async_mode()) {
+        this->start_worker();
     } else if (passthrough_mode()) {
-        wait_until_empty();
-        stop_worker();
+        this->wait_until_empty();
+        this->stop_worker();
     }
 }
 
@@ -1287,7 +1287,7 @@ void CommandQueue::start_worker() {
     }
     this->worker_state = CommandQueueState::RUNNING;
     this->worker_thread = std::make_unique<std::thread>(std::thread(&CommandQueue::run_worker, this));
-    tt::log_debug(tt::LogDispatch, "CQ{} started worker thread", cq_id);
+    tt::log_debug(tt::LogDispatch, "CQ{} started worker thread", this->cq_id);
 }
 
 void CommandQueue::stop_worker() {
@@ -1297,7 +1297,7 @@ void CommandQueue::stop_worker() {
     this->worker_state = CommandQueueState::TERMINATE;
     this->worker_thread->join();
     this->worker_state = CommandQueueState::IDLE;
-    tt::log_debug(tt::LogDispatch, "CQ{} stopped worker thread", cq_id);
+    tt::log_debug(tt::LogDispatch, "CQ{} stopped worker thread", this->cq_id);
 }
 
 void CommandQueue::run_worker() {
@@ -1310,25 +1310,25 @@ void CommandQueue::run_worker() {
             std::this_thread::yield();
         } else {
             auto command = this->worker_queue.pop();
-            run_command_impl(*command);
+            this->run_command_impl(*command);
         }
     }
 }
 
 void CommandQueue::run_command(const CommandInterface& command) {
-    log_trace(LogDispatch, "CQ{} received {} in {} mode", cq_id, command.type, async_mode() ? "ASYNC" : "PASSTHROUGH");
-    if (async_mode()) {
+    log_trace(LogDispatch, "CQ{} received {} in {} mode", this->cq_id, command.type, this->async_mode() ? "ASYNC" : "PASSTHROUGH");
+    if (this->async_mode()) {
         this->worker_queue.push(command);
         if (command.blocking.has_value() and *command.blocking == true) {
-            wait_until_empty();
+            this->wait_until_empty();
         }
     } else {
-        run_command_impl(command);
+        this->run_command_impl(command);
     }
 }
 
 void CommandQueue::run_command_impl(const CommandInterface& command) {
-    log_trace(LogDispatch, "CQ{} running {}", cq_id, command.type);
+    log_trace(LogDispatch, "CQ{} running {}", this->cq_id, command.type);
     switch (command.type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
@@ -1356,7 +1356,7 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         default:
             TT_THROW("Invalid command type");
     }
-    // log_trace(LogDispatch, "CQ{} running {} complete", cq_id, command.type);
+    // log_trace(LogDispatch, "CQ{} running {} complete", this->cq_id, command.type);
 }
 
 }  // namespace tt::tt_metal
