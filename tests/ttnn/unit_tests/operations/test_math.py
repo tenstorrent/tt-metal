@@ -154,20 +154,24 @@ def test_erfc(device, h, w):
 def test_erfinv(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erfinv, torch.erfinv, pcc=0.999)
 
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_square(device, h, w):
     run_math_unary_test(device, h, w, ttnn.square, torch.square)
+
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_exp2(device, h, w):
     run_math_unary_test(device, h, w, ttnn.exp2, torch.exp2, pcc=0.98)
 
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_expm1(device, h, w):
     run_math_unary_test(device, h, w, ttnn.expm1, torch.expm1, pcc=0.99)
+
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -195,7 +199,7 @@ def run_math_unary_test_recip(device, h, w, ttnn_function, torch_function, pcc=0
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_recip(device, h, w):
-    run_math_unary_test_recip(device, h, w, ttnn.recip, torch.reciprocal, pcc=0.999)
+    run_math_unary_test_recip(device, h, w, ttnn.reciprocal, torch.reciprocal, pcc=0.999)
 
 
 def run_math_unary_test_range(device, h, w, ttnn_function, torch_function, pcc=0.9999):
