@@ -137,7 +137,9 @@ def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
 # TODO: issue 4172
 def create_query_key_value(config: BloomConfig, hidden_states, *, use_core_grid=True, parameters: ParameterDict):
     if use_core_grid:
-        query_key_value = ttnn.matmul(hidden_states, parameters.query_key_value.weight, core_grid=(9, 12))
+        query_key_value = ttnn.matmul(
+            hidden_states, parameters.query_key_value.weight, core_grid=ttnn.CoreGrid(y=9, x=12)
+        )
     else:
         query_key_value = hidden_states @ parameters.query_key_value.weight
     query_key_value = query_key_value + parameters.query_key_value.bias

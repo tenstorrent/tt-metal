@@ -66,7 +66,7 @@ def test_group_norm_with_weight_and_bias(device, h, w, num_groups):
 def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
     torch.manual_seed(0)
 
-    grid_size = (1, 2)
+    grid_size = ttnn.CoreGrid(y=1, x=2)
 
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
@@ -82,7 +82,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
         grid_size,
-        [int(N * H * W / (grid_size[1] * grid_size[0])), int(C)],
+        ttnn.ShardShape(y=int(N * H * W / grid_size.num_cores), x=int(C)),
         ttnn.ShardStrategy.HEIGHT,
         ttnn.ShardOrientation.COLUMN_MAJOR,
     )
