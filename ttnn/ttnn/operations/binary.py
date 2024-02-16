@@ -8,6 +8,7 @@ import sys
 
 import ttnn
 
+import tt_lib as ttl
 
 THIS_MODULE = sys.modules[__name__]
 
@@ -607,5 +608,130 @@ def add_and_apply_activation_(
     )
     return output
 
+
+def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
+    def _torch_elt_binary(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+        import torch
+
+        name_to_torch_function = {
+            "ldexp": torch.ldexp,
+            "logaddexp": torch.logaddexp,
+            "logaddexp2": torch.logaddexp2,
+            "logical_and": torch.logical_and,
+            "logical_or": torch.logical_or,
+            "logical_xor": torch.logical_xor,
+            "xlogy": torch.xlogy,
+        }
+        input_shape_a = input_tensor_a.shape
+        slices = [slice(0, dim) for dim in input_shape_a]
+        input_tensor_a = ttnn.from_device(input_tensor_a)
+        input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_a = ttnn.to_torch(input_tensor_a)
+        input_tensor_a = input_tensor_a[slices]
+
+        input_shape_b = input_tensor_b.shape
+        slices = [slice(0, dim) for dim in input_shape_b]
+        input_tensor_b = ttnn.from_device(input_tensor_b)
+        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_b = ttnn.to_torch(input_tensor_b)
+        input_tensor_b = input_tensor_b[slices]
+
+        torch_function = name_to_torch_function[name]
+        return torch_function(input_tensor_a, input_tensor_b)
+
+    def _elt_binary_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+        ttnn.validate_input_tensor(
+            operation_name,
+            input_tensor_a,
+            ranks=(2, 3, 4),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            layouts=(ttnn.TILE_LAYOUT,),
+            can_be_on_device=True,
+            can_be_on_cpu=False,
+        )
+        ttnn.validate_input_tensor(
+            operation_name,
+            input_tensor_b,
+            ranks=(2, 3, 4),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+            layouts=(ttnn.TILE_LAYOUT,),
+            can_be_on_device=True,
+            can_be_on_cpu=False,
+        )
+
+    @ttnn.register_operation(
+        name=f"ttnn.{name}",
+        validate_input_tensors=_elt_binary_validate_input_tensors,
+        torch_function=_torch_elt_binary,
+    )
+    def elt_binary_function(
+        input_tensor_a: ttnn.Tensor,
+        input_tensor_b: Union[ttnn.Tensor, int, float],
+        *,
+        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
+        if not (input_tensor_a.shape == input_tensor_b.shape):
+            raise RuntimeError("input_tensors must be of same size!")
+
+        if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
+            raise TypeError("Expected both arguments to be a ttnn.Tensor")
+
+        if not ttnn.has_storage_type_of(input_tensor_a, ttnn.DEVICE_STORAGE_TYPE) or not ttnn.has_storage_type_of(
+            input_tensor_b, ttnn.DEVICE_STORAGE_TYPE
+        ):
+            raise RuntimeError("input_tensors must be on device!")
+
+        original_shape = input_tensor_a.shape
+
+        input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
+        ttl_input_tensor_a = input_tensor_a.value
+
+        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+        ttl_input_tensor_b = input_tensor_b.value
+
+        ttl_output_tensor = ttl_elt_binary_function(
+            ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config
+        )
+
+        ttl_input_tensor_a = input_tensor_a.value
+        ttl_input_tensor_b = input_tensor_b.value
+        output_tensor = ttnn.Tensor(ttl_output_tensor)
+        output_tensor = ttnn.reshape(output_tensor, original_shape)
+        return output_tensor
+
+    elt_binary_function.__name__ = f"ttnn.{name}"
+    elt_binary_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
+        Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.
+
+        .. math::
+            {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i )
+
+        Args:
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Example::
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor1, tensor2)
+        """
+
+    setattr(THIS_MODULE, name, elt_binary_function)
+
+
+TTL_BINARY_ELTWISE_FUNCTIONS = [
+    ("ldexp", ttl.tensor.ldexp, "ldexp (input_a * 2**input_b)"),
+    ("logaddexp", ttl.tensor.logaddexp, "logaddexp (log(exp(input_a) + exp(input_b)))"),
+    ("logaddexp2", ttl.tensor.logaddexp2, "logaddexp2 (log2(2^(input_a) + 2^(input_b)))"),
+    ("logical_and", ttl.tensor.logical_and, "logical AND (input_a && input_b) "),
+    ("logical_or", ttl.tensor.logical_or, "logical OR (input_a || input_b)"),
+    ("logical_xor", ttl.tensor.logical_xor, "logical XOR (input_a ^ input_b) "),
+    ("xlogy", ttl.tensor.xlogy, "xlogy (input_a * log( input_b ))"),
+]
+
+
+for elt_binary_function_name, ttl_elt_binary_function, op_name in TTL_BINARY_ELTWISE_FUNCTIONS:
+    register_ttl_elt_binary_function(elt_binary_function_name, ttl_elt_binary_function, op_name)
 
 __all__ = []

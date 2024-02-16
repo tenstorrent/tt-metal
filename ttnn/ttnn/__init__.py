@@ -172,6 +172,13 @@ from ttnn.operations.binary import (
     subtract,
     mul,
     multiply,
+    ldexp,
+    logical_and,
+    logical_or,
+    logical_xor,
+    logaddexp,
+    logaddexp2,
+    xlogy,
     add_and_apply_activation,
     add_and_apply_activation_,
 )
