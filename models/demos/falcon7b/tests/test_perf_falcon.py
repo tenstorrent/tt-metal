@@ -5,6 +5,8 @@
 import torch
 import pytest
 from loguru import logger
+import numpy as np
+from sklearn.metrics import top_k_accuracy_score
 
 import tt_lib
 from models.demos.falcon7b.reference.hf_modeling_falcon import (
@@ -280,6 +282,14 @@ def run_test_FalconCausalLM_end_to_end(
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output: {output_pcc}")
+
+    reference_logits = pytorch_out.view(batch, -1).float().detach().numpy()
+    eval_logits = tt_out.view(batch, -1).float().detach().numpy()
+    reference_top1 = np.argmax(reference_logits, axis=-1)
+    top1_acc = top_k_accuracy_score(reference_top1, eval_logits, k=1, labels=np.arange(eval_logits.shape[-1]))
+    top5_acc = top_k_accuracy_score(reference_top1, eval_logits, k=5, labels=np.arange(eval_logits.shape[-1]))
+    logger.info(f"Top-1 Accuracy: {top1_acc}")
+    logger.info(f"Top-5 Accuracy: {top5_acc}")
 
     for i in range(num_layers):
         tt_layer_pres = (
