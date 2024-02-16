@@ -36,15 +36,15 @@ tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @
 
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
-tt_metal/host_api.hpp @abhullar-tt @davorchap
+tt_metal/host_api.hpp @abhullar-tt @davorchap @tooniz @kmabeeTT
 # tt_metal/impl/device/ @TT-billteng
-tt_metal/impl/buffers/ @tarafdarTT
+tt_metal/impl/buffers/ @tarafdarTT @kmabeeTT
 # tt_metal/impl/program/ @TT-billteng
 # tt_metal/impl/ @abhullar-tt @TT-billteng
 # tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
 
 # metal - dispatch
-tt_metal/impl/dispatch/ @DrJessop @pgkeller
+tt_metal/impl/dispatch/ @DrJessop @pgkeller @tooniz @tt-asaigal
 tt_metal/impl/dispatch/**/module.mk @DrJessop @tt-rkim @pgkeller
 tt_metal/kernels/dataflow/dispatch/ @DrJessop @tarafdarTT @pgkeller
 docs/source/frameworks/tt_dispatch.rst @DrJessop @pgkeller
