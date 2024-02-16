@@ -6,15 +6,16 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
 
 # from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.llama_common import tt_all_gather
 
 
-class TtLlamaDecoder(nn.Module):
+class TtLlamaDecoder:
     def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration, batch):
         super().__init__()
 
@@ -22,6 +23,10 @@ class TtLlamaDecoder(nn.Module):
         self.devices = devices
         self.num_devices = len(devices)
         self.hidden_size = configuration.dim
+        self.n_heads = configuration.n_heads
+        self.n_local_heads = self.n_heads // self.num_devices
+        self.head_dim = self.hidden_size // self.n_heads
+        self.max_seq_len = configuration.max_seq_len
         self.model_config = model_config
 
         layer_name = f"{base_url}.{layer_num}"
@@ -51,7 +56,8 @@ class TtLlamaDecoder(nn.Module):
 
         self.attention = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
 
-        self.mlp = TtLlamaMLP_optimized(
+        # self.mlp = TtLlamaMLP_optimized(
+        self.mlp = TtLlamaMLP(
             devices,
             state_dict,
             base_url,
@@ -61,10 +67,50 @@ class TtLlamaDecoder(nn.Module):
         )
 
     def prepare_inputs(self, x, start_pos):
-        # Pass through to attention layer
-        return self.attention.prepare_inputs(x, start_pos)
+        # Only called by decoder tests
+        assert x.size(2) == self.hidden_size
+        assert len(x.size()) == 3
 
-    def forward(
+        batch = x.size(0)
+        seq_len = x.size(1)
+        assert seq_len == 1, "Only supporting decode mode"
+        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+
+        position_ids = torch.ones(seq_len, batch, dtype=torch.long) * start_pos
+        from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
+
+        rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+        rot_mat = gather_rotary_emb(rot_emb, position_ids)
+
+        padded_layer_past_len = nearest_32(start_pos + 1)
+        attn_mask = torch.zeros(seq_len, 1, batch, padded_layer_past_len)
+        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+        attn_mask = attn_mask.expand(-1, self.n_local_heads, -1, -1)
+
+        # expected shapes:
+        # x: (seq_len, 1, batch, hidden_dim)
+        # start_pos: int
+        # rot_mat: [1, bsz, head_dim, head_dim]
+        # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
+        assert x.size() == (seq_len, 1, batch, self.hidden_size)
+        assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
+        assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
+
+        x_fractured = torch.chunk(x, self.num_devices, dim=-1)
+        xs, rot_mats, attn_masks = [], [], []
+        for i in range(self.num_devices):
+            device = self.devices[i]
+            xs.append(torch2tt_tensor(x_fractured[i], device))
+            rot_mats.append(torch2tt_tensor(rot_mat.clone(), device))
+            attn_masks.append(torch2tt_tensor(attn_mask.clone(), device))
+        return (
+            xs,
+            start_pos,
+            rot_mats,
+            attn_masks,
+        )
+
+    def __call__(
         self,
         xs: list,
         rot_mats: list,

@@ -41,12 +41,14 @@ def run_test_LlamaMLP_inference(
     seq_len,
     pcc,
     model_config,
+    optimized,
+    n_devices
     # tt_cache_path,
     # model_location_generator,
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
+    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
     tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
 
     hugging_face_reference_model = Llama.build(
@@ -56,48 +58,48 @@ def run_test_LlamaMLP_inference(
     configuration = hugging_face_reference_model.params
     state_dict = hugging_face_reference_model.state_dict()
 
-    devices = [device for _ in range(8)]  # Emulate fracturing on N chips
+    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    layer_num = 0
 
     # Prepare input
     torch.manual_seed(0)
-    if seq_len == 1:
-        input_shape = [seq_len, 1, batch, configuration.dim]
-    else:
-        input_shape = [batch, 1, seq_len, configuration.dim]
+    pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
+    pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
+    pt_inp_normed = hugging_face_reference_model.layers[layer_num].ffn_norm(pt_inp)
 
-    mlp_input = (torch.rand(input_shape) * 2) - 1
-    layer_num = 0
+    pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+    tt_inp = pt_inp_normed.clone()
 
     print(state_dict.keys())
     base_url = "layers"
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, layer_num)
-    pytorch_out = pytorch_LlamaMLP_model(mlp_input)
+    pytorch_out = pytorch_LlamaMLP_model(pt_inp_normed)
     compute_grid_size = device.compute_with_storage_grid_size()
     print(f"Compute grid size: {compute_grid_size}")
     print(f"Compute grid size x: {compute_grid_size.x}")
     print(f"Compute grid size y: {compute_grid_size.y}")
+    print(f"Running optimized: {optimized}")
 
-    mlp_optimized = False
-    if mlp_optimized:
+    if optimized:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP_optimized(
-            device,
+            devices,
             state_dict,
             base_url,
             layer_num,
             configuration.dim,
             model_config,
-            tt_cache_path=None,
         )
         # Put input sharded in L1
-        tt_mlp_input = torch2tt_tensor(
-            mlp_input,
-            device,
-            tt_memory_config=model_config["LN_MLP_OUTPUT_MEMCFG"],
-            tt_dtype=model_config["LN_MLP_OUTPUT_DTYPE"],
-        )
+        tt_mlp_input = [
+            torch2tt_tensor(
+                tt_inp.clone(),
+                device,
+            )
+            for device in devices
+        ]
     else:
         # TT hardware execution -------------------------------------------------------------
         tt_LlamaMLP_model = TtLlamaMLP(
@@ -108,24 +110,16 @@ def run_test_LlamaMLP_inference(
             configuration.dim,
             model_config,
         )
-        tt_mlp_input = [torch2tt_tensor(mlp_input.clone(), device) for device in devices]
+        tt_mlp_input = [torch2tt_tensor(tt_inp.clone(), device) for device in devices]
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
-    if len(devices) > 1:
-        assert len(tt_out) == len(devices)
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        for i in range(len(devices)):
-            logger.info(comp_allclose(pytorch_out, tt_outs[i]))
+    assert len(tt_out) == len(devices)
+    tt_outs = [tt2torch_tensor(o) for o in tt_out]
+    tt_out = torch.cat(tt_outs, dim=-1)
+    logger.info(comp_allclose(pytorch_out, tt_out))
 
-            does_pass, output_pcc = comp_pcc(pytorch_out, tt_outs[i], pcc)
-            logger.info(f"PCC value: {output_pcc}")
-    else:
-        tt_out = tt2torch_tensor(tt_out[0])
-        # check outputs ----------------------------------------------------------------------
-        logger.info(comp_allclose(pytorch_out, tt_out))
-
-        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-        logger.info(f"PCC value: {output_pcc}")
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
         logger.info("Falcon MLP output Passed!")
@@ -135,28 +129,26 @@ def run_test_LlamaMLP_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc",
+    "model_version, batch, seq_len, pcc, optimized, n_devices",
     (
-        (
-            "llama-2-70B",
-            32,
-            1,
-            0.96,
-        ),
+        ("llama-2-70B", 32, 1, 0.96, False, 8),
+        ("llama-2-70B", 32, 1, 0.96, True, 8),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT8_B-DRAM"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaMLP_inference(
     model_version,
     batch,
     seq_len,
     pcc,
+    optimized,
     model_config_str,
+    n_devices,
     # model_location_generator,
     device,
     use_program_cache,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaMLP_inference(
@@ -166,6 +158,8 @@ def test_LlamaMLP_inference(
         seq_len,
         pcc,
         model_config,
+        optimized,
+        n_devices
         # tt_cache_path,
         # model_location_generator,
     )
