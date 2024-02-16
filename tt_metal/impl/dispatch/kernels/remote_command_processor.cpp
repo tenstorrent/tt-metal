@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t producer_data_buffer_size = get_compile_time_arg_val(4);
     constexpr uint32_t dispatcher_cmd_base_addr = get_compile_time_arg_val(5);
     constexpr uint32_t dispatcher_data_buffer_size = get_compile_time_arg_val(6);
+    constexpr uint32_t num_dispatcher_cmd_slots = get_compile_time_arg_val(7);
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -59,7 +60,7 @@ void kernel_main() {
         relay_command<cmd_base_addr, dispatcher_cmd_base_addr, dispatcher_data_buffer_size>(db_tx_buf_switch, ((uint64_t)dispatcher_noc_encoding << 32));
         uint32_t stall = header->stall;
         if (stall) {
-            wait_consumer_idle<1>(db_tx_semaphore_addr);
+            wait_consumer_idle<num_dispatcher_cmd_slots>(db_tx_semaphore_addr);
         }
 
         update_producer_consumer_sync_semaphores(((uint64_t)processor_noc_encoding << 32), ((uint64_t)dispatcher_noc_encoding << 32), db_tx_semaphore_addr, get_semaphore(0));

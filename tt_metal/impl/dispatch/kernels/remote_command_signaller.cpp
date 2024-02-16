@@ -44,10 +44,10 @@ void kernel_main() {
         uint32_t is_program = header->is_program_buffer;
         uint32_t num_pages = header->num_pages;
         const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
-        bool reading_buffer = (!is_program) & (num_pages > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
+        bool reading_buffer = (not is_program) and (num_pages > 0 and (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
         uint32_t num_buffer_transfers = header->num_buffer_transfers;
-        if (!reading_buffer) {
+        if (not reading_buffer) {
             // Received this command just to signal that it finished
             // This is hacky(!) but here we clear out cmd metadata so ethernet routers and completion queue write interface do not expect incoming data
             header->num_buffer_transfers = 0;

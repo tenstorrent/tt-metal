@@ -306,12 +306,10 @@ void produce_for_eth_src_router(
         const uint32_t src_page_index = command_ptr[6];
 
         bool read_from_sysmem = (BufferType)src_buf_type == BufferType::SYSTEM_MEMORY;
-        if (forward_path & !read_from_sysmem) {
+        if (forward_path & (not read_from_sysmem)) {
             // Data needs to come from target remote device
             continue;
         }
-
-        // uint32_t fraction_of_producer_cb_num_pages = consumer_cb_num_pages / 2;
 
         uint32_t num_to_read = min(num_pages, producer_consumer_transfer_num_pages);
         uint32_t num_to_write =
@@ -409,13 +407,13 @@ void transfer(
         const uint32_t src_page_index = command_ptr[6];
         uint32_t src_page_id = src_page_index;
 
-        bool skip_tx = forward_path & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY & !is_program;
+        bool skip_tx = forward_path and (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY and (not is_program);
         if (skip_tx) {
             continue;
         }
 
         Buffer buffer;
-        bool read_local_buffer = forward_path & (BufferType)src_buf_type != BufferType::SYSTEM_MEMORY & is_program;
+        bool read_local_buffer = forward_path and (BufferType)src_buf_type != BufferType::SYSTEM_MEMORY and is_program;
         if (read_local_buffer) {
             buffer.init((BufferType)src_buf_type, bank_base_address, page_size);
         }

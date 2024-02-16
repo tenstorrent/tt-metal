@@ -347,6 +347,7 @@ void Device::compile_command_queue_programs() {
 
                 uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
                 uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t consumer_cmd_slots = (device_id != this->id()) ? num_eth_command_slots : num_tensix_command_slots;
                 std::vector<uint32_t> producer_compile_args = {
                     host_issue_queue_read_ptr_addr,
                     issue_queue_start_addr,
@@ -355,7 +356,8 @@ void Device::compile_command_queue_programs() {
                     data_section_addr_tensix,
                     producer_data_buffer_size_tensix,
                     consumer_cmd_base_addr,
-                    consumer_data_buff_size};
+                    consumer_data_buff_size,
+                    consumer_cmd_slots};
 
                 uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
                 uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -435,6 +437,7 @@ void Device::compile_command_queue_programs() {
             producer_data_buffer_size_eth,
             cmd_start_tensix,
             consumer_data_buffer_size_tensix,
+            num_eth_command_slots
         };
 
         std::map<string, string> processor_defines = {

@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t data_buffer_size = get_compile_time_arg_val(5);
     constexpr uint32_t consumer_cmd_base_addr = get_compile_time_arg_val(6);
     constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(7);
+    constexpr uint32_t num_consumer_cmd_slots = get_compile_time_arg_val(8);
 
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
 
@@ -86,7 +87,7 @@ void kernel_main() {
             consumer_cb_size);
         relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
         if (stall) {
-            wait_consumer_idle<2>(db_semaphore_addr);
+            wait_consumer_idle<num_consumer_cmd_slots>(db_semaphore_addr);
         }
 
         update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr, get_semaphore(0));

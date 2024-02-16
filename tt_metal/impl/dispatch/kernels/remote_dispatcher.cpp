@@ -38,7 +38,7 @@ void kernel_main() {
         uint32_t num_pages = header->num_pages;
 
         const uint32_t dst_buf_type = buffer_transfer_command_ptr[5];
-        bool reading_buffer = (!is_program) & (num_pages > 0 & (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
+        bool reading_buffer = (not is_program) and (num_pages > 0 and (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY);
 
         tt_l1_ptr db_cb_config_t *rx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, true);
         const tt_l1_ptr db_cb_config_t *remote_producer_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, false);
@@ -56,14 +56,16 @@ void kernel_main() {
                 ((uint64_t)producer_noc_encoding << 32),
                 producer_consumer_transfer_num_pages);
             wait_for_program_completion(num_workers);
-        } else if (!reading_buffer) {
+        } else if (not reading_buffer) {
             uint32_t num_buffer_transfers = header->num_buffer_transfers;   // How many WriteBuffer commands we are running
+            bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
-            write_remote_buffers(
+            write_buffers(
                 rx_db_cb_config,
                 remote_producer_db_cb_config,
                 buffer_transfer_command_ptr,
                 num_buffer_transfers,
+                is_sharded,
                 sharded_buffer_num_cores,
                 ((uint64_t)producer_noc_encoding << 32),
                 producer_consumer_transfer_num_pages);
