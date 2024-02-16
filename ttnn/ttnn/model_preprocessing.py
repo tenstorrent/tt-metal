@@ -190,6 +190,16 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
     return make_parameter_dict(parameters)
 
 
+torch_dtype_to_ttnn_dtype = {
+    torch.int16: ttnn.uint16,
+    torch.int32: ttnn.uint32,
+    torch.int64: ttnn.uint32,
+    torch.bfloat16: ttnn.bfloat16,
+    torch.float32: ttnn.bfloat16,
+    torch.float64: ttnn.bfloat16,
+}
+
+
 def convert_torch_model_to_ttnn_model(
     model,
     *,
@@ -232,6 +242,7 @@ def convert_torch_model_to_ttnn_model(
     named_children = list(model.named_children())
     named_parameters = list((name, parameter) for name, parameter in model.named_parameters() if "." not in name)
 
+    parameters = make_parameter_dict({})
     if convert_to_ttnn(model, name):
         default_preprocessor_parameters = default_preprocessor(model, name, ttnn_module_args)
         if default_preprocessor_parameters:
@@ -240,16 +251,23 @@ def convert_torch_model_to_ttnn_model(
                     f"Not all children or parameters were converted using default_preprocessor_parameters!"
                 )
             return make_parameter_dict(default_preprocessor_parameters)
-
-    if not named_children:
+        else:
+            for parameter_name, parameter in named_parameters:
+                parameters[parameter_name] = ttnn.from_torch(
+                    parameter, dtype=torch_dtype_to_ttnn_dtype[parameter.dtype]
+                )
+    else:
         if isinstance(model, torch.nn.Linear):
             parameters = {"weight": model.weight.T.contiguous()}
             if model.bias is not None:
                 parameters["bias"] = model.bias
-            return make_parameter_dict(parameters)
-        return make_parameter_dict(dict(model.named_parameters()))
+        else:
+            for parameter_name, parameter in named_parameters:
+                parameters[parameter_name] = parameter
 
-    parameters = {}
+    if not named_children:
+        return make_parameter_dict(parameters)
+
     for child_name, child in named_children:
         if child_name.isdigit():
             child_name = int(child_name)
@@ -262,19 +280,6 @@ def convert_torch_model_to_ttnn_model(
         )
         if child_parameters:
             parameters[child_name] = child_parameters
-
-    for parameter_name, parameter in named_parameters:
-        dtype = {
-            torch.int16: ttnn.uint16,
-            torch.int32: ttnn.uint32,
-            torch.int64: ttnn.uint32,
-            torch.bfloat16: ttnn.bfloat16,
-            torch.float32: ttnn.bfloat16,
-            torch.float64: ttnn.bfloat16,
-        }[parameter.dtype]
-        parameters[parameter_name] = ttnn.from_torch(parameter, dtype=dtype)
-
-    parameters = make_parameter_dict(parameters)
 
     return parameters
 

@@ -14,7 +14,7 @@ Hint: Be sure to always run the cells from top to bottom as the order of the cel
 
 .. toctree::
 
-   tutorials/add.rst
+   tutorials/tensor_and_add_operation.rst
    tutorials/matmul.rst
    tutorials/multihead-attention.rst
    tutorials/ttnn-tracer.rst

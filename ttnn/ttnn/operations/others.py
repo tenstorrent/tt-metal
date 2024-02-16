@@ -52,7 +52,7 @@ def pad_to_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         >>> tensor = ttnn.from_torch(torch.zeros((62, 30), dtype=torch.bfloat16))
         >>> output = ttnn.pad_to_tile(tensor)
         >>> print(tensor.shape)
-        >>> print(tensor.shape.padded())
+        >>> print(tensor.shape.with_tile_padding())
 
     """
     height_multiple = 32
@@ -153,11 +153,11 @@ def unpad_from_tile(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((62, 30), dtype=torch.bfloat16)), device)
         >>> tensor = ttnn.pad_to_tile(tensor)
         >>> print(tensor.shape)
-        >>> print(tensor.shape.padded())
+        >>> print(tensor.shape.with_tile_padding())
         >>> tensor = ttnn.from_device(tensor)
         >>> output = ttnn.unpad_from_tile(tensor)
         >>> print(output.shape)
-        >>> print(output.shape.padded())
+        >>> print(output.shape.with_tile_padding())
 
     """
 
@@ -338,7 +338,7 @@ def softmax(
 
     is_padded_and_using_tile = (
         input_tensor.layout == ttnn.TILE_LAYOUT
-        and list(input_tensor.shape)[-2:] != list(input_tensor.shape.padded())[-2:]
+        and list(input_tensor.shape)[-2:] != list(input_tensor.shape.with_tile_padding())[-2:]
     )
     if not is_padded_and_using_tile and dim == rank - 1:
         ttl_input_tensor = input_tensor.value

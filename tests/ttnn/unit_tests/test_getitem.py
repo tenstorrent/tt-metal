@@ -74,3 +74,13 @@ def test_getitem_2d(device, height, width, input_layout, on_device):
 
     assert_with_pcc(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
+
+
+def test_getitem_scalar_output():
+    torch_input_tensor = torch.rand((16, 32), dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+
+    with pytest.raises(RuntimeError) as e:
+        input_tensor[0, 0]
+    assert "ttnn.Tensor.__getitem__: returned a scalar!" in str(e.value)

@@ -36,7 +36,7 @@ class BasicBlock:
         identity = ttnn.reshape(identity, conv2.shape)
         out = ttnn.add_and_apply_activation(conv2, identity, activation="relu", memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(conv2)
-        if x != identity:
+        if x is not identity:
             ttnn.deallocate(identity)
 
         return out
