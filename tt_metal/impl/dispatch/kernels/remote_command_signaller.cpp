@@ -35,7 +35,7 @@ void kernel_main() {
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_addr, data_buffer_size>(db_rx_buf_switch);
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
         volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
-        header->fwd_path = 0; // hacky
+        header->issue_path = 0; // signal to routers that they are on the servicing commands returning to MMIO device
 
         wait_consumer_space_available(tx_semaphore_addr);   // Check that there is space in the eth router
 

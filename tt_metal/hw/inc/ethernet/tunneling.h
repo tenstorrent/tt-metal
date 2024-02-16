@@ -272,7 +272,7 @@ void eth_tunnel_src_forward_one_cmd() {
     uint32_t num_buffer_transfers = header->num_buffer_transfers;
     uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
     bool is_program = header->is_program_buffer;
-    bool fwd_path = header->fwd_path;
+    bool issue_path = header->issue_path;
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
 
     // if (num_buffer_transfers == 0) { removed this when sending fd packet unconditionally even if there is data to tx
@@ -291,7 +291,7 @@ void eth_tunnel_src_forward_one_cmd() {
 
         bool read_from_sysmem = (BufferType)src_buf_type == BufferType::SYSTEM_MEMORY;
         bool write_to_sysmem = (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY;
-        bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !fwd_path & !is_program);
+        bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !issue_path & !is_program);
 
         if (!tunnel_data) {
             erisc_info->unused_arg2 = 109;
@@ -378,7 +378,7 @@ void eth_tunnel_dst_forward_one_cmd() {
 
     // Send the data that was in this packet
     bool is_program = header->is_program_buffer;
-    bool fwd_path = header->fwd_path;
+    bool issue_path = header->issue_path;
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;  // jump to buffer transfer region
     // if (num_buffer_transfers == 0 | is_program) { removed this when sending fd packet unconditionally from src even
     // if there is data to tx
@@ -397,7 +397,7 @@ void eth_tunnel_dst_forward_one_cmd() {
 
         bool read_from_sysmem = (BufferType)src_buf_type == BufferType::SYSTEM_MEMORY;
         bool write_to_sysmem = (BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY;
-        bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !is_program & !fwd_path);
+        bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !is_program & !issue_path);
 
         if (!tunnel_data) {
             // erisc_info->unused_arg2 = 109;

@@ -45,7 +45,8 @@ struct CommandHeader {
     uint32_t restart = 0;
     uint32_t new_issue_queue_size = 0;
     uint32_t new_completion_queue_size = 0;
-    uint32_t fwd_path = 1;
+    // Commands being sent from host are pushed to issue queue. Device unsets this before sending command back to completion queue
+    uint32_t issue_path = 1;
 };
 
 static_assert((offsetof(CommandHeader, event) % 32) == 0);
