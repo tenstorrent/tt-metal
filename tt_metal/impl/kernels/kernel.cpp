@@ -93,6 +93,7 @@ void ComputeKernel::process_defines(const std::function<void (const string& defi
 }
 
 void EthernetKernel::process_defines(const std::function<void (const string& define, const string &value)>callback) const {
+    Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
 }
 
@@ -173,8 +174,7 @@ std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const
 }
 
 std::pair<uint64_t, uint64_t> EthernetKernel::get_runtime_args_range() const {
-    // TODO: get this from eth l1 map
-    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE};
+    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE};
     return arg_base_to_result_base;
 }
 

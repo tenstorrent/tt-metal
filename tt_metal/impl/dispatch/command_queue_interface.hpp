@@ -14,14 +14,18 @@
 using namespace tt::tt_metal;
 
 // Starting L1 address of commands
-inline uint32_t get_command_start_l1_address(bool use_eth_l1) {
-    return (use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE);
+inline uint32_t get_command_start_l1_address() {
+    return L1_UNRESERVED_BASE;
+}
+
+inline uint32_t get_eth_command_start_l1_address(CQTunnelPath cq_tunnel_path) {
+    return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (uint8_t)cq_tunnel_path * eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
 }
 
 // Where issue queue interface core pulls in data (follows command)
 inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
     if (use_eth_l1) {
-        return eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     } else {
         return L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     }
@@ -29,7 +33,7 @@ inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
 
 inline uint32_t get_cq_data_buffer_size(bool use_eth_l1) {
     if (use_eth_l1) {
-        return eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        return eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     } else {
         return MEM_L1_SIZE - L1_UNRESERVED_BASE -  DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     }

@@ -24,11 +24,10 @@ struct address_map {
   static constexpr std::int32_t ERISC_L1_ARG_BASE = 0;
 
   static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 16;
-  static constexpr std::int32_t ERISC_APP_RESERVED_BASE = 0;
-  static constexpr std::int32_t ERISC_APP_RESERVED_SIZE = 16;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = 0;
   static constexpr std::uint32_t SEMAPHORE_BASE = 0;
-  static constexpr std::uint32_t CQ_CONSUMER_CB_BASE = 0;
+  static constexpr std::uint32_t ISSUE_CQ_CB_BASE = 0;
+  static constexpr std::uint32_t COMPLETION_CQ_CB_BASE = 0;
   static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;
   static constexpr std::uint32_t FW_VERSION_ADDR = 0;
   static constexpr std::int32_t PRINT_BUFFER_ER = 0;

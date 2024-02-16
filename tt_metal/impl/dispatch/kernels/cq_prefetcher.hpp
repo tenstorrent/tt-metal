@@ -189,7 +189,7 @@ void program_local_cb(uint32_t data_section_addr, uint32_t num_pages, uint32_t p
     cb_interface[cb_id].fifo_page_size = page_size >> 4;
 }
 
-template <uint32_t eth_cb>
+template <uint32_t eth_cb, uint32_t eth_buffer_id=0>
 FORCE_INLINE
 void program_remote_sync_cb(
     volatile db_cb_config_t* db_cb_config,
@@ -202,7 +202,7 @@ void program_remote_sync_cb(
         This API programs the double-buffered CB space of the consumer. This API should be called
         before notifying the consumer that data is available.
     */
-    uint32_t cb_start_rd_addr = get_cb_start_address<eth_cb>();
+    uint32_t cb_start_rd_addr = get_cb_start_address<eth_cb, eth_buffer_id>();
     uint32_t cb_start_wr_addr = cb_start_rd_addr;
 
     db_cb_config->ack = 0;
@@ -370,6 +370,9 @@ void pull_and_relay(
                 */
 
                 // wait for dst router to push data
+                DPRINT << " pull and relay " << HEX() << " addr " <<  (uint32_t)src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg << DEC() << " data " <<
+                    src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->num_pages << " " << src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->rd_ptr_16B <<
+                    " " << src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << " " << num_pages_to_read << ENDL();
                 multicore_cb_wait_front(src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg, num_pages_to_read);
 
                 uint32_t src_addr = (src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->rd_ptr_16B << 4);
@@ -411,7 +414,7 @@ void pull_and_relay(
                 }
 
                 num_pages_to_write = min(num_pages - num_writes_completed, dst_pr_cfg.num_pages_to_write);
-  
+
             }
 
             if (num_writes_completed == num_reads_completed) {

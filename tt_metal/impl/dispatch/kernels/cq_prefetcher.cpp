@@ -79,6 +79,11 @@ void kernel_main() {
 
     constexpr bool read_from_issue_queue = (pull_and_push_config == tt::PullAndPushConfig::LOCAL or pull_and_push_config == tt::PullAndPushConfig::PUSH_TO_REMOTE);
 
+    constexpr uint32_t issue_cmd_eth_src_base =  eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    constexpr uint32_t issue_cmd_eth_dst_base = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    constexpr uint32_t completion_cmd_eth_src_base = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
+    constexpr uint32_t completion_cmd_eth_dst_base = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
+
     setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
     setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
 
@@ -146,7 +151,12 @@ void kernel_main() {
             DPRINT << "WAIT FOR DST TO GET CMD" << ENDL();
             db_acquire(pull_semaphore_addr, my_noc_encoding); // dst routers increments this semaphore when cmd is available in the dst router
             DPRINT << "DONE WAIT FOR DST TO GET CMD" << ENDL();
-            uint64_t src_noc_addr = pull_noc_encoding | eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE;
+            uint64_t src_noc_addr;
+            if (pull_and_push_config == tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH) {
+                src_noc_addr = pull_noc_encoding |  issue_cmd_eth_dst_base;
+            } else if (pull_and_push_config == tt::PullAndPushConfig::PULL_FROM_REMOTE) {
+                src_noc_addr = pull_noc_encoding |  completion_cmd_eth_dst_base;
+            }
             noc_async_read(src_noc_addr, command_start_addr, DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND); // read in cmd header only
         }
         noc_async_read_barrier();
@@ -252,7 +262,7 @@ void kernel_main() {
             wait_consumer_space_available(push_semaphore_addr); // ensure SRC router has space to push command
 
             // Send command to SRC router
-            relay_command<command_start_addr, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
+            relay_command<command_start_addr, issue_cmd_eth_src_base, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
             update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0)); // notify SRC router that command was pushed
 
             // Need to support program transfers from sysmem
@@ -262,9 +272,9 @@ void kernel_main() {
                 uint32_t dst_buf_type = buffer_transfer_ptr[5];
 
                 if ((BufferType)src_buf_type == BufferType::SYSTEM_MEMORY) {
-                    volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
+                    volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE, db_buf_switch);
 
-                    program_remote_sync_cb<true>(
+                    program_remote_sync_cb<true, 0>(
                         local_multicore_cb_cfg,
                         remote_multicore_cb_cfg,
                         push_noc_encoding,
@@ -298,20 +308,19 @@ void kernel_main() {
         } else if constexpr (pull_and_push_config == tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH) {
             wait_consumer_space_available(push_semaphore_addr); // ensure SRC router has space to push command
 
-            volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
+            volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE, db_buf_switch);
+             program_remote_sync_cb<true, 0>(
+                 local_multicore_cb_cfg,
+                 remote_multicore_cb_cfg,
+                 pull_noc_encoding,
+                 consumer_cb_num_pages,
+                 page_size,
+                 consumer_cb_size
+             );
 
-            // Program the CB on the DST router because we may need to pull in data from DST
-            program_remote_sync_cb<true>(
-                local_multicore_cb_cfg,
-                remote_multicore_cb_cfg,
-                pull_noc_encoding,
-                consumer_cb_num_pages,
-                page_size,
-                consumer_cb_size
-            );
 
             // Signal to DST router that command has been read in
-            noc_semaphore_inc(pull_noc_encoding | eth_get_semaphore(0), 1);
+            noc_semaphore_inc(pull_noc_encoding | eth_get_semaphore(1), 1);
             noc_async_write_barrier(); // Barrier for now
 
             header->fwd_path = 0;
@@ -324,7 +333,7 @@ void kernel_main() {
 
                 if ((BufferType)src_buf_type == BufferType::SYSTEM_MEMORY) {
                     // Writing data to buffer on R chip after getting data from DST router
-                    volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
+                    volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE, db_buf_switch);
 
                     // remote pull and relay
                     // doing a write so we pull from eth router cb and write to buffer
@@ -350,15 +359,15 @@ void kernel_main() {
 
                     // Doing doing the write now send the write buffer command back to the src router without any data
                     header->num_buffer_transfers = 0; // make sure src router doesn't expect any data incoming
-                    relay_command<command_start_addr, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
+                    relay_command<command_start_addr, completion_cmd_eth_src_base, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
                     update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
 
                 } else if ((BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY) {
                     // Reading data from buffer on R chip and sending command + buffer data back to L chip
-                    volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
+                    volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE, db_buf_switch);
 
                     DPRINT << "Programming remote CB" << ENDL();
-                    program_remote_sync_cb<true>(
+                    program_remote_sync_cb<true, 1>(
                         local_multicore_cb_cfg,
                         remote_multicore_cb_cfg,
                         push_noc_encoding,
@@ -383,13 +392,13 @@ void kernel_main() {
 
                     DPRINT << "Read from src buffer and write to cb" << ENDL();
 
-                    relay_command<command_start_addr, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
+                    relay_command<command_start_addr, completion_cmd_eth_src_base, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
                     update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
                     pull_and_relay<PullAndRelayType::BUFFER, PullAndRelayType::CIRCULAR_BUFFER>(src_pr_cfg, dst_pr_cfg, num_pages_in_transfer);
                 }
             } else {
                 // Send command to src router
-                relay_command<command_start_addr, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
+                relay_command<command_start_addr, completion_cmd_eth_src_base, consumer_data_buffer_size>(db_buf_switch, push_noc_encoding);
                 update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
             }
 
@@ -406,20 +415,18 @@ void kernel_main() {
                 noc_async_write_barrier(); // Barrier for now
             }
 
-            volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::CQ_CONSUMER_CB_BASE, db_buf_switch);
-
-            // Program the CB on the DST router because we may need to pull in data from DST
-            program_remote_sync_cb<true>(
+            volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE, db_buf_switch);
+                    // Program the CB on the DST router because we may need to pull in data from DST
+            program_remote_sync_cb<true, 1>(
                 local_multicore_cb_cfg,
                 remote_multicore_cb_cfg,
                 pull_noc_encoding,
                 consumer_cb_num_pages,
                 page_size,
-                consumer_cb_size
-            );
+                consumer_cb_size);
 
             // Signal to DST router that command has been read in
-            noc_semaphore_inc(pull_noc_encoding | eth_get_semaphore(0), 1);
+            noc_semaphore_inc(pull_noc_encoding | eth_get_semaphore(1), 1);
             noc_async_write_barrier(); // Barrier for now
 
             // Read data from DST router

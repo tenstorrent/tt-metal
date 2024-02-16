@@ -210,7 +210,7 @@ void Device::initialize_and_launch_firmware() {
     };
 
     // Download to worker cores
-    log_debug("Initializing firmware");
+    log_info("Initializing firmware");
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
 
@@ -240,9 +240,9 @@ void Device::initialize_and_launch_firmware() {
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
-    log_debug("Waiting for firmware init complete");
+    log_info("Waiting for firmware init complete");
     llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_INIT, not_done_cores);
-    log_debug("Firmware init complete");
+    log_info("Firmware init complete");
 }
 
 void Device::clear_l1_state() {
@@ -281,12 +281,15 @@ void Device::compile_command_queue_programs() {
     const uint32_t num_eth_command_slots = 1;
     const uint32_t accept_cmd_sem_value = 0;
 
-    uint32_t cmd_start_tensix = get_command_start_l1_address(false);
+    uint32_t cmd_start_tensix = get_command_start_l1_address();
     uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
     uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false); //get_producer_data_buffer_size(false);
     uint32_t consumer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
 
-    uint32_t cmd_start_eth = get_command_start_l1_address(true);
+    // TODO: change these
+    uint32_t issue_path_cmd_start_eth = get_eth_command_start_l1_address(CQTunnelPath::ISSUE);
+    uint32_t completion_path_cmd_start_eth = get_eth_command_start_l1_address(CQTunnelPath::COMPLETION);
+
     uint32_t producer_data_buffer_size_eth = get_cq_data_buffer_size(true);
     uint32_t consumer_data_buffer_size_eth = get_cq_data_buffer_size(true);
 
@@ -316,24 +319,63 @@ void Device::compile_command_queue_programs() {
                     // the issue queue interface needs to send fast dispatch packets to the "src" ethernet core and
                     // the completion queue writer receives packets from the "dst" ethernet core
                     tt_cxy_pair logical_eth_router_src = tt::Cluster::instance().get_eth_core_for_dispatch_core(
-                        issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
+                        issue_q_reader_location, EthRouterMode::BI_DIR_TUNNELING, device_id);
                     consumer_physical_core = this->ethernet_core_from_logical_core(logical_eth_router_src);
 
+                    // remote_issue_q writing to eth SRC, semaphore 0
                     tt::Cluster::instance().write_core(&accept_cmd_sem_value, sizeof(uint32_t), tt_cxy_pair(this->id(), consumer_physical_core), eth_l1_mem::address_map::SEMAPHORE_BASE);
 
-                    tt::Cluster::instance().configure_eth_core_for_dispatch_core(issue_q_reader_location, EthRouterMode::FD_SRC, device_id);
-
                     tt_cxy_pair logical_eth_router_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(
-                        completion_q_writer_location, EthRouterMode::FD_DST, device_id);
+                        completion_q_writer_location, EthRouterMode::BI_DIR_TUNNELING, device_id);
                     producer_physical_core = this->ethernet_core_from_logical_core(logical_eth_router_dst);
+                    producer_physical_core = CoreCoord(9,6); // TODO: remove hardcoded return path
 
-                    tt::Cluster::instance().write_core(&num_eth_command_slots, sizeof(uint32_t), tt_cxy_pair(this->id(), producer_physical_core), eth_l1_mem::address_map::SEMAPHORE_BASE);
-
-                    tt::Cluster::instance().configure_eth_core_for_dispatch_core(completion_q_writer_location, EthRouterMode::FD_DST, device_id);
 
                     std::cout << "CQ prefetcher core: " << issue_q_physical_core.str() << std::endl;
                     std::cout << "SRC router (L): " << consumer_physical_core.str() << std::endl;
                     std::cout << "DST router (L): " << producer_physical_core.str() << std::endl;
+                    // remote_command_processor receiving from eth DST, semaphore 1
+                    tt::Cluster::instance().write_core(&num_eth_command_slots, sizeof(uint32_t), tt_cxy_pair(this->id(), producer_physical_core), eth_l1_mem::address_map::SEMAPHORE_BASE + L1_ALIGNMENT);
+
+                    // Setup eth core for bidirectional tunneling
+                    std::map<string, string> eth_tunneller_defines = {
+                        {"DISPATCH_KERNEL", "1"}, //TODO: do we need this?
+                        {"CONSUMER_NOC_X", std::to_string(completion_q_physical_core.x)},
+                        {"CONSUMER_NOC_Y", std::to_string(completion_q_physical_core.y)},
+                        {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
+                        {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
+                    };
+                    std::vector<uint32_t> eth_tunneller_compile_args = {true}; // TODO: what is this? SENDER is ISSUE?
+                    std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
+                    std::cout << "chip " << device_id << " ethernet bi dir src core " << logical_eth_router_src.str() << std::endl;
+                    std::cout << "chip " << device_id << " ethernet bi dir dst core " << logical_eth_router_dst.str() << std::endl;
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        command_q_tunneller_kernel,
+                        logical_eth_router_src,
+                        tt::tt_metal::EthernetConfig {
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = eth_tunneller_compile_args,
+                            .defines = eth_tunneller_defines});
+                    // TODO: remote this, temporarily adding a return path kernel as well
+                    eth_tunneller_defines = {
+                        {"DISPATCH_KERNEL", "1"}, //TODO: do we need this?
+                        {"CONSUMER_NOC_X", std::to_string(completion_q_physical_core.x)},
+                        {"CONSUMER_NOC_Y", std::to_string(completion_q_physical_core.y)},
+                    };
+                    // TODO remove hardcoding for return path
+                    eth_tunneller_compile_args = {false}; // TODO: what is this? SENDER is ISSUE?
+                    command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/temp_return_path.cpp";
+                    std::cout << "chip " << device_id << " ethernet bi dir src core " << logical_eth_router_src.str() << std::endl;
+                    std::cout << "chip " << device_id << " ethernet bi dir dst core " << logical_eth_router_dst.str() << std::endl;
+                    tt::tt_metal::CreateKernel(
+                        *command_queue_program_ptr,
+                        command_q_tunneller_kernel,
+                        CoreCoord(0,8),
+                        tt::tt_metal::EthernetConfig {
+                            .noc = tt::tt_metal::NOC::RISCV_0_default,
+                            .compile_args = eth_tunneller_compile_args,
+                            .defines = eth_tunneller_defines});
                 }
                 std::cout << "Issue q phy: " << issue_q_physical_core.str() << " completion q phy: " << completion_q_physical_core.str() << std::endl;
 
@@ -365,11 +407,10 @@ void Device::compile_command_queue_programs() {
                 uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
                 uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
 
-                uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? issue_path_cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
                 uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
 
                 tt::PullAndPushConfig pull_and_push_config = (device_id != this->id()) ? tt::PullAndPushConfig::PUSH_TO_REMOTE : tt::PullAndPushConfig::LOCAL;
-
                 std::vector<uint32_t> producer_compile_args = {
                     host_issue_queue_read_ptr_addr,
                     issue_queue_start_addr,
@@ -448,6 +489,7 @@ void Device::compile_command_queue_programs() {
                     };
 
                     std::cout << "Programming " << completion_q_writer_location.str() << " with cq prefetcher " << std::endl;
+                    std::cout << "Programming completion q writer " << device_id << " with" << completion_q_physical_core.str() << std::endl;
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
                         pull_and_push_kernel,
@@ -478,21 +520,61 @@ void Device::compile_command_queue_programs() {
         CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, CoreType::WORKER);
 
         // Set up the dst router to receive fast dispatch packets
-        tt_cxy_pair logical_eth_router_remote_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
+        tt_cxy_pair logical_eth_router_remote_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::BI_DIR_TUNNELING, mmio_device_id);
         CoreCoord physical_eth_router_remote_dst = this->ethernet_core_from_logical_core(logical_eth_router_remote_dst);
 
         // TODO (abhullar / aliu): there is no API to configure ethernet semaphores used for FD so manually write initial semaphore value
-        tt::Cluster::instance().write_core(&num_eth_command_slots, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_remote_dst), eth_l1_mem::address_map::SEMAPHORE_BASE);
-
-        tt::Cluster::instance().configure_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::FD_DST, mmio_device_id);
+        // remote_completion_writer receiving from eth DST, semaphore 1
+        std::cout << " writing to dst on remote " << physical_eth_router_remote_dst.str() << std::hex << " " << eth_l1_mem::address_map::SEMAPHORE_BASE + L1_ALIGNMENT << std::dec << std::endl;
+        tt::Cluster::instance().write_core(&num_eth_command_slots, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_remote_dst), eth_l1_mem::address_map::SEMAPHORE_BASE + L1_ALIGNMENT);
 
         // Set up the src router on remote device to send fast dispatch packets on the return path to MMIO device
         CoreCoord logical_eth_router_remote_src = tt::Cluster::instance().get_eth_core_for_dispatch_core(
-            remote_processor_location, EthRouterMode::FD_SRC, mmio_device_id);
-        CoreCoord physical_eth_router_remote_src = this->ethernet_core_from_logical_core(logical_eth_router_remote_src);
-        tt::Cluster::instance().write_core(&accept_cmd_sem_value, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_remote_src), eth_l1_mem::address_map::SEMAPHORE_BASE);
+            remote_processor_location, EthRouterMode::BI_DIR_TUNNELING, mmio_device_id);
 
-        tt::Cluster::instance().configure_eth_core_for_dispatch_core(remote_processor_location, EthRouterMode::FD_SRC, mmio_device_id);
+        // remote_signaller writing to eth SRC, semaphore 0
+        CoreCoord physical_eth_router_remote_src = this->ethernet_core_from_logical_core(logical_eth_router_remote_src);
+        physical_eth_router_remote_src = CoreCoord(9,0); // TODO: remove hardcoded return path
+        tt::Cluster::instance().write_core(&accept_cmd_sem_value, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_remote_src), eth_l1_mem::address_map::SEMAPHORE_BASE);
+        // TODO: aliu add more bidirection tunneling kernels for multihop dispatch
+          // Setup eth core for bidirectional tunneling
+            std::map<string, string> eth_tunneller_defines = {
+                {"DISPATCH_KERNEL", "1"}, //TODO: do we need this?
+                {"CONSUMER_NOC_X", std::to_string(remote_processor_physical_core.x)},
+                {"CONSUMER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
+                {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
+                {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
+            };
+            // TODO: remove hardcoding for return path
+            std::vector<uint32_t> eth_tunneller_compile_args = {true}; // SENDER is ISSUE
+            std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
+            std::cout << "chip " << this->id() << " ethernet bi dir src core " << logical_eth_router_remote_src.str() << std::endl;
+            std::cout << "chip " << this->id() << " ethernet bi dir dst core " << logical_eth_router_remote_dst.str() << std::endl;
+            tt::tt_metal::CreateKernel(
+                *command_queue_program_ptr,
+                command_q_tunneller_kernel,
+                logical_eth_router_remote_src,
+                tt::tt_metal::EthernetConfig {
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                    .compile_args = eth_tunneller_compile_args,
+                    .defines = eth_tunneller_defines});
+
+           // TODO: remote this, temporarily adding a return path kernel as well
+           eth_tunneller_defines = {
+               {"DISPATCH_KERNEL", "1"}, //TODO: do we need this?
+                {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
+                {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
+           };
+          eth_tunneller_compile_args = {false}; // TODO: what is this? SENDER is ISSUE?
+           command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/temp_return_path.cpp";
+           tt::tt_metal::CreateKernel(
+               *command_queue_program_ptr,
+               command_q_tunneller_kernel,
+               CoreCoord(0,0),
+               tt::tt_metal::EthernetConfig {
+                   .noc = tt::tt_metal::NOC::RISCV_0_default,
+                   .compile_args = eth_tunneller_compile_args,
+                   .defines = eth_tunneller_defines});
 
         std::cout << "Remote pull and push core: " << remote_processor_physical_core.str() << std::endl;
         std::cout << "DST router (R): " << physical_eth_router_remote_dst.str() << std::endl;
@@ -524,6 +606,7 @@ void Device::compile_command_queue_programs() {
             {"DISPATCH_NOC_Y", std::to_string(dispatch_physical_core.y)},
         };
 
+        std::cout << " remote chip command processor kernel " << this->id() << remote_processor_physical_core.str() << std::endl;
         tt::tt_metal::CreateKernel(
             *command_queue_program_ptr,
             "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp",
@@ -622,7 +705,7 @@ void Device::initialize_command_queue() {
         for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
             for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
                 launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core)->launch_msg;
-                tt::llrt::write_launch_msg_to_core(this->id(), this->worker_core_from_logical_core(logical_dispatch_core), &msg);
+                tt::llrt::write_launch_msg_to_core(this->id(), this->physical_core_from_logical_core(logical_dispatch_core, core_type), &msg);
             }
         }
     }

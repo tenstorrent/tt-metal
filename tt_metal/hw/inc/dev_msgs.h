@@ -113,10 +113,23 @@ static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) =
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 #endif
 
+struct eth_word_t {
+    volatile uint32_t bytes_sent;
+    uint32_t reserved_0;
+    uint32_t reserved_1;
+    uint32_t reserved_2;
+};
+
+enum class CQTunnelPath: uint8_t {
+    ISSUE = 0,
+    COMPLETION = 1,
+};
+
 enum EthRouterMode : uint32_t {
     FD_SRC = 0,
     FD_DST = 1,
     SD = 2,
+    BI_DIR_TUNNELING = 3,
 };
 
 struct routing_info_t {
@@ -128,8 +141,5 @@ struct routing_info_t {
     volatile uint32_t relay_src_y;
     volatile uint32_t relay_dst_x;
     volatile uint32_t relay_dst_y;
-    volatile uint32_t fd_buffer_msgs_sent;
-    uint32_t reserved_0_;
-    uint32_t reserved_1_;
-    uint32_t reserved_2_;
+    eth_word_t fd_buffer_msgs[2];
 };

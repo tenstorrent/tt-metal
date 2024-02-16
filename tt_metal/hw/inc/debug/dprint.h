@@ -35,7 +35,7 @@
 
 #include "dprint_buffer.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "erisc.h"
+#include "ethernet/tunneling.h"
 #endif
 
 #define DPRINT DebugPrinter()
@@ -65,6 +65,9 @@
 #define DPRINT_DATA0(x)
 #define DPRINT_DATA1(x)
 #endif
+namespace internal_ {
+void __attribute__((section("code_l1"))) risc_context_switch();
+}
 
 struct BF16 { uint16_t val; BF16(uint16_t val) : val(val) {} } ATTR_PACK;
 struct F32  { float val; F32(float val) : val(val) {} } ATTR_PACK;

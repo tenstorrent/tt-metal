@@ -105,8 +105,8 @@ class Device {
 
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
-    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips() const {
-        return tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(this->id_);
+    std::unordered_set<chip_id_t> get_ethernet_connected_device_ids() const {
+        return tt::Cluster::instance().get_ethernet_connected_device_ids(this->id_);
     }
 
     std::unordered_set<CoreCoord> get_active_ethernet_cores() const {

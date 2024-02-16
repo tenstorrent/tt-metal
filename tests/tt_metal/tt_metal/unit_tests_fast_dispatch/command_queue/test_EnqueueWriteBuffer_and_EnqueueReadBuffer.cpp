@@ -104,6 +104,8 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
     for (const bool use_void_star_api: {true, false}) {
         size_t buf_size = config.num_pages * config.page_size;
         Buffer bufa(device, buf_size, config.page_size, config.buftype);
+        std::cout << "  sending to buffer " << bufa.noc_coordinates().str() << " " << std::hex  << bufa.address() << std::endl;
+        std::cout << "  eth buffer " << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE << " " << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE +  eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE <<std::endl;
 
         vector<uint32_t> src = generate_arange_vector(bufa.size());
 
@@ -113,6 +115,8 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
             EnqueueWriteBuffer(cq, bufa, src, false);
         }
         vector<uint32_t> result;
+//        Finish(cq);
+//        detail::ReadFromBuffer(bufa, result);
         if (use_void_star_api) {
             result.resize(buf_size / sizeof(uint32_t));
             EnqueueReadBuffer(cq, bufa, result.data(), true);

@@ -18,7 +18,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
-constexpr std::int32_t MAX_NUM_WORDS = eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE / WORD_SIZE;
+constexpr std::int32_t MAX_NUM_WORDS = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE / WORD_SIZE;
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -35,7 +35,7 @@ struct erisc_info_t {
   volatile uint32_t reserverd_4_;
 };
 namespace unit_tests::erisc::direct_send {
-// Tests ethernet direct send/receive from ERISC_APP_RESERVED_BASE
+// Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
 bool send_over_eth(
     tt_metal::Device* sender_device,
     tt_metal::Device* receiver_device,
@@ -85,12 +85,12 @@ bool send_over_eth(
     // TODO: is it possible that receiver core app is stil running when we push inputs here???
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     llrt::write_hex_vec_to_core(
-        sender_device->id(), sender_core, inputs, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
+        sender_device->id(), sender_core, inputs, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
     // Zero out receiving address to ensure no stale data is causing tests to pass
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     llrt::write_hex_vec_to_core(
-        receiver_device->id(), receiver_core, all_zeros, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
+        receiver_device->id(), receiver_core, all_zeros, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
     std::vector<uint32_t> args_0 = {uint32_t(byte_size), 0};
     llrt::write_hex_vec_to_core(sender_device->id(), sender_core, args_0, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
@@ -126,7 +126,7 @@ bool send_over_eth(
 
     bool pass = true;
     auto readback_vec = llrt::read_hex_vec_from_core(
-        receiver_device->id(), receiver_core, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, byte_size);
+        receiver_device->id(), receiver_core, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, byte_size);
     pass &= (readback_vec == inputs);
 
     return pass;
