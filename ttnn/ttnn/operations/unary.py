@@ -132,56 +132,8 @@ for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
     register_ttl_unary_function(unary_function_name, ttl_unary_function)
 
 
-def torch_logical_andi(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
-    return result
-
-
-def torch_logical_ori(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
-    return result
-
-
-def torch_logical_xori(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
-    return result
-
-
 def _is_scalar(value):
     return isinstance(value, (int, float))
-
-
-def torch_rpow(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.pow(value, x)
-    return result
-
-
-def torch_rdiv(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.div(value, x)
-    return result
-
-
-def torch_rsub(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.sub(value, x)
-    return result
 
 
 def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, param):
@@ -189,21 +141,12 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
         import torch
 
         name_to_torch_function = {
-            "logical_andi": torch_logical_andi,
-            "logical_ori": torch_logical_ori,
-            "logical_xori": torch_logical_xori,
             "logit": torch.logit,
-            "rpow": torch_rpow,
-            "rdiv": torch_rdiv,
-            "rsub": torch_rsub,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
 
-        if name == "logical_noti" or name == "logical_andi" or name == "logical_ori" or name == "logical_xori":
-            return torch_function(input_tensor, scalar=parameter)
-        else:
-            return torch_function(input_tensor, parameter)
+        return torch_function(input_tensor, parameter)
 
     def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
         ttnn.validate_input_tensor(
@@ -266,105 +209,11 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, op_name, pa
 
 
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("logical_andi", ttl.tensor.logical_andi, "logical andi", "immediate"),
-    ("logical_ori", ttl.tensor.logical_ori, "logical ori", "immediate"),
-    ("logical_xori", ttl.tensor.logical_xori, "logical xori", "immediate"),
     ("logit", ttl.tensor.logit, "logit", "eps"),
-    ("rdiv", ttl.tensor.rdiv, "rdiv", "value"),
-    ("rsub", ttl.tensor.rsub, "rsub", "value"),
-    ("rpow", ttl.tensor.rpow, "rpow", "value"),
 ]
 
 for unary_function_name, ttl_unary_function, name, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, name, param)
-
-
-def register_ttl_unary_function_with_two_float(name, ttl_unary_function, op_name, param1, param2):
-    def _torch_unary(input_tensor: ttnn.Tensor, parameter1, parameter2, **_):
-        import torch
-
-        name_to_torch_function = {
-            "transpose": torch.transpose,
-        }
-        torch_function = name_to_torch_function[name]
-        input_tensor = ttnn.to_torch(input_tensor)
-
-        return torch_function(input_tensor, parameter1, parameter2)
-
-    def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_unary_validate_input_tensors,
-        torch_function=_torch_unary,
-    )
-    def unary_function(
-        input_tensor: ttnn.Tensor,
-        parameter1: int,
-        parameter2: int,
-        *,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    ) -> ttnn.Tensor:
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        ttl_input_tensor = input_tensor.value
-
-        if not isinstance(input_tensor, ttnn.Tensor):
-            raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-        if not _is_scalar(parameter1):
-            raise TypeError("Expected second argument to be a int")
-
-        if not _is_scalar(parameter2):
-            raise TypeError("Expected second argument to be a int")
-
-        if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-            raise RuntimeError("input_tensor must be on device!")
-        ttl_input_tensor = input_tensor.value
-
-        ttl_output_tensor = ttl_unary_function(
-            ttl_input_tensor, parameter1, parameter2, output_mem_config=memory_config
-        )
-
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
-        return output_tensor
-
-    unary_function.__name__ = f"ttnn.{(name)}"
-    unary_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-        Applies the {op_name} function to the elements of the input tensor :attr:`input_tensor` with dimensions :attr:`{param1}` and :attr:`{param2}` are swapped.
-
-        .. math::
-            {(op_name)}(\\mathrm{{input\\_tensor}}_i  \\; , \\; {param})
-
-        Args:
-            * :attr:`input_tensor`
-            * :attr:`{param}`
-
-        Example::
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.{(name)}(tensor, {param1}, {param2})
-
-        """
-    setattr(THIS_MODULE, name, unary_function)
-
-
-TTL_UNARY_FUNCTIONS_WITH_TWO_FLOAT_PARAM = [
-    ("transpose", ttl.tensor.transpose, "transpose", "dim0", "dim1"),
-]
-
-for unary_function_name, ttl_unary_function, name, param1, param2 in TTL_UNARY_FUNCTIONS_WITH_TWO_FLOAT_PARAM:
-    register_ttl_unary_function_with_two_float(unary_function_name, ttl_unary_function, name, param1, param2)
 
 
 __all__ = []

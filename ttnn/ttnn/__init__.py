@@ -161,16 +161,9 @@ from ttnn.operations.unary import (
     acosh,
     atanh,
     logical_not,
-    logical_andi,
-    logical_ori,
-    logical_xori,
     logit,
     clone,
     signbit,
-    rpow,
-    rdiv,
-    rsub,
-    transpose,
 )
 
 from ttnn.operations.binary import (

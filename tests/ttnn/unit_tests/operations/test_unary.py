@@ -141,6 +141,12 @@ def test_clone(device, h, w):
     run_unary_test(device, h, w, ttnn.clone, torch.clone)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_logical_not(device, h, w):
+    run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
+
+
 def run_unary_test_range(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     torch.manual_seed(0)
     low = -100
@@ -179,146 +185,8 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_functio
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-def run_unary_test_float_key(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch_function(torch_input_tensor, scalar=scalar)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, scalar)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-def run_unary_test_float_key_div(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor += 0.1
-    torch_output_tensor = torch_function(torch_input_tensor, scalar=scalar)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, scalar)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-def torch_logical_andi(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
-    return result
-
-
-def torch_logical_ori(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
-    return result
-
-
-def torch_logical_xori(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    return torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
-
-
-def torch_rpow(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.pow(value, x)
-    return result
-
-
-def torch_rdiv(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.div(value, x)
-    return result
-
-
-def torch_rsub(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.sub(value, x)
-    return result
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_not(device, h, w):
-    run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_andi(device, h, w, scalar):
-    run_unary_test_float_key(device, h, w, scalar, ttnn.logical_andi, torch_logical_andi)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_ori(device, h, w, scalar):
-    run_unary_test_float_key(device, h, w, scalar, ttnn.logical_ori, torch_logical_ori)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_xori(device, h, w, scalar):
-    run_unary_test_float_key(device, h, w, scalar, ttnn.logical_xori, torch_logical_xori)
-
-
 @pytest.mark.parametrize("scalar", [1, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logit(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.logit, torch.logit)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_rdiv(device, h, w, scalar):
-    run_unary_test_float_key_div(device, h, w, scalar, ttnn.rdiv, torch_rdiv)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_rpow(device, h, w, scalar):
-    run_unary_test_float_key(device, h, w, scalar, ttnn.rpow, torch_rpow, pcc=0.999)
-
-
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_rsub(device, h, w, scalar):
-    run_unary_test_float_key(device, h, w, scalar, ttnn.rsub, torch_rsub)
-
-
-def run_unary_test_two_float(device, h, w, scalar1, scalar2, ttnn_function, torch_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor = torch_input_tensor[None, None, :, :]
-    torch_output_tensor = torch_function(torch_input_tensor, scalar1, scalar2)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, scalar1, scalar2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("scalar1", [-2, -1, 0, 1, 2])
-@pytest.mark.parametrize("scalar2", [-2, 0, 1])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_transpose(device, h, w, scalar1, scalar2):
-    run_unary_test_two_float(device, h, w, scalar1, scalar2, ttnn.transpose, torch.transpose)

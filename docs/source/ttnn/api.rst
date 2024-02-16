@@ -134,16 +134,7 @@ Pointwise Unary
    ttnn/swish
    ttnn/tan
    ttnn/tanh
-   ttnn/logical_andi
-   ttnn/logical_ori
-   ttnn/logical_xori
-   ttnn/logit
-   ttnn/clone
    ttnn/signbit
-   ttnn/rdiv
-   ttnn/rsub
-   ttnn/rpow
-   ttnn/transpose
    ttnn/polygamma
    ttnn/rad2deg
    ttnn/recip
