@@ -1137,7 +1137,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -1181,13 +1181,33 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
     TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
     TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
 
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+    bool packer_l1_acc;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+            packer_l1_acc = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+            packer_l1_acc = compute_kernel_config.packer_l1_acc;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
     if (fp32_dest_acc_en) {
         TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
-    }
-
-    if (device->arch() == ARCH::GRAYSKULL) {
-        TT_ASSERT(fp32_dest_acc_en == false && "GraySkull does not support fp32 accumulation mode");
-        TT_ASSERT(packer_l1_acc == false && "GraySkull does not support packer L1 accumulation");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1263,8 +1283,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
     }
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
-    return matmul_multi_core_reuse_mcast_1d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fused_activation, mcast_in0);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, bool broadcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
+    return matmul_multi_core_reuse_mcast_1d_optimized_(a, b, bias, output_tensor, broadcast_batch, compute_with_storage_grid_size, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fused_activation, mcast_in0);
 }
 
 }  // namespace tt_metal

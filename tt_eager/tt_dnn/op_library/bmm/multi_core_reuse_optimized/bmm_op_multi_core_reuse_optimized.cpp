@@ -471,7 +471,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     // Pass in a and b shapes instead
 
@@ -499,13 +499,33 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
 
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+    bool packer_l1_acc;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+            packer_l1_acc = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+            packer_l1_acc = compute_kernel_config.packer_l1_acc;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
     if (fp32_dest_acc_en) {
         TT_ASSERT(out_subblock_h * out_subblock_w <= 4 && "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
-    }
-
-    if (device->arch() == ARCH::GRAYSKULL) {
-        TT_ASSERT(fp32_dest_acc_en == false && "GraySkull does not support fp32 accumulation mode");
-        TT_ASSERT(packer_l1_acc == false && "GraySkull does not support packer L1 accumulation");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -555,7 +575,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
 
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b,  Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, bool fp32_dest_acc_en, bool math_approx_mode, bool packer_l1_acc, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b,  Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -563,7 +583,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, 
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
     */
-    return matmul_multi_core_reuse_optimized_(a, b, output, bcast_batch, compute_with_storage_grid_size, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return matmul_multi_core_reuse_optimized_(a, b, output, bcast_batch, compute_with_storage_grid_size, output_dtype, compute_kernel_config, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

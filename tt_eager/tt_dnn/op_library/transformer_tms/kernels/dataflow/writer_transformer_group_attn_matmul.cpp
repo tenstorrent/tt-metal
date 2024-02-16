@@ -4,6 +4,8 @@
 
 #include "dataflow_api.h"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     uint32_t i = 0;
 
@@ -30,6 +32,9 @@ void kernel_main() {
     uint32_t bfloat16_row_bytes           = get_arg_val<uint32_t>(i++);
     uint32_t bfloat16_Nt_bytes            = get_arg_val<uint32_t>(i++);
     uint32_t bfloat16_last_row_bytes_read = get_arg_val<uint32_t>(i++);
+
+    DPRINT << "bfloat16_row_bytes " <<bfloat16_row_bytes <<ENDL();
+    DPRINT << "bfloat16_Nt_bytes " <<bfloat16_Nt_bytes <<ENDL();
 
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
@@ -102,7 +107,10 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             #endif
+
             cb_push_back(cb_id_in0, in0_block_w);
+
+
 
             cb_reserve_back(cb_id_intermed1, out_num_tiles);
             uint32_t cb_intermed1_addr = get_write_ptr(cb_id_intermed1);

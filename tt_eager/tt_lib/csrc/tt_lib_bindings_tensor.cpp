@@ -34,6 +34,7 @@
 #include "type_caster.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_lib_bindings_tensor.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt::tt_metal{
 
@@ -325,6 +326,24 @@ void TensorModule(py::module &m_tensor) {
 
     auto py_borrowed_buffer_for_bfloat16_t = py::class_<borrowed_buffer::Buffer<bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
+
+    py::class_<GrayskullComputeKernelConfig>(m_tensor, "GrayskullComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true
+        );
+
+    py::class_<WormholeComputeKernelConfig>(m_tensor, "WormholeComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool, bool, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true,
+            py::arg("fp32_dest_acc_en") = false,
+            py::arg("packer_l1_acc") = false
+        );
 
     detail::bind_unary_op(m_tensor, "mean_hw", tt::tt_metal::mean_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
     detail::bind_unary_op(m_tensor, "global_mean", tt::tt_metal::global_mean, R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");

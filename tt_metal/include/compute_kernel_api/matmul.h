@@ -128,19 +128,19 @@ ALWI void mm_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, 
  * | rt_dim         | the number of rows of the output matrix in tiles              | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
  * | kt_dim         | the inner dim of the input matrices in tiles                  | uint32_t | 1 to 2^32-1                                         | False    |
  */
-ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
+ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose = 0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(in0_cb_id, in1_cb_id, transpose) ));
     #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
     #endif
     MATH(( llk_math_pack_sync_init<SYNC, DST_ACCUM_MODE>()  ));
 
-    PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>(out_cb_id)  ));
@@ -227,9 +227,9 @@ ALWI void mm_block_init_short(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, ui
  * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | False    |
  * | kt_dim         | The inner dimension.                                          | uint32_t | Must be equal to block A column dimension           | False    |
  */
-ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t old_in1_cb_id=2, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
+ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t old_in1_cb_id=2, const uint32_t transpose=0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
     UNPACK(( llk_unpack_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id) ));
-    mm_block_init_short(in0_cb_id, in1_cb_id, false, ct_dim, rt_dim, kt_dim);
+    mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 }
 
 
