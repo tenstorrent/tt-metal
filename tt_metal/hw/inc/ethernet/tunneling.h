@@ -270,7 +270,7 @@ void eth_tunnel_src_forward_one_cmd() {
     volatile tt_l1_ptr uint32_t *command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(command_start_addr);
     volatile tt_l1_ptr CommandHeader *header = (CommandHeader *)command_ptr;
     uint32_t num_buffer_transfers = header->num_buffer_transfers;
-    uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
+    uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
     bool is_program = header->is_program_buffer;
     bool issue_path = header->issue_path;
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
@@ -301,7 +301,7 @@ void eth_tunnel_src_forward_one_cmd() {
         //     continue;
         // }
 
-        uint32_t num_to_write = min(num_pages, producer_consumer_transfer_num_pages);
+        uint32_t num_to_write = min(num_pages, router_transfer_num_pages);
 
         // erisc_info->unused_arg2 = 800 + num_pages *10 + num_buffer_transfers;
         // erisc_info->unused_arg2 = (uint32_t) (&command_ptr[2]);
@@ -315,7 +315,7 @@ void eth_tunnel_src_forward_one_cmd() {
                 eth_db_cb_config, remote_src_db_cb_config, ((uint64_t)relay_src_noc_encoding << 32), num_to_write);
             num_pages_tunneled += num_to_write;
             // DPRINT << "src-num-remaining: " << (uint32_t)(num_pages - num_pages_tunneled) << ENDL();
-            num_to_write = min(num_pages - num_pages_tunneled, producer_consumer_transfer_num_pages);
+            num_to_write = min(num_pages - num_pages_tunneled, router_transfer_num_pages);
         }
         command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
     }
@@ -384,7 +384,7 @@ void eth_tunnel_dst_forward_one_cmd() {
     // if there is data to tx
     internal_::ack_fd_packet();
     // }
-    uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
+    uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
     uint32_t l1_consumer_fifo_limit_16B =
         (get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size) >> 4;
     uint32_t local_cb_size_16B = header->router_cb_size >> 4;
@@ -404,8 +404,8 @@ void eth_tunnel_dst_forward_one_cmd() {
             continue;
         }
 
-        // producer_consumer_transfer_num_pages is the total num of data pages that could fit in a FD packet
-        uint32_t num_pages_to_tx = min(num_pages, producer_consumer_transfer_num_pages);
+        // router_transfer_num_pages is the total num of data pages that could fit in a FD packet
+        uint32_t num_pages_to_tx = min(num_pages, router_transfer_num_pages);
         uint32_t num_pages_transferred = 0;
 
         // erisc_info->unused_arg2 = 800 + num_pages *10 + num_buffer_transfers;
@@ -435,7 +435,7 @@ void eth_tunnel_dst_forward_one_cmd() {
                 eth_db_cb_config->rd_ptr_16B -= local_cb_size_16B;
             }
             num_pages_transferred += num_pages_to_tx;
-            num_pages_to_tx = min(num_pages - num_pages_transferred, producer_consumer_transfer_num_pages);
+            num_pages_to_tx = min(num_pages - num_pages_transferred, router_transfer_num_pages);
         }
         command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;  // jump to buffer transfer region
     }

@@ -280,14 +280,13 @@ void Device::compile_command_queue_programs() {
     const uint32_t num_eth_command_slots = 1;
     const uint32_t accept_cmd_sem_value = 0;
 
-    uint32_t cmd_start_tensix = get_command_start_l1_address(false);
-    uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
-    uint32_t producer_data_buffer_size_tensix = get_producer_data_buffer_size(false);
-    uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size(false);
+    uint32_t cmd_start_tensix = get_command_start_l1_address<CoreType::WORKER>();
+    uint32_t data_section_addr_tensix = get_data_section_l1_address<CoreType::WORKER>();
+    uint32_t producer_data_buffer_size_tensix = get_tensix_producer_data_buffer_size();
+    uint32_t consumer_data_buffer_size_tensix = get_tensix_consumer_data_buffer_size();
 
-    uint32_t cmd_start_eth = get_command_start_l1_address(true);
-    uint32_t producer_data_buffer_size_eth = get_producer_data_buffer_size(true);
-    uint32_t consumer_data_buffer_size_eth = get_consumer_data_buffer_size(true);
+    uint32_t cmd_start_eth = get_command_start_l1_address<CoreType::ETH>();
+    uint32_t router_data_buffer_size_eth = get_router_data_buffer_size();
 
     if (this->is_mmio_capable()) {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
@@ -346,7 +345,7 @@ void Device::compile_command_queue_programs() {
                 uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
 
                 uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
-                uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t consumer_data_buff_size = (device_id != this->id()) ? router_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
                 uint32_t consumer_cmd_slots = (device_id != this->id()) ? num_eth_command_slots : num_tensix_command_slots;
                 std::vector<uint32_t> producer_compile_args = {
                     host_issue_queue_read_ptr_addr,
@@ -434,7 +433,7 @@ void Device::compile_command_queue_programs() {
             data_section_addr_tensix,
             producer_data_buffer_size_tensix,
             cmd_start_eth,
-            producer_data_buffer_size_eth,
+            router_data_buffer_size_eth,
             cmd_start_tensix,
             consumer_data_buffer_size_tensix,
             num_eth_command_slots
@@ -496,7 +495,7 @@ void Device::compile_command_queue_programs() {
             cmd_start_tensix,
             consumer_data_buffer_size_tensix,
             cmd_start_eth,
-            producer_data_buffer_size_eth,
+            router_data_buffer_size_eth,
         };
 
         std::map<string, string> signaller_defines = {

@@ -14,27 +14,40 @@
 using namespace tt::tt_metal;
 
 // Starting L1 address of commands
-inline uint32_t get_command_start_l1_address(bool use_eth_l1) {
-    return (use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE);
+template <CoreType core_type>
+inline uint32_t get_command_start_l1_address() {
+    static_assert(core_type == CoreType::WORKER or core_type == CoreType::ETH);
+    return core_type == CoreType::ETH ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE;
 }
 
 // Where issue queue interface core pulls in data (follows command)
-inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
-    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE;
+template <CoreType core_type>
+inline uint32_t get_data_section_l1_address() {
+    static_assert(core_type == CoreType::WORKER or core_type == CoreType::ETH);
+    uint32_t l1_base = (core_type == CoreType::ETH) ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE;
     return l1_base + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 }
 
-// Space available in issue queue interface core pushing command data to consumer to dispatch or relay forward
-inline uint32_t get_producer_data_buffer_size(bool use_eth_l1) {
-    uint32_t available_l1 = use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE : MEM_L1_SIZE;
-    return available_l1 - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - (((uint32_t)!use_eth_l1) * L1_UNRESERVED_BASE);
+// Space available in bytes in producer tensix core pushing command data to consumer to dispatch or relay forward
+inline uint32_t get_tensix_producer_data_buffer_size() {
+    return MEM_L1_SIZE - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - L1_UNRESERVED_BASE;
 }
 
-// Space available in core receiving command data to dispatch or relay forward
-inline uint32_t get_consumer_data_buffer_size(bool use_eth_l1) {
-    uint32_t num_consumer_cmd_slots = use_eth_l1 ? 1 : 2;
-    uint32_t producer_data_buffer_size = get_producer_data_buffer_size(use_eth_l1);
+// Space available in bytes in consumer tensix core receiving command data to dispatch or relay forward
+inline uint32_t get_tensix_consumer_data_buffer_size() {
+    const uint32_t num_consumer_cmd_slots = 2;
+    uint32_t producer_data_buffer_size = get_tensix_producer_data_buffer_size();
     return (producer_data_buffer_size - ((num_consumer_cmd_slots - 1) * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND)) / num_consumer_cmd_slots;
+}
+
+// Space available in bytes in ethernet router core
+inline uint32_t get_router_data_buffer_size() {
+    if constexpr (eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE < (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t))) {
+        // Grayskull should not be calling this API
+        return 0;
+    } else {
+        return eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t));
+    }
 }
 
 /// @brief Get offset of the command queue relative to its channel

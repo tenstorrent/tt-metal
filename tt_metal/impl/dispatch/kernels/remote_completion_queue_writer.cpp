@@ -64,7 +64,7 @@ void kernel_main() {
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
             bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
-            uint32_t producer_consumer_transfer_num_pages = header->consumer_router_transfer_num_pages;
+            uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
             write_buffers(
                 db_cb_config,
                 eth_db_cb_config,
@@ -73,7 +73,7 @@ void kernel_main() {
                 is_sharded,
                 sharded_buffer_num_cores,
                 (uint64_t(producer_noc_encoding) << 32),
-                producer_consumer_transfer_num_pages);
+                router_transfer_num_pages);
         }
 
         uint32_t finish = header->finish;

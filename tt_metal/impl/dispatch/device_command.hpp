@@ -38,8 +38,7 @@ struct CommandHeader {
     uint32_t issue_data_size = 0;
     uint32_t completion_data_size = 0;
     uint32_t producer_consumer_transfer_num_pages = 0;
-    uint32_t producer_router_transfer_num_pages = 0;
-    uint32_t consumer_router_transfer_num_pages = 0;
+    uint32_t router_transfer_num_pages = 0;
     uint32_t buffer_type = 0;
     uint32_t sharded_buffer_num_cores = 0;
     uint32_t restart = 0;
@@ -141,9 +140,7 @@ class DeviceCommand {
 
     void set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages);
 
-    void set_producer_router_transfer_num_pages(const uint32_t producer_router_transfer_num_pages);
-
-    void set_consumer_router_transfer_num_pages(const uint32_t consumer_router_transfer_num_pages);
+    void set_router_transfer_num_pages(const uint32_t router_transfer_num_pages);
 
     uint32_t get_issue_data_size() const;
 

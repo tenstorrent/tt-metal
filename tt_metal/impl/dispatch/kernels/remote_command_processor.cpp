@@ -67,8 +67,8 @@ void kernel_main() {
 
         uint32_t num_buffer_transfers = header->num_buffer_transfers;
         uint32_t producer_cb_size = header->router_cb_size;
-        // producer_consumer_transfer_num_pages is the total number of data pages that were sent from the router
-        uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
+        // router_transfer_num_pages is the total number of data pages that were sent from the router
+        uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
 
         // get_db_buf_addr is set up to get address of first CQ slot only because currently remote FD does not have any cmd double buffering
         transfer<true>(
@@ -85,7 +85,7 @@ void kernel_main() {
             consumer_cb_size,
             (get_db_buf_addr<dispatcher_cmd_base_addr, dispatcher_data_buffer_size>(false) + consumer_cb_size) >> 4,
             ((uint64_t)dispatcher_noc_encoding << 32),
-            producer_consumer_transfer_num_pages,
+            router_transfer_num_pages,
             (get_db_buf_addr<cmd_base_addr, data_buffer_size>(false) + header->producer_cb_size) >> 4);
 
         // Notify producer ethernet router that it has completed transferring a command

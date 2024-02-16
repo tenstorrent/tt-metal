@@ -97,12 +97,8 @@ void DeviceCommand::set_producer_consumer_transfer_num_pages(const uint32_t prod
     this->packet.header.producer_consumer_transfer_num_pages = producer_consumer_transfer_num_pages;
 }
 
-void DeviceCommand::set_producer_router_transfer_num_pages(const uint32_t producer_router_transfer_num_pages) {
-    this->packet.header.producer_router_transfer_num_pages = producer_router_transfer_num_pages;
-}
-
-void DeviceCommand::set_consumer_router_transfer_num_pages(const uint32_t consumer_router_transfer_num_pages) {
-    this->packet.header.consumer_router_transfer_num_pages = consumer_router_transfer_num_pages;
+void DeviceCommand::set_router_transfer_num_pages(const uint32_t router_transfer_num_pages) {
+    this->packet.header.router_transfer_num_pages = router_transfer_num_pages;
 }
 
 void DeviceCommand::update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src) {

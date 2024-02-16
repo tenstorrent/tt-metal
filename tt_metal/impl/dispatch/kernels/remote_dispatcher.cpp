@@ -43,7 +43,7 @@ void kernel_main() {
         tt_l1_ptr db_cb_config_t *rx_db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, true);
         const tt_l1_ptr db_cb_config_t *remote_producer_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, false);
 
-        uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
+        uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
         if (is_program) {
             uint32_t program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
             uint32_t num_workers = header->num_workers;  // If num_workers > 0, it means we are launching a program
@@ -54,7 +54,7 @@ void kernel_main() {
                 num_pages,
                 command_ptr,
                 ((uint64_t)producer_noc_encoding << 32),
-                producer_consumer_transfer_num_pages);
+                router_transfer_num_pages);
             wait_for_program_completion(num_workers);
         } else if (not reading_buffer) {
             uint32_t num_buffer_transfers = header->num_buffer_transfers;   // How many WriteBuffer commands we are running
@@ -68,7 +68,7 @@ void kernel_main() {
                 is_sharded,
                 sharded_buffer_num_cores,
                 ((uint64_t)producer_noc_encoding << 32),
-                producer_consumer_transfer_num_pages);
+                router_transfer_num_pages);
         }
 
         // Relay command to remote signaller
@@ -97,7 +97,6 @@ void kernel_main() {
 
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
             uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
-            uint32_t producer_router_transfer_num_pages = header->producer_router_transfer_num_pages;
             produce_for_eth_src_router<false, signaller_cmd_base_addr, signaller_data_buffer_size>(
                 command_ptr,
                 num_buffer_transfers,
@@ -105,7 +104,7 @@ void kernel_main() {
                 consumer_cb_size,   // use consumer metadata because dispatcher is "consumer" from the command's pov but is the "producer" for return path to completion queue via signaller
                 consumer_cb_num_pages,  // use consumer metadata because dispatcher is "consumer" from the command's pov but is the "producer" for return path to completion queue via signaller
                 ((uint64_t)signaller_noc_encoding << 32),
-                producer_router_transfer_num_pages,
+                router_transfer_num_pages,
                 db_tx_buf_switch,
                 tx_db_cb_config,
                 signaller_db_cb_config
