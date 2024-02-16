@@ -90,6 +90,13 @@ Pointwise Binary
    ttnn/mul
    ttnn/sub
    ttnn/pow
+   ttnn/ldexp
+   ttnn/logical_and
+   ttnn/logical_or
+   ttnn/logical_xor
+   ttnn/logaddexp
+   ttnn/logaddexp2
+   ttnn/xlogy
    ttnn/add_and_apply_activation
    ttnn/add_and_apply_activation_
 
