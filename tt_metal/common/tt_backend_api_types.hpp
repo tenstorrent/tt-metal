@@ -31,12 +31,11 @@ enum class DataFormat : uint8_t {
     Bfp2_b = 15,
     Lf8 = 10,
     Fp8_e4m3 = 0x1A,
-    UInt16 = 9,
     Int8 = 14,
-    UInt8 = 30,
     Tf32 = 4,
-    Int32 = 8,
-    UInt32 = 12,
+    UInt8 = 30,
+    UInt16 = 9,
+    UInt32 = 8,
     RawUInt8 = 0xf0,
     RawUInt16 = 0xf1,
     RawUInt32 = 0xf2,
@@ -66,6 +65,7 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Float32: os << "Float32"; break;
         case DataFormat::Tf32: os << "Tf32"; break;
         case DataFormat::Int8: os << "Int8"; break;
+        case DataFormat::UInt8: os << "UInt8"; break;
         case DataFormat::Lf8: os << "Lf8"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
@@ -93,6 +93,7 @@ inline constexpr static uint32_t datum_size(const DataFormat &format) {
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Int8: return 1;
         case DataFormat::Lf8: return 1;
+        case DataFormat::UInt8: return 1;
         case DataFormat::UInt16: return 2;
         case DataFormat::UInt32: return 4;
         case DataFormat::RawUInt8: return 1;
@@ -118,6 +119,7 @@ inline constexpr static uint32_t tile_size(const DataFormat &format) {
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Int8: return 1024;
         case DataFormat::Lf8: return 1024;
+        case DataFormat::UInt8: return 1024;
         case DataFormat::UInt16: return (1024 * 2);
         case DataFormat::UInt32: return (1024 * 4);
         case DataFormat::RawUInt8: return 1024;
