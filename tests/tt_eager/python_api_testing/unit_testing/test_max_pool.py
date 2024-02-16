@@ -163,10 +163,16 @@ def test_run_max_pool(
     # Resnet specific config pulled from max_pool_multi_core.cpp:get_num_cores
     is_resnet_shape = out_nhw in (3136, 6272, 12544, 25088)
     ncores_for_resnet_shape = 98
+    ncores_on_n300 = 56
 
     if is_resnet_shape and (compute_grid_size.x * compute_grid_size.y < ncores_for_resnet_shape):
         pytest.skip(
             f"Skipping over Resnet specific config where parallelization does not fit on core grid {compute_grid_size}"
+        )
+
+    if (compute_grid_size.x * compute_grid_size.y) == ncores_on_n300:
+        pytest.skip(
+            f"Skipping on N300 (8x7 core grid) due to bug https://github.com/tenstorrent-metal/tt-metal/issues/5458"
         )
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
