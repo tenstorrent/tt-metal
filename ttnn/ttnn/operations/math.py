@@ -43,7 +43,7 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
             "exp2": torch.exp2,
             "expm1": torch.expm1,
             "rad2deg": torch.rad2deg,
-            "recip": torch.reciprocal,
+            "reciprocal": torch.reciprocal,
             "sqrt": torch.sqrt,
             "square": torch.square,
             "tril": torch.tril,
@@ -132,7 +132,7 @@ TTL_MATH_OP_FUNCTIONS_UNARY = [
     ("exp2", ttl.tensor.exp2, "exp2"),
     ("expm1", ttl.tensor.expm1, "expm1"),
     ("rad2deg", ttl.tensor.rad2deg, "rad2deg"),
-    ("recip", ttl.tensor.recip, "reciprocal"),
+    ("reciprocal", ttl.tensor.recip, "reciprocal"),
     ("sqrt", ttl.tensor.sqrt, "sqrt"),
     ("square", ttl.tensor.square, "square"),
     ("tril", ttl.tensor.tril, "tril"),
@@ -414,6 +414,7 @@ TTL_LERP_FUNCTION = [
 
 for lerp_function_name, ttl_lerp_function, op_name in TTL_LERP_FUNCTION:
     register_ttl_lerp_function(lerp_function_name, ttl_lerp_function, op_name)
+
 
 def _is_scalar(value):
     return isinstance(value, (int, float))

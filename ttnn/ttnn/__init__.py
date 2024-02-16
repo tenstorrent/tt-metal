@@ -252,7 +252,7 @@ from ttnn.operations.math import (
     lerp,
     polygamma,
     rad2deg,
-    recip,
+    reciprocal,
     sqrt,
     square,
     tril,

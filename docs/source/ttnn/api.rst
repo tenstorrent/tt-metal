@@ -137,7 +137,7 @@ Pointwise Unary
    ttnn/signbit
    ttnn/polygamma
    ttnn/rad2deg
-   ttnn/recip
+   ttnn/reciprocal
    ttnn/sqrt
    ttnn/square
    ttnn/tril
