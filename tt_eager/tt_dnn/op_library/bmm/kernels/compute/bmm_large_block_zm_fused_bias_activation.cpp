@@ -274,7 +274,7 @@ void MAIN {
                 PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
             #endif
             // reconfigure unpacker df for src B
-            unpack_reconfig_data_format(in0_cb_id, in1_cb_id);
+            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
         }
         #endif
     }
