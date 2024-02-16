@@ -518,9 +518,8 @@ class CommandQueue {
         TERMINATE = 2,
     };
     CommandQueueMode mode = CommandQueue::get_mode();
-    std::unique_ptr<std::thread> worker_thread;
     CommandQueueState worker_state = CommandQueueState::IDLE;
-
+    std::unique_ptr<std::thread> worker_thread;
     LockFreeQueue<CommandInterface> worker_queue;
     uint32_t cq_id;
     Device* device_ptr;
