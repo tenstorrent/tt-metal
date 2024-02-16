@@ -321,13 +321,15 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRo
     }
 }
 
-TEST_F(CommandQueueFixture, Sending131072Pages) {
-    TestBufferConfig config = {
-        .num_pages = 131072,
-        .page_size = 128,
-        .buftype = BufferType::DRAM};
+TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
+    for (Device *device : devices_) {
+        TestBufferConfig config = {
+            .num_pages = 131072,
+            .page_size = 128,
+            .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue, config));
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+    }
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
@@ -359,41 +361,37 @@ TEST_F(CommandQueueSingleCardFixture, TestPageSizeTooLarge) {
     }
 }
 
-// TODO (abhullar): This test is failing on remote device
-TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
-    if (not this->device_->is_mmio_capable()) {
-        GTEST_SKIP() << "TestWrapHostHugepageOnEnqueueReadBuffer fails on remote device";
+TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
+    for (Device *device : this->devices_) {
+        uint32_t page_size = 2048;
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+        uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
+        uint32_t command_issue_region_size = command_queue_size * 0.75;
+
+        uint32_t max_command_size = command_issue_region_size - CQ_START;
+        uint32_t buffer = 14240;
+        uint32_t buffer_size = max_command_size - (buffer + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+        uint32_t num_pages = buffer_size / page_size;
+
+        TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+        CommandQueue a(device, 0);
+        EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(device, a, buf_config));
     }
-    uint32_t page_size = 2048;
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
-    uint32_t command_issue_region_size = command_queue_size * 0.75;
-
-    uint32_t max_command_size = command_issue_region_size - CQ_START;
-    uint32_t buffer = 14240;
-    uint32_t buffer_size = max_command_size - (buffer + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
-    uint32_t num_pages = buffer_size / page_size;
-
-    TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
-    CommandQueue a(this->device_, 0);
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, a, buf_config));
 }
 
-// TODO (abhullar): This test is failing on remote device
-TEST_F(CommandQueueFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
-    if (not this->device_->is_mmio_capable()) {
-        GTEST_SKIP() << "TestWrapHostHugepageOnEnqueueReadBuffer fails on remote device";
+TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+    for (Device *device : this->devices_) {
+        uint32_t page_size = 2048;
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+        uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
+        uint32_t num_pages = command_queue_size / page_size;
+
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
     }
-    uint32_t page_size = 2048;
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
-    uint32_t num_pages = command_queue_size / page_size;
-
-    TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *this->cmd_queue, config));
 }
 
 // Test that command queue wraps when buffer available space in completion region is less than a page

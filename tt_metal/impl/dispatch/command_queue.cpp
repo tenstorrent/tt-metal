@@ -147,7 +147,6 @@ const DeviceCommand EnqueueReadInterleavedBufferCommand::create_buffer_transfer_
 const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t dst_address) {
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     uint32_t num_pages = this->pages_to_read;
-    // std::cout << "DST ADDRESS FOR EQRB " << dst_address << std::endl;
     DeviceCommand command = this->create_buffer_transfer_instruction(dst_address, padded_page_size, num_pages);
 
     // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
@@ -176,7 +175,6 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
 
         uint32_t router_consumer_multiple = tensix_consumer_data_buffer_size / router_data_buffer_size;
         consumer_cb_num_pages = router_cb_num_pages * router_consumer_multiple;
-        std::cout << "Router cb size: " << router_cb_size << std::endl;
     } else {
         consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
         // Number of pages that are transferred in one shot from producer to consumer
@@ -193,9 +191,6 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
 
     uint32_t producer_cb_num_pages = consumer_cb_num_pages * 2;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
-
-    std::cout << "Consumer cb size: " << consumer_cb_size << std::endl;
-    std::cout << "Producer cb size: " << producer_cb_size << std::endl;
 
     if (this->stall) {
         command.set_stall();
@@ -343,7 +338,6 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
 
         uint32_t router_consumer_multiple = tensix_consumer_data_buffer_size / router_data_buffer_size;
         consumer_cb_num_pages = router_cb_num_pages * router_consumer_multiple;
-        std::cout << "Router cb size: " << router_cb_size << std::endl;
     } else {
         consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
         uint32_t producer_consumer_tx_num_pages = 1;
@@ -358,9 +352,6 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
     uint32_t producer_cb_num_pages = consumer_cb_num_pages * 2;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
-
-    std::cout << "Consumer cb size: " << consumer_cb_size << std::endl;
-    std::cout << "Producer cb size: " << producer_cb_size << std::endl;
 
     command.set_page_size(padded_page_size);
     command.set_producer_cb_size(producer_cb_size);
