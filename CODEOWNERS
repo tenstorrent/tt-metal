@@ -76,7 +76,7 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
-tests/scripts/run_performance.sh @farbabi
+tests/scripts/run_performance.sh @tt-rkim @tapspatel
 
 # eager - dtx
 **/dtx/ @tt-nshanker
@@ -111,7 +111,7 @@ ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
 
 # models
-models/ @boris-drazic @farbabi
+models/ @boris-drazic
 models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
