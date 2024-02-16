@@ -1,4 +1,4 @@
-Converting torch model to ttnn
+Converting torch Model to ttnn
 ###############################
 
 There are many ways to convert a torch model to ttnn.
@@ -8,7 +8,7 @@ This is the recommend approach:
     #. Converting operations of the functional torch model to ttnn operations
     #. Optimizing functional ttnn model
 
-Step 1 - Rewriting the model
+Step 1 - Rewriting the Model
 ****************************
 
 Given a torch model, it can be rewritten using functional torch APIs.
@@ -90,8 +90,8 @@ And finally, the model can be rewritten using functional torch APIs to make the 
     And ``dense`` is a ``torch.nn.Linear`` object, so it in turn has two attributes ``weight`` and ``bias``.
 
 
-Step 2 - Switching to ttnn ops
-******************************
+Step 2 - Switching to ttnn Operations
+*************************************
 
 Starting off with the test:
 
@@ -151,7 +151,7 @@ Then implementing the function using ttnn operations:
         output = ttnn.gelu(output)
         return output
 
-Step 3 - Optimizing the model
+Step 3 - Optimizing the Model
 *****************************
 
 Starting off with the test:

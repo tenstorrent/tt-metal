@@ -133,8 +133,6 @@ def test_ttl_operations_primary_matmul_1d(
             dtype=input_b_dtype,
         )
 
-        if input_b_dtype == ttnn.bfloat8_b:
-            torch_bias = torch.nn.functional.pad(torch_bias, (0, 0, 0, 31), value=0.0)
         bias = ttnn.from_torch(
             torch_bias,
             device=device,

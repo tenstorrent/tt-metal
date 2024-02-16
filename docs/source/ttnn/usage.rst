@@ -157,3 +157,73 @@ Basic Examples
     torch_output_tensor = ttnn.to_torch(output_tensor)
 
     ttnn.close(device)
+
+
+
+8. Enabling Logging
+-------------------
+
+Recompile with TTNN_ENABLE_LOGGING=1 to enable logging then export the following variables as needed:
+
+.. code-block:: bash
+
+    # To generate a csv with all of the operations, their attributes and their input tensors:
+    export OPERATION_HISTORY_CSV=operation_history.csv
+
+    # To print the currently executing operation and its input tensors to stdout
+    export TT_METAL_LOGGER_TYPES=Op
+    export TT_METAL_LOGGER_LEVEL=Debug
+
+
+Logging will print out the time it took for the operation to execute. It also prints out the execution time of the program.
+
+Logging inserts :ref:`tt::tt_metal::Finish<tt::tt_metal::Finish>` after every operation to in order to calculate the time correctly.
+
+Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for more accurate way to profile.
+
+
+.. note::
+
+    The logging is only available when compiling with CONFIG=assert or CONFIG=debug.
+
+
+
+0. Supported Python Operators
+-----------------------------
+
+.. code-block:: python
+
+    import ttnn
+
+    input_tensor_a: ttnn.Tensor = ...
+    input_tensor_b: ttnn.Tensor = ...
+
+    # Add (supports broadcasting)
+    input_tensor_a + input_tensor_b
+
+    # Subtract (supports broadcasting)
+    input_tensor_a - input_tensor_b
+
+    # Multiply (supports broadcasting)
+    input_tensor_a - input_tensor_b
+
+    # Matrix Multiply
+    input_tensor_a @ input_tensor_b
+
+    # Equals
+    input_tensor_a == input_tensor_b
+
+    # Not equals
+    input_tensor_a != input_tensor_b
+
+    # Greater than
+    input_tensor_a > input_tensor_b
+
+    # Greater than or equals
+    input_tensor_a >= input_tensor_b
+
+    # Less than
+    input_tensor_a < input_tensor_b
+
+    # Less than or equals
+    input_tensor_a <= input_tensor_b
