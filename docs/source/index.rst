@@ -29,7 +29,8 @@ Welcome to TT-Metalium documentation!
    ttnn/tutorials
    ttnn/onboarding
    ttnn/converting_torch_model_to_ttnn
-   ttnn/ops_perf_report
+   ttnn/adding_new_ttnn_operation
+   ttnn/profiling_ttnn_operations
    ttnn/dependencies/index.rst
 
 .. toctree::

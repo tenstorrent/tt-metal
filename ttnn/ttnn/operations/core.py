@@ -143,7 +143,7 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -219,6 +219,7 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
         ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE)
         and len(input_tensor.shape) == 4
         and len(shape) == 4
+        and input_tensor.dtype == ttnn.bfloat16
     ):
         ttl_input_tensor = input_tensor.value
         w, z, y, x = shape
@@ -321,6 +322,16 @@ def from_torch(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
     """
 
+    if dtype == ttnn.bfloat8_b:
+        if len(tensor.shape) < 2:
+            raise RuntimeError("ttnn.from_torch: bfloat8_b requires at least 2 dimensions!")
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: bfloat8_b requires TILE_LAYOUT!")
+        # Tilize tensor
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT)
+        tensor = ttnn.Tensor(tensor.value.reshape(tensor.shape.padded()))
+        tensor = ttnn.to_torch(tensor)
+
     if memory_config is not None:
         if device is None:
             raise RuntimeError("device must be specified when memory_config is specified")
@@ -346,7 +357,7 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -648,6 +659,8 @@ def to_layout(tensor, layout: ttnn.Layout):
         raise RuntimeError(f"Unsupported layout conversion from {tensor.layout} to {layout}")
 
     is_on_device = ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE)
+    if is_on_device and tensor.dtype != ttnn.bfloat16:
+        raise RuntimeError("ttnn.to_layout: Only bfloat16 is supported on device")
 
     def requires_padding_change(layout, shape):
         intended_shape = list(shape)[-2:]

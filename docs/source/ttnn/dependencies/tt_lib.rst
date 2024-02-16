@@ -30,7 +30,7 @@ Below, is an example of how to declare a new on-device operation with all of the
 New Device Operation
 --------------------
 
-.. code-block::
+.. code-block:: cpp
 
     struct <NewOperation> {
         void validate(const std::vector<Tensor> &input_tensors) const;
@@ -47,10 +47,10 @@ New Device Operation
 New Device Operation with a member
 ----------------------------------
 
-.. code-block::
+.. code-block:: cpp
 
     struct <NewOperation> {
-        bool some_member
+        int some_member
 
         void validate(const std::vector<Tensor> &input_tensors) const;
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -63,14 +63,34 @@ New Device Operation with a member
         }
     };
 
+New Device Operation with Optional Input Tensors
+------------------------------------------------
 
-New Device Operation with optional output tensors
+.. code-block:: cpp
+
+    struct <NewOperation> {
+        void validate(const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+        operation::ProgramWithCallbacks create_program(
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            std::vector<Tensor> &output_tensors) const;
+
+        static constexpr auto attribute_names = std::make_tuple();
+        const auto attribute_values() const {
+            return std::make_tuple();
+        }
+    };
+
+New Device Operation with Optional Output Tensors
 -------------------------------------------------
 
 If an operation is expected to leverage optional output tensors, please use instead the validate_with_output_tensors
 and create_output_tensors with the additional parameter for the output_tensors.
 
-.. code-block::
+.. code-block:: cpp
 
     struct <NewOperation> {
         void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;

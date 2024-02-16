@@ -22,7 +22,6 @@ def get_expected_times(functional_whisper):
     }[functional_whisper]
 
 
-@pytest.mark.skip(reason="regression failure, see issue #5430")
 @skip_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
@@ -78,7 +77,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
                 decoder_attention_mask=decoder_attention_mask,
                 parameters=parameters,
             )
-            tt_output = ttnn.to_device(tt_output, device)
+            tt_output = ttnn.to_torch(tt_output)
         end = time.time()
 
         duration = end - start
