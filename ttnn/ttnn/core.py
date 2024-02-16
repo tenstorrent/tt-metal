@@ -35,7 +35,7 @@ def get_memory_config(tensor) -> ttl.tensor.MemoryConfig:
 def has_padding(tensor):
     if len(tensor.shape) > 1:
         *_, h, w = tensor.shape
-        *_, h_padded, w_padded = tensor.shape.padded()
+        *_, h_padded, w_padded = tensor.shape.with_tile_padding()
         return h != h_padded or w != w_padded
     return False
 

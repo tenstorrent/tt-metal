@@ -34,11 +34,6 @@ void py_module(py::module& m_types) {
                         py::arg("shape"),
                         py::arg("padded_shape"));
 
-                    PyShape.def(
-                        "__add__", [](const Shape& self, const std::array<std::array<uint32_t, 2>, Ns>& padding) {
-                            return self + padding;
-                        });
-
                     PyShape.def("__eq__", [](const Shape& self, const std::array<uint32_t, Ns>& other) {
                         return Shape{self.value().without_padding()} == Shape{tt::tt_metal::Shape{other}};
                     });
@@ -59,7 +54,7 @@ void py_module(py::module& m_types) {
         return ss.str();
     });
     PyShape.def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); });
-    PyShape.def("padded", [](const Shape& self) { return self.padded(); });
+    PyShape.def("with_tile_padding", [](const Shape& self) { return self.with_tile_padding(); });
 
     struct Tensor {
         tt::tt_metal::Tensor value;

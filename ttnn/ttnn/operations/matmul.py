@@ -166,9 +166,9 @@ def matmul(
     padded_output_shape_list = []
     for index in range(len(input_shape_a) - 1):
         output_shape_list.append(input_shape_a[index])
-        padded_output_shape_list.append(input_shape_a.padded()[index])
+        padded_output_shape_list.append(input_shape_a.with_tile_padding()[index])
     output_shape_list.append(input_shape_b[-1])
-    padded_output_shape_list.append(input_shape_b.padded()[-1])
+    padded_output_shape_list.append(input_shape_b.with_tile_padding()[-1])
     output_shape = ttnn.Shape(output_shape_list, padded_output_shape_list)
 
     if not isinstance(input_tensor_a, ttnn.Tensor):
@@ -491,9 +491,9 @@ def linear(
     padded_output_shape_list = []
     for index in range(len(input_shape_a) - 1):
         output_shape_list.append(input_shape_a[index])
-        padded_output_shape_list.append(input_shape_a.padded()[index])
+        padded_output_shape_list.append(input_shape_a.with_tile_padding()[index])
     output_shape_list.append(input_shape_b[-1])
-    padded_output_shape_list.append(input_shape_b.padded()[-1])
+    padded_output_shape_list.append(input_shape_b.with_tile_padding()[-1])
     output_shape = ttnn.Shape(output_shape_list, padded_output_shape_list)
 
     # The idea is to make the shapes "possibly" broadcastable.

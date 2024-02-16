@@ -18,7 +18,7 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -101,16 +101,18 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         output = ttnn.Tensor(ttl_output_tensor)
         output_shape = tuple(output.shape)[-input_rank:]
         return ttnn.reshape(output, shape=output_shape)
+    """
     elif not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
-        logger.warning(
-            "ttnn.Tensor.__getitem__:vusing torch because the tensor is on device and the slicing using unpad is not supported!"
+        logger.debug(
+            "ttnn.Tensor.__getitem__: using torch because the tensor is on device and the slicing using unpad is not supported!"
         )
     elif input_layout != ttnn.TILE_LAYOUT:
-        logger.warning(f"ttnn.Tensor.__getitem__: using torch because input layout {input_layout} is not TILE_LAYOUT!")
+        logger.debug(f"ttnn.Tensor.__getitem__: using torch because input layout {input_layout} is not TILE_LAYOUT!")
     elif input_rank > 4:
-        logger.warning(f"ttnn.Tensor.__getitem__: using torch because input rank {input_rank} is greater than 4!")
+        logger.debug(f"ttnn.Tensor.__getitem__: using torch because input rank {input_rank} is greater than 4!")
     elif not are_valid_device_slices(slices):
-        logger.warning(f"ttnn.Tensor.__getitem__: using torch because slices {slices} are not valid device slices!")
+        logger.debug(f"ttnn.Tensor.__getitem__: using torch because slices {slices} are not valid device slices!")
+    """
 
     def torch_getitem(tensor, slices):
         return tensor[slices]
@@ -120,6 +122,8 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     output_tensor = ttl.tensor.decorate_external_operation(torch_getitem, function_name="torch.Tensor.__getitem__")(
         output_tensor, slices
     )
+    if output_tensor.ndim == 0:
+        raise RuntimeError("ttnn.Tensor.__getitem__: returned a scalar!")
     output_tensor = ttnn.from_torch(output_tensor, dtype=input_dtype, layout=input_layout, device=input_device)
     return output_tensor
 
@@ -207,7 +211,7 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
             return ttnn_reshape(input_tensor, shape)
 
     if input_tensor.layout == ttnn.TILE_LAYOUT:
-        *_, new_height, new_width = tuple(shape.padded())
+        *_, new_height, new_width = tuple(shape.with_tile_padding())
         if new_height % ttnn.TILE_SIZE == 0 and new_width % ttnn.TILE_SIZE == 0:
             return ttnn_reshape(input_tensor, shape)
         else:
@@ -232,7 +236,7 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
     else:
 
         def torch_reshape(tensor, shape):
-            return tensor.reshape(tuple(shape.padded())).contiguous().clone()
+            return tensor.reshape(tuple(shape.with_tile_padding())).contiguous().clone()
 
         if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
             device = input_tensor.device
@@ -258,7 +262,7 @@ def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
     ranks = (1, 2, 3, 4, 5, 6, 7, 8)
     if len(tensor.shape) not in ranks:
         raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64)
+    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64, torch.float16)
     if tensor.dtype not in dtypes:
         raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
     # if not tensor.is_contiguous():
@@ -273,7 +277,7 @@ def unsqueeze_to_4D(tensor):
         raise RuntimeError("Tensor cannot have more than 4 dimensions!")
     num_missing_dims = 4 - len(tensor.shape)
     shape = tuple(tensor.shape)
-    padded_shape = tuple(tensor.shape.padded())
+    padded_shape = tuple(tensor.shape.with_tile_padding())
     shape = (1,) * num_missing_dims + shape
     padded_shape = (1,) * num_missing_dims + padded_shape
     return ttnn.reshape(tensor, shape=ttnn.Shape(shape, padded_shape))
@@ -289,7 +293,7 @@ def squeeze(tensor, dim):
     if tensor.shape[0] != 1:
         return tensor
     _, *shape = tensor.shape
-    _, *full_shape = tensor.shape.padded()
+    _, *full_shape = tensor.shape.with_tile_padding()
     return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
 
 
@@ -329,7 +333,7 @@ def from_torch(
             raise RuntimeError("ttnn.from_torch: bfloat8_b requires TILE_LAYOUT!")
         # Tilize tensor
         tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT)
-        tensor = ttnn.Tensor(tensor.value.reshape(tensor.shape.padded()))
+        tensor = ttnn.Tensor(tensor.value.reshape(tensor.shape.with_tile_padding()))
         tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
@@ -406,7 +410,7 @@ def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch
         return output
 
     ttl_tensor = tensor.value
-    tensor = ttnn.Tensor(ttl_tensor.reshape(tensor.shape.padded().value))
+    tensor = ttnn.Tensor(ttl_tensor.reshape(tensor.shape.with_tile_padding().value))
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor.value)
 
 
@@ -659,12 +663,12 @@ def to_layout(tensor, layout: ttnn.Layout):
         raise RuntimeError(f"Unsupported layout conversion from {tensor.layout} to {layout}")
 
     is_on_device = ttnn.has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE)
-    if is_on_device and tensor.dtype != ttnn.bfloat16:
-        raise RuntimeError("ttnn.to_layout: Only bfloat16 is supported on device")
+    if is_on_device and tensor.dtype not in {ttnn.bfloat16, ttnn.bfloat8_b}:
+        raise RuntimeError("ttnn.to_layout: Only bfloat16 and bfloat8_b are supported on device")
 
     def requires_padding_change(layout, shape):
         intended_shape = list(shape)[-2:]
-        padded_shape = list(shape.padded())[-2:]
+        padded_shape = list(shape.with_tile_padding())[-2:]
         if layout == ttnn.ROW_MAJOR_LAYOUT and intended_shape != padded_shape:
             return True
         elif (

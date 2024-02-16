@@ -188,15 +188,15 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 
 
 
-0. Supported Python Operators
+9. Supported Python Operators
 -----------------------------
 
 .. code-block:: python
 
     import ttnn
 
-    input_tensor_a: ttnn.Tensor = ...
-    input_tensor_b: ttnn.Tensor = ...
+    input_tensor_a: ttnn.Tensor = ttnn.from_torch(torch.rand(2, 4), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b: ttnn.Tensor = ttnn.from_torch(torch.rand(2, 4), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Add (supports broadcasting)
     input_tensor_a + input_tensor_b

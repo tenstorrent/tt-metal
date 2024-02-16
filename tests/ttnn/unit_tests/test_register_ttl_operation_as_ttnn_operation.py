@@ -33,7 +33,7 @@ def test_register_ttl_tensor_exp(device, height, width):
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
-def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
+def test_ttl_operations_primary_matmul(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
@@ -62,7 +62,7 @@ def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, device=device, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.ttl.operations.primary.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.ttl.operations.primary.moreh_matmul(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
