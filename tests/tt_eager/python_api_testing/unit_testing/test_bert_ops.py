@@ -179,6 +179,8 @@ def test_bert_linear(
         fused_activation=activation,
     )
 
+    compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
+
     if has_bias:
         output_t = ttl.operations.primary.matmul(
             in0_t,
@@ -186,7 +188,7 @@ def test_bert_linear(
             bias=bias_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
+            compute_kernel_config=compute_kernel_config,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -194,7 +196,7 @@ def test_bert_linear(
             in1_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
+            compute_kernel_config=compute_kernel_config,
         )
 
     if out_sharded:
@@ -373,6 +375,13 @@ def test_bert_linear_batch7(
         fused_activation=activation,
     )
 
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     if has_bias:
         output_t = ttl.operations.primary.matmul(
             in0_t,
@@ -380,9 +389,7 @@ def test_bert_linear_batch7(
             bias=bias_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
+            compute_kernel_config=compute_kernel_config,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -390,9 +397,7 @@ def test_bert_linear_batch7(
             in1_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
+            compute_kernel_config=compute_kernel_config,
         )
 
     if out_sharded:
@@ -504,6 +509,13 @@ def run_bert_linear_batch4(
         fused_activation=activation,
     )
 
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     if has_bias:
         output_t = ttl.operations.primary.matmul(
             in0_t,
@@ -511,9 +523,7 @@ def run_bert_linear_batch4(
             bias=bias_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
+            compute_kernel_config=compute_kernel_config,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -521,9 +531,7 @@ def run_bert_linear_batch4(
             in1_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
+            compute_kernel_config=compute_kernel_config,
         )
 
     if out_sharded:
@@ -621,11 +629,7 @@ def test_bert_linear_batch4(
 
 
 @pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
-@pytest.mark.parametrize(
-    "packer_l1_acc",
-    [True, False],
-    ids=["pack_l1", "no_pack_l1"],
-)
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",
     [
@@ -641,11 +645,7 @@ def test_bert_linear_batch4(
     ],
     ids=["LoFi", "HiFi4"],
 )
-@pytest.mark.parametrize(
-    "has_bias",
-    [True, False],
-    ids=["bias", "no_bias"],
-)
+@pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
 @pytest.mark.parametrize(
     "M, K, N, activation",
     [
@@ -744,6 +744,13 @@ def test_bert_linear_batch4_fp32_input_output(
         fused_activation=activation,
     )
 
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     if has_bias:
         output_t = ttl.operations.primary.matmul(
             in0_t,
@@ -751,9 +758,7 @@ def test_bert_linear_batch4_fp32_input_output(
             bias=bias_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
+            compute_kernel_config=compute_kernel_config,
         )
     else:
         output_t = ttl.operations.primary.matmul(
@@ -761,9 +766,7 @@ def test_bert_linear_batch4_fp32_input_output(
             in1_t,
             program_config=program_config,
             output_mem_config=output_mem_config,
-            math_fidelity=fidelity,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
+            compute_kernel_config=compute_kernel_config,
         )
 
     pt_out = in0 @ in1

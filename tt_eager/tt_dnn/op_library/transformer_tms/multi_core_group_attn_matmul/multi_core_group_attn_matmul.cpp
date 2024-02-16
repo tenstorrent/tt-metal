@@ -17,29 +17,60 @@ namespace primary {
 namespace transformers {
 
 
-operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major) {
+operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major, DeviceComputeKernelConfig compute_kernel_config) {
 
     tt_metal::Program program{};
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = a.device();
+
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+    bool packer_l1_acc;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+            packer_l1_acc = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+            packer_l1_acc = compute_kernel_config.packer_l1_acc;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    tt::DataFormat interm_data_format = DataFormat::Float16_b;
+    tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // interm_data_format=tt::DataFormat::Float16_b;
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    MathFidelity math_fidelity = MathFidelity::LoFi;
+
+    if (in0_data_format == tt::DataFormat::Float32 or in1_data_format == tt::DataFormat::Float32 or output_data_format == tt::DataFormat::Float32) {
+        TT_ASSERT(fp32_dest_acc_en == true, "when inputs/output are in fp32 format, fp32_dest_acc_en must be set");
+    }
+
+
 
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *src1_buffer = b.buffer();
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
 
     // Load kernels on all device cores, because we use cached program for input shapes with changing shapes
     CoreCoord device_compute_with_storage_grid = device->compute_with_storage_grid_size();
@@ -66,8 +97,22 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     const uint32_t intermediate_num_tiles = out_subblock_num_tiles;
     const uint32_t in1_per_core_w = in1_num_subblocks * out_block_w;
     const uint32_t in1_block_w_tile_bytes = out_subblock_w * in1_single_tile_size;
-    constexpr uint32_t ONE_ROW_BFLOAT16_BYTES = 64;
+    uint32_t ONE_ROW_BFLOAT16_BYTES = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? 128 : 64;
+    // ONE_ROW_BFLOAT16_BYTES = 64;
     const uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w; // TODO: Generalize
+
+    log_debug("in0_block_w: {}", in0_block_w);
+    log_debug("out_subblock_h: {}", out_subblock_h);
+    log_debug("out_subblock_w: {}", out_subblock_w);
+    log_debug("math_fidelity: {}", math_fidelity);
+    log_debug("math_approx_mode: {}", math_approx_mode);
+    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug("packer_l1_acc: {}", packer_l1_acc);
+    log_debug("in0_data_format: {}", in0_data_format);
+    log_debug("in1_data_format: {}", in1_data_format);
+    log_debug("interm_data_format: {}", interm_data_format);
+    log_debug("output_data_format: {}", output_data_format);
+
 
     // Mcast args
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
@@ -98,12 +143,16 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		    .set_page_size(src0_cb_index, in0_single_tile_size).set_globally_allocated_address(*src0_buffer);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
+
+        std::cout << cb0_num_input_tiles << std::endl;
     } else {
         uint32_t cb0_num_input_tiles = in0_block_w; // TODO: Generalize; double buffer and add blocking along inner dim if we have Mt > 1
         tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		    .set_page_size(src0_cb_index, in0_single_tile_size);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
     }
+
+
 
     // CB for interleaved/sharded KV heads for mcasting; mcasts to same CB
     // Then, push all KV_HEADS to compute and compute chooses which head to use for matmul
@@ -219,7 +268,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/compute/transformer_group_attn_matmul.cpp",
         all_device_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
     );
 
     auto set_runtime_args = [
