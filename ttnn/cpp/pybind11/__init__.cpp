@@ -4,20 +4,18 @@
 
 // #pragma once
 
+#include "operations/__init__.hpp"
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "operations/module.hpp"
 #include "types.hpp"
 
 namespace py = pybind11;
 
-
 PYBIND11_MODULE(_ttnn, m_ttnn) {
-
     // m_ttnn.attr("__name__") = "_ttnn";
     m_ttnn.doc() = "Python bindings for TTNN";
-
 
     auto m_types = m_ttnn.def_submodule("types", "ttnn Types");
     ttnn::types::py_module(m_types);

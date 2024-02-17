@@ -7,19 +7,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "binary.hpp"
-
 namespace py = pybind11;
 
 namespace ttnn {
-
 namespace operations {
+namespace core {
 
-void py_module(py::module& m_operations) {
-    auto m_binary = m_operations.def_submodule("binary", "binary operations");
-    binary::py_module(m_binary);
-}
+void py_module(py::module& m_core) {}
 
+}  // namespace core
 }  // namespace operations
-
 }  // namespace ttnn
