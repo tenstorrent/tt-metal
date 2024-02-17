@@ -1075,5 +1075,5 @@ op_map = {
     "ttnn-transformer_concatenate_heads": {
         "tt_lib_op": ttnn_ops.transformer_concatenate_heads,
         "pytorch_op": pytorch_ops.transformer_concatenate_heads,
-    },    
+    },
 }
