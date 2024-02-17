@@ -1343,6 +1343,7 @@ def attention_softmax(x, y, *args, scalar, **kwargs):
 
     return torch_output_tensor
 
+
 def rms_norm(hidden_states, weight, *, epsilon=1e-6):
     variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
     hidden_states = hidden_states * torch.rsqrt(variance + epsilon)
