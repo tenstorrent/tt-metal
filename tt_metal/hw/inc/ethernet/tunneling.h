@@ -275,14 +275,8 @@ void eth_tunnel_src_forward_one_cmd() {
     bool issue_path = header->issue_path;
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
 
-    // if (num_buffer_transfers == 0) { removed this when sending fd packet unconditionally even if there is data to tx
-    //                                      removed this when sending fd packet unconditionally even if there is data to
-    //                                      tx because there are cases where programs only have one buffer tx (from
-    //                                      dram) and in that case we weren't sending the cmd at all (because of
-    //                                      is_program continue below)
     // send cmd even if there is no data associated
-    internal_::send_fd_packets();  // TODO: AL, is this right?
-    // }
+    internal_::send_fd_packets();
 
     for (uint32_t i = 0; i < num_buffer_transfers; i++) {
         const uint32_t num_pages = command_ptr[2];
@@ -297,24 +291,17 @@ void eth_tunnel_src_forward_one_cmd() {
             erisc_info->unused_arg2 = 109;
             continue;
         }
-        // if (is_program & ((BufferType)src_buf_type == BufferType::DRAM)) {
-        //     continue;
-        // }
 
         uint32_t num_to_write = min(num_pages, router_transfer_num_pages);
 
-        // erisc_info->unused_arg2 = 800 + num_pages *10 + num_buffer_transfers;
-        // erisc_info->unused_arg2 = (uint32_t) (&command_ptr[2]);
         uint32_t num_pages_tunneled = 0;
         while (num_pages_tunneled != num_pages) {
             multicore_eth_cb_wait_front(eth_db_cb_config, num_to_write);
-            internal_::send_fd_packets();  // AL: increment since idx to msg sent
-            // DPRINT << "src sent data" << ENDL();
+            internal_::send_fd_packets();
             erisc_info->unused_arg1 = 500 + i;
             multicore_eth_cb_pop_front(
                 eth_db_cb_config, remote_src_db_cb_config, ((uint64_t)relay_src_noc_encoding << 32), num_to_write);
             num_pages_tunneled += num_to_write;
-            // DPRINT << "src-num-remaining: " << (uint32_t)(num_pages - num_pages_tunneled) << ENDL();
             num_to_write = min(num_pages - num_pages_tunneled, router_transfer_num_pages);
         }
         command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
@@ -357,7 +344,6 @@ void eth_tunnel_dst_forward_one_cmd() {
     uint32_t consumer_cb_num_pages = header->producer_cb_num_pages;
     uint32_t consumer_cb_size = header->producer_cb_size;
     uint32_t num_buffer_transfers = header->num_buffer_transfers;
-    // if (num_pages_transferred == 0) {   // new command
     eth_program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
         eth_db_cb_config,
         remote_dst_db_cb_config,
@@ -374,16 +360,12 @@ void eth_tunnel_dst_forward_one_cmd() {
         ((uint64_t)relay_dst_noc_encoding << 32),
         eth_db_semaphore_addr,
         get_semaphore(0));
-    //   }
 
     // Send the data that was in this packet
     bool is_program = header->is_program_buffer;
     bool issue_path = header->issue_path;
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;  // jump to buffer transfer region
-    // if (num_buffer_transfers == 0 | is_program) { removed this when sending fd packet unconditionally from src even
-    // if there is data to tx
-    internal_::ack_fd_packet();
-    // }
+    internal_::ack_fd_packet(); // ack the cmd
     uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
     uint32_t l1_consumer_fifo_limit_16B =
         (get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size) >> 4;
@@ -400,7 +382,6 @@ void eth_tunnel_dst_forward_one_cmd() {
         bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !is_program & !issue_path);
 
         if (!tunnel_data) {
-            // erisc_info->unused_arg2 = 109;
             continue;
         }
 
@@ -408,19 +389,15 @@ void eth_tunnel_dst_forward_one_cmd() {
         uint32_t num_pages_to_tx = min(num_pages, router_transfer_num_pages);
         uint32_t num_pages_transferred = 0;
 
-        // erisc_info->unused_arg2 = 800 + num_pages *10 + num_buffer_transfers;
-        // erisc_info->unused_arg2 = (uint32_t) (&command_ptr[2]);
         while (num_pages_transferred != num_pages) {
-            // if (num_pages_transferred != 0) { removed this when sending fd packet unconditionally from src even if
             // there is data to tx
             while (routing_info->fd_buffer_msgs_sent != 1) {
                 // maybe contesxt switch
                 internal_::risc_context_switch();
             }
-            // }
             uint32_t src_addr = eth_db_cb_config->rd_ptr_16B << 4;
             uint64_t dst_noc_addr = ((uint64_t)relay_dst_noc_encoding << 32) | (eth_db_cb_config->wr_ptr_16B << 4);
-            while (!cb_consumer_space_available(eth_db_cb_config, num_pages_to_tx))
+            while (!cb_consumer_space_available(eth_db_cb_config, num_pages_to_tx)) // noc stall so don't need to switch to base FW
                 ;
             noc_async_write(src_addr, dst_noc_addr, page_size * num_pages_to_tx);
             internal_::ack_fd_packet();
