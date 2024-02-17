@@ -410,11 +410,6 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    if shutil.which("dot") is not None:
-        file_name = ttnn.TMP_DIR / "model_graph.svg"
-        logger.info(f"Dumping graph of the model to {file_name}")
-        torchtrail.visualize(output, file_name=file_name)
-
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
         for node in graph:

@@ -13,6 +13,7 @@
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
@@ -243,8 +244,8 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
-    static constexpr auto attribute_names = std::make_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+    static constexpr auto attribute_names = std::make_tuple("memory_config", "device_id");
+    const auto attribute_values() const { return std::make_tuple(this->memory_config(), this->buffer->device()->id()); }
 };
 
 using BorrowedBuffer = std::variant<
