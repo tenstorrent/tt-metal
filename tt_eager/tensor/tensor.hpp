@@ -118,10 +118,10 @@ class Tensor {
      // Size in bytes of a single element held in tensor
      uint32_t element_size() const;
 
-     static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout", "device_id");
+     static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout");
      const auto attribute_values() const {
          return std::make_tuple(
-             std::cref(this->storage_), std::cref(this->shape_), std::cref(this->dtype_), std::cref(this->layout_), std::holds_alternative<tt::tt_metal::DeviceStorage>(this->storage_) ? this->device()->id() : -1);
+             std::cref(this->storage_), std::cref(this->shape_), std::cref(this->dtype_), std::cref(this->layout_));
      }
 
      std::vector<uint32_t> host_page_ordering();
