@@ -349,6 +349,7 @@ def attention_softmax(
 
     return ttnn_tensor_to_torch(t2, output_mem_config)
 
+
 def rmsnorm(
     x,
     y,

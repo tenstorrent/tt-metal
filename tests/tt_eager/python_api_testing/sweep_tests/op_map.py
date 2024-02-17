@@ -1071,5 +1071,5 @@ op_map = {
     "ttnn-rmsnorm": {
         "tt_lib_op": ttnn_ops.rmsnorm,
         "pytorch_op": pytorch_ops.ttnn_rmsnorm,
-    },    
+    },
 }
