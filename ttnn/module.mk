@@ -14,7 +14,7 @@ TTNN_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast -fno-var-tracking
 TTNN_SRCS =
 
 TTNN_PYBIND11_SRCS = \
-    ttnn/cpp/pybind11/module.cpp
+    ttnn/cpp/pybind11/__init__.cpp
 
 TTNN_OBJS = $(addprefix $(OBJDIR)/, $(TTNN_SRCS:.cpp=.o))
 TTNN_PYBIND11_OBJS = $(addprefix $(OBJDIR)/, $(TTNN_PYBIND11_SRCS:.cpp=.o))
