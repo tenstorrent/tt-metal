@@ -15,7 +15,7 @@ from ttnn.model_preprocessing import (
     preprocess_conv2d,
     fold_batch_norm2d_into_conv2d,
     fold_conv7s2_into_conv4s1,
-    convert_torch_model_to_ttnn_model,
+    preprocess_remaining_children_and_parameters,
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -222,22 +222,21 @@ def test_resnet(device):
                 ttnn_module_args["downsample"] = ttnn_module_args.downsample[0]
 
         elif isinstance(model, torchvision.models.resnet.ResNet):
+            ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1
             conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-            parameters["conv1"] = fold_conv7s2_into_conv4s1(conv1_weight, conv1_bias, ttnn_module_args.conv1)
-
-            named_parameters = tuple(
-                (name, parameter) for name, parameter in model.named_parameters() if "." not in name
+            parameters["conv1"]: ttnn.Conv2d = fold_conv7s2_into_conv4s1(
+                conv1_weight, conv1_bias, ttnn_module_args.conv1
             )
-            for child_name, child in tuple(model.named_children()) + named_parameters:
-                if child_name in {"conv1", "bn1"}:
-                    continue
-                parameters[child_name] = convert_torch_model_to_ttnn_model(
-                    child,
-                    name=name,
-                    convert_to_ttnn=convert_to_ttnn,
-                    custom_preprocessor=custom_preprocessor,
-                    ttnn_module_args=ttnn_module_args.get(child_name, None),
-                )
+
+            return preprocess_remaining_children_and_parameters(
+                model,
+                name=name,
+                convert_to_ttnn=convert_to_ttnn,
+                custom_preprocessor=custom_preprocessor,
+                parameters=parameters,
+                ttnn_module_args=ttnn_module_args,
+                already_preprocessed_children={"conv1", "bn1", "relu1"},
+            )
 
         return parameters
 

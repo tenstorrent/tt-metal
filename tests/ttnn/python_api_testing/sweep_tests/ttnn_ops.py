@@ -218,7 +218,9 @@ def linear(x, weight, bias=None, *args, device, dtype, layout, input_mem_config,
     else:
         tt_bias = None
 
-    t1 = ttnn.linear(t0, tt_weight, bias=tt_bias, dtype=ttnn.bfloat16, core_grid=(batch_size, num_cores_x))
+    t1 = ttnn.linear(
+        t0, tt_weight, bias=tt_bias, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x)
+    )
     return ttnn_tensor_to_torch(t1, output_mem_config)
 
 

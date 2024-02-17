@@ -23,7 +23,7 @@ def bert_attention(
         bias=parameters.self.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=(batch_size, num_cores_x),
+        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
 
     (
@@ -42,7 +42,7 @@ def bert_attention(
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=(batch_size, num_cores_x),
+        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
@@ -56,7 +56,7 @@ def bert_attention(
         value,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=(batch_size, num_cores_x),
+        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
@@ -72,7 +72,7 @@ def bert_attention(
         bias=parameters.output.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=(batch_size, num_cores_x),
+        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(context_layer)
 
@@ -103,7 +103,7 @@ def bert_intermediate(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=(batch_size, num_cores_x),
+        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         activation="gelu",
     )
     return output
@@ -125,7 +125,7 @@ def bert_output(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=(batch_size, num_cores_x),
+        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(hidden_states)
 

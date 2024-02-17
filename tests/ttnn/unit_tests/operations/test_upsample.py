@@ -100,17 +100,17 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
 
         ncores = nshards
         if ncores % max_grid_size[1] == 0:
-            grid_size = (ncores // max_grid_size[1], max_grid_size[1])
+            grid_size = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
         else:
             if ncores < max_grid_size[1]:
-                grid_size = (1, ncores)
+                grid_size = ttnn.CoreGrid(y=1, x=ncores)
             else:
                 grid1_size = (ncores // max_grid_size[1], max_grid_size[1])
                 grid2_size = (ncores // max_grid_size[1] + 1, ncores % max_grid_size[1])
-                grid_size = (grid1_size, grid2_size)
+                grid_size = ttnn.CoreGrid(y=grid1_size, x=grid2_size)
 
-        in_shard_shape = [batch_size * h * w // ncores, c]  ## y, x
-        out_shard_shape = [batch_size * h * w * scale_h * scale_w // ncores, c]
+        in_shard_shape = ttnn.ShardShape(y=batch_size * h * w // ncores, x=c)  ## y, x
+        out_shard_shape = ttnn.ShardShape(y=batch_size * h * w * scale_h * scale_w // ncores, x=c)
 
     elif shard_strategy == ttnn.ShardStrategy.BLOCK:
         max_nshards_h = min(batch_size * h, max_grid_size[0])  ## height along NHW
@@ -132,9 +132,9 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
             raise ValueError("nshards_h or nshards_w is 0")
 
         ## calculate grid_size and shard_shape
-        grid_size = (nshards_h, nshards_w)
-        in_shard_shape = [batch_size * h * w // nshards_h, c // nshards_w]
-        out_shard_shape = [batch_size * h * w * scale_h * scale_w // nshards_h, c // nshards_w]
+        grid_size = ttnn.CoreGrid(y=nshards_h, x=nshards_w)
+        in_shard_shape = ttnn.ShardShape(y=batch_size * h * w // nshards_h, x=c // nshards_w)
+        out_shard_shape = ttnn.ShardShape(y=batch_size * h * w * scale_h * scale_w // nshards_h, x=c // nshards_w)
 
     in_sharded_mem_config = ttnn.create_sharded_memory_config(grid_size, in_shard_shape, shard_strategy)
     out_sharded_mem_config = ttnn.create_sharded_memory_config(grid_size, out_shard_shape, shard_strategy)

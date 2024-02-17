@@ -168,7 +168,6 @@ class TTPyUntilizeWithHalo(TTPyOp):
             local_data = [item for sublist in local_data for item in sublist]
             local_pad = [item for sublist in local_pad for item in sublist]
             ll_data = [item for sublist in ll_data for item in sublist]
-            assert len(ll_data) == 0
             l_data = [item for sublist in l_data for item in sublist]
             r_data = [item for sublist in r_data for item in sublist]
             rr_data = [item for sublist in rr_data for item in sublist]

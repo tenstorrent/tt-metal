@@ -308,7 +308,8 @@ def attention_softmax(
 
     Args:
         * :attr:`input_tensor`: Input Tensor
-        * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
+        * :attr:`head_size`: Number of heads
+        * :attr:`attention_mask`: Attention Mask
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
@@ -347,8 +348,8 @@ def attention_softmax_(
 
     Args:
         * :attr:`input_tensor`: Input Tensor
-        * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
-        * :attr:`memory_config`: Memory Config of the output tensor
+        * :attr:`head_size`: Number of heads
+        * :attr:`attention_mask`: Attention Mask
 
     """
     if len(input_tensor.shape) != 4:

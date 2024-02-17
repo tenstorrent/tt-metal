@@ -66,9 +66,7 @@ def test_linear(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if not use_bias:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # TODO(arakhmati): figure out why using bias causes a mismatch
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -128,7 +126,7 @@ def test_linear_with_core_grid(
                 input_tensor_a,
                 input_tensor_b,
                 bias=bias,
-                core_grid=(batch_size, 6),
+                core_grid=ttnn.CoreGrid(y=batch_size, x=6),
             )
         assert "ttnn.linear: ttl.operations.primary.matmul failed" in str(exception.value)
     else:
@@ -136,7 +134,7 @@ def test_linear_with_core_grid(
             input_tensor_a,
             input_tensor_b,
             bias=bias,
-            core_grid=(batch_size, 6),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=6),
         )
 
         output_tensor = ttnn.to_torch(output_tensor)

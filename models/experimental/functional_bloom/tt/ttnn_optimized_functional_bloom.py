@@ -91,7 +91,7 @@ def create_query_key_value(config: BloomConfig, hidden_states, *, parameters: Pa
         hidden_states,
         input_tensor_b=parameters.query_key_value.weight,
         bias=parameters.query_key_value.bias,
-        core_grid=(9, 12),
+        core_grid=ttnn.CoreGrid(y=9, x=12),
         memory_config=BLOOM_MEMORY_CONFIG,
         dtype=BLOOM_DTYPE,
     )
@@ -105,7 +105,11 @@ def create_query_key_value(config: BloomConfig, hidden_states, *, parameters: Pa
 def compute_attention_scores(query_layer, key_layer, alibi):
     *_, head_size = query_layer.shape
     attention_scores = ttnn.matmul(
-        query_layer, key_layer, core_grid=(9, 12), memory_config=BLOOM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+        query_layer,
+        key_layer,
+        core_grid=ttnn.CoreGrid(y=9, x=12),
+        memory_config=BLOOM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
     )
     ttnn.deallocate(query_layer)
     ttnn.deallocate(key_layer)
@@ -144,7 +148,11 @@ def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
 
 def compute_context_layer(attention_probs, value_layer):
     context_layer = ttnn.matmul(
-        attention_probs, value_layer, core_grid=(9, 12), memory_config=BLOOM_MEMORY_CONFIG, dtype=BLOOM_DTYPE
+        attention_probs,
+        value_layer,
+        core_grid=ttnn.CoreGrid(y=9, x=12),
+        memory_config=BLOOM_MEMORY_CONFIG,
+        dtype=BLOOM_DTYPE,
     )
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value_layer)
@@ -156,7 +164,7 @@ def finalize_output(context_layer, *, parameters: ParameterDict):
         context_layer,
         parameters.dense.weight,
         bias=parameters.dense.bias,
-        core_grid=(9, 12),
+        core_grid=ttnn.CoreGrid(y=9, x=12),
         memory_config=BLOOM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -193,7 +201,7 @@ def bloom_mlp(
         hidden_states,
         parameters.dense_h_to_4h.weight,
         bias=parameters.dense_h_to_4h.bias,
-        core_grid=(9, 12),
+        core_grid=ttnn.CoreGrid(y=9, x=12),
         activation="gelu",
         memory_config=BLOOM_MEMORY_CONFIG,
         dtype=BLOOM_DTYPE,
@@ -204,7 +212,7 @@ def bloom_mlp(
         ff1_output,
         parameters.dense_4h_to_h.weight,
         bias=parameters.dense_4h_to_h.bias,
-        core_grid=(9, 12),
+        core_grid=ttnn.CoreGrid(y=9, x=12),
         memory_config=BLOOM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )

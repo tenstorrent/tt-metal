@@ -43,7 +43,22 @@ def run_clamp_bw(input_shape, dtype, dlayout, in_mem_config, out_mem_config, dat
 
 test_sweep_args = [
     (
-        (1, 10, 192, 96),
+        (6, 2, 224, 192),
+        [
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.DataType.BFLOAT16,
+        ],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            None,
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        17493725,
+        -88.5,
+    ),
+    (
+        (4, 7, 32, 96),
         [
             ttl.tensor.DataType.BFLOAT16,
             ttl.tensor.DataType.BFLOAT16,
@@ -53,9 +68,9 @@ test_sweep_args = [
             None,
             None,
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        9234542,
-        -99.0,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        16934480,
+        -94.0,
     ),
 ]
 
