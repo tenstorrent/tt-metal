@@ -202,7 +202,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # TODO: Move sharding inputs to model
         for i, device in enumerate(self.devices):
             xs[i] = xs[i].to(device, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
-        # Reshard
+
         # if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
         #     for i in range(len(xs)):
         #         xs[i] = tt_lib.tensor.sharded_to_interleaved(
@@ -213,40 +213,41 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         #             xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
         #         )
 
-        # Fused QKV
-        fused_query_key_value = []
+        attn_outputs = []
         for i in range(len(xs)):
-            fused_query_key_value.append(
+            x = xs[i]
+            attn_outputs.append(
                 tt_lib.operations.primary.matmul_1d(
-                    xs[i],
+                    x,
                     self.qkv_list[i],
                     program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
                 )
             )
-            xs[i].deallocate(True)
-        # TMs
+            x.deallocate(True)
+
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
-            for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = tt_lib.tensor.sharded_to_interleaved(
-                    fused_query_key_value[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            for i in range(len(attn_outputs)):
+                attn_outputs[i] = tt_lib.tensor.sharded_to_interleaved(
+                    attn_outputs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                 )
-            for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = tt_lib.tensor.interleaved_to_sharded(
-                    fused_query_key_value[i], sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
+            for i in range(len(attn_outputs)):
+                attn_outputs[i] = tt_lib.tensor.interleaved_to_sharded(
+                    attn_outputs[i], sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
                 )
+
         query_layer = []
         key_layer = []
         value_layer = []
-        for i in range(len(fused_query_key_value)):
+        for i in range(len(attn_outputs)):
             rot_mat = rot_mats[i]
             (
                 q_heads,  # [seqlen, n_local_heads, bsz, head_dim]
                 k_heads,  # [seqlen, n_local_kv_heads, bsz, head_dim]
                 v_heads,  # [seqlen, n_local_kv_heads, bsz, head_dim]
             ) = tt_lib.tensor.nlp_create_qkv_heads(
-                fused_query_key_value[i],
+                attn_outputs[i],
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
                 transpose_k_heads=False,
@@ -266,11 +267,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             #     q_heads,
             #     rot_mat,
             # )
+
             # k_heads = tt_lib.operations.primary.matmul(
             #     k_heads,
             #     rot_mat,
             # )
-            # ROTARY EMBEDDINGS
+
+            # q_heads (1, bsz, n_heads, head_dim)
+            # rot_mat (bsz, head_dim, head_dim)
             q_heads = tt_lib.tensor.bmm(
                 q_heads, rot_mat  # [seqlen, bsz, n_heads, head_dim]  # [1, bsz, head_dim, head_dim]
             )
@@ -283,132 +287,119 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             query_layer.append(q_heads)
             key_layer.append(k_heads)
             value_layer.append(v_heads)
-            fused_query_key_value[i].deallocate(True)
+            attn_outputs[i].deallocate(True)
 
-        # K Cache Update
+        ###
+        # KV update
+        ###
+        for i in range(len(query_layer)):
+            layer_past = self.layer_past_list[i]
+            k_heads = key_layer[i]
+            v_heads = value_layer[i]
+            keys = layer_past[0]
+            values = layer_past[1]
+
+            tt_lib.tensor.update_cache(keys, k_heads, start_pos)
+            tt_lib.tensor.update_cache(values, v_heads, start_pos)
+            k_heads.deallocate(True)
+            v_heads.deallocate(True)
+
+            keys = tt_lib.tensor.unpad(
+                layer_past[0],
+                [0, 0, 0, 0],
+                [
+                    self.max_batch_size - 1,
+                    self.n_local_kv_heads - 1,
+                    padded_layer_past_len - 1,
+                    self.head_dim - 1,
+                ],
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
+            values = tt_lib.tensor.unpad(
+                layer_past[1],
+                [0, 0, 0, 0],
+                [
+                    self.max_batch_size - 1,
+                    self.n_local_kv_heads - 1,
+                    padded_layer_past_len - 1,
+                    self.head_dim - 1,
+                ],
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
+
+            key_layer[i] = keys
+            value_layer[i] = values
+
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
         if kv_cache_memcfg.is_sharded():
             kv_cache_shard_shape = kv_cache_memcfg.shard_spec.shape
             kv_cache_shard_shape[0] = self.layer_past_list[0][0].shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         for i in range(len(key_layer)):
-            k_heads = key_layer[i]
-            keys = self.layer_past_list[i][0]
-            tt_lib.tensor.update_cache(keys, k_heads, start_pos)
-            key_layer[i].deallocate(True)
-
-        # key and value layers will have kv_seq_len padded to nearest 32
-        for i in range(len(key_layer)):
-            keys = self.layer_past_list[i][0]
-            key_layer[i] = tt_lib.tensor.unpad(
-                keys,
-                [0, 0, 0, 0],
-                [
-                    self.max_batch_size - 1,
-                    self.n_local_kv_heads - 1,
-                    padded_layer_past_len - 1,
-                    self.head_dim - 1,
-                ],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-            )
-        for i in range(len(key_layer)):
             key_layer[i] = tt_lib.tensor.interleaved_to_sharded(key_layer[i], sharded_mem_config=kv_cache_memcfg)
-        key_layer_transposed = []
-        for i in range(len(key_layer)):
-            key_layer_transposed.append(
-                tt_lib.tensor.transpose(
-                    key_layer[i],
-                    -2,
-                    -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-                )
-            )
-            key_layer[i].deallocate(True)
-
-        attn_weights = []
-        for i in range(len(query_layer)):
+            value_layer[i] = tt_lib.tensor.interleaved_to_sharded(value_layer[i], sharded_mem_config=kv_cache_memcfg)
             # Put query head back to L1 height sharded, currently causes PCC issues with group attention matmul
             # query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
             #     query_layer[i], sharded_mem_config=self.model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"]
             # )
-            attn_weights.append(
-                tt_lib.operations.primary.transformers.group_attn_matmul(
-                    query_layer[i],
-                    key_layer_transposed[i],
-                    compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-            )
-            query_layer[i].deallocate(True)
-            key_layer_transposed[i].deallocate(True)
-        ##Softmax
-        softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
-        softmax_progcfg.block_w = padded_layer_past_len // 32
-        # TODO:Also move to prepare inputs
-        attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = padded_layer_past_len
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-        for i in range(len(attn_weights)):
+        ###
+        # Attention
+        ###
+        for i in range(len(query_layer)):
+            q_heads = query_layer[i]
+            keys = key_layer[i]
+            values = value_layer[i]
             attn_mask = attn_masks[i]
-            # TODO: Put mask on L1 in prepare inputs
+
+            keys = tt_lib.tensor.transpose(
+                keys, -2, -1, output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
+            )  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
+            attn = tt_lib.operations.primary.transformers.group_attn_matmul(
+                q_heads,
+                keys,
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+            )  # seqlen, n_heads, batch, cache_len + seqlen
+            q_heads.deallocate(True)
+            keys.deallocate(True)
+
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = padded_layer_past_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
             attn_mask = tt_lib.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=attention_mask_memconfig)
-            attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
-                attn_weights[i],
+            softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
+            softmax_progcfg.block_w = padded_layer_past_len // 32
+            attn = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+                attn,
                 self.scale,
                 attn_mask,
                 program_config=self.model_config["SOFTMAX_PROGCFG"],
                 is_causal_mask=True,
             )
             attn_mask.deallocate(True)
-        # V CACHE UPDATE
-        for i in range(len(value_layer)):
-            v_heads = value_layer[i]
-            values = self.layer_past_list[i][1]
-            tt_lib.tensor.update_cache(values, v_heads, start_pos)
-            value_layer[i].deallocate(True)
-        for i in range(len(value_layer)):
-            values = self.layer_past_list[i][1]
-            value_layer[i] = tt_lib.tensor.unpad(
+            attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(
+                attn,
                 values,
-                [0, 0, 0, 0],
-                [
-                    self.max_batch_size - 1,
-                    self.n_local_kv_heads - 1,
-                    padded_layer_past_len - 1,
-                    self.head_dim - 1,
-                ],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-            )
-        for i in range(len(value_layer)):
-            value_layer[i] = tt_lib.tensor.interleaved_to_sharded(value_layer[i], sharded_mem_config=kv_cache_memcfg)
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+            )  # seqlen, n_heads, batch, dhead
 
-        # POST-SOFTMAX MM
-        attn_output = []
-        for i in range(len(attn_weights)):
-            attn_output.append(
-                tt_lib.operations.primary.transformers.group_attn_matmul(
-                    attn_weights[i],
-                    value_layer[i],
-                    compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                )
-            )
-            attn_weights[i].deallocate(True)
-            value_layer[i].deallocate(True)
-
-        for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.nlp_concat_heads(
-                attn_output[i],
+            attn_output = tt_lib.tensor.nlp_concat_heads(
+                attn_output,
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
 
-        # All gather input to dense
-        dense_output_replicated = tt_all_gather_torch(attn_output, dim=-1)
+            attn_outputs[i] = attn_output
+            attn.deallocate(True)
+            values.deallocate(True)
 
+        # All gather input to dense
+        dense_output_replicated = tt_all_gather_torch(attn_outputs, dim=-1)
         for i in range(len(dense_output_replicated)):
             dense_output_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
                 dense_output_replicated[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
