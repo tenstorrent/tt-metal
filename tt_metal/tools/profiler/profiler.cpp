@@ -165,7 +165,7 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp)
 }
 
 void DeviceProfiler::dumpResultToFile(
-        uint32_t runID,
+        uint32_t run_id,
         int device_id,
         CoreCoord core,
         int core_flat,
@@ -197,7 +197,7 @@ void DeviceProfiler::dumpResultToFile(
         source_line = stoi(source_line_str);
     }
 
-    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(runID, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
+    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
 
     device_events.push_back(event);
 
@@ -207,7 +207,7 @@ void DeviceProfiler::dumpResultToFile(
     {
         log_file.open(log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "Run ID, PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], zone name, zone phase, source line, source file" << std::endl;
+        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], Run ID, zone name, zone phase, source line, source file" << std::endl;
         new_log = false;
     }
     else
@@ -215,16 +215,16 @@ void DeviceProfiler::dumpResultToFile(
         log_file.open(log_path, std::ios_base::app);
     }
 
-    log_file << fmt::format("{:5},{:4},{:3},{:3},{:>7},{:7},{:>25},{:>6},{:15},{:6},{}",
-            runID,
+    log_file << fmt::format("{:4},{:3},{:3},{:>7},{:7},{:15},{:5},{:>25},{:>6},{:6},{}",
             device_id,
             core.x,
             core.y,
             tracy::riscName[risc_num],
             timer_id,
+            timestamp,
+            run_id,
             zone_name,
             magic_enum::enum_name(zone_phase),
-            timestamp,
             source_line,
             source_file
             );
@@ -344,6 +344,8 @@ void DeviceProfiler::dumpResults (
             }
         }
 
+        std::sort (device_events.begin(), device_events.end());
+
         pushTracyDeviceResults();
     }
     else
@@ -362,14 +364,15 @@ void DeviceProfiler::pushTracyDeviceResults()
 
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin)
         {
-            device_tracy_contexts[device_core]->PushStartZone(event);
+            TracyTTPushStartZone(device_tracy_contexts[device_core], event);
         }
         else if (event.zone_phase == tracy::TTDeviceEventPhase::end)
         {
-            device_tracy_contexts[device_core]->PushEndZone(event);
+            TracyTTPushEndZone(device_tracy_contexts[device_core], event);
         }
 
     }
+    device_events.clear();
 #endif
 }
 

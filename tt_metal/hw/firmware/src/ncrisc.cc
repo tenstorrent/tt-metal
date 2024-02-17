@@ -47,12 +47,11 @@ int main(int argc, char *argv[]) {
 
   mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
 
-  kernel_profiler::init_profiler();
   // Cleanup profiler buffer incase we never get the go message
   while (1) {
       DEBUG_STATUS('W');
       notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
-      DeviceZoneScopedN("NCRISC_FW");
+      DeviceZoneScopedMainN("NCRISC-FW");
 
 
       setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);

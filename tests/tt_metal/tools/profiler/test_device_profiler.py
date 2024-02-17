@@ -36,8 +36,7 @@ def run_device_profiler_test(doubleRun=False, setup=False):
         setupStr = f"-s {name}"
 
     postProcessRun = os.system(
-        f"cd {PROFILER_SCRIPTS_ROOT} && "
-        f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats --no-webapp"
+        f"cd {PROFILER_SCRIPTS_ROOT} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats"
     )
 
     assert postProcessRun == 0, f"Log process script crashed with exit code {postProcessRun}"
@@ -56,8 +55,8 @@ def get_function_name():
 
 def test_multi_op():
     REF_COUNT_DICT = {
-        "grayskull": [330, 270],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
-        "wormhole_b0": [222, 198, 174],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "grayskull": [1080, 880],
+        "wormhole_b0": [720, 640, 560],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -97,8 +96,8 @@ def test_custom_cycle_count():
 
 def test_full_buffer():
     REF_COUNT_DICT = {
-        "grayskull": [2700, 2200],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
-        "wormhole_b0": [1800, 1600, 1400],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "grayskull": [67500, 55000],  # [108, 88](compute cores) x 5(riscs) x 125(buffer size in marker pairs)
+        "wormhole_b0": [45000, 40000, 35000],  # [72,64,56](compute cores) x 5(riscs) x 125(buffer size in marker pairs)
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")

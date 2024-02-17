@@ -92,7 +92,7 @@ int main(int argc, char *argv[])
     while (1) {
         DEBUG_STATUS('W');
         while (*trisc_run != RUN_SYNC_MSG_GO);
-        DeviceZoneScopedN("TRISC_FW");
+        DeviceZoneScopedMainN("TRISC-FW");
 
 
 #if !defined(UCK_CHLKC_MATH)

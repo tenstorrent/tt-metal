@@ -30,11 +30,10 @@ void kernel_main() {
 
     setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
 
-    DeviceProfilerFlush;
     while (true) {
-        DeviceZoneScopedN("CQ-CONSUMER-MAIN");
+        DeviceZoneScopedMainN("CQ-CONSUMER-MAIN");
         {
-            DeviceZoneScopedN("CQ-CONSUMER-PROD-SEM-ACQ");
+            DeviceZoneScopedMainChildN("CQ-CONSUMER-PROD-SEM-ACQ");
             // Wait for producer to supply a command
             db_acquire(db_semaphore_addr, consumer_noc_encoding);
         }
@@ -66,13 +65,11 @@ void kernel_main() {
         completion_queue_reserve_back(completion_data_size);
         write_event(uint32_t(&header->event));
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
-            DeviceZoneScopedN("CQ-CONSUMER-WRAP-COMPLETION");
             cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
             cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
             notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
             noc_async_write_barrier(); // Barrier for now
         } else if (is_program) {
-            DeviceZoneScopedN("CQ-CONSUMER-WRAP-IS-PROG");
             write_and_launch_program(
                 db_cb_config,
                 remote_db_cb_config,
@@ -85,7 +82,6 @@ void kernel_main() {
         } else if (is_event_sync) {
             wait_for_event(header->event_sync_event_id, header->event_sync_core_x, header->event_sync_core_y);
         } else {
-            DeviceZoneScopedN("CQ-CONSUMER-WRITE-BUFFER");
             command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
             write_buffers(
                 db_cb_config,
@@ -99,14 +95,13 @@ void kernel_main() {
         }
 
         if (finish) {
-            DeviceZoneScopedN("CQ-CONSUMER-FINISH");
             notify_host_complete<host_finish_addr>();
         }
 
         completion_queue_push_back<completion_queue_start_addr, host_completion_queue_write_ptr_addr>(completion_data_size);
         record_last_completed_event(header->event);
         {
-            DeviceZoneScopedN("CQ-CONSUMER-NOT-FINISH");
+            DeviceZoneScopedN("CQ-NOTIFY_PROC");
             // notify producer that it has completed a command
             noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
             db_buf_switch = not db_buf_switch;

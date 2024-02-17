@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        constexpr int host_loop_count = 3;
+        constexpr int host_loop_count = 10;
         RunCustomCycle(device, host_loop_count);
         tt_metal::detail::DumpDeviceProfileResults(device);
 

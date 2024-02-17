@@ -302,61 +302,53 @@ int main() {
     mailboxes->launch.run = RUN_MSG_DONE;
 
     while (1) {
-        DeviceZoneScopedN("BRISC-FW");
-        {
-            DeviceZoneScopedN("BRISC-INIT");
             init_sync_registers();
             assert_just_ncrisc_reset();
-        }
 
-        {
-            DeviceZoneScopedN("BRISC-GO-MSG-WAIT");
-            // Wait...
             DEBUG_STATUS('G', 'W');
             while (mailboxes->launch.run != RUN_MSG_GO);
             DEBUG_STATUS('G', 'D');
-        }
 
-        {
-            DeviceZoneScopedN("BRISC-RUN");
+            {
+                DeviceZoneScopedMainN("BRISC-FW");
 
-            // Always copy ncrisc even if its size is 0 (save branch)...
-            l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
-                                   MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
-                                   mailboxes->launch.ncrisc_kernel_size16);
+                // Always copy ncrisc even if its size is 0 (save branch)...
+                l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
+                                       MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
+                                       mailboxes->launch.ncrisc_kernel_size16);
 
-            // Invalidate the i$ now the kernels have loaded and before running
-            volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
+                // Invalidate the i$ now the kernels have loaded and before running
+                volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+                cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
 
-            run_triscs();
+                run_triscs();
 
-            noc_index = mailboxes->launch.brisc_noc_id;
+                noc_index = mailboxes->launch.brisc_noc_id;
 
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
-            finish_ncrisc_copy_and_run();
+                setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
+                finish_ncrisc_copy_and_run();
 
-            // Run the BRISC kernel
-            DEBUG_STATUS('R');
-            if (mailboxes->launch.enable_brisc) {
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
-                kernel_init();
-            } else {
-                // This was not initialized in kernel_init
-                noc_local_state_init(noc_index);
+                // Run the BRISC kernel
+                DEBUG_STATUS('R');
+                if (mailboxes->launch.enable_brisc) {
+                    setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
+                    kernel_init();
+                } else {
+                    // This was not initialized in kernel_init
+                    noc_local_state_init(noc_index);
+                }
+                DEBUG_STATUS('D');
+
+                wait_ncrisc_trisc();
+
+                mailboxes->launch.run = RUN_MSG_DONE;
+
+                // Notify dispatcher core that it has completed
+                if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
+                    uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+                    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+                }
             }
-            DEBUG_STATUS('D');
-
-            wait_ncrisc_trisc();
-
-            mailboxes->launch.run = RUN_MSG_DONE;
-        }
-
-        // Notify dispatcher core that it has completed
-        if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-            uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-            noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
-        }
     }
 
     return 0;

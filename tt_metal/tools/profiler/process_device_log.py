@@ -11,8 +11,6 @@ import csv
 import json
 from datetime import datetime
 
-import plotly.graph_objects as go
-from dash import Dash, dcc, html, Input, Output, State
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -33,68 +31,6 @@ def coreCompare(core):
     x = core[0]
     y = core[1]
     return x + y * 100
-
-
-def generate_analysis_table(analysisData, setup):
-    stats = setup.displayStats
-    return html.Div(
-        [
-            html.H6("Duration Stats Table"),
-            html.P("Duration is the period between two recorded events"),
-            html.P(
-                "T0 is the the 0 refrence point, corresponding to the earliest core that reports a BRISC FW start marker"
-            ),
-            html.Table(
-                # Header
-                [
-                    html.Tr(
-                        [html.Th("Duration Name")]
-                        +
-                        # TODO(MO): Issue 799
-                        # [html.Th("Analysis Type")] +\
-                        # [html.Th("Across")] +\
-                        [html.Th(f"{stat} [cycles]") if stat not in ["Count"] else html.Th(f"{stat}") for stat in stats]
-                    )
-                ]
-                +
-                # Body
-                [
-                    html.Tr(
-                        [html.Td(f"{analysis}")]
-                        +
-                        # TODO(MO): Issue 799
-                        # [html.Td(f"{setup.timerAnalysis[analysis]['type']}")] +\
-                        # [html.Td(f"{setup.timerAnalysis[analysis]['across']}")] +\
-                        [
-                            html.Td(f"{analysisData[analysis]['stats'][stat]:,.0f}")
-                            if stat in analysisData[analysis]["stats"].keys()
-                            else html.Td("-")
-                            for stat in stats
-                        ]
-                    )
-                    for analysis in analysisData.keys()
-                ]
-            ),
-        ]
-    )
-
-
-# Note if multiple instances are present, all are returned space delimited
-# Further analysis has to be done on the excel side
-def return_available_timer(risc, coreTimeseries, timerIDLabels):
-    resList = []
-    for desiredTimerID, label in timerIDLabels:
-        res = ""
-        if risc in coreTimeseries.keys():
-            timeseries = coreTimeseries[risc]["timeseries"]
-            for timerID, timestamp, *metaData in timeseries:
-                if timerID == desiredTimerID:
-                    if res:
-                        res = f"{res} {timestamp}"
-                    else:
-                        res = f"{timestamp}"
-        resList.append(res)
-    return resList
 
 
 class TupleEncoder(json.JSONEncoder):
@@ -135,31 +71,6 @@ class TupleEncoder(json.JSONEncoder):
 def print_json(devicesData, setup):
     with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
         json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
-
-
-def print_rearranged_csv(devicesData, setup, freqText=None):
-    timerIDLabels = setup.timerIDLabels[1:5]
-    if not freqText:
-        freqText = devicesData["deviceInfo"]["freq"]
-    with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceRearranged}", "w") as timersCSV:
-        for chipID, deviceData in devicesData["devices"].items():
-            timeWriter = csv.writer(timersCSV, delimiter=",")
-
-            timeWriter.writerow(["Clock Frequency [MHz]", freqText])
-            timeWriter.writerow(["PCIe slot", chipID])
-            timeWriter.writerow(
-                ["core x", "core y"]
-                + [f"BRISC {timerIDLabel[1]}" for timerIDLabel in timerIDLabels]
-                + [f"NCRISC {timerIDLabel[1]}" for timerIDLabel in timerIDLabels]
-            )
-            for core in sorted(deviceData["cores"].keys(), key=coreCompare):
-                if type(core) == tuple:
-                    core_x, core_y = core
-                    timeWriter.writerow(
-                        [core_x, core_y]
-                        + return_available_timer("BRISC", deviceData["cores"][core]["riscs"], timerIDLabels)
-                        + return_available_timer("NCRISC", deviceData["cores"][core]["riscs"], timerIDLabels)
-                    )
 
 
 def analyze_stats(timerStats, timerStatsCores):
@@ -269,7 +180,7 @@ def print_stats(devicesData, setup):
 
 
 def print_help():
-    print("Please choose a plot setup class that matches your test kernel profile data.")
+    print("Please choose a postprocessing config for profile data.")
     print("e.g. : process_device_log.py test_add_two_ints")
     print("Or run default by providing no args")
     print("e.g. : process_device_log.py")
@@ -303,21 +214,21 @@ def import_device_profile_log(
                 devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
             elif lineCount > 1:
-                runID = -1
-                if len(row) == 7:
-                    startCol = 1
-                    runID = int(row[0].strip())
-                else:
-                    startCol = 0
-                chipID = int(row[startCol])
-                core = (int(row[startCol + 1]), int(row[startCol + 2]))
+                chipID = int(row[0].strip())
+                core = (int(row[1].strip()), int(row[2].strip()))
                 if intrestingCores and core not in intrestingCores:
                     continue
-                risc = row[startCol + 3].strip()
-                timerID = int(row[startCol + 4])
+                risc = row[3].strip()
+                timerID = {"id": int(row[4].strip()), "zoneName": "", "zonePhase": "", "srcLine": "", "srcFile": ""}
                 if ignoreMarkers and timerID in ignoreMarkers:
                     continue
-                timeData = int(row[startCol + 5])
+                timeData = int(row[5].strip())
+                if len(row) > 6:
+                    runID = int(row[6].strip())
+                    timerID["zoneName"] = row[7].strip()
+                    timerID["zonePhase"] = row[8].strip()
+                    timerID["srcLine"] = int(row[9].strip())
+                    timerID["srcFile"] = row[10].strip()
 
                 if chipID in devicesData["devices"].keys():
                     if core in devicesData["devices"][chipID]["cores"].keys():
@@ -370,7 +281,13 @@ def import_device_profile_log(
                         riscData["timeseries"] = newTimeseries
                         foundRange.add((chipID, core, risc))
                     else:
-                        riscData["timeseries"].insert(0, (0, deviceData["metadata"]["global_min"]["ts"]))
+                        riscData["timeseries"].insert(
+                            0,
+                            (
+                                {"id": 0, "zoneName": "", "zonePhase": "", "srcLine": "", "srcFile": ""},
+                                deviceData["metadata"]["global_min"]["ts"],
+                            ),
+                        )
 
         if foundRange:
             for chipID, deviceData in devicesData["devices"].items():
@@ -387,7 +304,7 @@ def import_device_profile_log(
 
 def is_new_op_core(tsRisc):
     timerID, tsValue, risc = tsRisc
-    if risc == "BRISC" and timerID == 1:
+    if risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "begin":
         return True
     return False
 
@@ -398,16 +315,16 @@ def is_new_op_device(tsCore, coreOpMap):
     isNewOp = False
     isNewOpFinished = False
     if core[1] != NON_COMPUTE_ROW:
-        if timerID != 0:
+        if timerID["id"] != 0:
             appendTs = True
-        if risc == "BRISC" and timerID == 1:
+        if risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "begin":
             assert (
                 core not in coreOpMap.keys()
             ), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}, this could be caused by soft resets"
             if not coreOpMap:
                 isNewOp = True
             coreOpMap[core] = (tsValue,)
-        elif risc == "BRISC" and timerID == 4:
+        elif risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "end":
             assert core in coreOpMap.keys() and len(coreOpMap[core]) == 1, "Unexpected BRISC end"
             coreOpMap[core] = (coreOpMap[core][0], tsValue)
             isNewOpFinished = True
@@ -450,7 +367,7 @@ def core_to_device_timeseries(devicesData):
                 for ts in riscData["timeseries"]:
                     timerID, timestamp, *metadata = ts
                     tsCore = ts + (core,)
-                    if timerID == 0:
+                    if timerID["id"] == 0:
                         tsCore = ts + (deviceData["metadata"]["global_min"]["core"],)
                     if risc in tmpTimeseries["riscs"].keys():
                         tmpTimeseries["riscs"][risc]["timeseries"].append(tsCore)
@@ -467,7 +384,8 @@ def core_to_device_timeseries(devicesData):
             if appendTs:
                 if isNewOp:
                     ops.append({"timeseries": []})
-                ops[-1]["timeseries"].append(ts)
+                if len(ops) > 0:
+                    ops[-1]["timeseries"].append(ts)
             if isNewOpFinished:
                 coreOpMap = {}
 
@@ -499,179 +417,6 @@ def timeseries_to_durations(deviceData):
                 )
 
 
-def plotData_to_timelineXVals(deviceData, plotCores, setup):
-    plotRiscs = setup.riscs
-    xValsDict = {risc: [] for risc in plotRiscs}
-    traces = {risc: [] for risc in plotRiscs}
-
-    coreOrderTrav = {core: {risc: 0 for risc in deviceData["cores"][core]["riscs"].keys()} for core in plotCores}
-    for risc in plotRiscs:
-        ordering = True
-        traceToAdd = None
-        discardedTraces = set()
-        while ordering:
-            ordering = False
-            addTrace = True
-            for core in plotCores:
-                assert core in deviceData["cores"].keys()
-                if risc in deviceData["cores"][core]["riscs"].keys():
-                    if coreOrderTrav[core][risc] < len(deviceData["cores"][core]["riscs"][risc]["durations"]["order"]):
-                        ordering = True
-                        trace = deviceData["cores"][core]["riscs"][risc]["durations"]["order"][
-                            coreOrderTrav[core][risc]
-                        ]
-                        if traceToAdd:
-                            if core not in traceToAdd[1]:
-                                if traceToAdd[0] == trace:
-                                    traceToAdd[1].add(core)
-                                else:
-                                    # Let see if any trace in the future is the candidate for this core
-                                    for i in range(
-                                        coreOrderTrav[core][risc] + 1,
-                                        len(deviceData["cores"][core]["riscs"][risc]["durations"]["order"]),
-                                    ):
-                                        futureTrace = deviceData["cores"][core]["riscs"][risc]["durations"]["order"][i]
-                                        if futureTrace == traceToAdd[0] and traceToAdd[0] not in discardedTraces:
-                                            # Pick a better candidate and put this in discarded so it cannot picked
-                                            # again this round. This is to avoid forever loop in the while loop
-                                            discardedTraces.add(traceToAdd[0])
-                                            traceToAdd = (trace, set([core]))
-                                            addTrace = False
-                                            break
-                                    if addTrace == False:
-                                        break
-                        else:
-                            # Pick a new candidate
-                            traceToAdd = (trace, set([core]))
-                            addTrace = False
-                            break
-
-            if addTrace and traceToAdd:
-                if traceToAdd[0] in discardedTraces:
-                    discardedTraces.remove(traceToAdd[0])
-                traces[risc].append(traceToAdd)
-                for core in traceToAdd[1]:
-                    if risc in deviceData["cores"][core]["riscs"].keys():
-                        coreOrderTrav[core][risc] += 1
-                traceToAdd = None
-
-    for risc in traces.keys():
-        for trace in traces[risc]:
-            xVals = []
-            traceType = trace[0]
-            cores = trace[1]
-            for core in plotCores:
-                xVal = 0
-                if core in cores:
-                    xVal = deviceData["cores"][core]["riscs"][risc]["durations"]["data"][traceType[0]][traceType[1]][2]
-                xVals.append(xVal)
-            xValsDict[risc].append((traceType, xVals))
-    return xValsDict
-
-
-def timeline_plot(yVals, xValsDict, setup):
-    riscsData = setup.riscsData
-    timerIDLabels = setup.timerIDLabels
-
-    layout = go.Layout(xaxis=dict(title="Cycle count"))
-    if len(yVals) > 1:
-        layout = go.Layout(xaxis=dict(title="Cycle count"), yaxis=dict(title="Cores"))
-
-    fig = go.Figure(layout=layout)
-
-    fig.add_trace(
-        go.Bar(
-            y=[yVals, [" "] * len(yVals)],
-            x=[0] * len(yVals),
-            orientation="h",
-            showlegend=False,
-            marker=dict(color="rgba(255, 255, 255, 0.0)"),
-        )
-    )
-    for risc in setup.riscs:
-        durations = []
-        if risc in xValsDict.keys():
-            for xVals in xValsDict[risc]:
-                (duration, instance), xValsData = xVals
-                if duration not in durations:
-                    durations.append(duration)
-
-            colors = sns.color_palette(riscsData[risc]["color"], len(durations) + 1).as_hex()
-            colorMap = {duration: color for duration, color in zip(durations, colors)}
-            colorMap["TRANSPARENT"] = "rgb(135,206,250)"
-            colorMap["DARK"] = colors[-1]
-
-            for xVals in xValsDict[risc]:
-                (duration, instance), xValsData = xVals
-                startData, endData = duration
-                if type(startData) == tuple:
-                    (start, *startMeta) = startData
-                else:
-                    start = startData
-                    startMeta = None
-                if type(endData) == tuple:
-                    (end, *endMeta) = endData
-                else:
-                    end = endData
-                    endMeta = None
-
-                if (start, end) in [(4, 1), (0, 1)]:
-                    color = colorMap["TRANSPARENT"]
-                elif (start, end) in [(1, 2), (3, 4)]:
-                    color = colorMap["DARK"]
-                else:
-                    color = colorMap[duration]
-
-                for timerID, text in timerIDLabels:
-                    if start == timerID:
-                        start = text
-                    if end == timerID:
-                        end = text
-
-                startTxt = f"{start}"
-                if startMeta:
-                    startTxt = f"{start},{startMeta}"
-                endTxt = f"{end}"
-                if endMeta:
-                    endTxt = f"{end},{endMeta}"
-                name = f"{startTxt}->{endTxt}"
-
-                showlegend = False
-
-                fig.add_trace(
-                    go.Bar(
-                        y=[yVals, [risc] * len(yVals)],
-                        x=xValsData,
-                        orientation="h",
-                        name="",
-                        showlegend=showlegend,
-                        marker=dict(color=color),
-                        customdata=[name for i in range(len(xValsData))],
-                        hovertemplate="<br>".join(["%{customdata}", "%{x} cycles"]),
-                    )
-                )
-                fig.update_xaxes(
-                    showspikes=True,
-                    spikecolor="green",
-                    spikesnap="cursor",
-                    spikemode="across",
-                    spikethickness=0.5,
-                )
-    fig.add_trace(
-        go.Bar(
-            y=[yVals, [""] * len(yVals)],
-            x=[0] * len(yVals),
-            orientation="h",
-            showlegend=False,
-            marker=dict(color="rgba(255, 255, 255, 0.0)"),
-        )
-    )
-
-    fig.update_layout(barmode="stack", height=setup.plotBaseHeight + setup.plotPerCoreHeight * len(yVals))
-
-    return fig
-
-
 def translate_metaData(metaData, core, risc):
     metaRisc = None
     metaCore = None
@@ -694,22 +439,48 @@ def translate_metaData(metaData, core, risc):
 def determine_conditions(timerID, metaData, analysis):
     currCore = analysis["start"]["core"] if "core" in analysis["start"].keys() else None
     currRisc = analysis["start"]["risc"]
-    currStart = (timerID,) + translate_metaData(metaData, currCore, currRisc)
+    currStart = (timerID["zoneName"],) + translate_metaData(metaData, currCore, currRisc)
 
     currCore = analysis["end"]["core"] if "core" in analysis["end"].keys() else None
     currRisc = analysis["end"]["risc"]
-    currEnd = (timerID,) + translate_metaData(metaData, currCore, currRisc)
+    currEnd = (timerID["zoneName"],) + translate_metaData(metaData, currCore, currRisc)
 
-    desStart = (
-        analysis["start"]["timerID"],
-        analysis["start"]["core"] if "core" in analysis["start"].keys() else None,
-        analysis["start"]["risc"],
-    )
-    desEnd = (
-        analysis["end"]["timerID"],
-        analysis["end"]["core"] if "core" in analysis["end"].keys() else None,
-        analysis["end"]["risc"],
-    )
+    if type(analysis["start"]["zoneName"]) == list:
+        desStart = [
+            (
+                zoneName,
+                analysis["start"]["core"] if "core" in analysis["start"].keys() else None,
+                analysis["start"]["risc"],
+            )
+            for zoneName in analysis["start"]["zoneName"]
+        ]
+    else:
+        desStart = [
+            (
+                analysis["start"]["zoneName"],
+                analysis["start"]["core"] if "core" in analysis["start"].keys() else None,
+                analysis["start"]["risc"],
+            )
+        ]
+
+    if type(analysis["end"]["zoneName"]) == list:
+        desEnd = [
+            (
+                zoneName,
+                analysis["end"]["core"] if "core" in analysis["end"].keys() else None,
+                analysis["end"]["risc"],
+            )
+            for zoneName in analysis["end"]["zoneName"]
+        ]
+    else:
+        desEnd = [
+            (
+                analysis["end"]["zoneName"],
+                analysis["end"]["core"] if "core" in analysis["end"].keys() else None,
+                analysis["end"]["risc"],
+            )
+        ]
+
     return currStart, currEnd, desStart, desEnd
 
 
@@ -719,7 +490,7 @@ def first_last_analysis(timeseries, analysis):
     for index, (timerID, timestamp, *metaData) in enumerate(timeseries):
         currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
         if not startFound:
-            if currStart == desStart:
+            if currStart in desStart:
                 startFound = (index, timerID, timestamp)
                 break
 
@@ -728,7 +499,7 @@ def first_last_analysis(timeseries, analysis):
         for i in range(len(timeseries) - 1, startIndex, -1):
             timerID, timestamp, *metaData = timeseries[i]
             currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
-            if currEnd == desEnd:
+            if currEnd in desEnd:
                 durations.append(
                     dict(start=startTS, end=timestamp, durationType=(startID, timerID), diff=timestamp - startTS)
                 )
@@ -752,16 +523,16 @@ def adjacent_LF_analysis(riscData, analysis):
     for timerID, timestamp, *metaData in timeseries:
         currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
         if not startFound:
-            if currStart == desStart:
+            if currStart in desStart:
                 startFound = (timerID, timestamp)
         else:
-            if currEnd == desEnd:
+            if currEnd in desEnd:
                 startID, startTS = startFound
                 durations.append(
                     dict(start=startTS, end=timestamp, durationType=(startID, timerID), diff=timestamp - startTS)
                 )
                 startFound = None
-            elif currStart == desStart:
+            elif currStart in desStart:
                 startFound = (timerID, timestamp)
 
     return durations
@@ -906,153 +677,6 @@ def import_log_run_stats(setup=device_post_proc_config.default_setup()):
     return devicesData
 
 
-def generate_plots(devicesData, setup, saveFigure=True):
-    timelineFigs = {}
-    for chipID, deviceData in devicesData["devices"].items():
-        timeseries_to_durations(deviceData)
-        yVals = sorted(deviceData["cores"].keys(), key=coreCompare, reverse=True)
-        yVals.remove("DEVICE")
-
-        xValsDict = plotData_to_timelineXVals(deviceData, yVals, setup)
-        key = f"Chip {chipID} Cores"
-        timelineFigs[key] = timeline_plot(yVals, xValsDict, setup)
-
-        figHtmls = {
-            f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{fig.replace(' ','_')}_{setup.devicePerfHTML}": fig
-            for fig in sorted(timelineFigs.keys())
-        }
-
-        if saveFigure:
-            for filename, figHtml in figHtmls.items():
-                timelineFigs[figHtml].write_html(filename)
-
-    return timelineFigs
-
-
-def run_dashbaord_webapp(devicesData, timelineFigs, setup):
-    statTables = {}
-    for chipID, deviceData in devicesData["devices"].items():
-        key = f"Chip {chipID} Cores"
-        if "analysis" in deviceData["cores"]["DEVICE"].keys():
-            statTables[key] = generate_analysis_table(deviceData["cores"]["DEVICE"]["analysis"], setup)
-    external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css"]
-    app = Dash(__name__, external_stylesheets=external_stylesheets)
-
-    plotsDiv = []
-    for num, item in enumerate(sorted(set(timelineFigs.keys()) | set(statTables.keys()))):
-        plotRiscs = set()
-        for marker in timelineFigs[item]["data"]:
-            if marker["y"][-1][0] in setup.riscs:
-                plotRiscs.add(marker["y"][-1][0])
-
-        plotsDiv += [
-            html.Div(
-                [
-                    html.H5(f"{item}:"),
-                    statTables[item] if item in statTables.keys() else html.Div([]),
-                    html.Br(),
-                    html.Br(),
-                    html.P("X Axix select box diff [Cycles]: ", style={"display": "inline"}),
-                    html.P("", id=f"selected-data-{num}", style={"display": "inline"}),
-                    dcc.Graph(id=f"figure-{num}", figure=timelineFigs[item])
-                    if item in timelineFigs.keys()
-                    else html.Div([]),
-                    dcc.Store(
-                        id=f"figure-height-{num}",
-                        data=dict(
-                            height=timelineFigs[item]["layout"]["height"],
-                            perRiscHeight=(setup.plotPerCoreHeight) / len(plotRiscs),
-                            baseHeight=setup.plotBaseHeight,
-                        ),
-                    ),
-                ]
-            )
-        ]
-
-    app.layout = html.Div(
-        [html.H1("Device Profiler Dashboard", id="main-header")]
-        + [
-            html.Button("Refresh", id="btn-refresh", style={"margin-right": "15px"}),
-            html.Button("Download Artifacts", id="btn-download-artifacts", style={"margin-right": "15px"}),
-            dcc.Download(id="download-artifacts"),
-            html.P("", id="p-download-message-bar", style={"display": "inline"}),
-            html.Br(),
-            html.Br(),
-        ]
-        + plotsDiv
-    )
-
-    for num, item in enumerate(sorted(set(timelineFigs.keys()) | set(statTables.keys()))):
-        app.clientside_callback(
-            """
-            function (layoutData, fig, layoutDefaults) {
-                newFig = JSON.parse(JSON.stringify(fig))
-                if (layoutData['yaxis.autorange'] !== 'undefined' && layoutData['yaxis.autorange'] === true)
-                {
-                    newFig['layout']['height'] = layoutDefaults['height']
-                }
-                else if (layoutData['yaxis.range[0]'] !== 'undefined')
-                {
-                    newFig['layout']['height'] = layoutDefaults['perRiscHeight']*
-                        (layoutData['yaxis.range[1]'] - layoutData['yaxis.range[0]'])
-                        + layoutDefaults['baseHeight']
-                }
-                return newFig
-            }
-            """,
-            Output(f"figure-{num}", "figure"),
-            [Input(f"figure-{num}", "relayoutData")],  # this triggers the event
-            [State(f"figure-{num}", "figure"), State(f"figure-height-{num}", "data")],
-            prevent_initial_call=True,
-        )
-
-        app.clientside_callback(
-            """
-            function (selectedData) {
-                if (selectedData !== null && selectedData.hasOwnProperty('range') &&  selectedData.range.hasOwnProperty('x'))
-                {
-                    return (selectedData.range.x[1] - selectedData.range.x[0]).toFixed(0)
-                }
-                else
-                {
-                    return ""
-                }
-            }
-            """,
-            Output(f"selected-data-{num}", "children"),
-            [Input(f"figure-{num}", "selectedData")],  # this triggers the event
-            prevent_initial_call=True,
-        )
-
-    # @app.callback(
-    # Output('selected-data', 'children'),
-    # Input('basic-interactions', 'selectedData'))
-    # def display_selected_data(selectedData):
-    # return json.dumps(selectedData, indent=2)
-
-    @app.callback(Output("btn-refresh", "children"), Input("btn-refresh", "n_clicks"), prevent_initial_call=True)
-    def refresh_callback(n_clicks):
-        os.system("touch dummy_refresh.py")
-        return "Refreshing ..."
-
-    @app.callback(
-        Output("p-download-message-bar", "children"),
-        Output("download-artifacts", "data"),
-        Input("btn-download-artifacts", "n_clicks"),
-        prevent_initial_call=True,
-    )
-    def download_callback(n_clicks):
-        newTarballName = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{setup.deviceTarball}"
-        ret = os.system(
-            f"cd {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; mv {setup.deviceTarball} {newTarballName} > /dev/null 2>&1"
-        )
-        if ret == 0:
-            return "", dcc.send_file(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{newTarballName}")
-        return "No artifact tarball found, make sure webapp is started without the --no-artifact flag", None
-
-    app.run_server(host="0.0.0.0", port=setup.webappPort, debug=True)
-
-
 def prepare_output_folder(setup):
     os.system(
         f"rm -rf {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; mkdir -p {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; cp {setup.deviceInputLog} {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}"
@@ -1070,13 +694,11 @@ def generate_artifact_tarball(setup):
 @click.option(
     "-d", "--device-input-log", type=click.Path(exists=True, dir_okay=False), help="Input device side csv log"
 )
-@click.option("-o", "--output-folder", type=click.Path(), help="Output folder for plots and stats")
+@click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-p", "--port", type=int, help="Dashboard webapp port")
 @click.option("--no-print-stats", default=False, is_flag=True, help="Do not print timeline stats")
-@click.option("--no-webapp", default=False, is_flag=True, help="Do not run profiler dashboard webapp")
-@click.option("--no-plots", default=False, is_flag=True, help="Do not generate plots")
 @click.option("--no-artifacts", default=False, is_flag=True, help="Do not generate artifacts tarball")
-def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp, no_plots, no_artifacts):
+def main(setup, device_input_log, output_folder, port, no_print_stats, no_artifacts):
     if device_input_log:
         setup.deviceInputLog = device_input_log
     if output_folder:
@@ -1089,21 +711,13 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
     prepare_output_folder(setup)
 
     print_stats_outfile(devicesData, setup)
-    print_rearranged_csv(devicesData, setup)
     print_json(devicesData, setup)
 
     if not no_print_stats:
         print_stats(devicesData, setup)
 
-    timelineFigs = {}
-    if not no_plots:
-        timelineFigs = generate_plots(devicesData, setup)
-
     if not no_artifacts:
         generate_artifact_tarball(setup)
-
-    if not no_webapp:
-        run_dashbaord_webapp(devicesData, timelineFigs, setup)
 
 
 if __name__ == "__main__":

@@ -221,7 +221,7 @@ std::vector<Tensor> run_device_operation(
                     if (!operation::skip_profile) {
                         // Only need to dump device data when in dispatch mode
                         // LaunchKernel automatically dumps device data
-                        op_profiler::dump_device_profiler_results(device, program);
+                        //op_profiler::dump_device_profiler_results(device, program);
                     } else {
                         if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
                             operation::skipped_programs.emplace(device->id(), *program);

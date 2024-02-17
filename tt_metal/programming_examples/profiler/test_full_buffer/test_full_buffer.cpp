@@ -11,7 +11,6 @@ void RunCustomCycle(tt_metal::Device *device, int loop_count, bool fast_dispatch
 {
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
-    //CoreCoord end_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
@@ -62,7 +61,7 @@ int main(int argc, char **argv) {
         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-        constexpr int device_loop_count = 10;
+        constexpr int device_loop_count = 150;
 
         RunCustomCycle(device, device_loop_count, USE_FAST_DISPATCH);
         tt_metal::detail::DumpDeviceProfileResults(device);

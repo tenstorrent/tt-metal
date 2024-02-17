@@ -71,7 +71,7 @@ def run_device_log_compare_golden(test):
     underTestPath = PROFILER_ARTIFACTS_DIR / "output/device"
 
     ret = os.system(
-        f"cd {PROFILER_SCRIPTS_ROOT} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts --no-webapp"
+        f"cd {PROFILER_SCRIPTS_ROOT} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts"
     )
     assert ret == 0, f"Log process script crashed with exit code {ret}"
 

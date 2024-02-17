@@ -28,10 +28,12 @@ void kernel_main() {
 
     bool db_buf_switch = false;
 
-    DeviceProfilerFlush;
     while (true) {
-        DeviceZoneScopedN("CQ-PRODUCER-MAIN");
-        issue_queue_wait_front();
+        DeviceZoneScopedMainN("CQ-PRODUCER-MAIN");
+        {
+            DeviceZoneScopedMainChildN("CQ-WAIT-FRONT");
+            issue_queue_wait_front();
+        }
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
         noc_async_read(src_noc_addr, command_start_addr, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));

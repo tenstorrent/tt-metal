@@ -89,9 +89,13 @@ void DumpDeviceProfileResults(Device *device) {
 #if defined(PROFILER)
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
-    for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
-    {
-        CoreCoord curr_core = {core.first.x, core.first.y};
+    auto device_num_hw_cqs = device->num_hw_cqs();
+    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs)) {
+        const CoreCoord curr_core = device->worker_core_from_logical_core(core);
+        workerCores.push_back(curr_core);
+    }
+    for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs)) {
+        const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
     }
     DumpDeviceProfileResults(device, workerCores);

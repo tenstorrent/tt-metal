@@ -19,7 +19,7 @@ import click
 from loguru import logger
 from dash import Dash, dcc, html, Input, Output
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats, generate_plots
+from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 from tt_metal.tools.profiler.process_host_log import import_host_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import (
@@ -119,50 +119,50 @@ def load_device_data(opCandidatePath):
             "FW_START->FW_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
-                "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
+                "start": {"core": "ANY", "risc": "ANY", "zoneName": [f"{risc}-FW" for risc in setup.riscTypes]},
+                "end": {"core": "ANY", "risc": "ANY", "zoneName": [f"{risc}-FW" for risc in setup.riscTypes]},
             },
             "KERNEL_START->KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "ANY", "timerID": 2},
-                "end": {"core": "ANY", "risc": "ANY", "timerID": 3},
+                "start": {"core": "ANY", "risc": "ANY", "zoneName": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+                "end": {"core": "ANY", "risc": "ANY", "zoneName": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
             },
             "BR_KERNEL_START->BR_KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
-                "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
+                "start": {"core": "ANY", "risc": "BRISC", "zoneName": "BRISC-KERNEL"},
+                "end": {"core": "ANY", "risc": "BRISC", "zoneName": "BRISC-KERNEL"},
             },
             "NC_KERNEL_START->NC_KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "NCRISC", "timerID": 2},
-                "end": {"core": "ANY", "risc": "NCRISC", "timerID": 3},
+                "start": {"core": "ANY", "risc": "NCRISC", "zoneName": "NCRISC-KERNEL"},
+                "end": {"core": "ANY", "risc": "NCRISC", "zoneName": "NCRISC-KERNEL"},
             },
             "T0_KERNEL_START->T0_KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "TRISC_0", "timerID": 2},
-                "end": {"core": "ANY", "risc": "TRISC_0", "timerID": 3},
+                "start": {"core": "ANY", "risc": "TRISC_0", "zoneName": "TRISC-KERNEL"},
+                "end": {"core": "ANY", "risc": "TRISC_0", "zoneName": "TRISC-KERNEL"},
             },
             "T1_KERNEL_START->T1_KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "TRISC_1", "timerID": 2},
-                "end": {"core": "ANY", "risc": "TRISC_1", "timerID": 3},
+                "start": {"core": "ANY", "risc": "TRISC_1", "zoneName": "TRISC-KERNEL"},
+                "end": {"core": "ANY", "risc": "TRISC_1", "zoneName": "TRISC-KERNEL"},
             },
             "T2_KERNEL_START->T2_KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "TRISC_2", "timerID": 2},
-                "end": {"core": "ANY", "risc": "TRISC_2", "timerID": 3},
+                "start": {"core": "ANY", "risc": "TRISC_2", "zoneName": "TRISC-KERNEL"},
+                "end": {"core": "ANY", "risc": "TRISC_2", "zoneName": "TRISC-KERNEL"},
             },
             "ER_KERNEL_START->ER_KERNEL_END": {
                 "across": "ops",
                 "type": "op_first_last",
-                "start": {"core": "ANY", "risc": "ERISC", "timerID": 2},
-                "end": {"core": "ANY", "risc": "ERISC", "timerID": 3},
+                "start": {"core": "ANY", "risc": "ERISC", "zoneName": "ERISC-KERNEL"},
+                "end": {"core": "ANY", "risc": "ERISC", "zoneName": "ERISC-KERNEL"},
             },
         }
 
