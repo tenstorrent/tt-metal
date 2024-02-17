@@ -313,23 +313,25 @@ TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
 
 namespace host_command_queue_tests {
 
-TEST_F(CommandQueueFixture, TestAsyncCommandQueue) {
-    Program program;
+TEST_F(CommandQueueSingleCardFixture, TestAsyncCommandQueue) {
+    for (Device *device : devices_) {
+        Program program;
 
-    CoreRange cr({0, 0}, {0, 0});
-    CoreRangeSet cr_set({cr});
-    // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
-    // added separately
-    auto dummy_reader_kernel = CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        CoreRange cr({0, 0}, {0, 0});
+        CoreRangeSet cr_set({cr});
+        // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+        // added separately
+        auto dummy_reader_kernel = CreateKernel(
+            program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    this->cmd_queue->set_mode(CommandQueue::CommandQueueMode::ASYNC);
+        device->command_queue().set_mode(CommandQueue::CommandQueueMode::ASYNC);
 
-    // Use scoper timer to benchmark time for pushing 2 commands
-    {
-        tt::ScopedTimer timer("AsyncCommandQueue");
-        EnqueueProgram(*this->cmd_queue, program, false);
-        Finish(*this->cmd_queue);
+        // Use scoper timer to benchmark time for pushing 2 commands
+        {
+            tt::ScopedTimer timer("AsyncCommandQueue");
+            EnqueueProgram(device->command_queue(), program, false);
+            Finish(device->command_queue());
+        }
     }
 }
 
