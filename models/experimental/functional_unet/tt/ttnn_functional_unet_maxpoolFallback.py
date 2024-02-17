@@ -32,7 +32,6 @@ class UNet:
         # Relu and bn1 are fused with conv1
         out = self.c1(x)
 
-        # Relu and bn2 are fused with conv1
         out = self.c1_2(out)
         out = self.c2(out)
         out = self.c2_2(out)
@@ -42,63 +41,10 @@ class UNet:
         out = self.c4_2(out)
         out = self.bnc(out)
         out = self.bnc_2(out)
-        # out = self.p1(out)
-
-        # out = ttnn.add(out, identity, memory_config=ttnn.get_memory_config(out))
-        # out = ttnn.to_memory_config(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # out = self.relu(out)
 
         return out
 
     def torch_call(self, torch_input_tensor):
-        #        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        #        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
-        #
-        #        input_tensor = self.c1.copy_input_to_device(input_tensor)
-        #        output_tensor = self(input_tensor)
-        #        output_tensor = self.bnc_2.copy_output_from_device(output_tensor)
-        #        # output_tensor = self.c1_2.copy_output_from_device(input_tensor)
-        #
-        #        output_tensor = ttnn.to_torch(output_tensor)
-        #        print("the shape before change is: ", output_tensor.size())
-        #        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        #        print("the shape after change is: ", output_tensor.size())
-        #        print(" torch_input_tensor.shape: ", torch_input_tensor.shape)
-        #        # output_tensor = torch.reshape(output_tensor, torch_input_tensor.shape)
-        #        output_tensor = output_tensor.to(torch_input_tensor.dtype)
-        #
-        #
-        #        #pt_nn = torch.nn.MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, return_indices=False, ceil_mode=False)
-        #        pt_nn = torch.nn.MaxPool2d(kernel_size=2, stride=2)
-        #        pt_out = pt_nn(output_tensor)
-        #        t0 = ttl.tensor.Tensor(
-        #            output_tensor.reshape(-1).tolist(),
-        #            output_tensor.shape,
-        #            ttl.tensor.DataType.BFLOAT16,
-        #            ttl.tensor.Layout.ROW_MAJOR,
-        #        )
-        #
-        #        device_id = 0
-        #        device = ttnn.open(device_id)
-        #        kernel_size=2
-        #        stride=2
-        #        padding=0
-        #        dilation=1
-        #        return_indices=False
-        #        ceil_mode=False
-        #        t0 = t0.to(device)
-        #        tt_nn = ttl.fallback_ops.MaxPool2d(
-        #            kernel_size,
-        #            stride,
-        #            padding,
-        #            dilation,
-        #            return_indices,
-        #            ceil_mode,
-        #        )
-        #        t1 = tt_nn(t0)
-        #
-        #        output_tensor = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
         input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         input_tensor = self.c1.copy_input_to_device(input_tensor)
@@ -139,7 +85,6 @@ class UNet:
         t1 = tt_nn(t0)
 
         output_tensor = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        print("The size of torch tensor before permute is: ", output_tensor.size())
         output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
         output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
         output_tensor = self.c2.copy_input_to_device(output_tensor)
@@ -150,26 +95,11 @@ class UNet:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-        """
-
-        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
-        input_tensor = self.c1.copy_input_to_device(input_tensor)
-
-        output_tensor = self.c1(input_tensor)
-        output_tensor = self.c1_2(output_tensor)
-        output_tensor = self.c1_2.copy_output_from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
-        """
-
         # fall back maxpool to cpu
         pt_nn = torch.nn.MaxPool2d(kernel_size=2, stride=2)
         # pt_out = pt_nn(output_tensor)
         t0 = ttl.tensor.Tensor(
             output_tensor.reshape(-1).tolist(),
-            # output_tensor.tolist(),
             output_tensor.shape,
             ttl.tensor.DataType.BFLOAT16,
             ttl.tensor.Layout.ROW_MAJOR,
@@ -183,9 +113,6 @@ class UNet:
         return_indices = False
         ceil_mode = False
         t0 = t0.to(device)
-
-        # t0_shape = t0.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().size()
-        # print("t0_shape: ", t0_shape)
 
         tt_nn = ttl.fallback_ops.MaxPool2d(
             kernel_size,
