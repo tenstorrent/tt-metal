@@ -370,6 +370,7 @@ def rmsnorm(
 
     return ttnn_tensor_to_torch(t2, output_mem_config)
 
+
 def transformer_concatenate_heads(
     x,
     *args,

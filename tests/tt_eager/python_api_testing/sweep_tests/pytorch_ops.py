@@ -1359,6 +1359,7 @@ def ttnn_rmsnorm(x, y, *args, **kwargs):
     torch_output_tensor = rms_norm(x, y)
     return torch_output_tensor
 
+
 def transformer_concatenate_heads(x, *args, **kwargs):
     torch_output_tensor = ttnn.transformer._torch_concatenate_heads(x)
 
