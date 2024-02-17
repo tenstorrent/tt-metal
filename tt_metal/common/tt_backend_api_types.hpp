@@ -47,7 +47,7 @@ enum class DataFormat : uint8_t {
  */
 inline bool is_integer_format(DataFormat format) {
     return (
-        (format == DataFormat::Int32) || (format == DataFormat::Int8) ||
+        (format == DataFormat::UInt32) || (format == DataFormat::Int8) ||
         (format == DataFormat::UInt16) || (format == DataFormat::UInt8) ||
         (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
