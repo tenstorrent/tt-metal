@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
+          # {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
           {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"], machine-type: "bare_metal"},
         ]
     env:
