@@ -1691,3 +1691,12 @@ def gen_ttnn_layernorm_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_ttnn_rmsnorm_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
