@@ -1215,7 +1215,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-    TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
+    TT_ASSERT(
+        num_blocks_total <= num_cores_x * num_cores_y,
+        "Number of blocks exceeds number of cores: {} blocks > {} cores",
+        num_blocks_total,
+        num_cores_x * num_cores_y);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup

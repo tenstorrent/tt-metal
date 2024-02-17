@@ -8,10 +8,6 @@ from enum import Enum
 import tt_lib as ttl
 import ttnn
 
-
-Device = ttl.device.Device
-
-
 DataType = ttl.tensor.DataType
 uint16 = DataType.UINT16
 uint32 = DataType.UINT32

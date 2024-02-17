@@ -159,9 +159,11 @@ def trace_ttnn_operation(pretty_operation_name, operation):
             )
 
         output_tensors = [
-            torchtrail.tracer.TracedTorchTensor(tensor, graph=graph, node=node, output_index=output_index)
-            if isinstance(tensor, torch.Tensor)
-            else TracedTTNNTensor(tensor, graph=graph, node=node, output_index=output_index)
+            (
+                torchtrail.tracer.TracedTorchTensor(tensor, graph=graph, node=node, output_index=output_index)
+                if isinstance(tensor, torch.Tensor)
+                else TracedTTNNTensor(tensor, graph=graph, node=node, output_index=output_index)
+            )
             for output_index, tensor in enumerate(output_tensors)
         ]
         return postprocess_return_value(operation_return_type, output_tensors)
@@ -169,7 +171,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
     return call_wrapper
 
 
-def visualize(*args, file_name, **kwargs):
+def visualize(*args, file_name=None, **kwargs):
     if shutil.which("dot") is None:
         logger.warning("Graphviz is not installed. Skipping visualization.")
         return
