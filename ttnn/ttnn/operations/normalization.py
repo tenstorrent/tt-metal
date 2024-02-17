@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, Tuple
+from typing import Optional, Union
 
 import ttnn
 
@@ -255,7 +255,7 @@ def group_norm(
     bias: Optional[ttnn.Tensor] = None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
-    core_grid: Optional[Tuple[int, int]] = None,
+    core_grid: Optional[Union[ttnn.CoreGrid, ttnn.CoreRange]] = None,
 ) -> ttnn.Tensor:
     r"""
     group_norm(input_tensor: ttnn.Tensor, *, num_groups: int, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
@@ -263,6 +263,9 @@ def group_norm(
     Compute group_norm over :attr:`input_tensor`.
 
     """
+
+    if core_grid is not None and not isinstance(core_grid, ttnn.CoreGrid):
+        raise RuntimeError("core_grid must be a valid CoreGrid object")
 
     if ttnn.is_sharded(input_tensor):
         if input_tensor.shape.rank != 4:
@@ -294,7 +297,7 @@ def group_norm(
                 bias.value,
                 output_mem_config=memory_config,
                 program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
                     out_data_format=output_dtype,
                     inplace=False
                     if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
@@ -309,7 +312,7 @@ def group_norm(
                 weight.value,
                 output_mem_config=memory_config,
                 program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
                     out_data_format=output_dtype,
                     inplace=False
                     if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
@@ -324,7 +327,7 @@ def group_norm(
                 bias.value,
                 output_mem_config=memory_config,
                 program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
                     out_data_format=output_dtype,
                     inplace=False
                     if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
@@ -338,7 +341,7 @@ def group_norm(
                 epsilon,
                 output_mem_config=memory_config,
                 program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
                     out_data_format=output_dtype,
                     inplace=False
                     if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)

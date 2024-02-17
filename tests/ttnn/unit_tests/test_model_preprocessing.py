@@ -4,6 +4,9 @@
 
 import pytest
 
+import contextlib
+import random
+
 import torch
 import torchvision
 
@@ -19,6 +22,13 @@ from ttnn.model_preprocessing import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
+
+
+@contextlib.contextmanager
+def use_ttnn_model_cache():
+    ttnn.TTNN_ENABLE_MODEL_CACHE = True
+    yield
+    ttnn.TTNN_ENABLE_MODEL_CACHE = False
 
 
 @skip_for_wormhole_b0()
@@ -460,7 +470,7 @@ def test_conv2d_with_batch_norm2d(device, use_conv_bias):
 
 
 @skip_for_wormhole_b0()
-def test_resnet(device):
+def test_resnet_with_module_cache(device):
     torch.manual_seed(0)
 
     torch_model = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1).eval()
@@ -497,50 +507,56 @@ def test_resnet(device):
 
         return parameters
 
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        reader_patterns_cache=reader_patterns_cache,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
+    random_value = random.randint(0, 100000)
 
-    assert "conv1" in parameters
-    assert "maxpool" in parameters
+    with use_ttnn_model_cache():
+        for _ in range(2):
+            reader_patterns_cache = {}
+            parameters = preprocess_model(
+                model_name="resnet18",
+                version=f"{random_value}",
+                initialize_model=lambda: torch_model,
+                run_model=lambda model: model(torch_input_tensor),
+                reader_patterns_cache=reader_patterns_cache,
+                custom_preprocessor=custom_preprocessor,
+                device=device,
+            )
 
-    assert "layer1" in parameters
-    assert 0 in parameters["layer1"]
-    assert "conv1" in parameters["layer1"][0]
-    assert "conv2" in parameters["layer1"][0]
-    assert 1 in parameters["layer1"]
-    assert "conv1" in parameters["layer1"][1]
-    assert "conv2" in parameters["layer1"][1]
+        assert "conv1" in parameters
+        assert "maxpool" in parameters
 
-    assert "layer2" in parameters
-    assert 0 in parameters["layer3"]
-    assert "conv1" in parameters["layer2"][0]
-    assert "conv2" in parameters["layer2"][0]
-    assert 1 in parameters["layer2"]
-    assert "conv1" in parameters["layer2"][1]
-    assert "conv2" in parameters["layer2"][1]
+        assert "layer1" in parameters
+        assert 0 in parameters["layer1"]
+        assert "conv1" in parameters["layer1"][0]
+        assert "conv2" in parameters["layer1"][0]
+        assert 1 in parameters["layer1"]
+        assert "conv1" in parameters["layer1"][1]
+        assert "conv2" in parameters["layer1"][1]
 
-    assert "layer3" in parameters
-    assert 0 in parameters["layer3"]
-    assert "conv1" in parameters["layer3"][0]
-    assert "conv2" in parameters["layer3"][0]
-    assert 1 in parameters["layer3"]
-    assert "conv1" in parameters["layer3"][1]
-    assert "conv2" in parameters["layer3"][1]
+        assert "layer2" in parameters
+        assert 0 in parameters["layer3"]
+        assert "conv1" in parameters["layer2"][0]
+        assert "conv2" in parameters["layer2"][0]
+        assert 1 in parameters["layer2"]
+        assert "conv1" in parameters["layer2"][1]
+        assert "conv2" in parameters["layer2"][1]
 
-    assert "layer4" in parameters
-    assert 0 in parameters["layer4"]
-    assert "conv1" in parameters["layer4"][0]
-    assert "conv2" in parameters["layer4"][0]
-    assert 1 in parameters["layer4"]
-    assert "conv1" in parameters["layer4"][1]
-    assert "conv2" in parameters["layer4"][1]
+        assert "layer3" in parameters
+        assert 0 in parameters["layer3"]
+        assert "conv1" in parameters["layer3"][0]
+        assert "conv2" in parameters["layer3"][0]
+        assert 1 in parameters["layer3"]
+        assert "conv1" in parameters["layer3"][1]
+        assert "conv2" in parameters["layer3"][1]
 
-    assert "fc" in parameters
-    assert "weight" in parameters["fc"]
-    assert "bias" in parameters["fc"]
+        assert "layer4" in parameters
+        assert 0 in parameters["layer4"]
+        assert "conv1" in parameters["layer4"][0]
+        assert "conv2" in parameters["layer4"][0]
+        assert 1 in parameters["layer4"]
+        assert "conv1" in parameters["layer4"][1]
+        assert "conv2" in parameters["layer4"][1]
+
+        assert "fc" in parameters
+        assert "weight" in parameters["fc"]
+        assert "bias" in parameters["fc"]

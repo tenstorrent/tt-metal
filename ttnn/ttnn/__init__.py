@@ -48,6 +48,9 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
+    CoreGrid,
+    CoreRange,
+    ShardShape,
     Shape,
     Tensor,
 )

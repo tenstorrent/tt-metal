@@ -229,7 +229,9 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=(8, 8))
+    output = ttnn.matmul(
+        input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8)
+    )
 
     output = ttnn.to_torch(output)
 
@@ -239,7 +241,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 @skip_for_wormhole_b0()
 def test_interleaved_to_block_sharded_matmul(device):
     torch.manual_seed(0)
-    grid_size = (5, 8)
+    grid_size = ttnn.CoreGrid(y=5, x=8)
 
     M = 1600
     K = 256
@@ -259,7 +261,7 @@ def test_interleaved_to_block_sharded_matmul(device):
     )
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
-        grid_size, [M // grid_size[0], K // grid_size[1]], ttnn.ShardStrategy.BLOCK
+        grid_size, ttnn.ShardShape(y=M // grid_size.y, x=K // grid_size.x), ttnn.ShardStrategy.BLOCK
     )
     input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_mem_config)
 
@@ -274,7 +276,7 @@ def test_interleaved_to_block_sharded_matmul(device):
 @skip_for_wormhole_b0()
 def test_height_sharded_matmul(device):
     torch.manual_seed(0)
-    grid_size = (8, 12)
+    grid_size = ttnn.CoreGrid(8, 12)
     B = 12
     H = 16
     M = 384
@@ -295,9 +297,9 @@ def test_height_sharded_matmul(device):
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    num_cores = grid_size[0] * grid_size[1]
+    num_cores = grid_size.num_cores
     sharded_mem_config = ttnn.create_sharded_memory_config(
-        grid_size, [B * H * M // num_cores, K], ttnn.ShardStrategy.HEIGHT
+        grid_size, ttnn.ShardShape(y=B * H * M // num_cores, x=K), ttnn.ShardStrategy.HEIGHT
     )
 
     input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_mem_config)
@@ -331,16 +333,15 @@ def test_matmul_with_core_grid(device, batch_size):
             output_tensor = ttnn.matmul(
                 input_tensor_a,
                 input_tensor_b,
-                core_grid=(batch_size, 6),
+                core_grid=ttnn.CoreGrid(y=batch_size, x=12),
             )
         assert "ttnn.matmul: ttl.operations.primary.matmul failed" in str(exception.value)
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            core_grid=(batch_size, 6),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=12),
         )
 
         output_tensor = ttnn.to_torch(output_tensor)
-
         assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

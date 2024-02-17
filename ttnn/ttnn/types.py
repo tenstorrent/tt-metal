@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from enum import Enum
 
 import tt_lib as ttl
@@ -38,6 +39,28 @@ Shape = ttnn._ttnn.types.Shape
 
 
 Tensor = ttnn._ttnn.types.Tensor
+
+
+@dataclasses.dataclass
+class CoreGrid:
+    y: int
+    x: int
+
+    @property
+    def num_cores(self):
+        return self.y * self.x
+
+
+@dataclasses.dataclass
+class CoreRange:
+    start: CoreGrid
+    end: CoreGrid
+
+
+@dataclasses.dataclass
+class ShardShape:
+    y: int
+    x: int
 
 
 class ShardStrategy(Enum):
