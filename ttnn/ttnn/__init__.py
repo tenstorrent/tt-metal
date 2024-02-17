@@ -29,7 +29,6 @@ from ttnn._ttnn import TTNN_ENABLE_LOGGING
 
 from ttnn.types import (
     TILE_SIZE,
-    Device,
     DataType,
     uint16,
     uint32,
@@ -55,6 +54,8 @@ from ttnn.types import (
     Tensor,
 )
 
+from ttnn.device import Device, open, close
+
 from ttnn.core import (
     has_storage_type_of,
     has_padding,
@@ -75,8 +76,6 @@ from ttnn.decorators import (
 )
 
 import ttnn.ttl as ttl
-
-from ttnn.device import open, close
 
 from ttnn.program_cache import (
     enable_program_cache,
@@ -101,6 +100,7 @@ from ttnn.operations.core import (
 from ttnn.operations.matmul import (
     matmul,
     linear,
+    create_matmul_1d_systolic_array_config,
 )
 
 from ttnn.operations.others import (

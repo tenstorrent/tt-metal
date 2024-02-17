@@ -4,6 +4,17 @@
 
 import tt_lib as ttl
 
+import ttnn
+
+
+def get_device_core_grid(device):
+    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+
+
+Device = ttl.device.Device
+Device.core_grid = property(get_device_core_grid)
+
 DEVICES = {}
 
 

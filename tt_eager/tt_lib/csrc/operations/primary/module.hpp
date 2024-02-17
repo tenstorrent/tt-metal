@@ -40,9 +40,12 @@ void py_module(py::module& m_primary) {
     auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
     transformers::py_module(m_transformers);
 
-    py::class_<MatmulProgramConfig>(m_primary, "MatmulProgramConfig");
+    py::class_<MatmulProgramConfig>(m_primary, "MatmulProgramConfig")
+        .def("__repr__", [](const MatmulProgramConfig& config) { return fmt::format("{}", config); });
 
-    py::class_<MatmulDefaultProgramConfig>(m_primary, "MatmulDefaultProgramConfig").def(py::init<>());
+    py::class_<MatmulDefaultProgramConfig>(m_primary, "MatmulDefaultProgramConfig")
+        .def(py::init<>())
+        .def("__repr__", [](const MatmulDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<MatmulMultiCoreReuseProgramConfig>(m_primary, "MatmulMultiCoreReuseProgramConfig")
         .def(
@@ -53,10 +56,20 @@ void py_module(py::module& m_primary) {
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert());
+            py::arg("per_core_N").noconvert())
+        .def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) { return fmt::format("{}", config); });
+
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>>(),
+            py::init<
+                CoreCoord,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                bool,
+                std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -65,13 +78,24 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("transpose_mcast").noconvert(),
-            py::arg("fused_activation")
-        )
-        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation);
+            py::arg("fused_activation"))
+        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 
     py::class_<MatmulMultiCoreReuseMultiCast1DProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCast1DProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>, bool>(),
+            py::init<
+                CoreCoord,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                bool,
+                std::optional<UnaryWithParam>,
+                bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -82,7 +106,10 @@ void py_module(py::module& m_primary) {
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
             py::arg("mcast_in0").noconvert())
-        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation);
+        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 
     m_primary.def(
         "get_mcast_1d_config",
