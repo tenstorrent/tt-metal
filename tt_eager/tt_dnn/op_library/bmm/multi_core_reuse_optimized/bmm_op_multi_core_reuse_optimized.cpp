@@ -123,24 +123,12 @@ operation::ProgramWithCallbacks create_program(
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
-
-    bool split_half = num_cores_c > 2 && !in0_is_sharded;
-    uint32_t half_core = split_half ? (num_cores_c) / 2 : num_cores_c - 1;
+    bool use_right_half_grid = num_cores_c > 1;
+    uint32_t left_half_grid_x = use_right_half_grid ? num_cores_c / 2 : 1;
 
     CoreRange left_half{
         {(std::size_t) start_core_x, (std::size_t) start_core_y},
-        {(std::size_t) start_core_x + half_core, (std::size_t) start_core_y + num_cores_r - 1}};
-
-    CoreRange right_half{
-        {0, 0},
-        {0, 0}};
-
-    if (split_half) {
-        right_half = {
-            {(std::size_t) start_core_x + half_core + 1, (std::size_t) start_core_y},
-            {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}
-        };
-    }
+        {(std::size_t) start_core_x + left_half_grid_x - 1, (std::size_t) start_core_y + num_cores_r - 1}};
 
     // Compile time args
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -185,7 +173,11 @@ operation::ProgramWithCallbacks create_program(
     // right half
     KernelHandle mm_kernel_in0_reader_other_noc_setup_id = mm_kernel_in0_reader_id;
     KernelHandle mm_kernel_in1_reader_writer_other_noc_setup_id = mm_kernel_in1_reader_writer_id;
-    if (split_half) {
+    if (use_right_half_grid) {
+        CoreRange right_half{
+            {(std::size_t) start_core_x + left_half_grid_x, (std::size_t) start_core_y},
+            {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+
         mm_kernel_in0_reader_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
@@ -394,7 +386,7 @@ operation::ProgramWithCallbacks create_program(
         mm_writer_args[14] = num_blocks_written * num_tiles_per_block_out; // out_tensor_start_tile_id
 
         // left half
-        if (core_idx_x <= half_core) {
+        if (core_idx_x < left_half_grid_x) {
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_id, core, mm_writer_args);
             reader_kernel_ids.push_back(mm_kernel_in0_reader_id);

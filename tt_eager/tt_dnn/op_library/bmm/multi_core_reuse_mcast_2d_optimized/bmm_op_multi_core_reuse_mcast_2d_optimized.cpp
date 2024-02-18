@@ -943,7 +943,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    if (core_range.x > 1 && core_range.y > 1) {
+    if (core_range.x > 1 and core_range.y > 1) {
         return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
             device,
             math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
@@ -959,12 +959,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
             in0_data_format, in1_data_format, bias_data_format, output_data_format,
             a.memory_config().is_sharded(), output.memory_config().is_sharded()
         );
-    } else if (core_range.x > 1) {
+    } else if (core_range.x > 1 or core_range.y > 1) {
         // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp
-        TT_ASSERT(false, "mcast_in0 is not implemented yet.");
+        TT_ASSERT(false, "1D mcast for in0 or in1 is not implemented yet.");
     } else {
-        // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp
-        TT_ASSERT(false, "mcast_in1 is not implemented yet.");
+        TT_ASSERT(false, "Grid is invalid for mcast matmul!");
     }
 
     return {};

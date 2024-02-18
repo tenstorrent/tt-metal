@@ -29,104 +29,104 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-     Tensor(const Storage &storage, const Shape &shape, DataType dtype, Layout layout);
+        Tensor(const Storage &storage, const Shape &shape, DataType dtype, Layout layout);
 
-     Tensor(const Tensor &other) = default;
-     Tensor &operator=(const Tensor &other) = default;
+        Tensor(const Tensor &other) = default;
+        Tensor &operator=(const Tensor &other) = default;
 
-     Tensor(Tensor &&other) = default;
-     Tensor &operator=(Tensor &&other) = default;
+        Tensor(Tensor &&other) = default;
+        Tensor &operator=(Tensor &&other) = default;
 
-     ~Tensor();
+        ~Tensor();
 
-     void deallocate(bool force = false);
+        void deallocate(bool force = false);
 
-     Tensor to(
-         Device *target_device,
-         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        Tensor to(
+            Device *target_device,
+            const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
-     Tensor to(Layout target_layout) const;
+        Tensor to(Layout target_layout) const;
 
-     Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
+        Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
 
-     Tensor cpu(bool blocking = true) const;
+        Tensor cpu(bool blocking = true) const;
 
-     Tensor cpu_sharded() const;
+        Tensor cpu_sharded() const;
 
-     Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
+        Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
 
-     Tensor pad_to_tile(float pad_value) const;
+        Tensor pad_to_tile(float pad_value) const;
 
-     Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
+        Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
 
-     const std::string write_to_string(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
-     void print(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
+        const std::string write_to_string(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
+        void print(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
 
-     Tensor extract_shard(const CoreCoord &core) const;
-     Tensor extract_shard(const uint32_t &core_id) const;
+        Tensor extract_shard(const CoreCoord &core) const;
+        Tensor extract_shard(const uint32_t &core_id) const;
 
-     // ======================================================================================
-     //                                  Low Level APIs
-     // ======================================================================================
-     Tensor reshape(int N, int C, int H, int W) const;
-     Tensor reshape(const Shape &new_shape) const;
+        // ======================================================================================
+        //                                  Low Level APIs
+        // ======================================================================================
+        Tensor reshape(int N, int C, int H, int W) const;
+        Tensor reshape(const Shape &new_shape) const;
 
-     // ======================================================================================
-     //                                      Getters
-     // ======================================================================================
-     const Storage &storage() const;
-     const Shape &shape() const { return this->shape_; }
-     DataType dtype() const { return this->dtype_; }
-     Layout layout() const { return this->layout_; }
+        // ======================================================================================
+        //                                      Getters
+        // ======================================================================================
+        const Storage &storage() const;
+        const Shape &shape() const { return this->shape_; }
+        DataType dtype() const { return this->dtype_; }
+        Layout layout() const { return this->layout_; }
 
-     // ======================================================================================
-     //                                      Extra Helper Functions
-     // ======================================================================================
+        // ======================================================================================
+        //                                      Extra Helper Functions
+        // ======================================================================================
 
-     StorageType storage_type() const;
-     const Shape strides() const;
-     uint32_t volume() const;
+        StorageType storage_type() const;
+        const Shape strides() const;
+        uint32_t volume() const;
 
-     bool is_allocated() const;
+        bool is_allocated() const;
 
-     // TODO(arakhmati): clean up the methods below
-     Buffer *buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
-     DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->storage_).buffer; }
+        // TODO(arakhmati): clean up the methods below
+        Buffer *buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
+        DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->storage_).buffer; }
 
-     Device *device() const {
-         auto buffer = this->buffer();
-         if (buffer == nullptr)
-             TT_THROW("Cannot get the device from a tensor without an allocated buffer");
-         return buffer->device();
-     }
-     const MemoryConfig memory_config() const {
-         return std::visit(
-             [](const auto &storage) -> MemoryConfig {
-                 using T = std::decay_t<decltype(storage)>;
-                 if constexpr (std::is_same_v<T, DeviceStorage>) {
-                     return storage.memory_config();
-                 } else {
-                     TT_THROW("MemoryConfig can only be obtained for a tensor with DeviceStorage");
-                 }
-             },
-             this->storage_);
-     }
-     const std::optional<ShardSpec> shard_spec() const { return this->memory_config().shard_spec; }
+        Device *device() const {
+            auto buffer = this->buffer();
+            if (buffer == nullptr)
+                TT_THROW("Cannot get the device from a tensor without an allocated buffer");
+            return buffer->device();
+        }
+        const MemoryConfig memory_config() const {
+            return std::visit(
+                [](const auto &storage) -> MemoryConfig {
+                    using T = std::decay_t<decltype(storage)>;
+                    if constexpr (std::is_same_v<T, DeviceStorage>) {
+                        return storage.memory_config();
+                    } else {
+                        TT_THROW("MemoryConfig can only be obtained for a tensor with DeviceStorage");
+                    }
+                },
+                this->storage_);
+        }
+        const std::optional<ShardSpec> shard_spec() const { return this->memory_config().shard_spec; }
 
-     const bool is_sharded() const { return this->memory_config().is_sharded(); }
+        const bool is_sharded() const { return this->storage_type() == StorageType::DEVICE ? this->memory_config().is_sharded() : false; }
 
-     // Size in bytes of a single element held in tensor
-     uint32_t element_size() const;
+        // Size in bytes of a single element held in tensor
+        uint32_t element_size() const;
 
-     static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout");
-     const auto attribute_values() const {
-         return std::make_tuple(
-             std::cref(this->storage_), std::cref(this->shape_), std::cref(this->dtype_), std::cref(this->layout_));
-     }
+        static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout");
+        const auto attribute_values() const {
+            return std::make_tuple(
+                std::cref(this->storage_), std::cref(this->shape_), std::cref(this->dtype_), std::cref(this->layout_));
+        }
 
-     std::vector<uint32_t> host_page_ordering();
+        std::vector<uint32_t> host_page_ordering();
 
-     const ttnn::Shape ttnn_shape() const { return ttnn::Shape(this->shape_); }
+        const ttnn::Shape ttnn_shape() const { return ttnn::Shape(this->shape_); }
 
     private:
      Storage storage_;
