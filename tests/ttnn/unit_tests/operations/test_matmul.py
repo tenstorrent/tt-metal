@@ -379,9 +379,9 @@ def test_matmul_with_core_grid(device, batch_size):
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("m_size", [32, 64])
+@pytest.mark.parametrize("m_size", [31, 63])
 @pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("n_size", [1023, 2047])
 def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 
@@ -393,8 +393,8 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.create_matmul_1d_systolic_array_config(
-        input_shape_a=input_tensor_a.shape,
-        input_shape_b=input_tensor_b.shape,
+        input_shape_a=input_tensor_a.shape.with_tile_padding(),
+        input_shape_b=input_tensor_b.shape.with_tile_padding(),
         max_core_grid=input_tensor_a.device.core_grid,
     )
 
@@ -409,9 +409,9 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("m_size", [32, 64])
-@pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("m_size", [30, 61])
+@pytest.mark.parametrize("k_size", [1023, 2048])
+@pytest.mark.parametrize("n_size", [1021, 2048])
 def test_matmul_with_argument_for_using_1D_systolic_array_set_to_true(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 

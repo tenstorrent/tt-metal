@@ -112,8 +112,8 @@ def create_matmul_1d_systolic_array_config(
     if max_core_grid is not None and not isinstance(max_core_grid, ttnn.CoreGrid):
         raise RuntimeError(f"core_grid must be a valid CoreGrid object")
 
-    *batch_shape_a, m_size, k_size = input_shape_a
-    *batch_shape_b, _, n_size = input_shape_b
+    *batch_shape_a, m_size, k_size = input_shape_a.with_tile_padding()
+    *batch_shape_b, _, n_size = input_shape_b.with_tile_padding()
     batch_size = math.prod(batch_shape_a)
     input_b_is_batched = math.prod(batch_shape_b) > 1
 
@@ -158,8 +158,14 @@ def create_matmul_1d_systolic_array_config(
 def _get_matmul_program_config(
     *, operation_name, input_tensor_a, input_tensor_b, core_grid, activation, use_1d_systolic_array
 ):
-    *batch_shape_a, m_size, k_size = input_tensor_a.shape
-    *batch_shape_b, _, n_size = input_tensor_b.shape
+    *batch_shape_a, m_size, k_size = input_tensor_a.shape.with_tile_padding()
+    *batch_shape_b, _, n_size = input_tensor_b.shape.with_tile_padding()
+    *_, intended_k_size_of_a = input_tensor_a.shape
+    *_, intended_k_size_of_b, intended_n_size = input_tensor_b.shape
+
+    if intended_k_size_of_a != intended_k_size_of_b:
+        raise RuntimeError(f"The k dimension does not match between tensors")
+
     batch_size = math.prod(batch_shape_a)
     input_b_is_batched = math.prod(batch_shape_b) > 1
 
