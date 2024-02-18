@@ -42,11 +42,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
             core,
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::RECEIVER,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
         // Run the program
         log_info(
