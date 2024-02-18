@@ -594,7 +594,11 @@ Program CreateProgram(){
     return Program();
 }
 
-KernelHandle CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, experimental::EthernetConfig> &config) {
+KernelHandle CreateKernel(
+    Program &program,
+    const std::string &file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
     return std::visit( [&](auto&& cfg) -> KernelHandle
                         {
                             CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
@@ -606,8 +610,7 @@ KernelHandle CreateKernel(Program &program, const std::string &file_name, const 
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
                                 kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
-                            }
-                            else if constexpr (std::is_same_v<T, experimental::EthernetConfig>) {
+                            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
                                 kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
                             }
                             return detail::AddKernel(program, kernel);
