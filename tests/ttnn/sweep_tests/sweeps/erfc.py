@@ -44,17 +44,14 @@ def run(
 ) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
-    low = -0.1
-    high = 0.1
-
-    torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
-    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor)
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_output_tensor = torch.erfc(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
     )
 
-    output_tensor = ttnn.gelu(input_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.erfc(input_tensor, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.999)

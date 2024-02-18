@@ -119,6 +119,15 @@ Pointwise Math
    ttnn/log2
    ttnn/multigammaln
    ttnn/neg
+   ttnn/abs
+   ttnn/cbrt
+   ttnn/deg2rad
+   ttnn/digamma
+   ttnn/erf
+   ttnn/erfc
+   ttnn/erfinv
+   ttnn/exp2
+   ttnn/expm1
 
 Activation
 ==========
@@ -144,6 +153,7 @@ Activation
    ttnn/softshrink
    ttnn/softsign
    ttnn/swish
+   ttnn/hardsigmoid
 
 Reduction
 =========

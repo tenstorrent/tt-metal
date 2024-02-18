@@ -23,6 +23,7 @@ __all__ = []
 def register_ttl_activation_function_unary(name, ttl_activation_function, op_name):
     def _torch_activation(input_tensor: ttnn.Tensor, **_):
         name_to_torch_function = {
+            "hardsigmoid": F.hardsigmoid,
             "hardswish": F.hardswish,
             "hardtanh": F.hardtanh,
             "log_sigmoid": F.logsigmoid,
@@ -278,6 +279,7 @@ def register_ttl_activation_function_with_two_float(name, ttl_activation_functio
 
 
 TTL_ACTIVATION_FUNCTIONS_UNARY = [
+    ("hardsigmoid", ttl.tensor.hardsigmoid, "hardsigmoid"),
     ("hardswish", ttl.tensor.hardswish, "hardswish"),
     ("hardtanh", ttl.tensor.hardtanh, "hardtanh"),
     ("log_sigmoid", ttl.tensor.log_sigmoid, "log sigmoid"),
