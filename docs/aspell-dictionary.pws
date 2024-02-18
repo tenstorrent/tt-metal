@@ -1,4 +1,4 @@
-personal_ws-1.1 en 490
+personal_ws-1.1 en 492
 ABI
 ADDI
 API
@@ -191,6 +191,7 @@ brisc
 cachable
 cb
 cbid
+cbrt
 cd
 cin
 ckernel
@@ -225,6 +226,7 @@ dest
 dev
 devs
 dfb
+digamma
 dir
 dnn
 doxygendefine

@@ -60,6 +60,18 @@ def test_relu6(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+def test_gelu(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.gelu, F.gelu)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_hardsigmoid(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.hardsigmoid, F.hardsigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_sigmoid(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.sigmoid, torch.sigmoid)
 

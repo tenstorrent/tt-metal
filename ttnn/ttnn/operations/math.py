@@ -33,6 +33,15 @@ def register_ttl_math_op_function_unary(name, ttl_math_op_function, op_name):
             "log2": torch.log2,
             "multigammaln": torch_multigammaln,
             "neg": torch.neg,
+            "abs": torch.abs,
+            "cbrt": torch_cbrt,
+            "deg2rad": torch.deg2rad,
+            "digamma": torch.digamma,
+            "erf": torch.erf,
+            "erfc": torch.erfc,
+            "erfinv": torch.erfinv,
+            "exp2": torch.exp2,
+            "expm1": torch.expm1,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
@@ -107,11 +116,24 @@ TTL_MATH_OP_FUNCTIONS_UNARY = [
     ("log2", ttl.tensor.log2, "log2"),
     ("multigammaln", ttl.tensor.multigammaln, "multigammaln"),
     ("neg", ttl.tensor.neg, "neg"),
+    ("abs", ttl.tensor.abs, "abs"),
+    ("cbrt", ttl.tensor.cbrt, "cbrt"),
+    ("deg2rad", ttl.tensor.deg2rad, "deg2rad"),
+    ("digamma", ttl.tensor.digamma, "digamma"),
+    ("erf", ttl.tensor.erf, "erf"),
+    ("erfc", ttl.tensor.erfc, "erfc"),
+    ("erfinv", ttl.tensor.erfinv, "erfinv"),
+    ("exp2", ttl.tensor.exp2, "exp2"),
+    ("expm1", ttl.tensor.expm1, "expm1"),
 ]
 
 
 for math_op_function_name, ttl_math_op_function, op_name in TTL_MATH_OP_FUNCTIONS_UNARY:
     register_ttl_math_op_function_unary(math_op_function_name, ttl_math_op_function, op_name)
+
+
+def torch_cbrt(x, *args, **kwargs):
+    return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
 
 
 def torch_multigammaln(x, *args, **kwargs):
