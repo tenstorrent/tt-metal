@@ -539,6 +539,37 @@ std::vector<Tensor> hypot_bw(const Tensor& grad, const Tensor& input, const Tens
     return operation::decorate_as_composite(__func__, _hypot_bw)(grad, input, other, output_mem_config);
 }
 
+//bw(expm1) = grad * expm1(input) + 1
+std::vector<Tensor> _expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor eresult = expm1(input, output_mem_config);
+    Tensor rp1 = add1(eresult , output_mem_config);
+    Tensor result = mul(grad, rp1, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> expm1_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _expm1_bw)(grad, input, output_mem_config);
+}
+
+
+// #  bw (exp2) = grad * exp2(input) * M_LN2
+// # M_LN2 = 0.693147180559945309417
+std::vector<Tensor> _exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor exp_result = exp2(input, output_mem_config);
+    exp_result = mul_unary(exp_result, M_LN2, output_mem_config);
+    Tensor result = mul(grad, exp_result, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> exp2_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _exp2_bw)(grad, input, output_mem_config);
+}
+
+
 }//namespace tt_metal
 
 }//namespace tt
