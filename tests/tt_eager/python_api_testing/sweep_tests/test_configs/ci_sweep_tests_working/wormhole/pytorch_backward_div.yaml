@@ -24,7 +24,6 @@ test-list:
         out-buffer-type: ["DRAM", "L1"]
       output-file: backward_div_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
   - div-bw:
       shape:
@@ -50,5 +49,4 @@ test-list:
         out-buffer-type: ["DRAM", "L1"]
       output-file: backward_div_sweep.csv
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
