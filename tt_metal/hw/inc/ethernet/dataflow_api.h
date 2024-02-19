@@ -104,7 +104,7 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
         while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF))
             ;
     }
-    noc_fast_atomic_increment_l1(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
+    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
 }
 
 
