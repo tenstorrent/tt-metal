@@ -130,16 +130,17 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     uint32_t num_pages = this->pages_to_read;
     DeviceCommand command = this->create_buffer_transfer_instruction(dst_address, padded_page_size, num_pages);
 
-    // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
-    // Even when targeting fast dispatch on remote device, commands are tunneled through ethernet to consumer tensix cores
-    constexpr bool cmd_consumer_on_ethernet = false;
-    uint32_t tensix_consumer_data_buffer_size = get_cq_data_buffer_size(cmd_consumer_on_ethernet);
-    uint32_t consumer_cb_num_pages;
-    // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
-    consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
-    // Number of pages that are transferred in one shot from producer to consumer
+    // Commands are tunneled through ethernet to consumer tensix cores for remote fast dispatch
+    bool route_through_ethernet = not device->is_mmio_capable();
+    uint32_t consumer_data_buffer_size = get_cq_data_buffer_size(route_through_ethernet);
+    uint32_t consumer_cb_num_pages = consumer_data_buffer_size / padded_page_size;
     uint32_t producer_consumer_tx_num_pages = 1;
-    if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+    uint32_t producer_consumer_multiple = 1;
+
+    if (route_through_ethernet) {
+        producer_consumer_tx_num_pages = consumer_cb_num_pages;
+        producer_consumer_multiple = get_cq_data_buffer_size(false) / consumer_data_buffer_size;
+    } else if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
         producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
         consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
     }
@@ -148,10 +149,11 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     uint32_t consumer_cb_size = consumer_cb_num_pages * padded_page_size;
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
 
-    uint32_t producer_cb_num_pages = consumer_cb_num_pages;
+    uint32_t producer_cb_num_pages = consumer_cb_num_pages * producer_consumer_multiple;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
 
     if (this->stall) {
+        std::cout << "set stall!" << std::endl;
         command.set_stall();
     }
     command.set_page_size(padded_page_size);
@@ -278,13 +280,18 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
 
     DeviceCommand command = this->create_buffer_transfer_instruction(src_address, padded_page_size, num_pages);
 
-    // Even when targeting fast dispatch on remote device, commands are tunneled through ethernet to consumer tensix cores
-    constexpr bool cmd_consumer_on_ethernet = false;
-    uint32_t tensix_consumer_data_buffer_size = get_cq_data_buffer_size(cmd_consumer_on_ethernet);
+    // Commands are tunneled through ethernet to consumer tensix cores for remote fast dispatch
     bool route_through_ethernet = not device->is_mmio_capable();
-    uint32_t consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
+    uint32_t consumer_data_buffer_size = get_cq_data_buffer_size(route_through_ethernet);
+    uint32_t consumer_cb_num_pages = consumer_data_buffer_size / padded_page_size;
     uint32_t producer_consumer_tx_num_pages = 1;
-    if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+    uint32_t producer_consumer_multiple = 1;
+
+    if (route_through_ethernet) {
+        producer_consumer_tx_num_pages = consumer_cb_num_pages;
+        producer_consumer_multiple = get_cq_data_buffer_size(false) / consumer_data_buffer_size;
+    }
+    else if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
         producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
         consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
     }
@@ -292,7 +299,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
 
     uint32_t consumer_cb_size = consumer_cb_num_pages * padded_page_size;
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
-    uint32_t producer_cb_num_pages = consumer_cb_num_pages;
+    uint32_t producer_cb_num_pages = consumer_cb_num_pages * producer_consumer_multiple;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
     command.set_page_size(padded_page_size);
     command.set_producer_cb_size(producer_cb_size);
@@ -488,6 +495,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     // enqueueing a program immediately
     // after writing it to a buffer
     if (this->stall) {
+        std::cout << "setting stall!" << std::endl;
         command.set_stall();
     }
 
@@ -1085,6 +1093,7 @@ void HWCommandQueue::read_completion_queue() {
 void HWCommandQueue::finish() {
     ZoneScopedN("HWCommandQueue_finish");
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id);
+
     if (tt::llrt::OptionsG.get_test_mode_enabled()) {
         while (this->num_issued_commands > this->num_completed_commands) {
             if (DPrintServerHangDetected()) {

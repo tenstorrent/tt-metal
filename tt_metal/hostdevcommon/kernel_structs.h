@@ -180,6 +180,12 @@ enum class OpCode : uint8_t
 
 };
 
+enum class PullAndPushConfig : uint8_t {
+    LOCAL = 0,                  // fast dispatch only on local chip
+    PUSH_TO_REMOTE = 1,         // read from issue queue and write data to CB on SRC router on issue path
+    REMOTE_PULL_AND_PUSH = 2,   // read from CB on DST router on issue path and push to CB on SRC router on completion path
+    PULL_FROM_REMOTE = 3        // read from CB on DST router on completion path and write to completion queue
+};
 
 constexpr std::uint32_t NUM_MAX_IN_BUFFERS_PER_CORE = HlkOperand::in7 - HlkOperand::in0 + 1;
 constexpr std::uint32_t NUM_MAX_PARAM_BUFFERS_PER_CORE = HlkOperand::param7 - HlkOperand::param0 + 1;

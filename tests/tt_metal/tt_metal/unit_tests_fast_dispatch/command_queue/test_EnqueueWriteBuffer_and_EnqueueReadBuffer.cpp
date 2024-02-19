@@ -113,15 +113,13 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
             EnqueueWriteBuffer(cq, bufa, src, false);
         }
         vector<uint32_t> result;
-        // Finish(cq);
-        // detail::ReadFromBuffer(bufa, result);
-
         if (use_void_star_api) {
             result.resize(buf_size / sizeof(uint32_t));
             EnqueueReadBuffer(cq, bufa, result.data(), true);
         } else {
             EnqueueReadBuffer(cq, bufa, result, true);
         }
+
         EXPECT_EQ(src, result);
     }
     return true;
@@ -291,49 +289,55 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 namespace basic_tests {
 namespace dram_tests {
 
-TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
+TEST_F(CommandQueueSingleCardFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config));
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+    }
 }
 
-TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
-    // for (Device *device : devices_) {
-    TestBufferConfig config = {
-        .num_pages = uint32_t(device_->num_banks(BufferType::DRAM)),
-        .page_size = 2048,
-        .buftype = BufferType::DRAM};
+TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllDramBanks) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        TestBufferConfig config = {
+            .num_pages = uint32_t(device->num_banks(BufferType::DRAM)),
+            .page_size = 2048,
+            .buftype = BufferType::DRAM};
 
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, device_->command_queue(), config));
-    // }
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+    }
 }
 
-TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
+TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr uint32_t num_round_robins = 2;
-
-    // for (Device *device : devices_) {
-    TestBufferConfig config = {
-        .num_pages = num_round_robins * (device_->num_banks(BufferType::DRAM)),
-        .page_size = 2048,
-        .buftype = BufferType::DRAM};
-    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device_, device_->command_queue(), config));
-    // }
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        TestBufferConfig config = {
+            .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
+            .page_size = 2048,
+            .buftype = BufferType::DRAM};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+    }
 }
 
-TEST_F(CommandQueueFixture, Sending131072Pages) {
-    // for (Device *device : devices_) {
+TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         TestBufferConfig config = {
             .num_pages = 131072,
             .page_size = 128,
             .buftype = BufferType::DRAM};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config));
-    // }
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
+    }
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
     }
 }
@@ -343,6 +347,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
     }
 }
@@ -359,6 +364,7 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
 
 TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     for (Device *device : this->devices_) {
+        if (device->is_mmio_capable()) { continue; }
         uint32_t page_size = 2048;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
@@ -378,6 +384,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
 
 TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     for (Device *device : this->devices_) {
+        if (device->is_mmio_capable()) { continue; }
         uint32_t page_size = 2048;
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
@@ -397,6 +404,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
 
     // Using default 75-25 issue and completion queue split
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
         uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
@@ -435,6 +443,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
 TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace2) {
     // Using default 75-25 issue and completion queue split
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
         uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
@@ -473,12 +482,14 @@ namespace l1_tests {
 TEST_F(CommandQueueSingleCardFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
     }
 }
 
 TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1Banks) {
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         auto compute_with_storage_grid = device->compute_with_storage_grid_size();
         TestBufferConfig config = {
             .num_pages = uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
@@ -491,6 +502,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1Banks) {
 
 TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         auto compute_with_storage_grid = device->compute_with_storage_grid_size();
         TestBufferConfig config = {
             .num_pages = 2 * uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
@@ -505,6 +517,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForL1) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
     }
 }
@@ -513,6 +526,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBackToBackNon32BAlignedPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         Buffer bufa(device, 125000, 100, buff_type);
         auto src_a = local_test_functions::generate_arange_vector(bufa.size());
         EnqueueWriteBuffer(device->command_queue(), bufa, src_a, false);
@@ -538,6 +552,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNonblockingReads) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (auto device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         Buffer bufa(device, 2048, 2048, buff_type);
         auto src_a = local_test_functions::generate_arange_vector(bufa.size());
         EnqueueWriteBuffer(device->command_queue(), bufa, src_a, false);
@@ -567,6 +582,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocki
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(
             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(device, device->command_queue(), config));
     }
@@ -577,6 +593,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(
             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<false>(device, device->command_queue(), config));
     }
@@ -589,6 +606,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
     config.num_iterations = 100;
 
     for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         EXPECT_TRUE(
             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(device, device->command_queue(), config));
     }
