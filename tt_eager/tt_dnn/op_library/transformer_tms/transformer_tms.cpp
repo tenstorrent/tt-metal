@@ -278,6 +278,7 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     if (input_tensor_a.is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_a.shard_spec().value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
+        TT_FATAL(input_tensor_a.shard_spec().value().num_cores() == ashape[1], "Q heads must be sharded on number of q heads!");
         auto shard_shape = input_tensor_a.shard_spec().value().shape;
         TT_FATAL(shard_shape[0] == ashape[2]);
         TT_FATAL(shard_shape[1] == ashape[3]);
@@ -285,6 +286,7 @@ void GroupAttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     if (input_tensor_b.is_sharded()) {
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_b.shard_spec().value().orientation == shard_orientation, "Any sharded memory configs must have the same shard orientation as one another!");
+        TT_FATAL(input_tensor_b.shard_spec().value().num_cores() == bshape[0], "KV heads must be sharded on batch!");
         auto shard_shape = input_tensor_b.shard_spec().value().shape;
         TT_FATAL(shard_shape[0] == bshape[1] * bshape[2]);
         TT_FATAL(shard_shape[1] == bshape[3]);
