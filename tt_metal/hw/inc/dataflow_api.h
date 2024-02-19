@@ -1423,7 +1423,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
   */
     DEBUG_STATUS('N', 'S', 'I', 'W');
     DEBUG_SANITIZE_NOC_ADDR(addr, 4);
-    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, addr, incr, 31 /*wrap*/, false /*linked*/);
+    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, addr, NOC_UNICAST_WRITE_VC, incr, 31 /*wrap*/, false /*linked*/);
     DEBUG_STATUS('N', 'S', 'I', 'D');
 }
 

@@ -24,6 +24,7 @@
 #include "noc_addr_ranges_gen.h"
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
+#include "dataflow_api.h"
 
 #include "debug/status.h"
 #include "debug/dprint.h"
@@ -350,7 +351,7 @@ int main() {
         // Notify dispatcher core that it has completed
         if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
             uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-            noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
+            noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
         }
     }
 
