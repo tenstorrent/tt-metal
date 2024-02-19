@@ -21,10 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class Layout {
-    ROW_MAJOR = 0,
-    TILE = 1
-};
+enum class Layout { ROW_MAJOR = 0, TILE = 1 };
 
 enum class DataType {
     BFLOAT16 = 0,
@@ -40,20 +37,12 @@ enum class StorageType {
     BORROWED,  // for storing torch/numpy/etc tensors
 };
 
-
-
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
-
 
 static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 
 struct Padding {
-    enum class PadValue {
-        Any,
-        Zero,
-        Infinity,
-        NegativeInfinity
-    };
+    enum class PadValue { Any, Zero, Infinity, NegativeInfinity };
 
     struct PadDimension {
         std::size_t front;
@@ -67,15 +56,15 @@ struct Padding {
     std::array<PadDimension, MAX_NUM_DIMENSIONS> pad_dimensions_;
     PadValue pad_value_;
 
-    Padding(const Padding&) = default;
-    Padding& operator=(const Padding&) = default;
-    Padding(Padding&&) = default;
-    Padding& operator=(Padding&&) = default;
+    Padding(const Padding &) = default;
+    Padding &operator=(const Padding &) = default;
+    Padding(Padding &&) = default;
+    Padding &operator=(Padding &&) = default;
     ~Padding() = default;
 
     Padding(const std::size_t rank);
     Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value);
-    Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value);
+    Padding(const std::vector<PadDimension> &pad_dimensions, PadValue pad_value);
 
     template <std::size_t Rank>
     Padding(const std::array<std::array<uint32_t, 2>, Rank> pad_dimensions, PadValue pad_value) :
@@ -85,8 +74,8 @@ struct Padding {
         }
     }
 
-    PadDimension& operator[](const std::int64_t index);
-    const PadDimension& operator[](const std::int64_t index) const;
+    PadDimension &operator[](const std::int64_t index);
+    const PadDimension &operator[](const std::int64_t index) const;
 
     PadValue pad_value() const;
 
@@ -94,16 +83,17 @@ struct Padding {
     const auto attribute_values() const {
         return std::make_tuple(std::cref(this->rank_), std::cref(this->pad_dimensions_), std::cref(this->pad_value_));
     }
-    friend std::ostream& operator<<(std::ostream& os, const Padding& padding);
+    friend std::ostream &operator<<(std::ostream &os, const Padding &padding);
 };
 
-inline std::ostream& operator<<(std::ostream& os, const Padding& padding) {
+inline std::ostream &operator<<(std::ostream &os, const Padding &padding) {
     os << "Padding(";
     os << "rank: " << padding.rank_;
     os << ", pad_dimensions: [";
     for (std::size_t i = 0; i < padding.rank_; ++i) {
         os << "{front: " << padding.pad_dimensions_[i].front << ", back: " << padding.pad_dimensions_[i].back << "}";
-        if (i < padding.rank_ - 1) os << ", ";
+        if (i < padding.rank_ - 1)
+            os << ", ";
     }
     os << "]";
     os << ", pad_value: ";
@@ -118,8 +108,8 @@ inline std::ostream& operator<<(std::ostream& os, const Padding& padding) {
     return os;
 }
 
-bool operator==(const Padding&, const Padding&);
-bool operator!=(const Padding&, const Padding&);
+bool operator==(const Padding &, const Padding &);
+bool operator!=(const Padding &, const Padding &);
 
 class Shape {
     std::size_t rank_;
@@ -127,18 +117,18 @@ class Shape {
     Padding padding_;
 
    public:
-    Shape(const Shape&) = default;
-    Shape& operator=(const Shape&) = default;
-    Shape(Shape&&) = default;
-    Shape& operator=(Shape&&) = default;
+    Shape(const Shape &) = default;
+    Shape &operator=(const Shape &) = default;
+    Shape(Shape &&) = default;
+    Shape &operator=(Shape &&) = default;
     ~Shape() = default;
 
     Shape(const std::initializer_list<uint32_t>);
-    Shape(const std::vector<uint32_t>&);
-    Shape(const std::initializer_list<uint32_t>, const Padding&);
-    Shape(const std::vector<uint32_t>&, const Padding&);
+    Shape(const std::vector<uint32_t> &);
+    Shape(const std::initializer_list<uint32_t>, const Padding &);
+    Shape(const std::vector<uint32_t> &, const Padding &);
 
-    explicit Shape(const Shape&, const Padding&);
+    explicit Shape(const Shape &, const Padding &);
 
     template <std::size_t Rank>
     Shape(const std::array<uint32_t, Rank> &shape) : rank_(Rank), dimensions_{}, padding_{Rank} {
@@ -159,13 +149,13 @@ class Shape {
 
     std::size_t rank() const;
 
-    uint32_t& operator[](const std::int64_t index);
-    const uint32_t& operator[](const std::int64_t index) const;
+    uint32_t &operator[](const std::int64_t index);
+    const uint32_t &operator[](const std::int64_t index) const;
 
-    const uint32_t* begin() const;
-    const uint32_t* end() const;
+    const uint32_t *begin() const;
+    const uint32_t *end() const;
 
-    const Padding& padding() const;
+    const Padding &padding() const;
     const Shape without_padding() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
@@ -174,7 +164,7 @@ class Shape {
     const auto attribute_values() const {
         return std::make_tuple(std::cref(this->rank_), std::cref(this->dimensions_), std::cref(this->padding_));
     }
-    friend std::ostream& operator<<(std::ostream& os, const Shape& shape);
+    friend std::ostream &operator<<(std::ostream &os, const Shape &shape);
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
@@ -194,12 +184,12 @@ inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
     return os;
 }
 
-bool operator==(const Shape&, const Shape&);
-bool operator!=(const Shape&, const Shape&);
+bool operator==(const Shape &, const Shape &);
+bool operator!=(const Shape &, const Shape &);
 
 struct MemoryConfig {
-    TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
-    BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+    TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
+    BufferType buffer_type = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool is_sharded() const;
 
@@ -210,8 +200,8 @@ struct MemoryConfig {
     }
 };
 
-bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
-bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
+bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
+bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
 
 using OwnedBuffer = std::variant<
     owned_buffer::Buffer<uint16_t>,
@@ -255,21 +245,25 @@ using BorrowedBuffer = std::variant<
     borrowed_buffer::Buffer<bfloat16>>;
 struct BorrowedStorage {
     BorrowedBuffer buffer;
-    std::function<void()> on_creation_callback = []{};
-    std::function<void()> on_destruction_callback = []{};
+    std::function<void()> on_creation_callback = [] {};
+    std::function<void()> on_destruction_callback = [] {};
 
-
-    explicit BorrowedStorage(const BorrowedBuffer& buffer, const std::function<void()>& on_creation_callback, const std::function<void()>& on_destruction_callback)
-    : buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
+    explicit BorrowedStorage(
+        const BorrowedBuffer &buffer,
+        const std::function<void()> &on_creation_callback,
+        const std::function<void()> &on_destruction_callback) :
+        buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
         this->on_creation_callback();
     }
 
-    BorrowedStorage(const BorrowedStorage& other)
-    : buffer(other.buffer), on_creation_callback(other.on_creation_callback), on_destruction_callback(other.on_destruction_callback) {
+    BorrowedStorage(const BorrowedStorage &other) :
+        buffer(other.buffer),
+        on_creation_callback(other.on_creation_callback),
+        on_destruction_callback(other.on_destruction_callback) {
         this->on_creation_callback();
     }
 
-    BorrowedStorage operator=(const BorrowedStorage& other) {
+    BorrowedStorage operator=(const BorrowedStorage &other) {
         this->buffer = other.buffer;
         this->on_creation_callback = other.on_creation_callback;
         this->on_destruction_callback = other.on_destruction_callback;
@@ -277,48 +271,47 @@ struct BorrowedStorage {
         return *this;
     }
 
-    BorrowedStorage(BorrowedStorage&& other)
-    : buffer(other.buffer), on_creation_callback(other.on_creation_callback), on_destruction_callback(other.on_destruction_callback) {
-        other.on_creation_callback = []{};
-        other.on_destruction_callback = []{};
+    BorrowedStorage(BorrowedStorage &&other) :
+        buffer(other.buffer),
+        on_creation_callback(other.on_creation_callback),
+        on_destruction_callback(other.on_destruction_callback) {
+        other.on_creation_callback = [] {};
+        other.on_destruction_callback = [] {};
     }
 
-    BorrowedStorage operator=(BorrowedStorage&& other) {
+    BorrowedStorage operator=(BorrowedStorage &&other) {
         this->buffer = other.buffer;
         this->on_creation_callback = other.on_creation_callback;
         this->on_destruction_callback = other.on_destruction_callback;
-        other.on_creation_callback = []{};
-        other.on_destruction_callback = []{};
+        other.on_creation_callback = [] {};
+        other.on_destruction_callback = [] {};
         return *this;
     }
 
-    ~BorrowedStorage() {
-        this->on_destruction_callback();
-    }
+    ~BorrowedStorage() { this->on_destruction_callback(); }
 
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
 };
 
-using Storage = std::variant<
-    OwnedStorage,
-    DeviceStorage,
-    BorrowedStorage
->;
+using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage>;
 
-template<typename T>
+template <typename T>
 constexpr void raise_unsupported_storage() {
     static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }
 
-inline bool operator==(const Storage& v1, const Storage& v2) {
-    return std::visit([](const auto& a, const auto& b) -> bool {
-        if constexpr (std::is_same_v<decltype(a), decltype(b)>) {
-            return a == b;
-        } else {
-            return false;
-        }
-    }, v1, v2);
+inline bool operator==(const Storage &v1, const Storage &v2) {
+    return std::visit(
+        [](const auto &a, const auto &b) -> bool {
+            if constexpr (std::is_same_v<decltype(a), decltype(b)>) {
+                return a == b;
+            } else {
+                return false;
+            }
+        },
+        v1,
+        v2);
 };
 
 }  // namespace tt_metal

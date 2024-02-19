@@ -17,10 +17,11 @@ bfloat8_b = DataType.BFLOAT8_B
 
 BufferType = ttl.tensor.BufferType
 TensorMemoryLayout = ttl.tensor.TensorMemoryLayout
+# TODO: MemoryConfig = ttnn._ttnn.types.MemoryConfig
 MemoryConfig = ttl.tensor.MemoryConfig
 MathFidelity = ttl.tensor.MathFidelity
-DRAM_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.INTERLEAVED, BufferType.DRAM)
-L1_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.INTERLEAVED, BufferType.L1)
+DRAM_MEMORY_CONFIG = ttnn._ttnn.types.DRAM_MEMORY_CONFIG
+L1_MEMORY_CONFIG = ttnn._ttnn.types.L1_MEMORY_CONFIG
 L1_BLOCK_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.BLOCK_SHARDED, BufferType.L1)
 L1_HEIGHT_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.HEIGHT_SHARDED, BufferType.L1)
 L1_WIDTH_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.WIDTH_SHARDED, BufferType.L1)
@@ -35,7 +36,6 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 TILE_SIZE = 32
 
 Shape = ttnn._ttnn.types.Shape
-
 
 Tensor = ttnn._ttnn.types.Tensor
 

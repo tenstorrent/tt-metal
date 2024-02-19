@@ -3,8 +3,8 @@ TTNN_PYBIND11_LIB = $(LIBDIR)/_ttnn.so
 
 TTNN_DEFINES =
 
-TTNN_INCLUDES = $(TT_EAGER_INCLUDES) $(TT_LIB_INCLUDES)
-TTNN_PYBIND11_INCLUDES = -Ittnn/cpp $(TTNN_INCLUDES) $(shell python3-config --includes) -Itt_metal/third_party/pybind11/include
+TTNN_INCLUDES = $(TT_EAGER_INCLUDES) $(TT_LIB_INCLUDES) -Ittnn/cpp
+TTNN_PYBIND11_INCLUDES = $(TTNN_INCLUDES) $(shell python3-config --includes) -Itt_metal/third_party/pybind11/include
 
 TTNN_LDFLAGS = -L$(LIBDIR) -ltt_dnn -ldtx -ltensor -ltt_metal -lyaml-cpp $(LDFLAGS)
 TTNN_PYBIND11_LDFLAGS = $(TTNN_LDFLAGS) -ltt_lib_csrc  #At some point possibly add: -lttnn

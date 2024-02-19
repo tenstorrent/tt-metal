@@ -4,22 +4,14 @@
 
 #pragma once
 
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_eager/tt_numpy/functions.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace core {
 
-static const auto DRAM_MEMORY_CONFIG = tt::tt_metal::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
-static const auto L1_MEMORY_CONFIG = tt::tt_metal::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
-
 inline ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    // TODO: make it work just like in python
     return ttnn::Tensor(tensor.reshape(shape.value()));
 }
 
@@ -34,13 +26,52 @@ inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
     }
 
     const auto tensor_shape_4D = tensor_shape.to_rank<4>();
-    return reshape(tensor, tensor_shape_4D);
+    return ttnn::operations::core::reshape(tensor, tensor_shape_4D);
+}
+
+inline ttnn::Tensor from_device(const ttnn::Tensor& tensor) { return tensor.cpu(); }
+
+// TODO : @eyonland move these creation functions to creation.hpp
+template <typename T>
+inline ttnn::Tensor full(
+    const ttnn::Shape& shape,
+    const T value,
+    const DataType data_type,
+    const Layout layout,
+    Device& device,
+    const MemoryConfig& output_mem_config = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    return tt::numpy::full(shape.with_tile_padding().value(), value, data_type, layout, &device, output_mem_config);
+}
+
+inline ttnn::Tensor zeros(
+    const ttnn::Shape& shape,
+    const DataType data_type,
+    const Layout layout,
+    Device& device,
+    const MemoryConfig& output_mem_config = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    return full(shape, 0.0f, data_type, layout, device, output_mem_config);
+}
+
+inline ttnn::Tensor ones(
+    const ttnn::Shape& shape,
+    const DataType data_type,
+    const Layout layout,
+    Device& device,
+    const MemoryConfig& output_mem_config = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    return full(shape, 1.0f, data_type, layout, device, output_mem_config);
 }
 
 }  // namespace core
 }  // namespace operations
 
+using operations::core::from_device;
+using operations::core::full;
+using operations::core::ones;
 using operations::core::reshape;
 using operations::core::unsqueeze_to_4D;
+using operations::core::zeros;
 
 }  // namespace ttnn
