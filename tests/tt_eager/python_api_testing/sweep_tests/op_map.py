@@ -48,6 +48,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.arange,
         "pytorch_op": pytorch_ops.arange,
     },
+    "prod": {
+        "tt_lib_op": tt_lib_ops.prod,
+        "pytorch_op": pytorch_ops.prod,
+    },
     # stats
     "stats-var_hw": {
         "tt_lib_op": tt_lib_ops.var_hw,

@@ -77,7 +77,8 @@ enum class UnaryOpType {
     IDENTITY_UINT32 = 59,
     UNARY_NE = 60,
     UNARY_GT = 61,
-    UNARY_LT = 62
+    UNARY_LT = 62,
+    TILED_PROD = 60
 };
 
 template <typename T>
@@ -276,6 +277,7 @@ constexpr auto recip = make_eltwise_unary<UnaryOpType::RECIP>{};
 constexpr auto relu = make_eltwise_unary<UnaryOpType::RELU>{};
 constexpr auto relu6 = make_eltwise_unary<UnaryOpType::RELU6>{};
 constexpr auto sigmoid = make_eltwise_unary<UnaryOpType::SIGMOID>{};
+constexpr auto tiled_prod = make_eltwise_unary<UnaryOpType::TILED_PROD>{};
 constexpr auto log = make_eltwise_unary<UnaryOpType::LOG>{};
 constexpr auto tanh = make_eltwise_unary<UnaryOpType::TANH>{};
 constexpr auto log2 = make_eltwise_unary<UnaryOpType::LOG2>{};
