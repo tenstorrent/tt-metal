@@ -1,6 +1,17 @@
 APIs
 ####
 
+Device
+******
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/open_device
+   ttnn/close_device
+   ttnn/manage_device
+
+
 Tensor
 ******
 

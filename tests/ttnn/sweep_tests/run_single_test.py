@@ -21,9 +21,9 @@ def main():
     test_name = parsed_args.test_name
     index = parsed_args.index
 
-    device = ttnn.open(0)
+    device = ttnn.open_device(device_id=0)
     status, message = run_single_test(test_name, index, device=device)
-    ttnn.close(device)
+    ttnn.close_device(device)
 
     if status == "passed":
         logger.info(f"Passed")

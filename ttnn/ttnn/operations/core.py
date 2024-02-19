@@ -444,7 +444,7 @@ def to_device(tensor, device, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_ME
     Example::
 
         >>> device_id = 0
-        >>> device = ttnn.open(device_id)
+        >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
         >>> tensor_on_device = ttnn.to_device(tensor_on_host, device, memory_config=ttnn.L1_MEMORY_CONFIG)
         >>> print(tensor_on_device[0,0,:3])
@@ -484,7 +484,7 @@ def from_device(tensor):
 
     Example::
         >>> device_id = 0
-        >>> device = ttnn.open(device_id)
+        >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor_on_device = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
         >>> tensor_on_host = ttnn.from_device(tensor_on_device)
         >>> print(tensor_on_host[0,0,:3])
@@ -522,7 +522,7 @@ def deallocate(tensor: ttnn.Tensor) -> None:
 
     Example::
         >>> device_id = 0
-        >>> device = ttnn.open(device_id)
+        >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
         >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
         >>> ttnn.deallocate(tensor)
@@ -560,7 +560,7 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
 
     Example::
         >>> device_id = 0
-        >>> device = ttnn.open(device_id)
+        >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
         >>> tensor = ttnn.to_memory_config(tensor, memory_config)
     """
@@ -645,7 +645,7 @@ def to_layout(tensor, layout: ttnn.Layout):
 
     Example::
         >>> device_id = 0
-        >>> device = ttnn.open(device_id)
+        >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
         >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
         >>> print(tensor[0,0,:3])
