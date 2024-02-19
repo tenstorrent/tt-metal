@@ -8,14 +8,31 @@
 #include <pybind11/stl.h>
 
 #include "tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
 namespace types {
 
-void py_module(py::module& m_types) {
-    auto PyShape = py::class_<Shape>(m_types, "Shape");
+void py_module(py::module& module) {
+    // TODO: @eyonland, figure out how to migrate these duplicate pybindings.
+
+    // py::class_<ttnn::types::MemoryConfig>(module, "MemoryConfig")
+    //     .def(py::init<>())
+    //     .def_readwrite("memory_layout", &ttnn::types::MemoryConfig::memory_layout)
+    //     .def_readwrite("buffer_type", &ttnn::types::MemoryConfig::buffer_type);
+
+    // py::enum_<tt::tt_metal::TensorMemoryLayout>(module, "TensorMemoryLayout")
+    //     .value("INTERLEAVED", tt::tt_metal::TensorMemoryLayout::INTERLEAVED)
+    //     .export_values();
+
+    // py::class_<tt::tt_metal::Device>(module, "Device");
+
+    module.attr("DRAM_MEMORY_CONFIG") = py::cast(DRAM_MEMORY_CONFIG);
+    module.attr("L1_MEMORY_CONFIG") = py::cast(L1_MEMORY_CONFIG);
+
+    auto PyShape = py::class_<ttnn::Shape>(module, "Shape");
     PyShape.def(py::init<tt::tt_metal::Shape>());
 
     [&PyShape]<auto... Ns>(std::index_sequence<Ns...>) {
@@ -61,7 +78,7 @@ void py_module(py::module& m_types) {
         tt::tt_metal::Tensor value;
     };
 
-    py::class_<Tensor>(m_types, "Tensor")
+    py::class_<Tensor>(module, "Tensor")
         .def(py::init<tt::tt_metal::Tensor>())
         .def_property_readonly("value", [](const Tensor& self) -> auto& { return self.value; })
         .def(

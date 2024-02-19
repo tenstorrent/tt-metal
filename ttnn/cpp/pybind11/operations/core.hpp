@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations {
 namespace core {
 
-void py_module(py::module& m_core) {}
+void py_module(py::module& module) {}
 
 }  // namespace core
 }  // namespace operations

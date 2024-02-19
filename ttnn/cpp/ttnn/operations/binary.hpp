@@ -4,11 +4,10 @@
 
 #pragma once
 #include <optional>
+
+#include "core.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "ttnn/operations/core.hpp"
 
 namespace ttnn {
 
@@ -19,7 +18,7 @@ inline ttnn::Tensor add(
     const ttnn::Tensor& input_tensor_a_arg,
     const ttnn::Tensor& input_tensor_b_arg,
     const tt::tt_metal::MemoryConfig& memory_config,
-           std::optional<DataType> dtype = std::nullopt) {
+    std::optional<DataType> dtype = std::nullopt) {
     auto&& [input_tensor_a, input_tensor_b] = [](const auto& input_tensor_a_arg, const auto& input_tensor_b_arg) {
         // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
         if (tt::tt_metal::compute_volume(input_tensor_a_arg.ttnn_shape()) <
@@ -69,8 +68,10 @@ inline ttnn::Tensor add(
 }
 
 inline ttnn::Tensor add(
-    const ttnn::Tensor& input_tensor_a, const float input_tensor_b, const tt::tt_metal::MemoryConfig& memory_config,
-           std::optional<DataType> dtype = std::nullopt) {
+    const ttnn::Tensor& input_tensor_a,
+    const float scalar,
+    const tt::tt_metal::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+    std::optional<DataType> dtype = std::nullopt) {
     if (dtype.has_value()) {
         TT_THROW("ttnn.add: cannot change dtype when broadcasting");
     }
@@ -78,10 +79,15 @@ inline ttnn::Tensor add(
 
     auto input_tensor_a_4D = ttnn::unsqueeze_to_4D(input_tensor_a);
 
-    auto output = tt::tt_metal::add_unary(input_tensor_a_4D, input_tensor_b, memory_config);
+    auto output = tt::tt_metal::add_unary(input_tensor_a_4D, scalar, memory_config);
     return ttnn::reshape(output, original_shape);
 }
 
+ttnn::Tensor operator+(const ttnn::Tensor& input_tensor_a, const float& scalar) { return add(input_tensor_a, scalar); }
+
 }  // namespace binary
 }  // namespace operations
+
+using namespace operations::binary;
+
 }  // namespace ttnn
