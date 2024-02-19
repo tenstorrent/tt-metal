@@ -70,7 +70,7 @@ def run_ttnn_conv_with_pre_and_post_tensor_formatting(
     device, ttnn_conv_op, tensor: ttnn.Tensor, batch_size, output_height, output_width, output_channels
 ) -> ttnn.Tensor:
     tensor = pre_process_input(device, tensor)
-    print("Running conv op")
+    # print("Running conv op")
     tensor = ttnn_conv_op(tensor)
     tensor = post_process_output(device, tensor, batch_size, output_height, output_width, output_channels)
     return tensor

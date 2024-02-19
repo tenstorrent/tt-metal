@@ -11,6 +11,10 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block,
 )
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    post_process_output,
+)
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -113,20 +117,12 @@ def transformer_2d_model(
                 parameters.proj_in.bias = torch.reshape(
                     parameters.proj_in.bias, (1, 1, 1, parameters.proj_in.bias.shape[-1])
                 )
-                # print("conv2 weight shape=", parameters.conv2.weight.shape)
-                # print("conv2 bias shape=", parameters.conv2.bias.shape)
                 tt_weight_tensor = ttnn.from_torch(parameters.proj_in.weight, ttnn.float32)
                 tt_bias_tensor = ttnn.from_torch(parameters.proj_in.bias, ttnn.float32)
                 out_channels = parameters.proj_in.weight.shape[0]
                 in_channels = parameters.proj_in.weight.shape[1]
-                # conv2_config_override = {}
-                # if (out_channels, out_channels, input_height, input_width) in config_override:
-                #     conv2_config_override = config_override[(out_channels, out_channels, input_height, input_width)]
-                # else:
-                #     print("NO OVERRIDE for -", (out_channels, out_channels, input_height, input_width))
-                print("Build conv as matmul in transformer")
                 proj_in = ttnn.Conv2D(
-                    out_channels,
+                    in_channels,
                     out_channels,
                     kernel_size=(1, 1),
                     stride=(1, 1),
@@ -146,26 +142,9 @@ def transformer_2d_model(
                     use_shallow_conv_variant=False,
                     enable_auto_formatting=True,
                 )
-
-                hidden_states = ttnn_to_torch(hidden_states)
-                hidden_states = hidden_states.permute((0, 2, 3, 1))
-                # Reshape 4d to 2d
-                hidden_states = torch.reshape(
-                    hidden_states,
-                    (1, 1, batch_size * input_height * input_width, out_channels),
+                hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+                    device, proj_in, hidden_states, batch_size, input_height, input_width, out_channels
                 )
-                hidden_states = ttnn.from_torch(hidden_states, ttnn.bfloat16)
-                hidden_states = ttnn.to_device(hidden_states, device)
-
-                hidden_states = ttnn.pad_to_tile(hidden_states)
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-                print("Running proj_in in transformer block")
-                hidden_states = proj_in(hidden_states)
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-                hidden_states = ttnn.from_device(hidden_states)
-                hidden_states = ttnn.to_torch(hidden_states)
-                hidden_states = torch.reshape(hidden_states, (batch_size, input_height, input_width, out_channels))
-                hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
             else:
                 hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))
                 hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
@@ -187,10 +166,10 @@ def transformer_2d_model(
                 hidden_states = proj_in(hidden_states)
 
                 hidden_states = tt_to_torch_tensor(hidden_states)
-            hidden_states = ttnn.to_layout(
-                ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
-                layout=ttnn.TILE_LAYOUT,
-            )
+                hidden_states = ttnn.to_layout(
+                    ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
+                    layout=ttnn.TILE_LAYOUT,
+                )
 
             inner_dim = hidden_states.shape[1]
 
@@ -240,21 +219,13 @@ def transformer_2d_model(
                 parameters.proj_out.bias = torch.reshape(
                     parameters.proj_out.bias, (1, 1, 1, parameters.proj_out.bias.shape[-1])
                 )
-                # print("conv2 weight shape=", parameters.conv2.weight.shape)
-                # print("conv2 bias shape=", parameters.conv2.bias.shape)
                 tt_weight_tensor = ttnn.from_torch(parameters.proj_out.weight, ttnn.float32)
                 tt_bias_tensor = ttnn.from_torch(parameters.proj_out.bias, ttnn.float32)
                 out_channels = parameters.proj_out.weight.shape[0]
                 in_channels = parameters.proj_out.weight.shape[1]
-                # conv2_config_override = {}
-                # if (out_channels, out_channels, input_height, input_width) in config_override:
-                #     conv2_config_override = config_override[(out_channels, out_channels, input_height, input_width)]
-                # else:
-                #     print("NO OVERRIDE for -", (out_channels, out_channels, input_height, input_width))
-                print("Build conv as matmul in transformer")
                 proj_out = ttnn.Conv2D(
-                    out_channels,
-                    out_channels,
+                    in_channels=in_channels,
+                    out_channels=out_channels,
                     kernel_size=(1, 1),
                     stride=(1, 1),
                     padding=(0, 0),
@@ -273,14 +244,10 @@ def transformer_2d_model(
                     use_shallow_conv_variant=False,
                     enable_auto_formatting=True,
                 )
-
-                print("Running proj_out in transformer block")
                 hidden_states = proj_out(hidden_states)
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-                hidden_states = ttnn.from_device(hidden_states)
-                hidden_states = ttnn.to_torch(hidden_states)
-                hidden_states = torch.reshape(hidden_states, (batch_size, input_height, input_width, out_channels))
-                hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
+                hidden_states = post_process_output(
+                    device, hidden_states, batch_size, input_height, input_width, out_channels
+                )
             else:
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
                 hidden_states = ttnn.reshape(hidden_states, (batch, height, width, inner_dim))
@@ -307,10 +274,10 @@ def transformer_2d_model(
                 hidden_states = proj_out(hidden_states)
 
                 hidden_states = tt_to_torch_tensor(hidden_states)
-            hidden_states = ttnn.to_layout(
-                ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
-                layout=ttnn.TILE_LAYOUT,
-            )
+                hidden_states = ttnn.to_layout(
+                    ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
+                    layout=ttnn.TILE_LAYOUT,
+                )
 
         else:
             hidden_states = ttnn.to_device(hidden_states, device)

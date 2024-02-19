@@ -261,7 +261,7 @@ def UNet2DConditionModel(
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 device=device,
-                reader_patterns_cache=None,  # enable convs on device for this module causes failure. Investigating.
+                reader_patterns_cache=reader_patterns_cache,  # enable convs on device for this module causes failure. Investigating.
             )
         elif down_block_type == "DownBlock2D":
             sample, res_samples = downblock2d(
@@ -418,7 +418,7 @@ def UNet2DConditionModel(
         parameters.conv_out.weight, parameters.conv_out.bias
     )
 
-    if False and convs_on_device:
+    if convs_on_device:
         parameters.conv_out.bias = torch.reshape(
             parameters.conv_out.bias, (1, 1, 1, parameters.conv_out.bias.shape[-1])
         )
@@ -437,7 +437,7 @@ def UNet2DConditionModel(
             padding=(1, 1),
             dtype=ttnn.bfloat8_b,
             device=device,
-            use_1d_systolic_array=True if in_channels < 320 else False,
+            use_1d_systolic_array=True,
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -451,25 +451,9 @@ def UNet2DConditionModel(
             enable_auto_formatting=True,
             deallocate_input=True,
         )
-        sample = ttnn_to_torch(sample)
-        sample = sample.permute((0, 2, 3, 1))
-        # Reshape 4d to 2d
-        sample = torch.reshape(
-            sample,
-            (1, 1, batch_size * input_height * input_width, in_channels),
+        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv_out, sample, batch_size, input_height, input_width, out_channels
         )
-        sample = ttnn.from_torch(sample, ttnn.bfloat16)
-        sample = ttnn.to_device(sample, device)
-
-        sample = ttnn.pad_to_tile(sample)
-        sample = ttnn.to_layout(sample, ttnn.TILE_LAYOUT)
-        print("Running conv2 in resblock")
-        sample = conv_out(sample)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
-        sample = ttnn.from_device(sample)
-        sample = ttnn.to_torch(sample)
-        sample = torch.reshape(sample, (batch_size, input_height, input_width, out_channels))
-        sample = torch.permute(sample, (0, 3, 1, 2))
     else:
         parameters.conv_out.weight = torch_to_tt_tensor_rm(parameters.conv_out.weight, device, put_on_device=False)
         parameters.conv_out.bias = torch_to_tt_tensor_rm(parameters.conv_out.bias, device, put_on_device=False)
@@ -488,7 +472,7 @@ def UNet2DConditionModel(
         sample = torch_to_tt_tensor_rm(sample, device)
         sample = conv_out(sample)
         sample = tt_to_torch_tensor(sample)
-    sample = torch_to_ttnn(sample, device=device)
+        sample = torch_to_ttnn(sample, device=device)
 
     # con_in completes
 

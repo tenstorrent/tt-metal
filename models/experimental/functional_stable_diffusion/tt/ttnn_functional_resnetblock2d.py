@@ -115,10 +115,6 @@ def resnetBlock2D(
     if in_channels != parameters.conv1.weight.shape[1]:
         # breakpoint()
         in_channels = parameters.conv1.weight.shape[1]
-    print("weights shape - ", parameters.conv1.weight.shape)
-
-    print("conv1 bias shape - ", parameters.conv1.bias.shape)
-    print("out_channels - ", out_channels)
     if convs_on_device:
         batch_size = hidden_states.shape[0]
         input_height = hidden_states.shape[2]
@@ -144,7 +140,6 @@ def resnetBlock2D(
             conv1_config_override = {}
             if (out_channels, in_channels, input_height, input_width) in config_override:
                 conv1_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
-            print("Build conv1")
             conv1s.append(
                 ttnn.Conv2D(
                     split_input_channels,
@@ -187,7 +182,6 @@ def resnetBlock2D(
                 output_tensor_start_width_dim += split_input_channels
                 output_tensor_end_width_dim += split_input_channels
             hidden_states = split_hidden_states
-        print("Going to run conv1")
         if conv1_split_chunks == 1:
             hidden_states = conv1s[0](hidden_states[0])
         else:
@@ -198,17 +192,11 @@ def resnetBlock2D(
                     ttnn.deallocate(hidden_states[i - 1])
             hidden_states = hidden_states[-1]
 
-        # hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        # hidden_states = ttnn.from_device(hidden_states)
-        # hidden_states = ttnn.to_torch(hidden_states)
-        # hidden_states = torch.reshape(hidden_states, (batch_size, input_height, input_width, out_channels))
-        # hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
         split_hidden_states = []
     else:
         parameters.conv1.weight = torch_to_tt_tensor_rm(parameters.conv1.weight, device, put_on_device=False)
         parameters.conv1.bias = torch_to_tt_tensor_rm(parameters.conv1.bias, device, put_on_device=False)
         # Using fallback Conv2D as we face issue with ttnn.Conv2D
-        print("parameters.conv1.bias.shape()[-1]=", parameters.conv1.bias.shape()[-1])
         # assert out_channels == parameters.conv1.bias.shape()[-1]
         conv1 = fallback_ops.Conv2d(
             parameters.conv1.weight,
@@ -221,7 +209,6 @@ def resnetBlock2D(
         )
         hidden_states = ttnn_to_torch(hidden_states)
         hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
-        print("Running conv1 in resblock")
         hidden_states = conv1(hidden_states)
         hidden_states = tt_to_torch_tensor(hidden_states)
         hidden_states = torch_to_ttnn(hidden_states, device=device)
@@ -240,9 +227,7 @@ def resnetBlock2D(
             temb = ttnn.matmul(temb, parameters.time_emb_proj.weight)
             temb = ttnn.add(temb, parameters.time_emb_proj.bias)
         if not convs_on_device:
-            print("temb shape before permute=", temb.shape.padded())
             temb = ttnn.permute(temb, (2, 3, 0, 1))
-            print("temb shape after permute=", temb.shape.padded())  # tile layout
         else:
             # breakpoint()
             temb = ttnn.permute(temb, (2, 0, 1, 3))
@@ -253,12 +238,8 @@ def resnetBlock2D(
             hidden_states = ttnn.clone(hidden_states, ttnn.get_memory_config(hidden_states), ttnn.bfloat16)
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, input_height * input_width, out_channels))
             temb = ttnn.reshape(temb, (batch_size, 1, 1, out_channels))
-        print("hidden states shape before add with temb=", hidden_states.shape.padded())
-        print("hidden states shape before add with temb unpadded =", hidden_states.shape)
         # breakpoint()
         hidden_states = hidden_states + temb
-        print("hidden states shape after add with temb=", hidden_states.shape.padded())
-        print("hidden states shape after add with temb unpadded =", hidden_states.shape)
     if convs_on_device:
         hidden_states = post_process_output(device, hidden_states, batch_size, input_height, input_width, out_channels)
     hidden_states = ttnn.group_norm(
@@ -280,9 +261,8 @@ def resnetBlock2D(
         conv2_config_override = {}
         if (out_channels, out_channels, input_height, input_width) in config_override:
             conv2_config_override = config_override[(out_channels, out_channels, input_height, input_width)]
-        else:
-            print("NO OVERRIDE for -", (out_channels, out_channels, input_height, input_width))
-        print("Build conv2")
+        assert out_channels == parameters.conv2.weight.shape[0]
+        assert out_channels == parameters.conv2.weight.shape[1]
         conv2 = ttnn.Conv2D(
             out_channels,
             out_channels,
@@ -344,6 +324,8 @@ def resnetBlock2D(
             conv_shortcut_config_override = {}
             # if (out_channels, in_channels, input_height, input_width) in config_override:
             #     conv2_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+            assert in_channels == parameters.conv_shortcut.weight.shape[1]
+            assert out_channels == parameters.conv_shortcut.weight.shape[0]
             conv_shortcut = ttnn.Conv2D(
                 in_channels,
                 out_channels,
@@ -365,27 +347,9 @@ def resnetBlock2D(
                 use_shallow_conv_variant=False,
                 enable_auto_formatting=True,
             )
-
-            input_tensor = ttnn_to_torch(input_tensor)
-            input_tensor = input_tensor.permute((0, 2, 3, 1))
-            # Reshape 4d to 2d
-            input_tensor = torch.reshape(
-                input_tensor,
-                (1, 1, batch_size * input_height * input_width, in_channels),
+            input_tensor = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+                device, conv_shortcut, input_tensor, batch_size, input_height, input_width, out_channels
             )
-
-            input_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16)
-            input_tensor = ttnn.to_device(input_tensor, device)
-
-            input_tensor = ttnn.pad_to_tile(input_tensor)
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-            print("Running conv shortcut in resblock")
-            input_tensor = conv_shortcut(input_tensor)
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-            input_tensor = ttnn.from_device(input_tensor)
-            input_tensor = ttnn.to_torch(input_tensor)
-            input_tensor = torch.reshape(input_tensor, (batch_size, input_height, input_width, out_channels))
-            input_tensor = torch.permute(input_tensor, (0, 3, 1, 2))
         else:
             parameters.conv_shortcut.weight = torch_to_tt_tensor_rm(
                 parameters.conv_shortcut.weight, device, put_on_device=False
@@ -407,7 +371,7 @@ def resnetBlock2D(
             input_tensor = torch_to_tt_tensor_rm(input_tensor, device)
             input_tensor = conv_shortcut(input_tensor)
             input_tensor = tt_to_torch_tensor(input_tensor)
-        input_tensor = torch_to_ttnn(input_tensor, device=device)
+            input_tensor = torch_to_ttnn(input_tensor, device=device)
 
     output_sc_recip = 1 / output_scale_factor
     output_tensor = ttnn.add(input_tensor, hidden_states)

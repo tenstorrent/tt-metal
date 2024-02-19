@@ -518,7 +518,7 @@ class Conv2d(torch.nn.Module):
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
-        # assert False
+        assert False
         return self.pt_fallback(input)
 
 

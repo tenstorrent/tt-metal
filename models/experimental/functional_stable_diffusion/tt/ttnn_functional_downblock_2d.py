@@ -49,6 +49,7 @@ def downblock2d(
             up=False,
             down=False,
             dtype=dtype,
+            reader_patterns_cache=reader_patterns_cache,
         )
 
         hidden_states = resnet

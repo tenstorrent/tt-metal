@@ -190,10 +190,10 @@ def determine_parallel_config(
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
-    print("num_cores_nhw=", num_cores_nhw)
-    print("grid_size=", grid_size)
-    print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
-    print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
+    # print("num_cores_nhw=", num_cores_nhw)
+    # print("grid_size=", grid_size)
+    # print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
+    # print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
     return conv_parallelization_config, num_cores_nhw
 
 
@@ -296,7 +296,6 @@ def determine_per_core_block_config(
         assert (
             "out_subblock_h" in config_override
         ), "out_subblock_h must also be provided as override config if out_subblock_w is provided"
-    print("act_block_h_ntiles=", act_block_h_ntiles)
     conv_blocking_config = ttl.tensor.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h_ntiles,
         act_block_w_ntiles=act_block_w_ntiles,
@@ -685,8 +684,6 @@ class TTPyCompositeConv(TTPyOp):
             )
             assert weight.layout() == ttl.tensor.Layout.ROW_MAJOR
             assert weight.dtype() == weights_untiled_dtype
-            print("weight.shape()=", weight.shape())
-            print("weights_shape=", weights_shape)
             assert weight.shape() == weights_shape
             weight_untiled = weight.pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
             # for conv op, pad the weights to block shape
@@ -798,8 +795,8 @@ class TTPyCompositeConv(TTPyOp):
                 self.conv = composite_conv
 
     def __call__(self, activation):
-        print("Going to run conv with input shape-", self.input_tensor_shape)
-        print("with output shape = ", self.conv_output_shape)
+        # print("Going to run conv with input shape-", self.input_tensor_shape)
+        # print("with output shape = ", self.conv_output_shape)
         if self.enable_auto_formatting:
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)

@@ -12,6 +12,7 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
 )
+import math
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -86,8 +87,8 @@ def downsample_2d(
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
+                stride=(stride, stride),
+                padding=(padding, padding),
                 dtype=ttnn.bfloat8_b,
                 device=device,
                 use_1d_systolic_array=True if in_channels < 320 else False,
@@ -131,7 +132,13 @@ def downsample_2d(
 
     if conv_on_device:
         hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            device, conv, hidden_states, batch_size, input_height, input_width, out_channels
+            device,
+            conv,
+            hidden_states,
+            batch_size,
+            math.ceil(input_height / 2),
+            math.ceil(input_width / 2),
+            out_channels,
         )
     else:
         hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))

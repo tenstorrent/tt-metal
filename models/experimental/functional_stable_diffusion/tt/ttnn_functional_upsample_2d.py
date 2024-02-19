@@ -12,6 +12,9 @@ from models.utility_functions import (
 
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from tt_lib.fallback_ops import fallback_ops
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+)
 
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
@@ -30,10 +33,6 @@ config_override = {
 def upsample2d(device, input, parameters, in_channels, out_channels, scale_factor=2.0, reader_patterns_cache=None):
     conv_on_device = reader_patterns_cache is not None
     tt_out = upsample_nearest2d(input, scale_factor)
-
-    tt_out = ttnn.from_device(tt_out)
-    tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
-    tt_out = ttnn.to_torch(tt_out)
 
     weight = ttnn.to_layout(parameters.conv.weight, layout=ttnn.ROW_MAJOR_LAYOUT)
     weight = ttnn.to_torch(weight)
@@ -75,26 +74,13 @@ def upsample2d(device, input, parameters, in_channels, out_channels, scale_facto
             enable_auto_formatting=True,
             deallocate_input=True,
         )
-
-        tt_out = tt_out.permute((0, 2, 3, 1))
-        # Reshape 4d to 2d
-        tt_out = torch.reshape(
-            tt_out,
-            (1, 1, batch_size * input_height * input_width, in_channels),
+        tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv, tt_out, batch_size, input_height, input_width, out_channels
         )
-
-        tt_out = ttnn.from_torch(tt_out, ttnn.bfloat16)
-        tt_out = ttnn.to_device(tt_out, device)
-        tt_out = ttnn.pad_to_tile(tt_out)
-        tt_out = ttnn.to_layout(tt_out, ttnn.TILE_LAYOUT)
-        print("Running conv in upsample")
-        tt_out = conv(tt_out)
-        tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
-        tt_out = ttnn.from_device(tt_out)
-        torch_out = ttnn.to_torch(tt_out)
-        torch_out = torch.reshape(torch_out, (batch_size, input_height, input_width, out_channels))
-        torch_out = torch.permute(torch_out, (0, 3, 1, 2))
     else:
+        tt_out = ttnn.from_device(tt_out)
+        tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
+        tt_out = ttnn.to_torch(tt_out)
         tt_out = torch_to_tt_tensor_rm(tt_out, device)
         weight = torch_to_tt_tensor_rm(weight, device, put_on_device=False)
         bias = torch_to_tt_tensor_rm(bias, device, put_on_device=False)
@@ -111,5 +97,5 @@ def upsample2d(device, input, parameters, in_channels, out_channels, scale_facto
 
         tt_out = conv(tt_out)
         torch_out = tt_to_torch_tensor(tt_out)
-    ttnn_out = ttnn.from_torch(torch_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    return ttnn_out
+        tt_out = ttnn.from_torch(torch_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    return tt_out

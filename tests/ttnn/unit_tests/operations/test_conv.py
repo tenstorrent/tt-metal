@@ -383,7 +383,7 @@ def test_resnet50_conv(
         # (1, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         # (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
         # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
-        # # sd convs with HxW=64x64 with batch size=2
+        # sd convs with HxW=64x64 with batch size=2
         (2, 320, 4, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
@@ -406,6 +406,7 @@ def test_resnet50_conv(
         (2, 640, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         # 1x1 conv
         (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, False, None),
+        (2, 4, 320, 64, 64, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 64}),
     ),
 )
 @pytest.mark.parametrize(
