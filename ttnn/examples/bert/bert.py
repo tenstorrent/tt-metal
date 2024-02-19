@@ -61,7 +61,7 @@ def main():
     outputs = model(inputs)
 
     device_id = 0
-    device = ttnn.open(device_id)
+    device = ttnn.open_device(device_id=device_id)
 
     parameters = preprocess_model(
         model_name=model_name,
@@ -78,7 +78,7 @@ def main():
 
     ttnn.tracer.visualize(ttnn_output_as_torch, file_name="bert_model_trace.svg")
 
-    ttnn.close(device)
+    ttnn.close_device(device)
 
 
 if __name__ == "__main__":

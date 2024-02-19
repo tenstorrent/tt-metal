@@ -54,7 +54,7 @@ from ttnn.types import (
     Tensor,
 )
 
-from ttnn.device import Device, open, close
+from ttnn.device import Device, open_device, close_device, manage_device
 
 from ttnn.core import (
     has_storage_type_of,

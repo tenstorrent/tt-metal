@@ -246,7 +246,7 @@ def embedding(
 
     Example::
         >>> device_id = 0
-        >>> device = ttnn.open(device_id)
+        >>> device = ttnn.open_device(device_id=device_id)
         >>> input_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]]), dtype=ttnn.uint32), device)
         >>> # an embedding matrix containing 10 tensors of size 4
         >>> weight = ttnn.to_device(ttnn.from_torch(torch.rand(10, 4), dtype=ttnn.bfloat16), device)
