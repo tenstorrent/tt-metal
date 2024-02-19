@@ -13,6 +13,8 @@
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
+#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
+#include "tt_dnn/op_library/permute/permute_op.hpp"
 
 namespace tt {
 
@@ -1528,6 +1530,111 @@ std::vector<Tensor> _binary_gt_bw(const Tensor& grad, const Tensor& input, const
 std::vector<Tensor> binary_gt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _binary_gt_bw)(grad, input, output_mem_config);
+}
+
+// Prod
+// along a single dimension --> result: grad_data * (y / input )
+std::vector<Tensor> _prod_bw(
+    const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor prod_result = prod(input, all_dimensions, dim, output_mem_config);
+    if (all_dimensions == true) {
+        Tensor temp = mul(prod_result, grad, std::nullopt, output_mem_config);  // result is stored in the first position
+        Tensor fill_tensor = tt::numpy::fill_first_val_into_tensor<bfloat16>( temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_mem_config);
+        Tensor all_dimension_result = mul(recip(input, output_mem_config), fill_tensor, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(all_dimension_result);
+        return grad_tensor;
+    }
+    // all_dimensions = False
+    Tensor updated_grad = prod_result;
+    if (prod_result.get_legacy_shape() != grad.get_legacy_shape()) {
+        if (dim == 3 || dim == -1) {
+            std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
+            Tensor required = permute(grad, after_permute_dims, output_mem_config);
+            const Shape start_index = {0, 0, 0, 0};
+            const Shape end_index = { grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1};
+            Tensor new_unpad_tensor = unpad(required, start_index, end_index);
+            after_permute_dims = {0, 2, 3, 1};
+            updated_grad = permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+        } else if (dim == 2 || dim == -2) {
+            std::vector<int64_t> after_permute_dims = {0, 2, 1, 3};
+            Tensor required = permute(grad, after_permute_dims, output_mem_config);
+            const Shape start_index = {0, 0, 0, 0};
+            const Shape end_index = { grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
+            Tensor new_unpad_tensor = unpad(required, start_index, end_index);
+            updated_grad = permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+        }
+    }
+    Tensor reciprocal_input = recip(input, output_mem_config);
+    Tensor temp = mul(prod_result, (dim == 1 || dim == 0 || dim == -4 || dim == -3) ? grad : updated_grad, std::nullopt, output_mem_config);
+    if (dim == 3 || dim == -1) {
+        Tensor grad_result = bcast(reciprocal_input, temp, BcastOpMath::MUL, BcastOpDim::W, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    } else if (dim == 2 || dim == -2) {
+        Tensor grad_result = bcast(reciprocal_input, temp, BcastOpMath::MUL, BcastOpDim::H, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    } else if (dim == 1 || dim == -3) {
+        Tensor tensor_1_temp = reciprocal_input;
+        if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
+            const Shape start_index = {0, 0, 0, 0};
+            const Shape required_shape = {
+                reciprocal_input.get_legacy_shape()[0],
+                reciprocal_input.get_legacy_shape()[1] + (32 - (reciprocal_input.get_legacy_shape()[1] % 32)),
+                reciprocal_input.get_legacy_shape()[2],
+                reciprocal_input.get_legacy_shape()[3]};
+            tensor_1_temp = pad(reciprocal_input, required_shape, start_index, 0);
+        }
+        std::vector<int64_t> after_permute_dims = {0, 2, 3, 1};
+        Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);
+        Tensor tensor_2 = permute(temp, after_permute_dims, output_mem_config);
+        after_permute_dims = {0, 3, 1, 2};
+        Tensor result = permute( bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_mem_config), after_permute_dims, output_mem_config);
+        Tensor grad_result = result;
+        if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
+            const Shape start_index = {0, 0, 0, 0};
+            const Shape end_index = {
+                input.get_legacy_shape()[0] - 1,
+                input.get_legacy_shape()[1] - 1,
+                input.get_legacy_shape()[2] - 1,
+                input.get_legacy_shape()[3] - 1};
+            grad_result = unpad(result, start_index, end_index);
+        }
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    }
+    // dim 0
+    Tensor tensor_1_temp = reciprocal_input;
+    if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
+        const Shape start_index = {0, 0, 0, 0};
+        const Shape required_shape = {
+            reciprocal_input.get_legacy_shape()[0] + (32 - (reciprocal_input.get_legacy_shape()[0] % 32)),
+            reciprocal_input.get_legacy_shape()[1],
+            reciprocal_input.get_legacy_shape()[2],
+            reciprocal_input.get_legacy_shape()[3]};
+        tensor_1_temp = pad(reciprocal_input, required_shape, start_index, 0);
+    }
+    std::vector<int64_t> after_permute_dims = {3, 1, 2, 0};
+    Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);
+    Tensor tensor_2 = permute(temp, after_permute_dims, output_mem_config);
+    Tensor result = permute( bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_mem_config), after_permute_dims, output_mem_config);
+    Tensor grad_result = result;
+    if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
+        const Shape start_index = {0, 0, 0, 0};
+        const Shape end_index = {
+            input.get_legacy_shape()[0] - 1,
+            input.get_legacy_shape()[1] - 1,
+            input.get_legacy_shape()[2] - 1,
+            input.get_legacy_shape()[3] - 1};
+        grad_result = unpad(result, start_index, end_index);
+    }
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> prod_bw(
+    const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _prod_bw)(grad, input, all_dimensions, dim, output_mem_config);
 }
 
 // square

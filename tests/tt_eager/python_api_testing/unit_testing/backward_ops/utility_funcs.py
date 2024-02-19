@@ -52,6 +52,39 @@ def data_gen_with_val(input_shapes, device, required_grad=False, val=1, is_row_m
     return pt_tensor, tt_tensor
 
 
+def data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim, required_grad=False):
+    torch.manual_seed(213919)
+    pt_tensor_temp = torch.zeros(input_shapes, requires_grad=required_grad).bfloat16()
+    shape_Required = torch.Size(
+        [
+            input_shapes[0] if (dim != 0 and dim != -4) else 1,
+            input_shapes[1] if (dim != 1 and dim != -3) else 1,
+            input_shapes[2] if (dim != 2 and dim != -2) else 1,
+            input_shapes[3] if (dim != 3 and dim != -1) else 1,
+        ]
+    )
+    if all_dimensions == False and (dim == 1 or dim == 0 or dim == -4 or dim == -3):
+        pt_tensor = torch.randn(shape_Required, requires_grad=required_grad).bfloat16()
+        tt_tensor = (
+            tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+        return pt_tensor, tt_tensor
+    elif all_dimensions == False:
+        pt_tensor = torch.randn(shape_Required, requires_grad=required_grad).bfloat16()
+        if dim == 3 or dim == -1:
+            pt_tensor_temp[:, :, :, :1] = pt_tensor
+        elif dim == 2 or dim == -2:
+            pt_tensor_temp[:, :, :1, :] = pt_tensor
+    else:
+        shape_Required = torch.Size([1, 1, 1, 1])
+        pt_tensor = torch.randn(shape_Required, requires_grad=required_grad).bfloat16()
+        pt_tensor_temp[:1, :1, :1, :1] = pt_tensor
+    tt_tensor = (
+        tt_lib.tensor.Tensor(pt_tensor_temp, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+    )
+    return pt_tensor, tt_tensor
+
+
 def compare_results(tt_tensor, golden_tensor, pcc=0.99):
     status = True
     for i in range(len(tt_tensor)):

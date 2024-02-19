@@ -207,6 +207,23 @@ namespace tt::tt_metal::detail{
             R"doc(Applies the Gated Linear Units (GLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
         R"doc(dimension to split)doc"
         );
+        m_tensor.def("prod", &prod,
+            py::arg("input").noconvert(), py::arg("all_dimensions") = false, py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Computes the prod function along specified ``dim`` or all dimensions on the ``input`` tensor.
+            If ``all_dimensions`` is set to ``true`` irrespective of given dimension it will prod along all dimensions.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor prod is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "all_dimensions", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
+                "dim", "Dimension to perform prod", "int", "default to 0", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
         detail::bind_unary_op_with_param(
             m_tensor, "geglu", &geglu,
         py::arg("dim") = -1,

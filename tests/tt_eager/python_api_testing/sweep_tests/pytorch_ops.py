@@ -874,6 +874,13 @@ def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
 
 
+def prod(x, *args, all_dimensions, dim, **kwargs):
+    if all_dimensions:
+        result = torch.prod(x)
+        return result.view(1, 1, 1, 1)
+    return torch.prod(x, dim, keepdim=True)
+
+
 def ldexp(x, y, *args, **kwargs):
     return torch.ldexp(x, y)
 

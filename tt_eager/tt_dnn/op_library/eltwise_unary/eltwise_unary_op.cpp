@@ -173,6 +173,8 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
             op_init_and_name = {"sign_tile_init();", fmt::format("sign_tile({});", idst)}; break;
         case UnaryOpType::SQUARE:
             op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)}; break;
+        case UnaryOpType::TILED_PROD:
+            op_init_and_name = {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)}; break;
         case UnaryOpType::EQZ:
             op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)}; break;
         case UnaryOpType::NEZ:

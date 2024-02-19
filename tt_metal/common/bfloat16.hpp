@@ -70,6 +70,9 @@ class bfloat16 {
     bool operator!=(const bfloat16 rhs) const {
         return not (*this == rhs);
     }
+    bfloat16 operator*(const bfloat16 rhs) const {
+        return bfloat16(this->to_float() * rhs.to_float());
+    }
 };
 
 inline ostream& operator<<(ostream& os, const bfloat16& bfp16)
