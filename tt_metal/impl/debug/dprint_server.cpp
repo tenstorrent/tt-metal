@@ -196,7 +196,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
-void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled) {
+void WriteInitMagic(chip_id_t chip_id, const CoreCoord& core, int hart_id, bool enabled) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
@@ -210,7 +210,7 @@ void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enable
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(int chip_id, const CoreCoord& core, int hart_id) {
+bool CheckInitMagicCleared(chip_id_t chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
@@ -411,6 +411,41 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
 
+    // When we detach a device, we should poll to make sure there's no outstanding prints.
+    chip_id_t chip_id = device->id();
+    uint32_t risc_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
+    bool outstanding_prints = true;
+    while (outstanding_prints && !server_killed_due_to_hang_) {
+        // Polling interval of 1ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        // Check all dprint-enabled cores on this device for outstanding prints.
+        outstanding_prints = false;
+        for (auto &core : device_to_core_range_.at(device)) {
+            for (int risc_id = 0; risc_id < GetNumRiscs(chip_id, core); risc_id++) {
+                if (risc_mask & (1<<risc_id)) {
+                    // No need to check if risc is not dprint-enabled.
+                    if (!CheckInitMagicCleared(chip_id, core, risc_id))
+                    continue;
+
+                    // Check if rpos < wpos, indicating unprocessed prints.
+                    constexpr int eightbytes = 8;
+                    uint32_t base_addr = GetBaseAddr(chip_id, core, risc_id);
+                    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, eightbytes);
+                    uint32_t wpos = from_dev[0], rpos = from_dev[1];
+                    if (rpos < wpos) {
+                        outstanding_prints = true;
+                        break;
+                    }
+                }
+            }
+            // If we already detected outstanding prints, no need to check the rest of the cores.
+            if (outstanding_prints)
+                break;
+        }
+    }
+
+    // Remove the device from relevant data structures.
     device_to_core_range_lock_.lock();
     TT_ASSERT(device_to_core_range_.count(device) > 0, "Device {} not present in DPRINT server but tried removing it!", device->id());
     device_to_core_range_.erase(device);
