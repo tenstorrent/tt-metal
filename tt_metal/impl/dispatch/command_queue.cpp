@@ -705,8 +705,6 @@ HWCommandQueue::~HWCommandQueue() {
     if (this->exit_condition) {
         this->completion_queue_thread.join();  // We errored out already prior
     } else {
-        this->exit_condition = true;
-        this->completion_queue_thread.join();
         TT_ASSERT(
             this->issued_reads.size() == 0,
             "There should be no reads in flight after closing our completion queue thread");
@@ -716,6 +714,8 @@ HWCommandQueue::~HWCommandQueue() {
         TT_ASSERT(
             this->num_issued_commands == this->num_completed_commands,
             "There shouldn't be any commands in flight after closing our completion queue thread. Num uncompleted commands: {}", this->num_issued_commands - this->num_completed_commands);
+        this->exit_condition = true;
+        this->completion_queue_thread.join();
     }
 }
 
