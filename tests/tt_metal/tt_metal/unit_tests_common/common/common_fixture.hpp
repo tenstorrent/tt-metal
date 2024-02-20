@@ -75,7 +75,9 @@ protected:
         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
         // Close all opened devices
         for (unsigned int id = 0; id < devices_.size(); id++) {
-            tt::tt_metal::CloseDevice(devices_.at(id));
+            // The test may ahve closed the device already, so only close if active.
+            if (devices_.at(id)->is_initialized())
+                tt::tt_metal::CloseDevice(devices_.at(id));
         }
     }
 
