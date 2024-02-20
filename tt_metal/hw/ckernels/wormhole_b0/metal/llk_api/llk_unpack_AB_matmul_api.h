@@ -123,6 +123,7 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t tile_size_a = cb_interface[operandA_id].fifo_page_size;
     std::uint32_t tile_size_b = cb_interface[operandB_id].fifo_page_size;
 
+    DEBUG_STATUS('U', 'P', 'M', 'W');
     _llk_unpack_AB_matmul_(
         base_address_a,
         base_address_b,
@@ -137,4 +138,5 @@ inline void llk_unpack_AB_matmul(
         ct_dim,
         rt_dim,
         kt_dim);
+    DEBUG_STATUS('U', 'P', 'M', 'D');
 }
