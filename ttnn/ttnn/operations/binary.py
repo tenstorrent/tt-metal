@@ -622,6 +622,8 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
             "logical_or": torch.logical_or,
             "logical_xor": torch.logical_xor,
             "xlogy": torch.xlogy,
+            "maximum": torch.maximum,
+            "minimum": torch.minimum,
         }
         input_shape_a = input_tensor_a.shape
         slices = [slice(0, dim) for dim in input_shape_a]
@@ -729,6 +731,8 @@ TTL_BINARY_ELTWISE_FUNCTIONS = [
     ("logical_or", ttl.tensor.logical_or, "logical OR (input_a || input_b)"),
     ("logical_xor", ttl.tensor.logical_xor, "logical XOR (input_a ^ input_b) "),
     ("xlogy", ttl.tensor.xlogy, "xlogy (input_a * log( input_b ))"),
+    ("maximum", ttl.tensor.max, "maximum "),
+    ("minimum", ttl.tensor.min, "minimum "),
 ]
 
 
