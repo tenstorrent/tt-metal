@@ -29,7 +29,7 @@ using std::tuple;
 using std::unique_ptr;
 
 // Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_RESTART, FLUSH, INVALID };
+enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, FLUSH, INVALID };
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
@@ -50,29 +50,6 @@ class Command {
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
     virtual const DeviceCommand assemble_device_command(uint32_t buffer_size) = 0;
-};
-
-class EnqueueRestartCommand : public Command {
-   private:
-    Device* device;
-    SystemMemoryManager& manager;
-    uint32_t event;
-    uint32_t command_queue_id;
-   public:
-    constexpr bool has_side_effects() { return true; }
-    EnqueueRestartCommand(
-        uint32_t command_queue_id,
-        Device* device,
-        SystemMemoryManager& manager,
-        uint32_t event
-    );
-
-    const DeviceCommand assemble_device_command(uint32_t dst);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_RESTART; };
-
 };
 
 class EnqueueReadBufferCommand : public Command {
@@ -345,7 +322,6 @@ class Trace {
 
 namespace detail {
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
-void EnqueueRestart(CommandQueue& cq);
 
 /*
  Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
@@ -458,9 +434,7 @@ class HWCommandQueue {
     void finish();
     void issue_wrap();
     void completion_wrap(uint32_t event);
-    void restart();
     void launch(launch_msg_t& msg);
-    friend void detail::EnqueueRestart(CommandQueue& cq);
     friend void EnqueueTrace(Trace& trace, bool blocking);
     friend void EndTrace(Trace& trace);
     friend Trace BeginTrace(CommandQueue& cq);

@@ -89,8 +89,6 @@ class DeviceCommand {
 
     void set_event(uint32_t event);
 
-    void set_restart();
-
     void set_issue_queue_size(uint32_t new_issue_queue_size);
 
     void set_completion_queue_size(uint32_t new_completion_queue_size);
