@@ -217,8 +217,8 @@ def run_test_FalconModel_inference(
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((2, 0.98), (32, 0.98)),
-    ids=["layers_2", "layers_32"],
+    ((1, 0.98), (2, 0.98), (32, 0.98)),
+    ids=["layers_1", "layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
     "model_version",

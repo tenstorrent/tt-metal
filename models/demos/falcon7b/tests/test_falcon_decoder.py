@@ -100,7 +100,6 @@ def run_test_FalconDecoder_inference(
 
         decoder_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
         attention_mask_bool = torch.zeros(batch, 1, q_len, kv_len, dtype=bool)
-        attention_mask_bool[:, :, :, -1] = True
         k_cache = torch.rand(batch, kv_cache_len, head_dim)
         v_cache = torch.rand(batch, kv_cache_len, head_dim)
         layer_past = (k_cache, v_cache)
