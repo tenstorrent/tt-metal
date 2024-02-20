@@ -34,32 +34,6 @@ namespace tt::tt_metal {
 
 uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 
-EnqueueRestartCommand::EnqueueRestartCommand(
-    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event) :
-    command_queue_id(command_queue_id), manager(manager) {
-    this->device = device;
-    this->event = event;
-}
-
-const DeviceCommand EnqueueRestartCommand::assemble_device_command(uint32_t) {
-    DeviceCommand cmd;
-    cmd.set_restart();
-    cmd.set_issue_queue_size(this->manager.get_issue_queue_size(this->command_queue_id));
-    cmd.set_completion_queue_size(this->manager.get_completion_queue_size(this->command_queue_id));
-    cmd.set_finish();
-    cmd.set_event(this->event);
-    return cmd;
-}
-
-void EnqueueRestartCommand::process() {
-    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
-    const DeviceCommand cmd = this->assemble_device_command(0);
-    uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
-    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->manager.issue_queue_push_back(cmd_size, false, this->command_queue_id);
-}
-
 // EnqueueReadBufferCommandSection
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     uint32_t command_queue_id,
@@ -1041,16 +1015,6 @@ void HWCommandQueue::completion_wrap(uint32_t event) {
     this->enqueue_command(command, false);
 }
 
-void HWCommandQueue::restart() {
-    ZoneScopedN("CommandQueue_restart");
-    tt::log_debug(tt::LogDispatch, "EnqueueRestart for channel {}", this->id);
-    EnqueueRestartCommand command(this->id, this->device, this->manager, this->manager.get_next_event(this->id));
-    this->enqueue_command(command, true);
-
-    // Reset the manager
-    this->manager.reset(this->id);
-}
-
 Trace::Trace(HWCommandQueue& command_queue): command_queue(command_queue) {
     this->trace_complete = false;
     this->num_data_bytes = 0;
@@ -1195,7 +1159,6 @@ void FinishImpl(CommandQueue& cq) {
 
 Trace BeginTrace(CommandQueue& cq) {
     // Resets the command queue state
-    cq.hw_command_queue().restart();
     return Trace(cq.hw_command_queue());
 }
 
@@ -1210,7 +1173,6 @@ void EndTrace(Trace& trace) {
     trace.trace_complete = true;
     manager.set_issue_queue_size(
         command_queue_id, trace.num_data_bytes + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * trace.history.size());
-    trace.command_queue.restart();
     trace.create_replay();
     manager.reset(trace.command_queue.id);
 }
@@ -1226,16 +1188,6 @@ void EnqueueTrace(Trace& trace, bool blocking) {
     if (blocking) {
         command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
     }
-}
-
-namespace detail {
-
-void EnqueueRestart(CommandQueue& cq) {
-    ZoneScoped;
-    detail::DispatchStateCheck(true);
-    cq.hw_command_queue().restart();
-}
-
 }
 
 CommandQueue::CommandQueue(Device* device, uint32_t id) : device_ptr(device), cq_id(id) {

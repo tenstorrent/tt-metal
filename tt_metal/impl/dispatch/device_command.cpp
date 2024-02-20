@@ -17,8 +17,6 @@ DeviceCommand::DeviceCommand() {
 
 void DeviceCommand::set_event(uint32_t event) { this->packet.header.event = event; }
 
-void DeviceCommand::set_restart() { this->packet.header.restart = 1; }
-
 void DeviceCommand::set_issue_queue_size(uint32_t new_issue_queue_size) {
     this->packet.header.new_issue_queue_size = new_issue_queue_size;
 }
