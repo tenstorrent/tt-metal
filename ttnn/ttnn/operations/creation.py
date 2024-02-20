@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple, Union
+from typing import Union
 
-
-import tt_lib as ttl
 
 import ttnn
 
@@ -25,10 +23,7 @@ def _zeros_like_validate_input_tensors(operation_name, input_tensor, *args, **kw
 def _torch_zeros_like(input_tensor: ttnn.Tensor, **_):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.to_torch(input_tensor)
-
     return torch.zeros_like(input_tensor)
 
 
@@ -39,19 +34,25 @@ def _torch_zeros_like(input_tensor: ttnn.Tensor, **_):
 )
 def zeros_like(
     input_tensor: ttnn.Tensor,
+    *,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+    zeros_like(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new tensor filled with zero by taking input tensor shape as reference.
 
     Args:
         * :attr:`input_tensor`: the input tensor for reference shape
+
+    Keyword Args:
+        * :attr:`memory_config`: the memory configuration for the output tensor
     """
 
-    ttl_input_tensor = input_tensor.value
-    output_tensor = ttl.tensor.zeros_like(ttl_input_tensor, output_mem_config=memory_config)
-    output_tensor = ttnn.Tensor(output_tensor)
-
+    original_shape = input_tensor.shape
+    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+    output_tensor = ttnn.ttl.tensor.zeros_like(input_tensor, output_mem_config=memory_config)
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
 
@@ -70,10 +71,7 @@ def _ones_like_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 def _torch_ones_like(input_tensor: ttnn.Tensor, **_):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.to_torch(input_tensor)
-
     return torch.ones_like(input_tensor)
 
 
@@ -84,19 +82,25 @@ def _torch_ones_like(input_tensor: ttnn.Tensor, **_):
 )
 def ones_like(
     input_tensor: ttnn.Tensor,
+    *,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+    ones_like(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new tensor filled with one by taking input tensor shape as reference.
 
     Args:
         * :attr:`input_tensor`: the input tensor for reference shape
+
+    Keyword Args:
+        * :attr:`memory_config`: the memory configuration for the output tensor
     """
 
-    ttl_input_tensor = input_tensor.value
-    output_tensor = ttl.tensor.ones_like(ttl_input_tensor, output_mem_config=memory_config)
-    output_tensor = ttnn.Tensor(output_tensor)
-
+    original_shape = input_tensor.shape
+    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+    output_tensor = ttnn.ttl.tensor.ones_like(input_tensor, output_mem_config=memory_config)
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
 
@@ -112,13 +116,10 @@ def _full_like_validate_input_tensors(operation_name, input_tensor, *args, **kwa
     )
 
 
-def _torch_full_like(input_tensor: ttnn.Tensor, fill_value: float, **_):
+def _torch_full_like(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
     import torch
 
-    input_tensor = ttnn.from_device(input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.to_torch(input_tensor)
-
     return torch.full_like(input_tensor, fill_value)
 
 
@@ -129,37 +130,40 @@ def _torch_full_like(input_tensor: ttnn.Tensor, fill_value: float, **_):
 )
 def full_like(
     input_tensor: ttnn.Tensor,
+    *,
     fill_value: float,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+
+    full_like(input_tensor: ttnn.Tensor, *, fill_value: float, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new tensor filled with scalar value by taking input tensor shape as reference.
 
     Args:
         * :attr:`input_tensor`: the input tensor for reference shape
+
+    Keyword Args:
         * :attr:`fill_value`: the value to be filled
+        * :attr:`memory_config`: the memory configuration for the output tensor
     """
 
-    ttl_input_tensor = input_tensor.value
-    output_tensor = ttl.tensor.full_like(ttl_input_tensor, fill_value, output_mem_config=memory_config)
-    output_tensor = ttnn.Tensor(output_tensor)
-
+    original_shape = input_tensor.shape
+    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+    output_tensor = ttnn.ttl.tensor.full_like(input_tensor, fill_value, output_mem_config=memory_config)
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
 
 def _torch_zeros(input_shape: ttnn.Shape, **_):
     import torch
 
-    input_shape = ttnn.from_device(input_shape)
-    input_shape = ttnn.to_layout(input_shape, ttnn.ROW_MAJOR_LAYOUT)
     input_shape = ttnn.to_torch(input_shape)
-
     return torch.zeros(input_shape)
 
 
 def _zeros_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    if len(input_shape) == 4:
-        return True
+    ...
 
 
 @ttnn.register_operation(
@@ -169,33 +173,42 @@ def _zeros_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 )
 def zeros(
     input_shape: ttnn.Shape,
+    *,
+    device: ttnn.Device,
+    dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+
+    zeros(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new tensor filled with zeros by taking input tensor shape as reference.
 
     Args:
         * :attr:`input_shape`: the input shape for reference
-    """
-    output_tensor = ttl.tensor.zeros(input_shape, output_mem_config=memory_config)
-    output_tensor = ttnn.Tensor(output_tensor)
 
+    Keyword Args:
+        * :attr:`device`: the device for the output tensor
+        * :attr:`dtype`: the data type for the output tensor
+        * :attr:`layout`: the layout for the output tensor
+        * :attr:`memory_config`: the memory configuration for the output tensor
+    """
+    output_tensor = ttnn.ttl.tensor.zeros(
+        input_shape, data_type=dtype, layout=layout, device=device, output_mem_config=memory_config
+    )
     return output_tensor
 
 
 def _torch_ones(input_shape: ttnn.Shape, **_):
     import torch
 
-    input_shape = ttnn.from_device(input_shape)
-    input_shape = ttnn.to_layout(input_shape, ttnn.ROW_MAJOR_LAYOUT)
     input_shape = ttnn.to_torch(input_shape)
-
     return torch.ones(input_shape)
 
 
 def _ones_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    if len(input_shape) == 4:
-        return True
+    ...
 
 
 @ttnn.register_operation(
@@ -205,33 +218,43 @@ def _ones_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 )
 def ones(
     input_shape: ttnn.Shape,
+    *,
+    device: ttnn.Device,
+    dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+
+    ones(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new tensor filled with ones by taking input tensor shape as reference.
 
     Args:
         * :attr:`input_shape`: the input shape for reference
-    """
-    output_tensor = ttl.tensor.ones(input_shape, output_mem_config=memory_config)
-    output_tensor = ttnn.Tensor(output_tensor)
 
+    Keyword Args:
+        * :attr:`device`: the device for the output tensor
+        * :attr:`dtype`: the data type for the output tensor
+        * :attr:`layout`: the layout for the output tensor
+        * :attr:`memory_config`: the memory configuration for the output tensor
+    """
+
+    output_tensor = ttnn.ttl.tensor.ones(
+        input_shape, data_type=dtype, layout=layout, device=device, output_mem_config=memory_config
+    )
     return output_tensor
 
 
 def _torch_full(input_shape: ttnn.Shape, fill_value: float, **_):
     import torch
 
-    input_shape = ttnn.from_device(input_shape)
-    input_shape = ttnn.to_layout(input_shape, ttnn.ROW_MAJOR_LAYOUT)
     input_shape = ttnn.to_torch(input_shape)
-
     return torch.full(input_shape, fill_value=fill_value)
 
 
 def _full_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    if len(input_shape) == 4:
-        return True
+    ...
 
 
 @ttnn.register_operation(
@@ -241,19 +264,39 @@ def _full_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
 )
 def full(
     input_shape: ttnn.Shape,
+    *,
+    device: ttnn.Device,
+    dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     fill_value: float,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     r"""
+
+    full(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, fill_value: float, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
     Returns a new tensor filled with fill_value by taking input tensor shape as reference.
 
     Args:
         * :attr:`input_shape`: the input shape for reference
-        * :attr:`fill_value`: the value to be filled
-    """
-    output_tensor = ttl.tensor.full(input_shape, fill_value=fill_value, output_mem_config=memory_config)
-    output_tensor = ttnn.Tensor(output_tensor)
 
+    Keyword Args:
+        * :attr:`device`: the device for the output tensor
+        * :attr:`dtype`: the data type for the output tensor
+        * :attr:`layout`: the layout for the output tensor
+        * :attr:`fill_value`: the value to be filled
+        * :attr:`memory_config`: the memory configuration for the output tensor
+
+    """
+
+    output_tensor = ttnn.ttl.tensor.full(
+        input_shape,
+        fill_value=fill_value,
+        device=device,
+        data_type=dtype,
+        layout=layout,
+        output_mem_config=memory_config,
+    )
     return output_tensor
 
 

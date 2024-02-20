@@ -99,18 +99,6 @@ def _is_scalar(value):
     return isinstance(value, (int, float))
 
 
-def torch_relu_max(x, *args, **kwargs):
-    upper_limit = kwargs.pop("scalar")
-    capped_tensor = torch.min(x, torch.tensor(upper_limit, dtype=x.dtype))
-    return torch.relu(capped_tensor)
-
-
-def torch_relu_min(x, *args, **kwargs):
-    lower_limit = kwargs.pop("scalar")
-    capped_tensor = torch.max(x, torch.tensor(lower_limit, dtype=x.dtype))
-    return torch.relu(capped_tensor)
-
-
 def torch_heaviside(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
@@ -131,14 +119,12 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, o
             "leaky_relu": F.leaky_relu,
             "prelu": torch_prelu,
             "elu": F.elu,
-            "relu_max": torch_relu_max,
-            "relu_min": torch_relu_min,
             "softshrink": F.softshrink,
         }
         torch_function = name_to_torch_function[name]
         input_tensor = ttnn.to_torch(input_tensor)
 
-        if name == "relu_max" or name == "relu_min" or name == "heaviside" or name == "prelu":
+        if name == "heaviside" or name == "prelu":
             return torch_function(input_tensor, scalar=parameter)
         else:
             return torch_function(input_tensor, parameter)
@@ -299,13 +285,11 @@ TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
     ("leaky_relu", ttl.tensor.leaky_relu, "leaky relu", "slope"),
     ("prelu", ttl.tensor.prelu, "prelu", "weight"),
     ("elu", ttl.tensor.elu, "elu", "alpha"),
-    ("relu_max", ttl.tensor.relu_max, "relu max", "upper-limit"),
-    ("relu_min", ttl.tensor.relu_min, "relu min", "lower-limit"),
     ("softshrink", ttl.tensor.softshrink, "softshrink", "lambda"),
 ]
 
 TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAM = [
-    ("clip", ttl.tensor.clip, "Clip", "min", "max"),
+    ("clip", ttl.tensor.clip, "clip", "min", "max"),
 ]
 
 for activation_function_name, ttl_activation_function, name, param in TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM:

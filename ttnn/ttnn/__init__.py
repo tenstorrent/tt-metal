@@ -212,8 +212,6 @@ from ttnn.operations.activation import (
     log_sigmoid,
     mish,
     prelu,
-    relu_max,
-    relu_min,
     relu6,
     sigmoid,
     sign,
