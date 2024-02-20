@@ -41,7 +41,6 @@ from ttnn.types import (
     L1_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
-    DEFAULT_SHARD_ORIENTATION,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -49,7 +48,6 @@ from ttnn.types import (
     DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
-    ShardShape,
     Shape,
     Tensor,
 )

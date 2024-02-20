@@ -81,8 +81,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
     )
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
+        input_tensor.shape,
         grid_size,
-        ttnn.ShardShape(y=int(N * H * W / grid_size.num_cores), x=int(C)),
         ttnn.ShardStrategy.HEIGHT,
         ttnn.ShardOrientation.COLUMN_MAJOR,
     )

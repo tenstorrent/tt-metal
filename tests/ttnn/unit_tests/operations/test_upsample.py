@@ -28,7 +28,7 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize("scale_h", [2])
 @pytest.mark.parametrize("scale_w", [2])
 def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
-    batch_size, h, w, c = input_shapes
+    batch_size, height, width, num_channels = input_shapes
 
     torch.manual_seed(0)
     input = torch.rand(input_shapes, dtype=torch.bfloat16)
@@ -73,7 +73,7 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
 def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy):
     ## input shape is N C H W
-    batch_size, c, h, w = input_shape
+    batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
     input = torch.rand(input_shape, dtype=torch.bfloat16)
 
@@ -81,6 +81,7 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     scale_factor = (scale_h, scale_w)
     torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
     torch_result = torch_upsample(input)
+    output_shape = torch_result.shape
 
     ## calculated ttnn result
 
@@ -91,10 +92,10 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     max_grid_size = (9, 12)  ## (y, x)
     if shard_strategy == ttnn.ShardStrategy.HEIGHT:
         ## nsticks per shard should be divisible by in_w
-        max_nshards = min(batch_size * h, max_grid_size[0] * max_grid_size[1])
+        max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
         nshards = max_nshards
         while nshards > 0:
-            if batch_size * h % nshards == 0:
+            if batch_size * height % nshards == 0:
                 break
             nshards -= 1
 
@@ -105,26 +106,23 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
             if ncores < max_grid_size[1]:
                 grid_size = ttnn.CoreGrid(y=1, x=ncores)
             else:
-                grid1_size = (ncores // max_grid_size[1], max_grid_size[1])
-                grid2_size = (ncores // max_grid_size[1] + 1, ncores % max_grid_size[1])
-                grid_size = ttnn.CoreGrid(y=grid1_size, x=grid2_size)
-
-        in_shard_shape = ttnn.ShardShape(y=batch_size * h * w // ncores, x=c)  ## y, x
-        out_shard_shape = ttnn.ShardShape(y=batch_size * h * w * scale_h * scale_w // ncores, x=c)
+                grid1_size = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
+                grid2_size = ttnn.CoreGrid(y=ncores // max_grid_size[1] + 1, x=ncores % max_grid_size[1])
+                grid_size = (grid1_size, grid2_size)
 
     elif shard_strategy == ttnn.ShardStrategy.BLOCK:
-        max_nshards_h = min(batch_size * h, max_grid_size[0])  ## height along NHW
-        max_nshards_w = min(c, max_grid_size[1])  ## width along C
+        max_nshards_h = min(batch_size * height, max_grid_size[0])  ## height along NHW
+        max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C
         ## find nshards_h along NHW
         nshards_h = max_nshards_h
         while nshards_h > 0:
-            if batch_size * h % nshards_h == 0:
+            if batch_size * height % nshards_h == 0:
                 break
             nshards_h -= 1
         ## find nshards_w along C
         nshards_w = max_nshards_w
         while nshards_w > 0:
-            if c % nshards_w == 0:
+            if num_channels % nshards_w == 0:
                 break
             nshards_w -= 1
 
@@ -133,11 +131,19 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
 
         ## calculate grid_size and shard_shape
         grid_size = ttnn.CoreGrid(y=nshards_h, x=nshards_w)
-        in_shard_shape = ttnn.ShardShape(y=batch_size * h * w // nshards_h, x=c // nshards_w)
-        out_shard_shape = ttnn.ShardShape(y=batch_size * h * w * scale_h * scale_w // nshards_h, x=c // nshards_w)
 
-    in_sharded_mem_config = ttnn.create_sharded_memory_config(grid_size, in_shard_shape, shard_strategy)
-    out_sharded_mem_config = ttnn.create_sharded_memory_config(grid_size, out_shard_shape, shard_strategy)
+    in_sharded_mem_config = ttnn.create_sharded_memory_config(
+        [batch_size, height, width, num_channels],
+        grid_size,
+        shard_strategy,
+        use_height_and_width_as_shard_shape=shard_strategy == ttnn.ShardStrategy.HEIGHT,
+    )
+    out_sharded_mem_config = ttnn.create_sharded_memory_config(
+        [batch_size, height * scale_h, width * scale_w, num_channels],
+        grid_size,
+        shard_strategy,
+        use_height_and_width_as_shard_shape=shard_strategy == ttnn.ShardStrategy.HEIGHT,
+    )
 
     ## ttnn uses NHWC, so need to set scale_factor_c = 1
     scale_factor = (scale_h, scale_w, 1)
