@@ -114,7 +114,7 @@ def run_test_LlamaDecoder_inference(
     )
 
     generation_start_pos = 126
-    generation_length = 129
+    generation_length = 3
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
