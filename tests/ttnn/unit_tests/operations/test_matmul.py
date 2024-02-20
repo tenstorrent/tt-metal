@@ -239,7 +239,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 
 
 @pytest.mark.parametrize(
-    "B, H, M, K, N, bcast_batch, in0_sharded_mem_config, in1_sharded_mem_config",
+    "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [
         (
             2,
@@ -248,9 +248,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             224,
             896,
             True,
-            ttnn.create_sharded_memory_config(
-                ttnn.CoreGrid(y=5, x=7), ttnn.ShardShape(y=2 * 3 * 1600 // 5, x=224 // 7), ttnn.ShardStrategy.BLOCK
-            ),
+            dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK),
             None,
         ),  # mcast 2d
         (
@@ -260,10 +258,9 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             224,
             896,
             True,
-            ttnn.create_sharded_memory_config(
-                ttnn.CoreGrid(y=7, x=5),
-                ttnn.ShardShape(y=2 * 3 * 1600 // 5, x=224 // 7),
-                ttnn.ShardStrategy.BLOCK,
+            dict(
+                core_grid=ttnn.CoreGrid(y=7, x=5),
+                strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
             ),
             None,
@@ -275,11 +272,12 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             32 * 7,
             1024,
             True,
-            ttnn.create_sharded_memory_config(
-                ttnn.CoreGrid(y=1, x=7), ttnn.ShardShape(y=2 * 3 * 64, x=32), ttnn.ShardStrategy.WIDTH
+            dict(
+                core_grid=ttnn.CoreGrid(y=1, x=7),
+                strategy=ttnn.ShardStrategy.WIDTH,
             ),
             None,
-        ),  # mcast in0
+        ),  # mcast input_a
         (
             2,
             3,
@@ -287,11 +285,12 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             64,
             64,
             True,
-            ttnn.create_sharded_memory_config(
-                ttnn.CoreGrid(y=7, x=1), ttnn.ShardShape(y=2 * 3 * 160, x=64), ttnn.ShardStrategy.HEIGHT
+            dict(
+                core_grid=ttnn.CoreGrid(y=7, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
             ),
             None,
-        ),  # mcast in1
+        ),  # mcast input_a
         (
             7,
             7,
@@ -299,27 +298,41 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
             64,
             384,
             False,
-            ttnn.create_sharded_memory_config(
-                ttnn.CoreGrid(y=7, x=7), ttnn.ShardShape(y=384, x=64), ttnn.ShardStrategy.HEIGHT
+            dict(
+                core_grid=ttnn.CoreGrid(y=7, x=7),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
             ),
-            ttnn.create_sharded_memory_config(
-                ttnn.CoreGrid(y=7, x=7), ttnn.ShardShape(y=64, x=384), ttnn.ShardStrategy.HEIGHT
+            dict(
+                core_grid=ttnn.CoreGrid(y=7, x=7),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
             ),
         ),  # bmm
     ],
     ids=["mcast_2d", "mcast_2d_transposed", "mcast_in0", "mcast_in1", "bmm"],
 )
-def test_sharded_matmul(B, H, M, K, N, bcast_batch, in0_sharded_mem_config, in1_sharded_mem_config, device):
+def test_sharded_matmul(
+    device,
+    batch_size_0,
+    batch_size_1,
+    m_size,
+    k_size,
+    n_size,
+    bcast_batch,
+    input_a_sharded_memory_config_args,
+    input_b_sharded_memory_config_args,
+):
     torch.manual_seed(0)
 
-    in0_shape = [B, H, M, K]
+    input_a_shape = [batch_size_0, batch_size_1, m_size, k_size]
     if bcast_batch:
-        in1_shape = [1, 1, K, N]
+        input_b_shape = [k_size, n_size]
     else:
-        in1_shape = [B, H, K, N]
+        input_b_shape = [batch_size_0, batch_size_1, k_size, n_size]
 
-    torch_input_tensor_a = torch.randn(in0_shape)
-    torch_input_tensor_b = torch.randn(in1_shape)
+    torch_input_tensor_a = torch.randn(input_a_shape)
+    torch_input_tensor_b = torch.randn(input_b_shape)
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a.to(torch.bfloat16))
@@ -331,9 +344,16 @@ def test_sharded_matmul(B, H, M, K, N, bcast_batch, in0_sharded_mem_config, in1_
     input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.TILE_LAYOUT)
     input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.TILE_LAYOUT)
 
-    input_tensor_a = ttnn.to_memory_config(input_tensor_a, in0_sharded_mem_config)
-    if in1_sharded_mem_config:
-        input_tensor_b = ttnn.to_memory_config(input_tensor_b, in1_sharded_mem_config)
+    input_a_sharded_memory_config = ttnn.create_sharded_memory_config(
+        input_a_shape, **input_a_sharded_memory_config_args
+    )
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_sharded_memory_config)
+
+    if input_b_sharded_memory_config_args:
+        input_b_sharded_memory_config = ttnn.create_sharded_memory_config(
+            input_b_shape, **input_b_sharded_memory_config_args
+        )
+        input_tensor_b = ttnn.to_memory_config(input_tensor_b, input_b_sharded_memory_config)
 
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
