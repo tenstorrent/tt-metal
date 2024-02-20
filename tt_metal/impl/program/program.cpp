@@ -47,11 +47,15 @@ namespace{
         // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
         // This can be removed with https://github.com/tenstorrent-metal/tt-metal/issues/3381
 
+        // Also account for watcher/dprint enabled in hash because they enable additional code to
+        // be compiled into the kernel.
         string compile_hash_str = fmt::format(
-            "{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             device_id,
             std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-            kernel->compute_hash()
+            kernel->compute_hash(),
+            tt::llrt::OptionsG.get_watcher_enabled(),
+            tt::llrt::OptionsG.get_dprint_enabled()
         );
         size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
