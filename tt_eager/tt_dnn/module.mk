@@ -114,6 +114,11 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/gamma_beta_grad/moreh_layernorm_backward_gamma_beta_grad.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/moreh_groupnorm_backward_input_grad.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/moreh_groupnorm_backward_gamma_beta_grad.cpp \
 	tt_eager/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_nc/moreh_cumsum_nc.cpp \
 	tt_eager/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.cpp \

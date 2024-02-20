@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,10 +43,12 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const auto output_grad_shape = output_grad.shape();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
+    const bool is_groupnorm = false;
 
     const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
 
     const auto origin_H = output_grad_shape_without_padding[2];
+    const auto origin_W = output_grad_shape_without_padding[3];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layernorm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
@@ -186,11 +188,13 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const std::vector<uint32_t> compute_args_group_1{
         num_cols_per_core_group_1,
         origin_H,
+        origin_W,
         NCHt,
         Wt,
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(beta_grad_has_value),
-        static_cast<uint32_t>(is_lastdim_layernorm)};
+        static_cast<uint32_t>(is_lastdim_layernorm),
+        static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
@@ -203,11 +207,13 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         const std::vector<uint32_t> compute_args_group_2{
             num_cols_per_core_group_2,
             origin_H,
+            origin_W,
             NCHt,
             Wt,
             static_cast<uint32_t>(gamma_grad_has_value),
             static_cast<uint32_t>(beta_grad_has_value),
-            static_cast<uint32_t>(is_lastdim_layernorm)};
+            static_cast<uint32_t>(is_lastdim_layernorm),
+            static_cast<uint32_t>(is_groupnorm)};
 
         CreateComputeKernel(
             program,

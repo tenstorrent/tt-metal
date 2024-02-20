@@ -802,6 +802,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.argmin
 
+.. autofunction:: tt_lib.operations.primary.moreh_groupnorm
+
 Backward Operations
 ===================
 
@@ -886,6 +888,8 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.atan2_bw
 
 .. autofunction:: tt_lib.tensor.hypot_bw
+
+.. autofunction:: tt_lib.operations.primary.moreh_groupnorm_backward
 
 Loss Functions
 ==============

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
 
-inline bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
+ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
 }
 
@@ -26,6 +26,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
     constexpr bool gamma_has_value = get_compile_time_arg_val(4) == 1;
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(5) == 1;
+    constexpr bool is_groupnorm = get_compile_time_arg_val(6) == 1;
 
     binary_op_init_common(tt::CB::c_in1, tt::CB::c_in2);
 
@@ -166,12 +167,17 @@ void MAIN {
                 cb_wait_front(cb_dy, onetile);     // comes from the reader
                 cb_wait_front(cb_gamma, onetile);  // comes from the reader
 
-                if (is_lastdim_layernorm) {
-                    mul_bcast_rows_init_short();
-                    mul_tiles_bcast_rows(cb_dy, cb_gamma, 0, 0, dst0);
+                if (is_groupnorm) {
+                    mul_tiles_bcast_scalar_init_short();
+                    mul_tiles_bcast_scalar(cb_dy, cb_gamma, 0, 0, dst0);
                 } else {
-                    mul_tiles_init();
-                    mul_tiles(cb_dy, cb_gamma, 0, 0, dst0);
+                    if (is_lastdim_layernorm) {
+                        mul_bcast_rows_init_short();
+                        mul_tiles_bcast_rows(cb_dy, cb_gamma, 0, 0, dst0);
+                    } else {
+                        mul_tiles_init();
+                        mul_tiles(cb_dy, cb_gamma, 0, 0, dst0);
+                    }
                 }
 
                 if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
@@ -376,12 +382,17 @@ void MAIN {
                 cb_wait_front(cb_dy, onetile);     // comes from the reader
                 cb_wait_front(cb_gamma, onetile);  // comes from the reader
 
-                if (is_lastdim_layernorm) {
-                    mul_bcast_rows_init_short();
-                    mul_tiles_bcast_rows(cb_dy, cb_gamma, 0, 0, dst0);
+                if (is_groupnorm) {
+                    mul_tiles_bcast_scalar_init_short();
+                    mul_tiles_bcast_scalar(cb_dy, cb_gamma, 0, 0, dst0);
                 } else {
-                    mul_tiles_init();
-                    mul_tiles(cb_dy, cb_gamma, 0, 0, dst0);
+                    if (is_lastdim_layernorm) {
+                        mul_bcast_rows_init_short();
+                        mul_tiles_bcast_rows(cb_dy, cb_gamma, 0, 0, dst0);
+                    } else {
+                        mul_tiles_init();
+                        mul_tiles(cb_dy, cb_gamma, 0, 0, dst0);
+                    }
                 }
 
                 if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
