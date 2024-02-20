@@ -18,7 +18,7 @@ CONFIG_LDFLAGS =
 TT_METAL_CREATE_STATIC_LIB ?= 0
 
 ifeq ($(CONFIG), release)
-CONFIG_CFLAGS += -O3 -flto
+CONFIG_CFLAGS += -O3
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
 CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG
 else ifeq ($(CONFIG), assert)

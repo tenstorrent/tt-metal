@@ -1,0 +1,50 @@
+name: "[post-commit] Build C++ binaries with all configs"
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-and-upload:
+    strategy:
+      matrix:
+        config: [debug, assert, release]
+        arch: [grayskull, wormhole_b0]
+        os: [ubuntu-20.04]
+    env:
+      ARCH_NAME: ${{ matrix.arch }}
+      CONFIG: ${{ matrix.config }}
+      # So we can get all the makefile output we want
+      SILENT: 0
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ubuntu-20.04
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ubuntu-20.04
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal libraries
+        run: make build
+      - name: Build all tt-metal tests
+        # Does not work yet
+        if: ${{ matrix.config != 'release' }}
+        run: make tests
+      - name: Upload libraries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal-libraries-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
+          path: build/lib
+      - name: Upload tests as artifacts
+        uses: actions/upload-artifact@v4
+        # Does not work yet
+        if: ${{ matrix.config != 'release' }}
+        with:
+          name: metal-tests-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
+          path: build/test

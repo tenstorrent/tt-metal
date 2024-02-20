@@ -7,6 +7,9 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
+  build:
+    uses: ./.github/workflows/build.yaml
+    secrets: inherit
   build-and-unit-tests:
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
