@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const auto output_grad_shape = output_grad.shape();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
+    const bool is_groupnorm = false;
 
     const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
 
@@ -223,7 +224,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
         origin_W,
         Wt,
         static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(is_lastdim_layernorm)};
+        static_cast<uint32_t>(is_lastdim_layernorm),
+        static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file = use_large_algorithm
                                          ? "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
@@ -241,7 +243,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
             origin_W,
             Wt,
             static_cast<uint32_t>(gamma_has_value),
-            static_cast<uint32_t>(is_lastdim_layernorm)};
+            static_cast<uint32_t>(is_lastdim_layernorm),
+            static_cast<uint32_t>(is_groupnorm)};
 
         CreateComputeKernel(
             program,

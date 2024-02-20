@@ -368,7 +368,7 @@ struct DeviceOperation final {
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()){
                     TT_FATAL(not optional_input_tensors.empty());
                     TT_FATAL(not optional_output_tensors.empty());
-                    operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
+                    operation.validate_with_output_tensors(input_tensors, optional_input_tensors, optional_output_tensors);
                 }else{
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation must implement either validate or validate_with_output_tensors");
                 }

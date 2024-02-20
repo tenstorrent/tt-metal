@@ -29,6 +29,8 @@
 #include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
+#include "tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 
 namespace py = pybind11;
 
@@ -803,6 +805,47 @@ void py_module(py::module& m_primary) {
         R"doc(
             Performs a groupnorm operation, returna a output tensor the same shape as input.
         )doc");
+
+    // moreh_groupnorm
+    m_primary.def(
+        "moreh_groupnorm",
+        &moreh_groupnorm,
+        py::arg("input").noconvert(),
+        py::arg("num_groups").noconvert(),
+        py::arg("eps").noconvert() = 1e-5f,
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("mean").noconvert() = std::nullopt,
+        py::arg("rstd").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("mean_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("rstd_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_groupnorm operation.
+    )doc");
+
+    // moreh_groupnorm_backward
+    m_primary.def(
+        "moreh_groupnorm_backward",
+        &moreh_groupnorm_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("mean").noconvert(),
+        py::arg("rstd").noconvert(),
+        py::arg("num_groups").noconvert(),
+        py::kw_only(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("gamma_grad").noconvert() = std::nullopt,
+        py::arg("beta_grad").noconvert() = std::nullopt,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("gamma_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("beta_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_groupnorm_backward operation.
+    )doc");
 }
 
 }  // namespace

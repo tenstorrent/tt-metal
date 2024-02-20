@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,17 +67,16 @@ void kernel_main() {
     const auto NCHt = num_rows_per_core;
     constexpr uint32_t onetile = 1;
 
+    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
+    uint32_t input_tile_idx;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
-            cb_reserve_back(cb_id_input, block_size);
-            auto input_l1_write_ptr = get_write_ptr(cb_id_input);
-            for (uint32_t r = 0; r < block_size; r++) {
-                noc_async_read_tile(offs + wt + r + tile_offset, input_addrg, input_l1_write_ptr);
-                input_l1_write_ptr += input_tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, block_size);
+        cb_reserve_back(cb_id_input, Wt);
+        for (uint32_t wt = 0; wt < Wt; wt++) {
+            input_tile_idx = tile_offset + ncht * Wt + wt;
+            noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + wt * input_tile_bytes);
         }  // wt loop
+        noc_async_read_barrier();
+        cb_push_back(cb_id_input, Wt);
 
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
 #ifdef GAMMA_HAS_VALUE
