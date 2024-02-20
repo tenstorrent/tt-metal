@@ -8,6 +8,7 @@ import numpy as np
 import tt_lib as ttl
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
+from models.utility_functions import skip_for_grayskull
 
 
 def transpose(
@@ -60,6 +61,7 @@ def test_transpose_hc(device):
     transpose(input_shape, device, dim0=1, dim1=-2)
 
 
+@skip_for_grayskull("Integer formats not supported on Grayskull")
 def test_transpose_wh_uint16(device):
     N = 3
     C = 32 * 2
