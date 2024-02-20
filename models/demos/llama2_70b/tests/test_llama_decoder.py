@@ -111,8 +111,8 @@ def run_test_LlamaDecoder_inference(
     # TT model -------------------------------------------------------------
     tt_LlamaDecoder_model = TtLlamaDecoder(devices, state_dict, base_url, layer_num, model_config, configuration, batch)
 
-    generation_start_pos = 0
-    generation_length = 8
+    generation_start_pos = 126
+    generation_length = 129
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input

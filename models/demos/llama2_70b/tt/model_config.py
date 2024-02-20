@@ -107,6 +107,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     )
     BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    # BFP2_DTYPE = ttl.tensor.DataType.BFLOAT2_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS:
@@ -217,6 +218,9 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 False,
             ),
         )
+
+    model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE
+
     model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
