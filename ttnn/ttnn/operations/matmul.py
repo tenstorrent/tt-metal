@@ -59,12 +59,10 @@ def _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core):
     raise RuntimeError(f"Unable to find subblock sizes for m_size={m_tiles_per_core} and n_size={n_tiles_per_core}")
 
 
-_SUPPORTED_ACTIVATIONS = ["gelu", "relu"]
-
-
 _ACTIVATION_TO_FUSED_ACTIVATION = {
     "gelu": (ttnn.ttl.tensor.FusibleActivation.GELU, True),
     "relu": ttnn.ttl.tensor.FusibleActivation.RELU,
+    "silu": ttnn.ttl.tensor.FusibleActivation.SILU,
 }
 
 
@@ -77,10 +75,10 @@ def get_fused_activation(activation):
 def _validate_activation(activation):
     if activation is None:
         return
-    is_supported = activation in _SUPPORTED_ACTIVATIONS
+    is_supported = activation in _ACTIVATION_TO_FUSED_ACTIVATION
     if not is_supported:
         raise RuntimeError(
-            f"{activation} is not supported as activation function. Use one of these instead: {_SUPPORTED_ACTIVATIONS}"
+            f"{activation} is not supported as activation function. Use one of these instead: {_ACTIVATION_TO_FUSED_ACTIVATION.keys()}"
         )
 
 
