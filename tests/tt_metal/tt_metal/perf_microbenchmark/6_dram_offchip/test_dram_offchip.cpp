@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
         } else {
             for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
-                uint32_t num_tiles_per_core;
+                uint32_t num_tiles_per_core = 0;
                 if (core_group_1.core_coord_in_core_ranges(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_1;
                 } else if (core_group_2.core_coord_in_core_ranges(core)) {
@@ -410,7 +410,7 @@ bool assign_runtime_args_to_program(
     bool pass = true;
     for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
@@ -450,7 +450,7 @@ bool validation(
         auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            uint32_t num_tiles_per_core;
+            uint32_t num_tiles_per_core = 0;
             if (core_group_1.core_coord_in_core_ranges(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
             } else if (core_group_2.core_coord_in_core_ranges(core)) {
@@ -482,7 +482,7 @@ bool validation(
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            uint32_t num_tiles_per_core;
+            uint32_t num_tiles_per_core = 0;
             if (core_group_1.core_coord_in_core_ranges(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
             } else if (core_group_2.core_coord_in_core_ranges(core)) {
