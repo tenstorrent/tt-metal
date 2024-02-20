@@ -98,5 +98,5 @@ def test_squared_difference(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_hypot_b(device, h, w):
+def test_hypot(device, h, w):
     run_math_binary_test_range(device, h, w, ttnn.hypot, torch.hypot, 0, 100)

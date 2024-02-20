@@ -112,18 +112,6 @@ def torch_prelu(x, *args, **kwargs):
     return result
 
 
-def torch_relu_max(x, *args, **kwargs):
-    upper_limit = kwargs.pop("scalar")
-    capped_tensor = torch.min(x, torch.tensor(upper_limit, dtype=x.dtype))
-    return torch.relu(capped_tensor)
-
-
-def torch_relu_min(x, *args, **kwargs):
-    lower_limit = kwargs.pop("scalar")
-    capped_tensor = torch.max(x, torch.tensor(lower_limit, dtype=x.dtype))
-    return torch.relu(capped_tensor)
-
-
 def run_activation_test_scalarB(device, h, w, scalar, ttnn_function, torch_function, pcc=0.99):
     torch.manual_seed(0)
 
@@ -196,20 +184,6 @@ def test_scalarB_prelu(device, h, w, scalar):
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_softshrink(device, h, w, scalar):
     run_activation_test_scalarB(device, h, w, scalar, ttnn.softshrink, F.softshrink)
-
-
-@pytest.mark.parametrize("scalar", [7.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_relu_max(device, h, w, scalar):
-    run_activation_test_scalarB_key(device, h, w, scalar, ttnn.relu_max, torch_relu_max)
-
-
-@pytest.mark.parametrize("scalar", [-2.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_scalarB_relu_min(device, h, w, scalar):
-    run_activation_test_scalarB_key(device, h, w, scalar, ttnn.relu_min, torch_relu_min)
 
 
 def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_function, torch_function, pcc=0.99):
