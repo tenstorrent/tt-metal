@@ -8,6 +8,7 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
+from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 
 # from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
@@ -54,6 +55,7 @@ class TtLlamaDecoder:
             self.attn_norm_list.append(attn_norm)
             self.ffn_norm_list.append(ffn_norm)
 
+        # self.attention = TtLlamaAttention_optimized(
         self.attention = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
 
         # self.mlp = TtLlamaMLP_optimized(
