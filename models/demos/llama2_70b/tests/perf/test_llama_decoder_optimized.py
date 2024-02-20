@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
+from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -109,7 +109,9 @@ def run_test_LlamaDecoder_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaDecoder_model = TtLlamaDecoder(devices, state_dict, base_url, layer_num, model_config, configuration, batch)
+    tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
+        devices, state_dict, base_url, layer_num, model_config, configuration, batch
+    )
 
     generation_start_pos = 126
     generation_length = 129

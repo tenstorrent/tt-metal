@@ -16,7 +16,7 @@ from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.llama_common import tt_all_gather
 
 
-class TtLlamaDecoder:
+class TtLlamaDecoder_optimized:
     def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration, batch):
         super().__init__()
 
@@ -55,11 +55,11 @@ class TtLlamaDecoder:
             self.attn_norm_list.append(attn_norm)
             self.ffn_norm_list.append(ffn_norm)
 
-        # self.attention = TtLlamaAttention_optimized(
-        self.attention = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
+        self.attention = TtLlamaAttention_optimized(
+            devices, state_dict, base_url, layer_num, model_config, configuration
+        )
 
-        # self.mlp = TtLlamaMLP_optimized(
-        self.mlp = TtLlamaMLP(
+        self.mlp = TtLlamaMLP_optimized(
             devices,
             state_dict,
             base_url,
@@ -104,7 +104,21 @@ class TtLlamaDecoder:
             device = self.devices[i]
             xs.append(torch2tt_tensor(x_fractured[i], device))
             rot_mats.append(torch2tt_tensor(rot_mat.clone(), device))
-            attn_masks.append(torch2tt_tensor(attn_mask.clone(), device))
+
+            # Put attn_mask on the device with the sharded config
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = padded_layer_past_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+            attn_masks.append(
+                torch2tt_tensor(
+                    attn_mask.clone(),
+                    device,
+                    tt_memory_config=attention_mask_memconfig,
+                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                )
+            )
         return (
             xs,
             start_pos,
