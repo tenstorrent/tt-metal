@@ -480,6 +480,6 @@ def test_group_attn_matmul_fp32(
     golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
     allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-
-    # print(tt_output_tensor)
+    # print("tt_output_tensor = {}", tt_output_tensor[0][0][0])
+    # print("golden_output_tensor = {}", golden_output_tensor[0][0][0])
     assert allclose, f"FAILED: {output}"

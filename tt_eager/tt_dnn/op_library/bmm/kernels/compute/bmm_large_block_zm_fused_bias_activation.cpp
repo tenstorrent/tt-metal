@@ -18,7 +18,7 @@ namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles, uint32_t out_subblock_w, uint32_t out_subblock_h, uint32_t in0_block_w) {
     // Reconfigure input
-    copy_tile_matmul_partials_init_short_with_dt(mm_partials_cb_id);
+    copy_tile_matmul_partials_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
     tile_regs_acquire();
 
