@@ -123,6 +123,12 @@ def get_model_config(model_config_str):
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 2,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon40b/datasets/"),
+        "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
@@ -458,7 +464,7 @@ def get_model_config(model_config_str):
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
-            out_subblock_w=8,
+            out_subblock_w=4,
             per_core_M=1,
             per_core_N=8,
             fuse_batch=True,
@@ -555,7 +561,7 @@ def get_model_config(model_config_str):
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
-            out_subblock_w=8,
+            out_subblock_w=4,
             per_core_M=1,
             per_core_N=16,
             fuse_batch=True,

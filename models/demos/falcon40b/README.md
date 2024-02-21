@@ -18,4 +18,4 @@ A sample of input prompts for 32 users is provided in `input_data.json` in demo 
 
 ## Details
 
-This model picks up certain configs and weights from huggingface pretrained model. We have used `tiiuae/falcon-7b-instruct` version from huggingface. The first time you run the model, the weights are downloaded and stored on your machine, and it might take a few minutes. The second time you run the model on your machine, the weights are being read from your machine and it will be faster.
+This model picks up certain configs and weights from huggingface pretrained model. We have used `tiiuae/falcon-40b-instruct` version from huggingface. The first time you run the model, the weights are downloaded and stored on your machine, and it might take a few minutes. The second time you run the model on your machine, the weights are being read from your machine and it will be faster.

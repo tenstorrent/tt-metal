@@ -301,6 +301,7 @@ class TtFalconAttention:
                     program_config=self.model_config["QKV_MM_PROGCFG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
         ###########
@@ -510,5 +511,6 @@ class TtFalconAttention:
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
                 output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
         return attn_output, layer_present

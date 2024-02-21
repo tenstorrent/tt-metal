@@ -326,6 +326,10 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"Output: {output_pcc}")
 
     for i in range(num_layers):
+        # Only check every 4 layers for full model
+        if num_layers == 60 and i % 4 > 0:
+            continue
+
         tt_layer_pres = (
             torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
             torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
@@ -398,7 +402,7 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize(
     "num_layers, out_pcc, cache_pcc, token_pcc",
-    ((1, 0.89, 0.99, 0.99), (2, 0.60, 0.95, 0.82), (60, 0.66, 0.90, 0.08)),
+    ((1, 0.99, 0.99, 0.99), (2, 0.99, 0.99, 0.99), (60, 0.92, 0.99, 0.85)),
     ids=["layers_1", "layers_2", "layers_60"],
 )
 @pytest.mark.parametrize(

@@ -107,7 +107,7 @@ def run_test_FalconMLP_inference(
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str, pcc", [("BFLOAT8_B-SHARDED", 0.85), ("BFLOAT16-SHARDED", 0.87)])
+@pytest.mark.parametrize("model_config_str, pcc", [("BFLOAT8_B-SHARDED", 0.9987), ("BFLOAT16-SHARDED", 0.9987)])
 def test_FalconMLP_inference(
     model_version,
     llm_mode,

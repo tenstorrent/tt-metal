@@ -277,6 +277,7 @@ def run_test_FalconCausalLM_inference(
         logger.info("Falcon CausalLM Passed!")
     else:
         logger.warning("Falcon CausalLM Failed!")
+        assert does_pass
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -299,7 +300,7 @@ def run_test_FalconCausalLM_inference(
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
-    [("BFLOAT8_B-SHARDED", 0.89, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.92, 0.99, 0.99)],
+    [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99)],
 )
 def test_FalconCausalLM_inference(
     model_version,
