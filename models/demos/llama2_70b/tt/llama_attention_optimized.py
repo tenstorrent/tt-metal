@@ -243,33 +243,39 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 transpose_k_heads=False,
                 output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
-            # TODO: Tmp fix because transpose can only work in DRAM
-            q_heads = tt_lib.tensor.sharded_to_interleaved(
-                q_heads, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            )
-            k_heads = tt_lib.tensor.sharded_to_interleaved(
-                k_heads, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            )
-            # Have to put bsz back in dim 1 to match rot_mat shape
-            q_heads = tt_lib.tensor.transpose(q_heads, 1, 2)
-            k_heads = tt_lib.tensor.transpose(k_heads, 1, 2)
-            # q_heads = tt_lib.operations.primary.matmul(
-            #     q_heads,
-            #     rot_mat,
+
+            # rot_mat = tt_lib.tensor.interleaved_to_sharded(
+            #     rot_mat, sharded_mem_config=self.model_config["ROT_MAT_K_OUTPUT_MEMCFG"]
             # )
-            # k_heads = tt_lib.operations.primary.matmul(
+            # k_heads = tt_lib.matmul(
             #     k_heads,
             #     rot_mat,
+            #     # program_config=self.model_config["ROT_MAT_K_MM_PROGCFG"],
+            #     output_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],
+            #     # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             # )
+            # k_heads = tt_lib.tensor.sharded_to_interleaved(
+            #     k_heads, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            # )
+
+            # TODO: matmul_1d is bugged for single core and causes hang.
+            k_heads = tt_lib.tensor.sharded_to_interleaved(
+                k_heads, output_mem_config=self.model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"]
+            )
+            k_heads = tt_lib.operations.primary.matmul(
+                k_heads,
+                rot_mat,
+                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
+            )
+
             # ROTARY EMBEDDINGS
-            q_heads = tt_lib.tensor.bmm(
-                q_heads, rot_mat  # [seqlen, bsz, n_heads, head_dim]  # [1, bsz, head_dim, head_dim]
+            q_heads = tt_lib.operations.primary.matmul_1d(
+                q_heads,
+                rot_mat,
+                program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
+                output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
+                # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             )
-            k_heads = tt_lib.tensor.bmm(
-                k_heads, rot_mat  # [seqlen, bsz, n_kv_heads, head_dim]  # [1, bsz, head_dim, head_dim]
-            )
-            q_heads = tt_lib.tensor.transpose(q_heads, 1, 2)
-            k_heads = tt_lib.tensor.transpose(k_heads, 1, 2)
 
             query_layer.append(q_heads)
             key_layer.append(k_heads)
@@ -319,9 +325,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         attn_weights = []
         for i in range(len(query_layer)):
             # Put query head back to L1 height sharded, currently causes PCC issues with group attention matmul
-            query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
-                query_layer[i], sharded_mem_config=self.model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"]
-            )
+            # query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+            #     query_layer[i], sharded_mem_config=self.model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"]
+            # )
             attn_weights.append(
                 tt_lib.operations.primary.transformers.group_attn_matmul(
                     query_layer[i],
