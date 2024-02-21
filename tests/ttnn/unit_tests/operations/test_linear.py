@@ -146,42 +146,8 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024, 2048])
 @pytest.mark.parametrize("n_size", [1024, 2048])
-@pytest.mark.parametrize("activation", [None, "relu"])
-def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_size, m_size, k_size, n_size, activation):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
-    if activation == "relu":
-        torch_output_tensor = torch.relu(torch_output_tensor)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    program_config = ttnn.create_matmul_1d_systolic_array_config(
-        input_shape_a=input_tensor_a.shape,
-        input_shape_b=input_tensor_b.shape,
-        max_core_grid=input_tensor_a.device.core_grid,
-        activation=activation,
-    )
-
-    output_tensor = ttnn.linear(
-        input_tensor_a,
-        input_tensor_b,
-        program_config=program_config,
-    )
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
-
-
-@pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("m_size", [32, 64])
-@pytest.mark.parametrize("k_size", [1024, 2048])
-@pytest.mark.parametrize("n_size", [1024, 2048])
 @pytest.mark.parametrize("activation", [None, "relu", "silu"])
-def test_linear_with_argument_for_using_1D_systolic_array_set_to_true(
+def test_wide_linear_with_argument_for_using_1D_systolic_array_set_to_true(
     device, batch_size, m_size, k_size, n_size, activation
 ):
     torch.manual_seed(0)
@@ -198,6 +164,40 @@ def test_linear_with_argument_for_using_1D_systolic_array_set_to_true(
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, use_1d_systolic_array=True, activation=activation)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("m_size", [32, 64])
+@pytest.mark.parametrize("k_size", [1024, 2048])
+@pytest.mark.parametrize("n_size", [1024, 2048])
+@pytest.mark.parametrize("activation", [None, "relu"])
+def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_size, m_size, k_size, n_size, activation):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+    if activation == "relu":
+        torch_output_tensor = torch.relu(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.create_matmul_1d_systolic_array_config(
+        input_shape_a=input_tensor_a.shape,
+        input_shape_b=input_tensor_b.shape,
+        core_grid=input_tensor_a.device.core_grid,
+        activation=activation,
+    )
+
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        program_config=program_config,
+    )
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)

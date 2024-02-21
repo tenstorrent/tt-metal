@@ -22,16 +22,6 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig = (
 MatmulProgramConfig = ttnn.experimental.operations.primary.MatmulProgramConfig
 
 
-def map_num_cores_to_core_grid(num_cores: int, max_core_grid) -> ttnn.CoreGrid:
-    for y in range(max_core_grid.y + 1, 1, -1):
-        for x in range(max_core_grid.x + 1, 1, -1):
-            if x * y == num_cores:
-                return ttnn.CoreGrid(y, x)
-    raise RuntimeError(
-        f"Unable to map {num_cores} cores to a core grid with a maximum of {max_core_grid.num_cores} cores"
-    )
-
-
 _DST_SUB_BLOCKS = [
     (2, 4),
     (4, 2),
@@ -90,7 +80,7 @@ def create_matmul_1d_systolic_array_config(
     *,
     input_shape_a: Tuple[int, ...],
     input_shape_b: Tuple[int, ...],
-    max_core_grid: Optional[ttnn.CoreGrid] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
     activation: Optional[str] = None,
 ):
     """
@@ -101,21 +91,24 @@ def create_matmul_1d_systolic_array_config(
     Args:
         * :attr:`input_shape_a` (Tuple[int, ...]): the shape of the first tensor
         * :attr:`input_shape_b` (Tuple[int, ...]): the shape of the second tensor
-        * :attr:`max_core_grid` (ttnn.CoreGrid): the maximum core grid to use
+        * :attr:`core_grid` (ttnn.CoreGrid): the maximum core grid to use
         * :attr:`activation` (Optional[str]): the activation function to use. Defaults to None
 
     """
 
     _validate_activation(activation)
 
-    if max_core_grid is None:
+    if core_grid is None:
         raise RuntimeError(f"core_grid must be a valid CoreGrid object")
 
-    if max_core_grid is not None and not isinstance(max_core_grid, ttnn.CoreGrid):
+    if core_grid is not None and not isinstance(core_grid, ttnn.CoreGrid):
         raise RuntimeError(f"core_grid must be a valid CoreGrid object")
 
     *batch_shape_a, m_size, k_size = input_shape_a.with_tile_padding()
     *batch_shape_b, _, n_size = input_shape_b.with_tile_padding()
+    if math.prod(batch_shape_b) != 1:
+        raise RuntimeError("Second input cannot be currently batched when running matmul using 1d systolic array")
+
     batch_size = math.prod(batch_shape_a)
     input_b_is_batched = math.prod(batch_shape_b) > 1
 
@@ -131,18 +124,24 @@ def create_matmul_1d_systolic_array_config(
     k_tiles = k_size // ttnn.TILE_SIZE
     n_tiles = n_size // ttnn.TILE_SIZE
 
-    num_cores = max_core_grid.num_cores
-    while k_tiles % num_cores != 0 or n_tiles % num_cores != 0:
-        num_cores -= 1
-    core_grid = map_num_cores_to_core_grid(num_cores, max_core_grid)
-    if core_grid.num_cores == 1:
-        raise RuntimeError(f"Cannot run this operation on a single core")
+    is_tall = batch_and_m_tiles > n_tiles
+    is_wide = not is_tall
+    # Tall output
+    if is_tall:
+        batch_and_m_tiles_per_core = int(math.ceil(batch_and_m_tiles / core_grid.num_cores))
+        k_tiles_per_core = int(math.ceil(k_tiles / core_grid.num_cores))
+        n_tiles_per_core = n_tiles
 
-    batch_and_m_tiles_per_core = batch_and_m_tiles
-    k_tiles_per_core = k_tiles // core_grid.num_cores
-    n_tiles_per_core = n_tiles // core_grid.num_cores
+    # Wide output
+    else:
+        batch_and_m_tiles_per_core = batch_and_m_tiles
+        k_tiles_per_core = int(math.ceil(k_tiles / core_grid.num_cores))
+        n_tiles_per_core = int(math.ceil(n_tiles / core_grid.num_cores))
 
-    m_subblock_size, n_subblock_size = _get_subblock_sizes(batch_and_m_tiles, n_tiles_per_core)
+    while k_tiles % k_tiles_per_core != 0:
+        k_tiles_per_core -= 1
+
+    m_subblock_size, n_subblock_size = _get_subblock_sizes(batch_and_m_tiles_per_core, n_tiles_per_core)
 
     return MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -153,7 +152,7 @@ def create_matmul_1d_systolic_array_config(
         per_core_N=n_tiles_per_core,
         fuse_batch=True,
         fused_activation=get_fused_activation(activation=activation),
-        mcast_in0=True,
+        mcast_in0=is_wide,
     )
 
 
@@ -174,15 +173,24 @@ def _get_matmul_program_config(
     input_tensor_a_memory_config = ttnn.get_memory_config(input_tensor_a)
     input_tensor_b_memory_config = ttnn.get_memory_config(input_tensor_b)
 
-    if use_1d_systolic_array is not None:
-        # TODO: infer if 1D systolic array can be used
-        if use_1d_systolic_array:
-            return create_matmul_1d_systolic_array_config(
-                input_shape_a=input_tensor_a.shape,
-                input_shape_b=input_tensor_b.shape,
-                max_core_grid=core_grid,
-                activation=activation,
-            )
+    if use_1d_systolic_array is None and not input_b_is_batched:
+        # Infer use_1d_systolic_array based on how rectangular the output matrix
+        height_width_ratio = (math.prod(batch_shape_a) * m_size) / n_size
+        if height_width_ratio < 1:
+            height_width_ratio = 1 / height_width_ratio
+
+        # 8 is an arbitrary choice. It should probably be inferred based on the device core grid
+        threshold_of_being_rectangular = 8
+        is_more_rectangular_than_square = height_width_ratio > threshold_of_being_rectangular
+        use_1d_systolic_array = is_more_rectangular_than_square
+
+    if use_1d_systolic_array:
+        return create_matmul_1d_systolic_array_config(
+            input_shape_a=input_tensor_a.shape,
+            input_shape_b=input_tensor_b.shape,
+            core_grid=core_grid,
+            activation=activation,
+        )
 
     # TODO: clean up the code below by mvoing it to separate create_*_config functions
 
@@ -270,15 +278,21 @@ def _matmul(
     bias: Optional[ttnn.Tensor] = None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
-    core_grid: Optional[Tuple[int, int]] = None,
     program_config: Optional[MatmulProgramConfig] = None,
+    core_grid: Optional[Tuple[int, int]] = None,
     activation: Optional[str] = None,
     use_1d_systolic_array: Optional[bool] = None,
 ) -> ttnn.Tensor:
     _validate_activation(activation)
 
-    if core_grid is not None and program_config is not None:
-        raise RuntimeError(f"{operation_name}: core_grid and program_config cannot be used together")
+    if program_config is not None and core_grid is not None:
+        raise RuntimeError(f"{operation_name}: program_config and core_grid cannot be used together")
+
+    if program_config is not None and use_1d_systolic_array is not None:
+        raise RuntimeError(f"{operation_name}: program_config and use_1d_systolic_array cannot be used together")
+
+    if program_config is not None and activation is not None:
+        raise RuntimeError(f"{operation_name}: program_config and activation cannot be used together")
 
     if core_grid is not None and not isinstance(core_grid, ttnn.CoreGrid):
         raise RuntimeError(f"{operation_name}: core_grid must be a valid CoreGrid object")
