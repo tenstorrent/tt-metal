@@ -41,6 +41,7 @@ class MaxPool2d:
         input_height: int,
         input_width: int,
         reader_patterns_cache: Dict,
+        parallel_config_override: Dict = None,
     ):
         if isinstance(kernel_size, int):
             window_h = kernel_size
@@ -79,7 +80,13 @@ class MaxPool2d:
             input_h=input_height,
             input_w=input_width,
         )
-        self.max_pool = TTPyMaxPool(sliding_window_op_params, device, reader_patterns_cache, pad_val=0xF7FF)
+        self.max_pool = TTPyMaxPool(
+            sliding_window_op_params,
+            device,
+            reader_patterns_cache,
+            pad_val=0xF7FF,
+            parallel_config_override=parallel_config_override,
+        )
 
     def __call__(self, activation: ttnn.Tensor):
         return ttnn.Tensor(self.max_pool(activation.value))
