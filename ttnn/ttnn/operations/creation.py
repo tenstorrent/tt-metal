@@ -51,7 +51,7 @@ def zeros_like(
 
     original_shape = input_tensor.shape
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttnn.ttl.tensor.zeros_like(input_tensor, output_mem_config=memory_config)
+    output_tensor = ttnn.experimental.tensor.zeros_like(input_tensor, output_mem_config=memory_config)
     output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
@@ -99,7 +99,7 @@ def ones_like(
 
     original_shape = input_tensor.shape
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttnn.ttl.tensor.ones_like(input_tensor, output_mem_config=memory_config)
+    output_tensor = ttnn.experimental.tensor.ones_like(input_tensor, output_mem_config=memory_config)
     output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
@@ -150,7 +150,7 @@ def full_like(
 
     original_shape = input_tensor.shape
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttnn.ttl.tensor.full_like(input_tensor, fill_value, output_mem_config=memory_config)
+    output_tensor = ttnn.experimental.tensor.full_like(input_tensor, fill_value, output_mem_config=memory_config)
     output_tensor = ttnn.reshape(output_tensor, original_shape)
     return output_tensor
 
@@ -194,7 +194,7 @@ def zeros(
         * :attr:`layout`: the layout for the output tensor
         * :attr:`memory_config`: the memory configuration for the output tensor
     """
-    output_tensor = ttnn.ttl.tensor.zeros(
+    output_tensor = ttnn.experimental.tensor.zeros(
         input_shape, data_type=dtype, layout=layout, device=device, output_mem_config=memory_config
     )
     return output_tensor
@@ -240,7 +240,7 @@ def ones(
         * :attr:`memory_config`: the memory configuration for the output tensor
     """
 
-    output_tensor = ttnn.ttl.tensor.ones(
+    output_tensor = ttnn.experimental.tensor.ones(
         input_shape, data_type=dtype, layout=layout, device=device, output_mem_config=memory_config
     )
     return output_tensor
@@ -289,7 +289,7 @@ def full(
 
     """
 
-    output_tensor = ttnn.ttl.tensor.full(
+    output_tensor = ttnn.experimental.tensor.full(
         input_shape,
         fill_value=fill_value,
         device=device,

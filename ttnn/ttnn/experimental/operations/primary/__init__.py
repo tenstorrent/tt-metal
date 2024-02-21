@@ -13,15 +13,15 @@ THIS_MODULE = sys.modules[__name__]
 
 __all__ = []
 
-for attribute_name in dir(ttl.tensor):
+for attribute_name in dir(ttl.operations.primary):
     if attribute_name.startswith("__"):
         continue
-    attribute = getattr(ttl.tensor, attribute_name)
+    attribute = getattr(ttl.operations.primary, attribute_name)
     if inspect.isbuiltin(attribute) and (
         "tt_lib.tensor.Tensor" in attribute.__doc__ or "tt::tt_metal::Tensor" in attribute.__doc__
     ):
         attribute = ttnn.decorators.register_ttl_operation_as_ttnn_operation(
-            name=f"ttnn.ttl.t   ensor.{attribute_name}", function=attribute
+            name=f"ttnn.experimental.operations.primary.{attribute_name}", function=attribute
         )
     setattr(THIS_MODULE, attribute_name, attribute)
     __all__.append(attribute_name)

@@ -15,14 +15,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
-def test_register_ttl_tensor_exp(device, height, width):
+def test_ttnn_experimental_tensor_exp(device, height, width):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((1, 1, height, width), -1, 1, dtype=torch.bfloat16)
     torch_output_tensor = torch.exp(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
-    output_tensor = ttnn.ttl.tensor.exp(input_tensor)
+    output_tensor = ttnn.experimental.tensor.exp(input_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -33,7 +33,7 @@ def test_register_ttl_tensor_exp(device, height, width):
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
-def test_ttl_operations_primary_matmul(device, m_size, k_size, n_size):
+def test_ttnn_experimental_operations_primary_matmul(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
@@ -42,7 +42,7 @@ def test_ttl_operations_primary_matmul(device, m_size, k_size, n_size):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, device=device, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.ttl.operations.primary.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.experimental.operations.primary.matmul(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -53,7 +53,7 @@ def test_ttl_operations_primary_matmul(device, m_size, k_size, n_size):
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
-def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
+def test_ttnn_experimental_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
@@ -62,7 +62,7 @@ def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, device=device, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.ttl.operations.primary.moreh_matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.experimental.operations.primary.moreh_matmul(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -75,7 +75,7 @@ def test_ttl_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
 @pytest.mark.parametrize("k_size, n_size", [[64, 64], [64, 256]])
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("input_b_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_ttl_operations_primary_matmul_1d(
+def test_ttnn_experimental_operations_primary_matmul_1d(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
     grid_size = device.compute_with_storage_grid_size()
@@ -89,18 +89,18 @@ def test_ttl_operations_primary_matmul_1d(
     input_shape_b = [1, 1, k_size, n_size]
     bias_shape = [1, 1, 1, n_size]
 
-    interleaved_memory_config = ttnn.ttl.tensor.MemoryConfig(
-        memory_layout=ttnn.ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.ttl.tensor.BufferType.DRAM,
+    interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    sharded_memory_config = ttnn.ttl.tensor.MemoryConfig(
-        memory_layout=ttnn.ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.ttl.tensor.BufferType.L1,
+    sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     output_memory_config = sharded_memory_config if output_is_sharded else interleaved_memory_config
 
-    program_config = ttnn.ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(12, 9),
         in0_block_w=k_size // 32,
         out_subblock_h=8 // (n_size // 32),
@@ -141,15 +141,15 @@ def test_ttl_operations_primary_matmul_1d(
             dtype=input_b_dtype,
         )
         if input_a_is_sharded:
-            input_tensor_a = ttnn.ttl.tensor.interleaved_to_sharded(
+            input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
                 input_tensor_a,
                 grid_size,
                 [m_size // num_cores, k_size],
-                ttnn.ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             )
 
-        output_tensor = ttnn.ttl.operations.primary.matmul_1d(
+        output_tensor = ttnn.experimental.operations.primary.matmul_1d(
             input_tensor_a,
             input_tensor_b,
             bias=bias,
@@ -158,7 +158,7 @@ def test_ttl_operations_primary_matmul_1d(
             output_dtype=input_a_dtype,
         )
         if output_is_sharded:
-            output_tensor = ttnn.ttl.tensor.sharded_to_interleaved(output_tensor, interleaved_memory_config)
+            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, interleaved_memory_config)
 
         output_tensor = ttnn.to_torch(output_tensor)
         ttnn.tracer.visualize(output_tensor)

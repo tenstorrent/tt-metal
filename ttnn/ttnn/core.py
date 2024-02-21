@@ -25,7 +25,7 @@ def is_sharded(tensor) -> bool:
     return tensor.value.is_sharded()
 
 
-def get_memory_config(tensor) -> ttnn.ttl.tensor.MemoryConfig:
+def get_memory_config(tensor) -> ttnn.MemoryConfig:
     if has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
         return tensor.value.memory_config()
     else:
@@ -83,19 +83,19 @@ def create_sharded_memory_config(
         raise RuntimeError("Invalid sharding strategy")
 
     if orientation is None:
-        shard_orientation = ttnn.ttl.tensor.ShardOrientation.ROW_MAJOR
+        shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     elif orientation == ShardOrientation.ROW_MAJOR:
-        shard_orientation = ttnn.ttl.tensor.ShardOrientation.ROW_MAJOR
+        shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     elif orientation == ShardOrientation.COLUMN_MAJOR:
-        shard_orientation = ttnn.ttl.tensor.ShardOrientation.COL_MAJOR
+        shard_orientation = ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
     else:
         raise RuntimeError("Invalid shard orientation")
 
     shard_grid = None
     if isinstance(core_grid, ttnn.CoreGrid):
-        grid_coord = ttnn.ttl.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
-        shard_grid = ttnn.ttl.tensor.CoreRangeSet(
-            {ttnn.ttl.tensor.CoreRange(ttnn.ttl.tensor.CoreCoord(0, 0), grid_coord)}
+        grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
+        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
         )
     elif isinstance(core_grid, (list, tuple)):
         if len(core_grid) != 2:
@@ -105,12 +105,12 @@ def create_sharded_memory_config(
         if not isinstance(core_grid[1], ttnn.CoreGrid):
             raise RuntimeError("Invalid core_grid type")
 
-        grid_coord_1 = ttnn.ttl.tensor.CoreCoord(core_grid[0].x - 1, core_grid[0].y - 1)
-        grid_coord_2 = ttnn.ttl.tensor.CoreCoord(core_grid[1].x - 1, core_grid[0].y)
-        shard_grid = ttnn.ttl.tensor.CoreRangeSet(
+        grid_coord_1 = ttnn.experimental.tensor.CoreCoord(core_grid[0].x - 1, core_grid[0].y - 1)
+        grid_coord_2 = ttnn.experimental.tensor.CoreCoord(core_grid[1].x - 1, core_grid[0].y)
+        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
             {
-                ttnn.ttl.tensor.CoreRange(ttnn.ttl.tensor.CoreCoord(0, 0), grid_coord_1),
-                ttnn.ttl.tensor.CoreRange(ttnn.ttl.tensor.CoreCoord(0, core_grid[0].y), grid_coord_2),
+                ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord_1),
+                ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, core_grid[0].y), grid_coord_2),
             }
         )
     else:
@@ -120,23 +120,23 @@ def create_sharded_memory_config(
     batch_size = math.prod(batch_sizes)
 
     if use_height_and_width_as_shard_shape:
-        if shard_orientation == ttnn.ttl.tensor.ShardOrientation.ROW_MAJOR:
+        if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR:
             shard_shape = height, width
-        elif shard_orientation == ttnn.ttl.tensor.ShardOrientation.COL_MAJOR:
+        elif shard_orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR:
             shard_shape = width, height
         else:
             raise RuntimeError("Invalid shard orientation")
     else:
         shard_height = batch_size * height
         shard_width = width
-        if shard_orientation == ttnn.ttl.tensor.ShardOrientation.ROW_MAJOR:
+        if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR:
             if shard_height % core_grid.y != 0:
                 raise RuntimeError("Invalid sharding core_grid")
             if shard_width % core_grid.x != 0:
                 raise RuntimeError("Invalid sharding core_grid")
             shard_shape = shard_height // core_grid.y, shard_width // core_grid.x
 
-        elif shard_orientation == ttnn.ttl.tensor.ShardOrientation.COL_MAJOR:
+        elif shard_orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR:
             if shard_height % core_grid.x != 0:
                 raise RuntimeError("Invalid sharding core_grid")
             if shard_width % core_grid.y != 0:
@@ -145,7 +145,7 @@ def create_sharded_memory_config(
         else:
             raise RuntimeError("Invalid shard orientation")
 
-    shard_spec = ttnn.ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
+    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return memory_config
 

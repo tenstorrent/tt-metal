@@ -149,9 +149,9 @@ def query_all_registered_operations(include_ttl=False):
     ttnn_operations = [
         operation
         for operation in sorted_operations
-        if operation.startswith("ttnn.") and not operation.startswith("ttnn.ttl.")
+        if operation.startswith("ttnn.") and not operation.startswith("ttnn.experimental.")
     ]
-    ttl_operations = [operation for operation in sorted_operations if operation.startswith("ttnn.ttl.")]
+    ttl_operations = [operation for operation in sorted_operations if operation.startswith("ttnn.experimental.")]
     if include_ttl:
         return ttnn_operations + ttl_operations
     else:

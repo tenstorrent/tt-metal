@@ -73,7 +73,7 @@ from ttnn.decorators import (
     disable_validate_decorator,
 )
 
-import ttnn.ttl as ttl
+import ttnn.experimental
 
 from ttnn.program_cache import (
     enable_program_cache,

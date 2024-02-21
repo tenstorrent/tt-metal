@@ -2,5 +2,5 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn.ttl.tensor
-import ttnn.ttl.operations.primary
+import ttnn.experimental.tensor
+import ttnn.experimental.operations.primary

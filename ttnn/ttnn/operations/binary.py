@@ -58,7 +58,7 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
 TTL_BINARY_FUNCTIONS = [
     (
         "pow",
-        ttnn.ttl.tensor.pow,
+        ttnn.experimental.tensor.pow,
         r"""pow(input_tensor: ttnn.Tensor, exponent: Union[ttnn.Tensor, float, int]) -> ttnn.Tensor
 
         Takes the power of each element in input with exponent and returns a tensor with the result.
@@ -249,7 +249,7 @@ def sub(
     input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
 
     if _is_scalar(input_tensor_b):
-        output_tensor = ttnn.ttl.tensor.sub_unary(
+        output_tensor = ttnn.experimental.tensor.sub_unary(
             input_tensor_a,
             input_tensor_b * alpha,
             output_mem_config=memory_config,
@@ -269,38 +269,38 @@ def sub(
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
     if alpha != 1:
-        input_tensor_b = ttnn.ttl.tensor.mul_unary(
+        input_tensor_b = ttnn.experimental.tensor.mul_unary(
             input_tensor_b,
             alpha,
             output_mem_config=memory_config,
         )
 
     if height_b == 1 and width_b == 1:
-        output_tensor = ttnn.ttl.tensor.bcast(
+        output_tensor = ttnn.experimental.tensor.bcast(
             input_tensor_a,
             input_tensor_b,
-            ttnn.ttl.tensor.BcastOpMath.SUB,
-            ttnn.ttl.tensor.BcastOpDim.HW,
+            ttnn.experimental.tensor.BcastOpMath.SUB,
+            ttnn.experimental.tensor.BcastOpDim.HW,
             output_mem_config=memory_config,
         )
     elif height_b == 1:
-        output_tensor = ttnn.ttl.tensor.bcast(
+        output_tensor = ttnn.experimental.tensor.bcast(
             input_tensor_a,
             input_tensor_b,
-            ttnn.ttl.tensor.BcastOpMath.SUB,
-            ttnn.ttl.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.SUB,
+            ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=memory_config,
         )
     elif width_b == 1:
-        output_tensor = ttnn.ttl.tensor.bcast(
+        output_tensor = ttnn.experimental.tensor.bcast(
             input_tensor_a,
             input_tensor_b,
-            ttnn.ttl.tensor.BcastOpMath.SUB,
-            ttnn.ttl.tensor.BcastOpDim.W,
+            ttnn.experimental.tensor.BcastOpMath.SUB,
+            ttnn.experimental.tensor.BcastOpDim.W,
             output_mem_config=memory_config,
         )
     else:
-        output_tensor = ttnn.ttl.tensor.sub(
+        output_tensor = ttnn.experimental.tensor.sub(
             input_tensor_a,
             input_tensor_b,
             output_mem_config=memory_config,
@@ -391,12 +391,12 @@ def mul(
 
     ttl_input_tensor_a = input_tensor_a.value
 
-    if not ttnn.has_storage_type_of(input_tensor_a, ttnn.ttl.tensor.StorageType.DEVICE):
+    if not ttnn.has_storage_type_of(input_tensor_a, ttnn.experimental.tensor.StorageType.DEVICE):
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
         return ttnn.reshape(
-            ttnn.ttl.tensor.mul_unary(
+            ttnn.experimental.tensor.mul_unary(
                 ttl_input_tensor_a,
                 input_tensor_b,
                 output_mem_config=memory_config,
@@ -419,40 +419,40 @@ def mul(
 
     if height_b == 1 and width_b == 1:
         return ttnn.reshape(
-            ttnn.ttl.tensor.bcast(
+            ttnn.experimental.tensor.bcast(
                 ttl_input_tensor_a,
                 ttl_input_tensor_b,
-                ttnn.ttl.tensor.BcastOpMath.MUL,
-                ttnn.ttl.tensor.BcastOpDim.HW,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.HW,
                 output_mem_config=memory_config,
             ),
             original_shape,
         )
     elif height_b == 1:
         return ttnn.reshape(
-            ttnn.ttl.tensor.bcast(
+            ttnn.experimental.tensor.bcast(
                 ttl_input_tensor_a,
                 ttl_input_tensor_b,
-                ttnn.ttl.tensor.BcastOpMath.MUL,
-                ttnn.ttl.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.H,
                 output_mem_config=memory_config,
             ),
             original_shape,
         )
     elif width_b == 1:
         return ttnn.reshape(
-            ttnn.ttl.tensor.bcast(
+            ttnn.experimental.tensor.bcast(
                 ttl_input_tensor_a,
                 ttl_input_tensor_b,
-                ttnn.ttl.tensor.BcastOpMath.MUL,
-                ttnn.ttl.tensor.BcastOpDim.W,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.W,
                 output_mem_config=memory_config,
             ),
             original_shape,
         )
 
     return ttnn.reshape(
-        ttnn.ttl.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config),
+        ttnn.experimental.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config),
         original_shape,
     )
 
@@ -541,13 +541,13 @@ def add_and_apply_activation(
     fused_activations = []
     if activation is not None:
         activations_map = {
-            "relu": [ttnn.ttl.tensor.FusibleActivation.RELU],
+            "relu": [ttnn.experimental.tensor.FusibleActivation.RELU],
         }
         fused_activations = activations_map[activation]
 
     input_tensor_a = input_tensor_a.value
     input_tensor_b = input_tensor_b.value
-    output = ttnn.ttl.tensor.add_without_autoformat(
+    output = ttnn.experimental.tensor.add_without_autoformat(
         input_tensor_a,
         input_tensor_b,
         fused_activations=fused_activations,
@@ -594,11 +594,11 @@ def add_and_apply_activation_(
     fused_activations = []
     if activation is not None:
         activations_map = {
-            "relu": [ttnn.ttl.tensor.FusibleActivation.RELU],
+            "relu": [ttnn.experimental.tensor.FusibleActivation.RELU],
         }
         fused_activations = activations_map[activation]
 
-    output = ttnn.ttl.tensor.add_without_autoformat(
+    output = ttnn.experimental.tensor.add_without_autoformat(
         input_tensor_a,
         input_tensor_b,
         fused_activations=fused_activations,
