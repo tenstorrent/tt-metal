@@ -54,7 +54,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    // interm_data_format=tt::DataFormat::Float16_b;
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -64,8 +63,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     if (in0_data_format == tt::DataFormat::Float32 or in1_data_format == tt::DataFormat::Float32 or output_data_format == tt::DataFormat::Float32) {
         TT_ASSERT(fp32_dest_acc_en == true, "when inputs/output are in fp32 format, fp32_dest_acc_en must be set");
     }
-
-
 
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *src1_buffer = b.buffer();
@@ -98,7 +95,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     const uint32_t in1_per_core_w = in1_num_subblocks * out_block_w;
     const uint32_t in1_block_w_tile_bytes = out_subblock_w * in1_single_tile_size;
     uint32_t ONE_ROW_BFLOAT16_BYTES = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? 128 : 64;
-    // ONE_ROW_BFLOAT16_BYTES = 64;
     const uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w; // TODO: Generalize
 
     log_debug("in0_block_w: {}", in0_block_w);
@@ -143,16 +139,12 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		    .set_page_size(src0_cb_index, in0_single_tile_size).set_globally_allocated_address(*src0_buffer);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
-
-        std::cout << cb0_num_input_tiles << std::endl;
     } else {
         uint32_t cb0_num_input_tiles = in0_block_w; // TODO: Generalize; double buffer and add blocking along inner dim if we have Mt > 1
         tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		    .set_page_size(src0_cb_index, in0_single_tile_size);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
     }
-
-
 
     // CB for interleaved/sharded KV heads for mcasting; mcasts to same CB
     // Then, push all KV_HEADS to compute and compute chooses which head to use for matmul

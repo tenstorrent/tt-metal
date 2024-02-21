@@ -215,10 +215,6 @@ void py_module(py::module& m_primary) {
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
            std::optional<DeviceComputeKernelConfig> compute_kernel_config
-        //    const MathFidelity math_fidelity,
-        //    const bool fp32_dest_acc_en,
-        //    const bool math_approx_mode,
-        //    const bool packer_l1_acc
            ) {
             return matmul(
                 input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config);
@@ -253,10 +249,7 @@ void py_module(py::module& m_primary) {
            const MatmulMultiCoreReuseProgramConfig& program_config,
            const MemoryConfig& out_mem_config,
            std::optional<DataType> output_dtype,
-           const MathFidelity math_fidelity,
-           const bool fp32_dest_acc_en,
-           const bool math_approx_mode,
-           const bool packer_l1_acc) {
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
             return matmul(
                 input_tensor_a,
                 input_tensor_b,
@@ -264,10 +257,7 @@ void py_module(py::module& m_primary) {
                 program_config,
                 out_mem_config,
                 output_dtype,
-                math_fidelity,
-                fp32_dest_acc_en,
-                math_approx_mode,
-                packer_l1_acc);
+                compute_kernel_config);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -276,10 +266,7 @@ void py_module(py::module& m_primary) {
         py::arg("program_config").noconvert() = MatmulDefaultProgramConfig(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
-        py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
-        py::arg("fp32_dest_acc_en").noconvert() = false,
-        py::arg("math_approx_mode").noconvert() = true,
-        py::arg("packer_l1_acc").noconvert() = false,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
             Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
 
