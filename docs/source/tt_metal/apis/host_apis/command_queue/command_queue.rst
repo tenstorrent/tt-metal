@@ -5,4 +5,5 @@ CommandQueue
   EnqueueWriteBuffer
   EnqueueReadBuffer
   EnqueueProgram
+  EnqueueQueueRecordEvent
   Finish

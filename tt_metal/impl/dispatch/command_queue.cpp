@@ -648,6 +648,30 @@ void EnqueueCompletionWrapCommand::process() {
     this->manager.issue_queue_push_back(wrap_packet_size_bytes, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
 }
 
+
+EnqueueRecordEventCommand::EnqueueRecordEventCommand(
+    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event):
+    command_queue_id(command_queue_id), device(device), manager(manager), event(event) {
+}
+
+
+const DeviceCommand EnqueueRecordEventCommand::assemble_device_command(uint32_t) {
+    DeviceCommand command;
+    command.set_issue_data_size(0); // No extra data just CMD.
+    command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
+    command.set_event(this->event);
+    return command;
+}
+
+void EnqueueRecordEventCommand::process() {
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    const DeviceCommand cmd = this->assemble_device_command(0);
+    uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.issue_queue_push_back(cmd_size, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
+}
+
 // HWCommandQueue section
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) : manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
@@ -904,6 +928,30 @@ void HWCommandQueue::enqueue_program(
     this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 }
 
+// Populate event struct for caller. This must not occur in enqueue_* function which is "too late" when async
+// queues are enabled, since top level API is non-blocking and enqueue_* runs on child thread.
+void HWCommandQueue::populate_record_event(std::reference_wrapper<Event> event) {
+    auto &event_ref = event.get();
+    event_ref.cq_id = this->id;
+    event_ref.event_id = this->manager.get_next_event(this->id);
+    event_ref.device = this->device;
+}
+
+void HWCommandQueue::enqueue_record_event(std::reference_wrapper<Event> event) {
+    ZoneScopedN("HWCommandQueue_enqueue_record_event");
+    uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    auto event_id = event.get().event_id; // Captured and incremented, already.
+
+    if ((this->manager.get_issue_queue_write_ptr(this->id)) + command_size >= this->manager.get_issue_queue_limit(this->id)) {
+        this->issue_wrap();
+    }
+
+    auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event_id);
+    this->enqueue_command(command, false);
+    this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
+}
+
+
 void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
     const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_host_page_id] =
         this->issued_reads.at(event);
@@ -1145,6 +1193,25 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
     }, program);
 }
 
+void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event) {
+    TT_ASSERT(event.device == nullptr, "EnqueueQueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event.event_id == -1, "EnqueueQueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event.cq_id == -1, "EnqueueQueueRecordEvent expected to be given an uninitialized event");
+
+    detail::DispatchStateCheck(true);
+    cq.hw_command_queue().populate_record_event(event);
+    cq.run_command(CommandInterface{
+        .type = EnqueueCommandType::ENQUEUE_RECORD_EVENT,
+        .blocking = false,
+        .event = event,
+    });
+}
+
+void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event) {
+    cq.hw_command_queue().enqueue_record_event(event);
+}
+
+
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -1299,6 +1366,10 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             TT_ASSERT(command.program.has_value(), "Must provide a program!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
             EnqueueProgramImpl(*this, command.program.value(), command.blocking.value(), command.trace);
+            break;
+        case EnqueueCommandType::ENQUEUE_RECORD_EVENT:
+            TT_ASSERT(command.event.has_value(), "Must provide an event!");
+            EnqueueRecordEventImpl(*this, *command.event);
             break;
         case EnqueueCommandType::FINISH:
             FinishImpl(*this);

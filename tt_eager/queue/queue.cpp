@@ -22,7 +22,6 @@ void EnqueueDeviceToHostTransfer(
 
 void QueueSynchronize(CommandQueue& q) { Finish(q); }
 
-void QueueRecordEvent(CommandQueue& q, Event& e) {}
 void QueueWaitForEvent(CommandQueue& q, Event& e) {}
 void EventSynchronize(Event& e) {}
 

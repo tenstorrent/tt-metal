@@ -57,6 +57,7 @@ ENDL
 ETH
 EltwiseUnary
 EnqueueProgram
+EnqueueQueueRecordEvent
 EnqueueReadBuffer
 EnqueueWriteBuffer
 Enum
