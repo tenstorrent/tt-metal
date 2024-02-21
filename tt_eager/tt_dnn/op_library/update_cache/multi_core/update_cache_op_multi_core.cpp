@@ -16,7 +16,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset) {
+operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config) {
     Program program{};
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
@@ -25,13 +25,37 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat interm_cb_data_format = tt::DataFormat::Float16_b;
+    tt_metal::Device *device = input_tensor.device();
+
+    bool fp32_dest_acc_en;
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_cb_data_format);
 
     uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
 
     // Width size after untilize
-    uint32_t Wbytes = cache_tensor.get_legacy_shape()[-1] * sizeof(bfloat16);
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * sizeof(bfloat16);
+
+    log_debug("cache_cb_data_format: {}", cache_cb_data_format);
+    log_debug("input_cb_data_format: {}", input_cb_data_format);
+    log_debug("interm_cb_data_format: {}", interm_cb_data_format);
+    log_debug("Wbytes: {}", Wbytes);
+    log_debug("Wt: {}", Wt);
+
 
     uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_legacy_shape()[0];
@@ -45,7 +69,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
     uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
-    tt_metal::Device *device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -177,7 +200,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         program,
         "tt_eager/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
 
     if (!core_group_2.ranges().empty()) {
@@ -186,7 +209,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         program,
         "tt_eager/tt_dnn/op_library/update_cache/kernels/compute/update_cache.cpp",
         core_group_2,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args}
     );
     }
 

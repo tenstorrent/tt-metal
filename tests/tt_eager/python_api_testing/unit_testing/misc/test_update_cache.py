@@ -9,6 +9,7 @@ import tt_lib as ttl
 from loguru import logger
 from models.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
+from models.utility_functions import is_grayskull
 
 
 @pytest.mark.parametrize("head_dim", [64])
@@ -141,3 +142,97 @@ class TestUpdateCache:
         logger.info(output_cache)
         logger.info(output_update)
         assert eq_cache and eq_update
+
+
+@pytest.mark.parametrize("head_dim", [64])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32, 64])
+class TestUpdateCacheFP32:
+    @pytest.mark.parametrize("seq_len", [128, 512, 1024])
+    def test_fill_cache_fp32(self, seq_len, head_dim, max_seq_len, num_users, device):
+        input_shape = [1, 1, seq_len, head_dim]
+        cache_shape = [num_users, 1, max_seq_len, head_dim]
+        cache = torch.rand(cache_shape) * 1000.0
+        cachett = ttl.tensor.Tensor(cache, ttl.tensor.DataType.FLOAT32).to(ttl.tensor.Layout.TILE).to(device)
+        for i in range(num_users):
+            x = torch.rand(input_shape) * 1000.0
+            xt = ttl.tensor.Tensor(x, ttl.tensor.DataType.FLOAT32).to(ttl.tensor.Layout.TILE).to(device)
+            cachett = ttl.tensor.fill_cache(cachett, xt, i)
+            cache[i : i + 1, 0:1, 0 : x.shape[-2], 0 : x.shape[-1]] = x
+
+        tt_got_back = cachett.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+        eq = torch.equal(tt_got_back, cache)
+        assert eq
+
+    @pytest.mark.parametrize("num_heads", [1, 2])
+    @pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
+    @pytest.mark.parametrize("in_sharded", [True, False])
+    @pytest.mark.parametrize(
+        "input_dtype",
+        [
+            ttl.tensor.DataType.FLOAT32,
+        ],
+    )
+    @pytest.mark.parametrize(
+        "cache_dtype",
+        [
+            ttl.tensor.DataType.FLOAT32,
+        ],
+    )
+    def test_update_cache_decode_fp32(
+        self,
+        head_dim,
+        max_seq_len,
+        num_users,
+        num_heads,
+        cache_idx,
+        device,
+        in_sharded,
+        input_dtype,
+        cache_dtype,
+        use_program_cache,
+    ):
+        if is_grayskull() and input_dtype == ttl.tensor.DataType.FLOAT32:
+            pytest.skip("Skipping float32 tests on Grayskull")
+        input_shape = [num_users, num_heads, 1, head_dim]
+        cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+        cache = torch.rand(cache_shape) * 10000.0
+        cachett = ttl.tensor.Tensor(cache, cache_dtype).to(ttl.tensor.Layout.TILE).to(device)
+        x = torch.rand(input_shape) * 10000.0
+        xt = ttl.tensor.Tensor(x.permute(2, 1, 0, 3), input_dtype).to(ttl.tensor.Layout.TILE)
+        if in_sharded:
+            compute_grid_size = device.compute_with_storage_grid_size()
+            num_cores = min(num_users // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
+            shard_grid = ttl.tensor.CoreRangeSet(
+                ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+            )
+            input_shard_spec = ttl.tensor.ShardSpec(
+                shard_grid,
+                [
+                    xt.volume() // xt.shape()[-1] // num_cores,
+                    xt.shape()[-1],
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            )
+            input_mem_config = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+            )
+            xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
+
+        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            fp32_dest_acc_en=True,
+        )
+
+        cachett = ttl.tensor.update_cache(
+            cachett, xt, cache_idx, batch_offset=0, compute_kernel_config=compute_kernel_config
+        )
+        cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x
+
+        tt_got_back = cachett.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        eq, output = comp_pcc(cache, tt_got_back, 0.99999999)
+        logger.info(output)
+        assert eq

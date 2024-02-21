@@ -20,11 +20,12 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t *unpack
     );
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
     const llk_unpack_A_params_t unpack_untilize_params = {
         .unpA_operand = unpA_operand,
     };
-    llk_unpack_untilize_hw_configure(&unpack_untilize_params);
+    llk_unpack_untilize_hw_configure<is_fp32_dest_acc_en>(&unpack_untilize_params);
 }
 
 inline void llk_unpack_untilize_mop_config() {

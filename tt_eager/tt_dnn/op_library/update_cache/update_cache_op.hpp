@@ -10,6 +10,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 
@@ -23,8 +24,8 @@ enum class UpdateCacheOpType {
     FILL = 0, UPDATE = 1
 };
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset);
-operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset);
+operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
 operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
 
@@ -33,6 +34,7 @@ struct UpdateCache {
     const uint32_t update_idx;
     const uint32_t batch_offset;
     const UpdateCacheOpType op_type;
+    const DeviceComputeKernelConfig compute_kernel_config;
 
     UpdateCacheOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
@@ -57,8 +59,9 @@ inline Tensor fill_cache(const Tensor& cache_tensor, const Tensor& input_tensor,
     return cache_tensor;
 }
 
-inline Tensor update_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset) {
-    operation::run(UpdateCache{0, update_idx, batch_offset, UpdateCacheOpType::UPDATE}, {cache_tensor, input_tensor});
+inline Tensor update_cache(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
+    operation::run(UpdateCache{0, update_idx, batch_offset, UpdateCacheOpType::UPDATE, kernel_config_val}, {cache_tensor, input_tensor});
     return cache_tensor;
 }
 
