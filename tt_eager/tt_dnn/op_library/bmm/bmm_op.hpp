@@ -374,10 +374,7 @@ inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b
             .program_config=matmul_program_config,
             .output_mem_config=mem_config,
             .output_dtype=input_tensor_a.dtype(),
-            .math_fidelity=MathFidelity::HiFi4,
-            .fp32_dest_acc_en=false,
-            .math_approx_mode=false,
-            .packer_l1_acc=false
+            .compute_kernel_config=kernel_config_val
         }, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     } else {
         return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=input_tensor_a.dtype(), .compute_kernel_config=kernel_config_val}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
@@ -398,10 +395,7 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
             .program_config=matmul_program_config,
             .output_mem_config=mem_config,
             .output_dtype=input_tensor_a.dtype(),
-            .math_fidelity=MathFidelity::HiFi4,
-            .fp32_dest_acc_en=false,
-            .math_approx_mode=false,
-            .packer_l1_acc=false
+            .compute_kernel_config=kernel_config_val
         }, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
     } else {
         return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config, .output_dtype=input_tensor_a.dtype(), .compute_kernel_config=kernel_config_val}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);

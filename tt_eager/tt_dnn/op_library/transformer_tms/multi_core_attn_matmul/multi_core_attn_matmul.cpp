@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    tt::DataFormat interm_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
@@ -68,6 +68,10 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     log_debug("math_approx_mode: {}", math_approx_mode);
     log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
     log_debug("packer_l1_acc: {}", packer_l1_acc);
+    log_debug("in0_data_format: {}", in0_data_format);
+    log_debug("in1_data_format: {}", in1_data_format);
+    log_debug("interm_data_format: {}", interm_data_format);
+    log_debug("output_data_format: {}", output_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *src1_buffer = b.buffer();
@@ -149,7 +153,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         (uint32_t) src0_is_dram,
         (uint32_t) src1_is_dram,
         (uint32_t) transpose_hw_bool,
-        (uint32_t) fp32_dest_acc_en
+        (uint32_t) (fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)
     };
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
