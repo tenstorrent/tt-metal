@@ -104,6 +104,11 @@ def determine_parallel_config(
     device,
     config_override={},
 ):
+    print(f"==================== determine_parallel_config ====================")
+    print(
+        f"output_channels: {output_channels}, input_channels: {input_channels}, input_height: {input_height}, input_width: {input_width}, sliding_window_op_params: {sliding_window_op_params}"
+    )
+
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
     conv_out_2d_matrix_height = batch_size * output_height * output_width
     # pad height to 32
@@ -190,6 +195,7 @@ def determine_parallel_config(
 
     conv_parallelization_config = ttl.tensor.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
+        num_cores_nhw=num_cores_nhw,
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
@@ -197,7 +203,10 @@ def determine_parallel_config(
     # print("grid_size=", grid_size)
     # print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
     # print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
-    return conv_parallelization_config, num_cores_nhw
+    print(
+        f"num_cores_nhw: {num_cores_nhw}, grid_size: {grid_size}, conv_parallelization_config: {conv_parallelization_config}"
+    )
+    return conv_parallelization_config, num_cores_nhw, grid_size
 
 
 def determine_per_core_block_config(
@@ -421,7 +430,8 @@ class TTPyCompositeConv(TTPyOp):
         self.is_1d_systolic = is_1d_systolic
         self.device = device
         # determine conv op parallelization and blocking config
-        self.opt_conv_parall_conf_auto, num_cores_nhw = determine_parallel_config(
+        print(f"==================== TTPyCompositeConv ====================")
+        self.opt_conv_parall_conf_auto, num_cores_nhw, grid_size = determine_parallel_config(
             is_1d_systolic,
             batch_size,
             output_channels,
@@ -432,6 +442,7 @@ class TTPyCompositeConv(TTPyOp):
             device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
+        self.parallel_config = (grid_size, num_cores_nhw)
 
         self.opt_conv_block_conf_auto = determine_per_core_block_config(
             is_1d_systolic,
@@ -850,6 +861,9 @@ class TTPyCompositeConv(TTPyOp):
 
     def get_num_cores_nhw(self):
         return self.sliding_window_op_params.num_cores_nhw
+
+    def get_parallel_config(self):
+        return self.parallel_config
 
     # TODO: with this api, we get incorrect output
     def copy_input_to_device_with_sharded_api(self, conv_input: ttl.tensor.Tensor):

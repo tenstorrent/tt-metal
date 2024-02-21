@@ -233,6 +233,39 @@ def test_resnet(device):
                 already_preprocessed_children={"conv1", "bn1", "relu1"},
             )
 
+            for child_name, child in tuple(model.named_children()) + named_parameters:
+                if child_name in {"conv1", "bn1"}:
+                    continue
+                if child_name == "maxpool":
+                    print(
+                        f"========================= custom_preprocessor has encountered maxpool =========================="
+                    )
+                parameters[child_name] = convert_torch_model_to_ttnn_model(
+                    child,
+                    name=name,
+                    convert_to_ttnn=convert_to_ttnn,
+                    custom_preprocessor=custom_preprocessor,
+                    ttnn_module_args=ttnn_module_args.get(child_name, None),
+                )
+                if child_name == "maxpool":
+                    print(f"ttnn_module_args.conv1: {ttnn_module_args.conv1}")
+                    print(f"model.conv1: {model.conv1}")
+                    print(f"model.conv1.stride: {model.conv1.stride}")
+                    # print(f'parameters["conv1"]: {parameters.conv1.get_parallel_config()}')
+                    # grid_size, ncores_nhw = model.conv1.get_parallel_config()
+                    # parameters['maxpool']['grid_size'] = grid_size
+                    # parameters['maxpool']['ncores_nhw'] = ncores_nhw
+                    print(f'parameters["maxpool"]: {parameters["maxpool"]}')
+                    print(f'parameters["conv1"]: {parameters["conv1"]}')
+                    ttnn_module_args.maxpool["parallel_config_override"] = {
+                        "grid_size": parameters["conv1"]["parallel_config"],
+                        "ncores_nhw": parameters["conv1"]["num_cores_nhw"],
+                    }
+                    # update_ttnn_module_args(ttnn_module_args.maxpool)
+
+        print(f"========================= custom_preprocessor is about to return ==========================")
+        print(f"model: {model}, name: {name}, ttnn_module_args: {ttnn_module_args}, convert_to_ttnn: {convert_to_ttnn}")
+        print(f"parameters: {parameters}")
         return parameters
 
     reader_patterns_cache = {}
@@ -243,6 +276,8 @@ def test_resnet(device):
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+
+    print(f"========================= parameters: {parameters.conv1} ==========================")
 
     input_tensor = pad_and_fold_conv_activation_for_unity_stride(
         torch_input_tensor, *torch_model.conv1.padding, *torch_model.conv1.stride

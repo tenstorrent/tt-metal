@@ -61,6 +61,8 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
     parameters["weight"] = ttnn.Tensor(conv.conv.weight)
     if bias is not None:
         parameters["bias"] = ttnn.Tensor(conv.conv.bias)
+    parameters["num_cores_nhw"] = conv.get_num_cores_nhw()
+    parameters["parallel_config"] = conv.get_parallel_config()
     return parameters
 
 
@@ -627,6 +629,7 @@ def preprocess_model(
                         device=device,
                     )
                 elif isinstance(model.ttnn_module_args, MaxPool2dArgs):
+                    print(f"---------------- Using max pool args: {model.ttnn_module_args}")
                     return ttnn.MaxPool2d(
                         **model.ttnn_module_args,
                         reader_patterns_cache=reader_patterns_cache,
