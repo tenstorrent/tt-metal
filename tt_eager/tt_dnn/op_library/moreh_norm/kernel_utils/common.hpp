@@ -15,16 +15,16 @@ void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_push_back(cb_id, 1);
 }
 
+union Scalar {
+    float f;
+    uint32_t u;
+};
+
 void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
-    union {
-        float f;
-        uint32_t u;
-    } one;
+    Scalar one;
+    Scalar zero;
+
     one.f = 1.0f;
-    union {
-        float f;
-        uint32_t u;
-    } zero;
     zero.f = 0.0f;
 
     cb_reserve_back(cb_mask, 1);
@@ -88,15 +88,10 @@ void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
 }
 
 void generate_mask_h(uint32_t cb_mask, uint32_t mask_h) {
-    union {
-        float f;
-        uint32_t u;
-    } one;
+    Scalar one;
+    Scalar zero;
+
     one.f = 1.0f;
-    union {
-        float f;
-        uint32_t u;
-    } zero;
     zero.f = 0.0f;
 
     cb_reserve_back(cb_mask, 1);
