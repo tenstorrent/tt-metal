@@ -9,13 +9,17 @@ from loguru import logger
 
 import ttnn
 
-MatmulDefaultProgramConfig = ttnn.ttl.operations.primary.MatmulDefaultProgramConfig
-MatmulMultiCoreReuseProgramConfig = ttnn.ttl.operations.primary.MatmulMultiCoreReuseProgramConfig
-MatmulMultiCoreReuseMultiCastProgramConfig = ttnn.ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig
-MatmulMultiCoreReuseMultiCast1DProgramConfig = ttnn.ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig
+MatmulDefaultProgramConfig = ttnn.experimental.operations.primary.MatmulDefaultProgramConfig
+MatmulMultiCoreReuseProgramConfig = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig
+MatmulMultiCoreReuseMultiCastProgramConfig = (
+    ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig
+)
+MatmulMultiCoreReuseMultiCast1DProgramConfig = (
+    ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig
+)
 
 # MatmulProgramConfig is the Union of the above types
-MatmulProgramConfig = ttnn.ttl.operations.primary.MatmulProgramConfig
+MatmulProgramConfig = ttnn.experimental.operations.primary.MatmulProgramConfig
 
 
 def map_num_cores_to_core_grid(num_cores: int, max_core_grid) -> ttnn.CoreGrid:
@@ -60,9 +64,9 @@ def _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core):
 
 
 _ACTIVATION_TO_FUSED_ACTIVATION = {
-    "gelu": (ttnn.ttl.tensor.FusibleActivation.GELU, True),
-    "relu": ttnn.ttl.tensor.FusibleActivation.RELU,
-    "silu": ttnn.ttl.tensor.FusibleActivation.SILU,
+    "gelu": (ttnn.experimental.tensor.FusibleActivation.GELU, True),
+    "relu": ttnn.experimental.tensor.FusibleActivation.RELU,
+    "silu": ttnn.experimental.tensor.FusibleActivation.SILU,
 }
 
 
@@ -198,7 +202,7 @@ def _get_matmul_program_config(
             n_tiles_per_core = int(math.ceil((n_size / ttnn.TILE_SIZE)))
             k_tiles_per_core = 1  # TODO(arakhmati): Can it be more than 1 without running out of memory?
         elif ttnn.is_sharded(input_tensor_a):
-            if input_tensor_a_memory_config.memory_layout == ttnn.ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            if input_tensor_a_memory_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED:
                 raise RuntimeError(f"{operation_name}: Cannot be width sharded")
             shard_shape = input_tensor_a_memory_config.shard_spec.shape
             N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
@@ -206,7 +210,7 @@ def _get_matmul_program_config(
             n_tiles_per_core = N
             k_tiles_per_core = shard_shape[1] // ttnn.TILE_SIZE
         elif ttnn.is_sharded(input_tensor_b):
-            if input_tensor_b_memory_config.memory_layout == ttnn.ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED:
+            if input_tensor_b_memory_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED:
                 raise RuntimeError(f"{operation_name}: Cannot be width sharded")
             shard_shape = input_tensor_b_memory_config.shard_spec.shape
             m_tiles_per_core = int(math.ceil((m_size / ttnn.TILE_SIZE)))
@@ -220,7 +224,10 @@ def _get_matmul_program_config(
             while (k_size // ttnn.TILE_SIZE) % k_tiles_per_core != 0:
                 k_tiles_per_core -= 1
         else:
-            if not input_tensor_a_memory_config.memory_layout == ttnn.ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+            if (
+                not input_tensor_a_memory_config.memory_layout
+                == ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            ):
                 raise RuntimeError(f"{operation_name}: Must be block sharded")
             K = input_tensor_a.shape[-1] // ttnn.TILE_SIZE
             N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
@@ -232,7 +239,7 @@ def _get_matmul_program_config(
     m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core)
 
     if input_b_is_batched:
-        program_config = ttnn.ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             per_core_M=m_tiles_per_core,
             per_core_N=n_tiles_per_core,
@@ -241,7 +248,7 @@ def _get_matmul_program_config(
             out_subblock_w=n_subblock_size,
         )
     else:
-        program_config = ttnn.ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             per_core_M=m_tiles_per_core,
             per_core_N=n_tiles_per_core,
@@ -325,7 +332,7 @@ def _matmul(
         apply_activation_separately = not hasattr(program_config, "fused_activation")
 
         try:
-            output_tensor = ttnn.ttl.operations.primary.matmul(
+            output_tensor = ttnn.experimental.operations.primary.matmul(
                 input_tensor_a,
                 input_tensor_b,
                 bias=bias,
@@ -346,13 +353,13 @@ def _matmul(
 
         input_b_is_batched = math.prod(batch_shape_b) > 1
         if input_b_is_batched:
-            output_tensor = ttnn.ttl.tensor.bmm(
+            output_tensor = ttnn.experimental.tensor.bmm(
                 input_tensor_a,
                 input_tensor_b,
                 output_mem_config=memory_config,
             )
         else:
-            output_tensor = ttnn.ttl.tensor.matmul(
+            output_tensor = ttnn.experimental.tensor.matmul(
                 input_tensor_a,
                 input_tensor_b,
                 output_mem_config=memory_config,

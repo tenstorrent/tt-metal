@@ -129,7 +129,7 @@ Add `tests/ttnn/unit_tests/ttl/test_<new_operation>.py`:
         torch_output_tensor = torch.exp(torch_input_tensor)
 
         input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
-        output_tensor = ttnn.ttl.tensor.<new_operation>(input_tensor)
+        output_tensor = ttnn.experimental.tensor.<new_operation>(input_tensor)
 
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -175,7 +175,7 @@ Add `tests/ttnn/sweep_tests/sweeps/ttl_<new_operation>.py`:
         torch_output_tensor = torch.exp(torch_input_tensor)
 
         input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
-        output_tensor = ttnn.ttl.tensor.<new_operation>(input_tensor)
+        output_tensor = ttnn.experimental.tensor.<new_operation>(input_tensor)
 
         output_tensor = ttnn.to_torch(output_tensor)
 
