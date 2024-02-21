@@ -1,4 +1,4 @@
-personal_ws-1.1 en 515
+personal_ws-1.1 en 519
 ABI
 ADDI
 API
@@ -271,10 +271,12 @@ funcs
 gcc
 gdb
 gdb's
+geglu
 gelu
 genindex
 getitem
 gez
+glu
 grayskull
 grey
 gte
@@ -395,6 +397,7 @@ rb
 rdiv
 recip
 reconfig
+reglu
 regs
 reigster
 relu
@@ -454,6 +457,7 @@ submodule
 subvec
 sudo
 svg
+swiglu
 sys
 tanh
 tanhshrink
