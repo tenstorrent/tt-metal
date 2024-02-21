@@ -309,7 +309,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
         uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_ASSERT(total_width == shard_shape[1], "Shard shape does not divide tensor shape correctly according to sharding scheme");
+        TT_ASSERT(total_width == shard_shape[1], "Shard width ({}) does not divide tensor width ({}) correctly according to sharding scheme", shard_shape[1], total_width);
         num_shards = div_up(total_height, shard_shape[0]);
     } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_ASSERT(total_height == shard_shape[0], "Shard shape does not divide tensor shape correctly according to sharding scheme");

@@ -48,6 +48,12 @@ def custom_preprocessor(model, name, ttnn_module_args):
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.c1_2)
         parameters["p1"] = {}
+        ttnn_module_args.p1["parallel_config_override"] = {
+            "grid_size": parameters["c1"]["parallel_config"],
+            "ncores_nhw": parameters["c1"]["num_cores_nhw"],
+        }
+
+        print(f'parameters["c1"]: {parameters["c1"]}')
 
         # print("parameters['p1']: ", parameters["p1"])
 

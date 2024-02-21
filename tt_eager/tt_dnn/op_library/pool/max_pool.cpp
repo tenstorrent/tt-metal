@@ -59,8 +59,8 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     uint32_t out_w = out_w_;
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
-    // uint32_t out_c_padded = ceil_multiple_of(out_c, constants::TILE_WIDTH);
-    uint32_t out_c_padded = ceil_multiple_of(out_c, 16);
+    uint32_t out_c_padded = ceil_multiple_of(out_c, constants::TILE_WIDTH);
+    // uint32_t out_c_padded = ceil_multiple_of(out_c, 16);
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.dtype()));
     uint32_t out_hw = out_h * out_w;
     uint32_t out_hw_padded = (uint32_t) ceil_multiple_of(out_hw, constants::TILE_HEIGHT);
@@ -73,7 +73,10 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
                                   {0, out_c_padded - out_c}},
                                  Padding::PadValue::NegativeInfinity);
 
-    auto out_shape = Shape{out_dims, padding};
+    log_debug("MaxPool: input shape: {}, out_dims: {}, padding: {}", input.shape(), out_dims, padding);
+    auto out_shape = Shape(out_dims, padding);
+    log_debug("MaxPool: output shape: {}", input.shape(), out_shape);
+    log_debug("MaxPool: out_c: {}, out_c_padded: {}, out_hw_padded: {}", out_c, out_c_padded, out_hw_padded);
 
     return {out_shape};
 }
