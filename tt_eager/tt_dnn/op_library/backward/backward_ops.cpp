@@ -9,6 +9,7 @@
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 
 namespace tt {
 
@@ -758,6 +759,42 @@ std::vector<Tensor> logaddexp2_bw(const Tensor& grad, const Tensor& input_a, con
 {
     return operation::decorate_as_composite(__func__, _logaddexp2_bw)(grad, input_a, other, output_mem_config);
 }
+std::vector<Tensor> _concat_bw(const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    const Shape start_index = {0, 0, 0, 0};
+    const Shape end_index = {input.shape()[0] - 1, input.shape()[1] - 1, input.shape()[2] - 1, input.shape()[3] - 1};
+
+    Tensor grad_a = unpad(grad, start_index, end_index);
+    grad_tensor.emplace_back(grad_a);
+
+    Shape start_index_2 = {0, 0, 0, 0};
+    if(dim == 0)
+    {
+      start_index_2 = {input.shape()[0], 0, 0, 0};
+    }
+    else if(dim == 1)
+    {
+        start_index_2 = {input.shape()[0] - 1, input.shape()[1], 0, 0};
+    }
+    else if(dim == 2)
+    {
+        start_index_2 = {input.shape()[0] - 1, input.shape()[1] - 1, input.shape()[2], 0};
+    }
+    else if(dim == 3)
+    {
+        start_index_2 = {input.shape()[0] - 1, input.shape()[1] - 1, 0, input.shape()[3]};
+    }
+    const Shape end_index_2 = {grad.shape()[0] - 1, grad.shape()[1] - 1, grad.shape()[2] - 1, grad.shape()[3] - 1};
+    Tensor grad_b = unpad(grad, start_index_2, end_index_2);
+    grad_tensor.emplace_back(grad_b);
+
+    return grad_tensor;
+}
+std::vector<Tensor> concat_bw(const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _concat_bw)(grad, input, other, dim, output_mem_config);
+}
+
 
 }//namespace tt_metal
 
