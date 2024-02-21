@@ -82,7 +82,7 @@ class TtLlamaDecoder_optimized:
         from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
 
         rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-        rot_mat = gather_rotary_emb(rot_emb, position_ids)
+        rot_mat = gather_rotary_emb(rot_emb, position_ids)[:, :1]
 
         padded_layer_past_len = nearest_32(start_pos + 1)
         attn_mask = torch.zeros(seq_len, 1, batch, padded_layer_past_len)
@@ -92,10 +92,10 @@ class TtLlamaDecoder_optimized:
         # expected shapes:
         # x: (seq_len, 1, batch, hidden_dim)
         # start_pos: int
-        # rot_mat: [1, bsz, head_dim, head_dim]
+        # rot_mat: [1, 1, head_dim, head_dim]
         # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
-        assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
+        assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
         assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
 
         x_fractured = torch.chunk(x, self.num_devices, dim=-1)
@@ -103,7 +103,9 @@ class TtLlamaDecoder_optimized:
         for i in range(self.num_devices):
             device = self.devices[i]
             xs.append(torch2tt_tensor(x_fractured[i], device))
-            rot_mats.append(torch2tt_tensor(rot_mat.clone(), device))
+            rot_mats.append(
+                torch2tt_tensor(rot_mat.clone(), device, tt_memory_config=self.model_config["ROT_MAT_MEMCFG"])
+            )
 
             # Put attn_mask on the device with the sharded config
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
