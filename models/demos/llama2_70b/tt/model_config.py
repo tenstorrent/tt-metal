@@ -569,7 +569,57 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             ),
         )
     model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
-    model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+    # model_config["ROT_MAT_K_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+    #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+    #     ttl.tensor.BufferType.L1,
+    #     ttl.tensor.ShardSpec(
+    #         ttl.tensor.CoreRangeSet(
+    #             {
+    #                 ttl.tensor.CoreRange(
+    #                     ttl.tensor.CoreCoord(0, 0),
+    #                     ttl.tensor.CoreCoord(0, 0),
+    #                 ),
+    #             }
+    #         ),
+    #         [
+    #             128,
+    #             128,  # Dynamic
+    #         ],
+    #         ttl.tensor.ShardOrientation.ROW_MAJOR,
+    #         False,
+    #     ),
+    # )
+
+    if num_devices == 8:
+        model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+        model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+
+        model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+        model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+
+    model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
+    model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"] = L1_MEMCFG
+
     model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.BufferType.L1,
