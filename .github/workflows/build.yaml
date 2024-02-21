@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-upload:
     strategy:
+      fail-fast: false
       matrix:
         config: [debug, assert, release]
         arch: [grayskull, wormhole_b0]
