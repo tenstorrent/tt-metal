@@ -17,7 +17,10 @@ for attribute_name in dir(ttl.tensor):
     if attribute_name.startswith("__"):
         continue
     attribute = getattr(ttl.tensor, attribute_name)
-    if inspect.isbuiltin(attribute) and (
+    probably_c_function = inspect.isbuiltin(attribute) or (
+        hasattr(attribute, "profiler_wrapped_function") and inspect.isbuiltin(attribute.profiler_wrapped_function)
+    )
+    if probably_c_function and (
         "tt_lib.tensor.Tensor" in attribute.__doc__ or "tt::tt_metal::Tensor" in attribute.__doc__
     ):
         attribute = ttnn.decorators.register_ttl_operation_as_ttnn_operation(
