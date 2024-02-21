@@ -38,15 +38,19 @@ def calculate_data_size(row):
     
     return total_size
 
-def calculate_total_duration(df, column_name, scale=1):
+def calculate_total_duration(df, column_name):
     numeric_durations = pd.to_numeric(df[column_name], errors='coerce')
     total_duration_ns = numeric_durations.sum()
     # Convert nanoseconds to milliseconds
-    return total_duration_ns * scale
+    return total_duration_ns / 1e6
 
 def find_top_k_longest_ops(df, k, column_name):
     df[column_name] = pd.to_numeric(df[column_name], errors='coerce')
-    top_k = df.nlargest(k, column_name)[['GLOBAL CALL COUNT', 'OP CODE', 'DEVICE FW DURATION (ms)', 'Utilization (GB/s)']]
+    top_k = df.nlargest(k, column_name)[['GLOBAL CALL COUNT', 'OP CODE', column_name]]
+    # Convert nanoseconds to milliseconds for display
+    top_k[column_name[:-5] + ' (ms)'] = top_k[column_name] / 1e6
+    top_k['GLOBAL CALL COUNT'] = top_k['GLOBAL CALL COUNT'].astype(int)
+    top_k.drop(columns=[column_name], inplace=True)
     return top_k
 
 def main():
@@ -58,26 +62,19 @@ def main():
     df = pd.read_csv(args.csv_file)
     
     # Perform calculations
-    df['Input Size (GB)'] = df.apply(calculate_data_size, axis=1) / (1024**3)
-    df['Input Size (GB)'] = pd.to_numeric(df['Input Size (GB)'], errors='coerce')
-    df['Utilization (GB/s)'] = df['Input Size (GB)'] / (df['DEVICE FW DURATION [ns]']*1e-9)
-    # Convert for display
-    df['DEVICE FW DURATION (ms)'] = df['DEVICE FW DURATION [ns]'] / 1e6
-    df['GLOBAL CALL COUNT'] = pd.to_numeric(df['GLOBAL CALL COUNT'], errors='coerce')
-    df['GLOBAL CALL COUNT'] = df['GLOBAL CALL COUNT'].fillna(-1)
-    df['GLOBAL CALL COUNT'] = df['GLOBAL CALL COUNT'].astype(int)
-    total_size_gb = df['Input Size (GB)'].sum()
-    total_device_duration_ms = calculate_total_duration(df, 'DEVICE FW DURATION (ms)', scale=1)
-    total_host_duration_ms = calculate_total_duration(df, 'HOST DURATION [ns]', scale=1e-6)
-    top_k_longest_device_ops = find_top_k_longest_ops(df, args.top_k_ops, 'DEVICE FW DURATION (ms)')
+    total_size_bytes = df.apply(calculate_data_size, axis=1).sum()
+    total_device_duration_ms = calculate_total_duration(df, 'DEVICE FW DURATION [ns]')
+    total_host_duration_ms = calculate_total_duration(df, 'HOST DURATION [ns]')
+    top_k_longest_device_ops = find_top_k_longest_ops(df, args.top_k_ops, 'DEVICE FW DURATION [ns]')
         
+    # Convert to gigabytes
+    total_size_gb = total_size_bytes / (1024**3)
+    
     # Compile results
     results = {
         'Total Input Data (GB)': [total_size_gb],
         'Total Device Duration (ms)': [total_device_duration_ms],
-        'Total Host Duration (ms)': [total_host_duration_ms],
-        'Total DRAM Utilization (GB/s)': [total_size_gb / total_device_duration_ms * 1e3],
-        'DRAM % Utilization @ 288 GB/s Ideal DRAM BW': [(total_size_gb / total_device_duration_ms * 1e3) / 288 * 100],
+        'Total Host Duration (ms)': [total_host_duration_ms]
     }
     results_df = pd.DataFrame(results)
     
@@ -88,12 +85,8 @@ def main():
     all_results_df.to_csv(args.output, index=False)
     
     # Pretty print the results table
-    def format_dataframe(df):
-        for col in df.select_dtypes(include=['float64', 'float32']).columns:
-            df[col] = df[col].map('{:,.5f}'.format)
-        return df
-    print(tabulate(format_dataframe(results_df), headers='keys', tablefmt='pretty'))
-    print(tabulate(format_dataframe(top_k_longest_device_ops), headers='keys', tablefmt='pretty'))
+    print(tabulate(results_df, headers='keys', tablefmt='pretty'))
+    print(tabulate(top_k_longest_device_ops, headers='keys', tablefmt='pretty'))
 
 
 if __name__ == "__main__":
