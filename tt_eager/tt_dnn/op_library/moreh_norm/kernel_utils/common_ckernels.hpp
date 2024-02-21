@@ -20,6 +20,7 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 
 namespace ckernel {
 
+// TODO(seunghwan100): If p is 2 and decimal is 0, we can use sqrt_tile.
 ALWI void power_tile_to_cb(
     std::uint8_t cb_x,
     std::uint8_t cb_xpow,
