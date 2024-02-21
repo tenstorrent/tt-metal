@@ -8,7 +8,10 @@
 using uint32_t = std::uint32_t;
 
 // tile index to address
-inline uint32_t TADDR(uint32_t ti) {
+inline uint32_t TADDR_FLOAT32(uint32_t ti) {
+    return ti << 12;
+}
+inline uint32_t TADDR_BFLOAT16(uint32_t ti) {
     return ti << 11;
 }
 
@@ -30,9 +33,24 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
+    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(2);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
+
+    // DPRINT << "WT " << WT <<ENDL();
+    // DPRINT << "H " << H <<ENDL();
+    // DPRINT << "CT " << CT <<ENDL();
+    // DPRINT << "HW_bytes " << HW_bytes <<ENDL();
+    // DPRINT << "CHW_bytes " << CHW_bytes <<ENDL();
+    // DPRINT << "start_id " << start_id <<ENDL();
+    // DPRINT << "num_tiles " << num_tiles <<ENDL();
+    // DPRINT << "batch_addr " << batch_addr <<ENDL();
+    // DPRINT << "h " << h <<ENDL();
+    // DPRINT << "htWT " << htWT <<ENDL();
+    // DPRINT << "ct " << ct <<ENDL();
+    // DPRINT << "ctoffs " << ctoffs <<ENDL();
+    // DPRINT << "wt " << wt <<ENDL();
 
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
@@ -76,13 +94,33 @@ void kernel_main() {
                 // note that dest h is decomposed as h = ht+h32 and htWT is incremented by WT in the outer H loop
 
                 // TODO(AP): not really trivial need better comments here
-                auto sub_src_offs = (sub & 1) << 9; // if dest subtile w==16, add 512 to src subtile offset
-                sub_src_offs += (((h32 >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
-                // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 2 bytes per element
-                auto src_offs = ctoffs + c16offs + TADDR(htWT + wt) + sub_src_offs + ((h32&15)<<5); // bytes offset
-                auto bsrc_offs = batch_addr + src_offs;
-                uint32_t batch_itile = (bsrc_offs >> 11);
-                uint32_t rem = (bsrc_offs & 2047);
+                // auto sub_src_offs = (sub & 1) << 9; // if dest subtile w==16, add 512 to src subtile offset
+                uint32_t sub_src_offs;
+                uint32_t src_offs;
+                uint32_t bsrc_offs;
+                uint32_t batch_itile;
+                uint32_t rem;
+
+                if constexpr(FLOAT32_DTYPE) {
+                    sub_src_offs = (sub & 1) << 10; // if dest subtile w==16, add 1024 to src subtile offset
+                    sub_src_offs += (((h32 >> 4) << 1) << 10); // if intra-tile source h is > 16, add 2*1024 to subtile offset
+                    // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 4 bytes per element
+                    src_offs = ctoffs + c16offs + TADDR_FLOAT32(htWT + wt) + sub_src_offs + ((h32&15)<<6); // bytes offset
+                    bsrc_offs = batch_addr + src_offs;
+                    batch_itile = (bsrc_offs >> 12);
+                    rem = (bsrc_offs & 4095);
+                } else {
+
+                    sub_src_offs = (sub & 1) << 9; // if dest subtile w==16, add 512 to src subtile offset
+                    sub_src_offs += (((h32 >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
+                    // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 2 bytes per element
+                    src_offs = ctoffs + c16offs + TADDR_BFLOAT16(htWT + wt) + sub_src_offs + ((h32&15)<<5); // bytes offset
+                    bsrc_offs = batch_addr + src_offs;
+                    batch_itile = (bsrc_offs >> 11);
+                    rem = (bsrc_offs & 2047);
+                }
+
+                // DPRINT << "rem " << rem <<ENDL();
 
                 //if (h == 0 && ct == 0 && wt == 0) {
                 //    DPRINT << "  Sub=" << sub << " c16=" << c16 << ENDL();

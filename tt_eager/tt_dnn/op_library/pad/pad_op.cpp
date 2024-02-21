@@ -403,6 +403,13 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
+    log_debug("pad_tile");
+    log_debug("cb_data_format: {}", cb_data_format);
+    log_debug("single_tile_size: {}", single_tile_size);
+    log_debug("output_tensor_shape: {}", output_tensor_shape);
+    log_debug("input_tensor_start: {}", input_tensor_start);
+    log_debug("pad_value: {}", pad_value);
+
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
@@ -535,10 +542,10 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_FATAL((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
     } else if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");

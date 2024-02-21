@@ -42,16 +42,16 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     }
     if (this->dim == TransposeOpDim::HC) {
         TT_FATAL(C % TILE_HEIGHT == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
     } else if (this->dim == TransposeOpDim::CW) {
         TT_FATAL(C % TILE_WIDTH == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
     } else if (this->dim == TransposeOpDim::NH) {
         TT_FATAL(N % TILE_HEIGHT == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
     } else if (this->dim == TransposeOpDim::NW) {
         TT_FATAL(N % TILE_WIDTH == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
     }
 }
 
