@@ -16,7 +16,6 @@ class UNet:
     ) -> None:
         self.c1 = parameters.c1
         self.c1_2 = parameters.c1_2
-        # self.p1 = parameters.p1
         self.c2 = parameters.c2
         self.c2_2 = parameters.c2_2
         self.c3 = parameters.c3
@@ -25,29 +24,34 @@ class UNet:
         self.c4_2 = parameters.c4_2
         self.bnc = parameters.bnc
         self.bnc_2 = parameters.bnc_2
-        # self.u4 = parameters.u4
-        # self.c5 = parameters.c5
-        # self.c5_2 = parameters.c5_2
+        self.c5 = parameters.c5
+        self.c5_2 = parameters.c5_2
+        self.c6 = parameters.c6
+        self.c6_2 = parameters.c6_2
+        self.c7 = parameters.c7
+        self.c7_2 = parameters.c7_2
+        self.c8 = parameters.c8
+        self.c8_2 = parameters.c8_2
 
-    def __call__(self, x):
-        identity = x
-
-        # Relu and bn1 are fused with conv1
-        out = self.c1(x)
-
-        out = self.c1_2(out)
-        out = self.c2(out)
-        out = self.c2_2(out)
-        out = self.c3(out)
-        out = self.c3_2(out)
-        out = self.c4(out)
-        out = self.c4_2(out)
-        out = self.bnc(out)
-        out = self.bnc_2(out)
-        out = self.c5(out)
-        out = self.c5_2(out)
-
-        return out
+    #    def __call__(self, x):
+    #        identity = x
+    #
+    #        # Relu and bn1 are fused with conv1
+    #        out = self.c1(x)
+    #
+    #        out = self.c1_2(out)
+    #        out = self.c2(out)
+    #        out = self.c2_2(out)
+    #        out = self.c3(out)
+    #        out = self.c3_2(out)
+    #        out = self.c4(out)
+    #        out = self.c4_2(out)
+    #        out = self.bnc(out)
+    #        out = self.bnc_2(out)
+    #        out = self.c5(out)
+    #        out = self.c5_2(out)
+    #
+    #        return out
 
     def torch_call(self, torch_input_tensor):
         device_id = 0
@@ -62,7 +66,7 @@ class UNet:
         output_tensor = ttnn.to_torch(output_tensor)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
-
+        save_c1_2_out = output_tensor
         output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
 
         output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
@@ -74,6 +78,7 @@ class UNet:
         output_tensor = ttnn.to_torch(output_tensor)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
+        save_c2_2_out = output_tensor
 
         output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
 
@@ -112,10 +117,7 @@ class UNet:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
         output_tensor_bnr2 = output_tensor
-        # output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
-        """
-        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode='bilinear')
-        #output_tensor = torch.nn.functional.upsample_bilinear(output_tensor, scale_factor=2)
+        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
 
         save_c4_2_out = torch.permute(save_c4_2_out, (0, 2, 3, 1))
         save_c4_2_out = ttnn.from_torch(save_c4_2_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
@@ -127,7 +129,6 @@ class UNet:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-
         output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
         output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
         output_tensor = self.c5.copy_input_to_device(output_tensor)
@@ -138,9 +139,7 @@ class UNet:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-
-        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode='bilinear')
-        #output_tensor = torch.nn.functional.upsample_bilinear(output_tensor, scale_factor=2)
+        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
 
         save_c3_2_out = torch.permute(save_c3_2_out, (0, 2, 3, 1))
         save_c3_2_out = ttnn.from_torch(save_c3_2_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
@@ -152,6 +151,58 @@ class UNet:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-        #return output_tensor
-        """
-        return output_tensor_bnr2
+        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
+        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
+        output_tensor = self.c6.copy_input_to_device(output_tensor)
+        output_tensor = self.c6(output_tensor)
+        output_tensor = self.c6_2(output_tensor)
+        output_tensor = self.c6_2.copy_output_from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
+        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
+
+        save_c2_2_out = torch.permute(save_c2_2_out, (0, 2, 3, 1))
+        save_c2_2_out = ttnn.from_torch(save_c2_2_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
+        output_tensor = ttnn.from_torch(output_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+        output_tensor = ttnn.concat([output_tensor, save_c2_2_out], dim=3)
+        output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
+        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
+        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
+        output_tensor = self.c7.copy_input_to_device(output_tensor)
+        output_tensor = self.c7(output_tensor)
+        output_tensor = self.c7_2(output_tensor)
+        output_tensor = self.c7_2.copy_output_from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
+        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
+
+        save_c1_2_out = torch.permute(save_c1_2_out, (0, 2, 3, 1))
+        save_c1_2_out = ttnn.from_torch(save_c1_2_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
+        output_tensor = ttnn.from_torch(output_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+        output_tensor = ttnn.concat([output_tensor, save_c1_2_out], dim=3)
+        output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
+        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
+        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
+        output_tensor = self.c8.copy_input_to_device(output_tensor)
+        output_tensor = self.c8(output_tensor)
+        output_tensor = self.c8_2(output_tensor)
+        output_tensor = self.c8_2.copy_output_from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+
+        return output_tensor
