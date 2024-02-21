@@ -33,3 +33,15 @@ TEST_F(CommandQueueFixture, TestEventsWrittenToCompletionQueueInOrder) {
         EXPECT_EQ(event, i);
     }
 }
+
+// Basic test, record events, check that Event struct was updated. Enough commands to trigger issue queue wrap.
+TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
+    size_t num_events = 100000; // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
+    for (size_t i = 0; i < num_events; i++) {
+        Event event;
+        EnqueueQueueRecordEvent(*this->cmd_queue, event);
+        EXPECT_EQ(event.event_id, i);
+        EXPECT_EQ(event.cq_id, this->cmd_queue->id());
+    }
+    Finish(*this->cmd_queue);
+}
