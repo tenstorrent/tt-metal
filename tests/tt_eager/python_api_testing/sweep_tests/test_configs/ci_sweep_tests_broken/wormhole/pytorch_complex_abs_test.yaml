@@ -1,6 +1,6 @@
 ---
 test-list:
-  - complex-recip:
+  - complex-abs:
       shape:
         start-shape: [1, 1, 32, 64]
         end-shape: [6, 12, 256, 512]
@@ -23,9 +23,9 @@ test-list:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM"]
-      output-file: complex_recip_sweep.csv
-  - complex-recip:
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: complex_abs_sweep.csv
+  - complex-abs:
       shape:
         start-shape: [1, 1, 32, 64]
         end-shape: [6, 12, 256, 512]
@@ -48,5 +48,5 @@ test-list:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM"]
-      output-file: complex_recip_sweep.csv
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: complex_abs_sweep.csv
