@@ -32,7 +32,6 @@ def prepare_conv_input_and_copy_to_device_interleaved(
     tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
 
     if not use_shallow_conv_variant:
-        tt_input_tensor_on_device = ttnn.pad_to_tile(tt_input_tensor_on_device)
         tt_input_tensor_on_device = ttnn.to_layout(tt_input_tensor_on_device, ttnn.TILE_LAYOUT)
     return tt_input_tensor_on_device
 

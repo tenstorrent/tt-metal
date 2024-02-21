@@ -103,8 +103,6 @@ from ttnn.operations.matmul import (
 
 from ttnn.operations.others import (
     embedding,
-    pad_to_tile,
-    unpad_from_tile,
     # fused operations
     softmax,
     # reduction operations
