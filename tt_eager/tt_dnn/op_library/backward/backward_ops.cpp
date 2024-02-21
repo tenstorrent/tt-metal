@@ -715,6 +715,50 @@ std::vector<Tensor> xlogy_bw(const Tensor& grad, const Tensor& input, const Tens
 {
     return operation::decorate_as_composite(__func__, _xlogy_bw)(grad, input, other, output_mem_config);
 }
+
+/*
+Torch Reference:
+name: logaddexp(Tensor self, Tensor other) -> Tensor
+self: grad / (1 + exp(other - self)).conj()
+other: grad / (1 + exp(self - other)).conj()
+*/
+std::vector<Tensor> _logaddexp_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor opexp = add1(exp(sub(other, input_a, std::nullopt, output_mem_config), output_mem_config), output_mem_config);
+    Tensor grad_a = mul(grad, recip(opexp, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    opexp = add1(exp(sub(input_a, other, std::nullopt, output_mem_config), output_mem_config), output_mem_config);
+    Tensor grad_b = mul(grad, recip(opexp, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> logaddexp_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logaddexp_bw)(grad, input_a, other, output_mem_config);
+}
+
+/*
+Torch reference
+name: logaddexp2(Tensor self, Tensor other) -> Tensor
+self: grad / (1 + pow(2, other - self))
+other: grad / (1 + pow(2, self - other))
+*/
+
+std::vector<Tensor> _logaddexp2_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor oppow = add1(rpow(sub(other, input_a, std::nullopt, output_mem_config), 2,  output_mem_config), output_mem_config);
+    Tensor grad_a = mul(grad, recip(oppow, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    oppow = add1(rpow(sub(input_a, other, std::nullopt, output_mem_config), 2, output_mem_config), output_mem_config);
+    Tensor grad_b = mul(grad, recip(oppow, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> logaddexp2_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logaddexp2_bw)(grad, input_a, other, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
