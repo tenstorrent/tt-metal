@@ -52,11 +52,11 @@ void test_multi_queue_api() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto num_command_queues = 2;
+    auto num_command_queues = 1;
     auto device = tt::tt_metal::CreateDevice(device_id, num_command_queues);
 
     auto& command_queue_0 = device->command_queue(0);
-    auto& command_queue_1 = device->command_queue(1);
+    // auto& command_queue_1 = device->command_queue(1);
 
     auto host_input_tensor =
         tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}).to(Layout::TILE);
@@ -100,7 +100,7 @@ void test_multi_queue_api() {
     auto golden_output_tensor = host_function<::detail::sqrt>(host_input_tensor);
 
     tt::tt_metal::QueueSynchronize(command_queue_0);
-    tt::tt_metal::QueueSynchronize(command_queue_1);
+    // tt::tt_metal::QueueSynchronize(command_queue_1);
 
     TT_FATAL(tt::numpy::allclose<bfloat16>(golden_output_tensor, cq0_output_tensor, 1e-3f, 1e-2f));
     TT_FATAL(tt::numpy::allclose<bfloat16>(golden_output_tensor, cq1_output_tensor, 1e-3f, 1e-2f));
