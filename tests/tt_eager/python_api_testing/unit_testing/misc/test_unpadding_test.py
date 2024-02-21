@@ -8,18 +8,29 @@ import numpy as np
 import torch
 
 import tt_lib as ttl
+from models.utility_functions import is_grayskull
 
 
 def unpadding_test(
-    input_layout, input_tensor_shape, output_tensor_start, output_tensor_end, device, in_mem_config, out_mem_config
+    input_layout,
+    input_tensor_shape,
+    output_tensor_start,
+    output_tensor_end,
+    device,
+    in_mem_config,
+    out_mem_config,
+    dtype,
 ):
-    inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
+    if dtype == ttl.tensor.DataType.FLOAT32:
+        inp = torch.rand(*input_tensor_shape, dtype=torch.float)
+    else:
+        inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     a = (
         ttl.tensor.Tensor(
             inp.reshape(-1).tolist(),
             inp.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(input_layout)
@@ -44,6 +55,11 @@ def unpadding_test(
     return a_pt, a_ref, device.num_program_cache_entries()
 
 
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    ids=["bfloat16", "float"],
+)
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
@@ -81,8 +97,12 @@ def test_run_unpadding_test(
     device,
     in_mem_config,
     out_mem_config,
+    dtype,
     use_program_cache,
 ):
+    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     a_pt, a_ref, num_cache_entries = unpadding_test(
         ttl.tensor.Layout.ROW_MAJOR,
         input_tensor_shape_0,
@@ -91,6 +111,7 @@ def test_run_unpadding_test(
         device,
         in_mem_config,
         out_mem_config,
+        dtype,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
@@ -105,6 +126,7 @@ def test_run_unpadding_test(
         device,
         in_mem_config,
         out_mem_config,
+        dtype,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
@@ -120,6 +142,7 @@ def test_run_unpadding_test(
         device,
         in_mem_config,
         out_mem_config,
+        dtype,
     )
     # change from RM to TILE
     assert num_cache_entries == 3
@@ -135,6 +158,7 @@ def test_run_unpadding_test(
         device,
         in_mem_config,
         out_mem_config,
+        dtype,
     )
     # CACHE HIT
     assert num_cache_entries == 3
