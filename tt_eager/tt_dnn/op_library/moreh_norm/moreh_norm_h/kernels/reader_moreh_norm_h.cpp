@@ -32,10 +32,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<false> l1_input_addrg = {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
-    union {
-        float f;
-        uint32_t u;
-    } one;
+    Scalar one;
     one.f = 1.0f;
     fill_cb_with_value(cb_id_one, one.u);
     fill_cb_with_value(cb_id_decimal, decimal);

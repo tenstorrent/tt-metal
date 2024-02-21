@@ -6,6 +6,11 @@
 
 #include "dataflow_api.h"
 
+union Scalar {
+    float f;
+    uint32_t u;
+};
+
 void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_reserve_back(cb_id, 1);
     auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
@@ -14,11 +19,6 @@ void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     }
     cb_push_back(cb_id, 1);
 }
-
-union Scalar {
-    float f;
-    uint32_t u;
-};
 
 void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
     Scalar one;
