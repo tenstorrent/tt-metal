@@ -26,7 +26,7 @@ jobs:
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
