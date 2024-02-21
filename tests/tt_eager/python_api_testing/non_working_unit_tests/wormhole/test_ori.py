@@ -16,11 +16,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_r
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
-def run_ori_tests(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, dispatch_mode, device
-):
+def run_ori_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, device):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -45,7 +42,6 @@ def run_ori_tests(
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
 
-    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -58,7 +54,6 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         66,
         9394661,
-        "1",
     ),
     (
         (5, 11, 252, 22),
@@ -68,18 +63,13 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         84,
         13482735,
-        "1",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, dispatch_mode",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed",
     (test_sweep_args),
 )
-def test_ori_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, dispatch_mode, device
-):
-    run_ori_tests(
-        input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, dispatch_mode, device
-    )
+def test_ori_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, device):
+    run_ori_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, device)
