@@ -8,6 +8,8 @@ import ttnn
 import tt_lib as ttl
 import tt_lib.fallback_ops
 
+from loguru import logger
+
 
 class UNet:
     def __init__(
@@ -112,18 +114,24 @@ class UNet:
         output_tensor = self.bnc.copy_input_to_device(output_tensor)
         output_tensor = self.bnc(output_tensor)
         output_tensor = self.bnc_2(output_tensor)
-        output_tensor = self.bnc_2.copy_output_from_device(output_tensor)
+        # output_tensor = self.bnc_2.copy_output_from_device(output_tensor)
+        # output_tensor = ttnn.to_torch(output_tensor)
+        # output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        # output_tensor = output_tensor.to(torch_input_tensor.dtype)
+        # output_tensor_bnr2 = output_tensor
+        # output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
+        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
-        output_tensor_bnr2 = output_tensor
-        output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
 
         save_c4_2_out = torch.permute(save_c4_2_out, (0, 2, 3, 1))
         save_c4_2_out = ttnn.from_torch(save_c4_2_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
         output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
         output_tensor = ttnn.from_torch(output_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
+        logger.debug(f"output_tensor: {output_tensor.shape}")
+        logger.debug(f"output_tensor: {save_c4_2_out.shape}")
         output_tensor = ttnn.concat([output_tensor, save_c4_2_out], dim=3)
         output_tensor = ttnn.to_torch(output_tensor)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
