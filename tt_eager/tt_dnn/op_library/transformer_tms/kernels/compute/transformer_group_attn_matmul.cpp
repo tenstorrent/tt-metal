@@ -109,13 +109,12 @@ void MAIN {
             } // in0_num_blocks_w
 
             // cb_intermed1 comes from reader; untilized row-major tile
-            pack_reconfig_data_format(cb_intermed0, out_cb_id);
             cb_wait_front(cb_intermed1, out_num_tiles);
-
             cb_reserve_back(out_cb_id, out_num_tiles);
 
             // tilize CB::intermed1 and write to CB::c_out0
             tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles);
+            pack_reconfig_data_format(cb_intermed0, out_cb_id);
             tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
             cb_push_back(out_cb_id, out_num_tiles);
 
