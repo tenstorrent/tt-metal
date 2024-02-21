@@ -6,9 +6,9 @@
 
 #include "dev_msgs.h"
 #include "eth_l1_address_map.h"
-#include "noc_nonblocking_api.h"
 #include "risc_common.h"
 #include "tt_eth_api.h"
+#include "erisc.h"
 
 #include "../dataflow_api.h"
 
@@ -44,24 +44,15 @@ tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::a
 
 erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 routing_info_t *routing_info = (routing_info_t *)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
-volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 
 extern uint32_t __erisc_jump_table;
 volatile uint32_t *RtosTable =
     (volatile uint32_t *)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
 
-void (*rtos_context_switch_ptr)();
-
 FORCE_INLINE
 void reset_erisc_info() { erisc_info->user_buffer_bytes_sent = 0; }
 
 namespace internal_ {
-FORCE_INLINE
-void __attribute__((section("code_l1"))) risc_context_switch() {
-    ncrisc_noc_full_sync();
-    rtos_context_switch_ptr();
-    ncrisc_noc_counters_init();
-}
 
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
@@ -107,9 +98,6 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
 }
 
-
-FORCE_INLINE
-void disable_erisc_app() { flag_disable[0] = 0; }
 
 FORCE_INLINE
 void send_fd_packets() {
