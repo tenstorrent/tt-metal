@@ -19,7 +19,7 @@ jobs:
       should-create-release: ${{ steps.get-should-create-release.outputs.should-create-release }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Get is-release-candidate
@@ -98,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Download eager Python packages
         uses: actions/download-artifact@v3
         with:
