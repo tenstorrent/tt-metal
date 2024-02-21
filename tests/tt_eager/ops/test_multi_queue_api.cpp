@@ -109,6 +109,8 @@ void test_multi_queue_api() {
 }
 
 int main(int argc, char** argv) {
-    test_multi_queue_api();
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        test_multi_queue_api();
+    }
     return 0;
 }

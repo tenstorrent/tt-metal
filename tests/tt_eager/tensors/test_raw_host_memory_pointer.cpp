@@ -185,6 +185,8 @@ void test_raw_host_memory_pointer() {
 }
 
 int main() {
-    test_raw_host_memory_pointer();
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        test_raw_host_memory_pointer();
+    }
     return 0;
 }
