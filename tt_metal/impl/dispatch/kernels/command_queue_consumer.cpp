@@ -53,7 +53,6 @@ void kernel_main() {
         bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t wrap = header->wrap;
-        uint32_t restart = header->restart;
 
         db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
@@ -63,13 +62,6 @@ void kernel_main() {
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
             cq_write_interface.completion_fifo_wr_ptr = completion_queue_start_addr >> 4;     // Head to the beginning of the completion region
             cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
-            notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
-            noc_async_write_barrier(); // Barrier for now
-        } else if (restart) {
-            completion_queue_size = header->new_completion_queue_size;
-            setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
-            db_buf_switch = false;
-            noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
             notify_host_of_completion_queue_write_pointer<host_completion_queue_write_ptr_addr>();
             noc_async_write_barrier(); // Barrier for now
         } else if (is_program) {
@@ -100,11 +92,10 @@ void kernel_main() {
         }
 
         completion_queue_push_back<completion_queue_start_addr, host_completion_queue_write_ptr_addr>(completion_data_size);
-        if (not restart) {
-            // notify producer that it has completed a command
-            noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
-            db_buf_switch = not db_buf_switch;
-            noc_async_write_barrier(); // Barrier for now
-        }
+
+        // notify producer that it has completed a command
+        noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
+        db_buf_switch = not db_buf_switch;
+        noc_async_write_barrier(); // Barrier for now
     }
 }

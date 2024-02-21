@@ -42,7 +42,6 @@ struct CommandHeader {
     uint32_t consumer_router_transfer_num_pages = 0;
     uint32_t buffer_type = 0;
     uint32_t sharded_buffer_num_cores = 0;
-    uint32_t restart = 0;
     uint32_t new_issue_queue_size = 0;
     uint32_t new_completion_queue_size = 0;
 };
