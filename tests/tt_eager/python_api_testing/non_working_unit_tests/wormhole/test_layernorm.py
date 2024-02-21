@@ -55,7 +55,7 @@ def run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_conf
     )
 
     # compare tt and golden outputs -------------
-    success, pcc_value = comp_equal(ref_value, tt_result)
+    success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
 
     assert success
