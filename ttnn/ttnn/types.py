@@ -53,6 +53,12 @@ class CoreRange:
     end: CoreGrid
 
 
+@dataclasses.dataclass
+class ShardShape:
+    y: int
+    x: int
+
+
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2
@@ -62,3 +68,6 @@ class ShardStrategy(Enum):
 class ShardOrientation(Enum):
     ROW_MAJOR = 1
     COLUMN_MAJOR = 2
+
+
+DEFAULT_SHARD_ORIENTATION = ShardOrientation.ROW_MAJOR
