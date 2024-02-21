@@ -90,23 +90,23 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5], ids=["p=2.0", "p=2.5", "p=-2.5"])
 @pytest.mark.parametrize(
-    "dim",
+    "dim_rtol_atol",
     [
-        [],
-        None,
-        0,
-        1,
-        2,
-        3,
-        [0, 1],
-        [0, 1, 2],
-        [0, 1, 2, 3],
-        [0, 1, 3],
-        [0, 2, 3],
-        [1, 2],
-        [1, 2, 3],
-        [1, 3],
-        [2, 3],
+        [[], 0.2, 0.2],
+        [None, 0.2, 0.2],
+        [0, 0.1, 0.1],
+        [1, 0.1, 0.1],
+        [2, 0.1, 0.1],
+        [3, 0.1, 0.1],
+        [[0, 1], 0.1, 0.1],
+        [[0, 1, 2], 0.15, 0.15],
+        [[0, 1, 2, 3], 0.2, 0.2],
+        [[0, 1, 3], 0.15, 0.15],
+        [[0, 2, 3], 0.15, 0.15],
+        [[1, 2], 0.1, 0.1],
+        [[1, 2, 3], 0.15, 0.15],
+        [[1, 3], 0.1, 0.1],
+        [[2, 3], 0.1, 0.1],
     ],
     ids=[
         "global_norm(dim=[])",
@@ -134,8 +134,10 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
         [16, 16, 8 * TILE_HEIGHT + 13, 8 * TILE_WIDTH + 13],
     ],
 )
-def test_moreh_norm(input_shape, p, dim, device):
+def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
     torch.manual_seed(2024)
+
+    dim, rtol, atol = dim_rtol_atol
 
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
 
@@ -144,16 +146,6 @@ def test_moreh_norm(input_shape, p, dim, device):
 
     # actual
     actual_y, _ = tt_norm(cpu_x, cpu_dy, p=p, dim=dim, device=device, do_backward=False)
-
-    # Set rtol and atol
-    rtol = atol = 0.1
-    if dim is None or dim == []:
-        rtol = atol = 0.2
-    if isinstance(dim, list):
-        if len(dim) == 3:
-            rtol = atol = 0.15
-        elif len(dim) == 4:
-            rtol = atol = 0.2
 
     # Check output
     pass_y, out_y = comp_allclose(expected_y, actual_y, rtol=rtol, atol=atol)
@@ -164,23 +156,23 @@ def test_moreh_norm(input_shape, p, dim, device):
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("p", [2.0], ids=["p=2.0"])
 @pytest.mark.parametrize(
-    "dim",
+    "dim_rtol_atol",
     [
-        [],
-        None,
-        0,
-        1,
-        2,
-        3,
-        [0, 1],
-        [0, 1, 2],
-        [0, 1, 2, 3],
-        [0, 1, 3],
-        [0, 2, 3],
-        [1, 2],
-        [1, 2, 3],
-        [1, 3],
-        [2, 3],
+        [[], 0.2, 0.2],
+        [None, 0.2, 0.2],
+        [0, 0.1, 0.1],
+        [1, 0.1, 0.1],
+        [2, 0.1, 0.1],
+        [3, 0.1, 0.1],
+        [[0, 1], 0.1, 0.1],
+        [[0, 1, 2], 0.15, 0.15],
+        [[0, 1, 2, 3], 0.2, 0.2],
+        [[0, 1, 3], 0.15, 0.15],
+        [[0, 2, 3], 0.15, 0.15],
+        [[1, 2], 0.1, 0.1],
+        [[1, 2, 3], 0.15, 0.15],
+        [[1, 3], 0.1, 0.1],
+        [[2, 3], 0.1, 0.1],
     ],
     ids=[
         "global_norm(dim=[])",
@@ -208,8 +200,10 @@ def test_moreh_norm(input_shape, p, dim, device):
         [16, 16, 8 * TILE_HEIGHT + 13, 8 * TILE_WIDTH + 13],
     ],
 )
-def test_moreh_norm_backward(input_shape, p, dim, device):
+def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, device):
     torch.manual_seed(2024)
+
+    dim, rtol, atol = dim_rtol_atol
 
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
 
@@ -218,16 +212,6 @@ def test_moreh_norm_backward(input_shape, p, dim, device):
 
     # actual
     _, actual_dx = tt_norm(cpu_x, cpu_dy, p=p, dim=dim, device=device, do_backward=True)
-
-    # Set rtol and atol
-    rtol = atol = 0.1
-    if dim is None or dim == []:
-        rtol = atol = 0.2
-    if isinstance(dim, list):
-        if len(dim) == 3:
-            rtol = atol = 0.15
-        elif len(dim) == 4:
-            rtol = atol = 0.2
 
     # Check input_grad
     pass_dx, out_dx = comp_allclose(expected_dx, actual_dx, rtol=rtol, atol=atol)
