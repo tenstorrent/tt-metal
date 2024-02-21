@@ -225,6 +225,10 @@ from ttnn.operations.activation import (
     softplus,
     tanhshrink,
     threshold,
+    glu,
+    geglu,
+    reglu,
+    swiglu,
 )
 
 from ttnn.operations.math import (

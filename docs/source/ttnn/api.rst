@@ -93,7 +93,9 @@ Pointwise Unary
    ttnn/exp
    ttnn/exp2
    ttnn/expm1
+   ttnn/geglu
    ttnn/gelu
+   ttnn/glu
    ttnn/hardshrink
    ttnn/hardsigmoid
    ttnn/hardswish
@@ -120,6 +122,7 @@ Pointwise Unary
    ttnn/multigammaln
    ttnn/neg
    ttnn/prelu
+   ttnn/reglu
    ttnn/relu
    ttnn/relu6
    ttnn/rsqrt
@@ -141,6 +144,7 @@ Pointwise Unary
    ttnn/reciprocal
    ttnn/sqrt
    ttnn/square
+   ttnn/swiglu
    ttnn/tril
    ttnn/triu
    ttnn/tanhshrink
