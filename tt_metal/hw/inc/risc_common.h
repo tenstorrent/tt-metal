@@ -213,11 +213,7 @@ inline void breakpoint_(uint32_t line) {
 
 // Helper function to wait for a specified number of cycles, safe to call in erisc kernels.
 #if defined(COMPILE_FOR_ERISC)
-// Forward declaration to avoid circular dependency
-namespace internal_ {
-void __attribute__((section("code_l1"))) risc_context_switch();
-void disable_erisc_app();
-}
+#include "erisc.h"
 #endif
 inline void riscv_wait(uint32_t cycles) {
     volatile uint tt_reg_ptr * clock_lo = reinterpret_cast<volatile uint tt_reg_ptr * >(RISCV_DEBUG_REG_WALL_CLOCK_L);
