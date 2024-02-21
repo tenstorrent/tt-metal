@@ -300,4 +300,47 @@ def full(
     return output_tensor
 
 
+def _is_int(value):
+    return isinstance(value, (int))
+
+
+def _torch_arange(start: int, end: int, step: int, **_):
+    import torch
+
+    return torch.arange(start, end, step)
+
+
+def _arange_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
+    return True
+
+
+@ttnn.register_operation(
+    name="ttnn.arange",
+    validate_input_tensors=_arange_validate_input_tensors,
+    torch_function=_torch_arange,
+)
+def arange(
+    start: int,
+    end: int,
+    step: int,
+    device,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step.
+
+    Args:
+        * :attr:`start`
+        * :attr:`end`
+        * :attr:`step`
+    """
+    if not _is_int(start) or not _is_int(end) or not _is_int(step):
+        raise TypeError("Expected three arguments to be a int")
+
+    output_tensor = ttl.tensor.arange(start, end, step, device, output_mem_config=memory_config)
+    output_tensor = ttnn.Tensor(output_tensor)
+
+    return output_tensor
+
+
 __all__ = []

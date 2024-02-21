@@ -20,7 +20,9 @@ parameters = {
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT],
-    "dim": [-1, -2],
+    "type": ["TensorTensorTensor", "TensorScalarScalar"],
+    "float1": [15.5, -6.8],
+    "float2": [-4.2, 11.4],
 }
 
 
@@ -39,21 +41,37 @@ def run(
     input_dtype,
     input_memory_config,
     output_memory_config,
-    dim,
     layout,
+    type,
+    float1,
+    float2,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
-    torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True)
+    if type == "TensorTensorTensor":
+        torch_input_tensor1 = torch.randn(input_shape, dtype=torch.bfloat16)
+        torch_input_tensor2 = torch.randn(input_shape, dtype=torch.bfloat16)
+        input_tensor1 = ttnn.from_torch(
+            torch_input_tensor1, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
+        )
+        input_tensor2 = ttnn.from_torch(
+            torch_input_tensor2, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
+        )
+    elif type == "TensorScalarScalar":
+        torch_input_tensor1 = float1
+        torch_input_tensor2 = float2
+        input_tensor1 = torch_input_tensor1
+        input_tensor2 = torch_input_tensor2
+    torch_output_tensor = torch.add(torch.mul(torch_input_tensor, torch_input_tensor1), torch_input_tensor2)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=True)
+    output_tensor = ttnn.mac(input_tensor, input_tensor1, input_tensor2, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    return check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    return check_with_pcc(torch_output_tensor, output_tensor)

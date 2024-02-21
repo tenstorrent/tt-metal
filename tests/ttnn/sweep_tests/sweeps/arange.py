@@ -14,13 +14,13 @@ from models.utility_functions import torch_random
 
 parameters = {
     "batch_sizes": [(1,)],
-    "height": [384, 1024],
-    "width": [1024, 4096],
+    "start": [384, 1024],
+    "end": [2048, 4096],
+    "step": [2, 4, 6],
     "input_dtype": [ttnn.bfloat16],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT],
-    "dim": [-1, -2],
 }
 
 
@@ -34,26 +34,33 @@ def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
 
 def run(
     batch_sizes,
-    height,
-    width,
+    start,
+    end,
+    step,
     input_dtype,
     input_memory_config,
     output_memory_config,
-    dim,
     layout,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
-    input_shape = (*batch_sizes, height, width)
+    input_shape = (*batch_sizes, start, end, step)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
-    torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True)
+    torch_output_tensor = torch.arange(start, end, step)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=True)
+    output_tensor = ttnn.arange(
+        input_tensor.shape[1],
+        input_tensor.shape[2],
+        input_tensor.shape[3],
+        device=device,
+        memory_config=output_memory_config,
+    )
     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = output_tensor[-1, -1, -1, :]
 
-    return check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    return check_with_pcc(torch_output_tensor, output_tensor)
