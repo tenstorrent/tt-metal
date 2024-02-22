@@ -122,17 +122,19 @@ def run_test_LlamaMLP_inference(
     logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
-        logger.info("Falcon MLP output Passed!")
+        logger.info("Llama MLP output Passed!")
     else:
-        logger.warning("Falcon MLP output Failed!")
+        logger.warning("Llama MLP output Failed!")
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, pcc, optimized, n_devices",
     (
-        ("llama-2-70B", 32, 1, 0.96, False, 8),
-        ("llama-2-70B", 32, 1, 0.96, True, 8),
+        ("llama-2-70B", 32, 1, 0.98, False, 8),
+        ("llama-2-70B", 32, 1, 0.98, True, 8),
+        ("llama-2-70B", 32, 1, 0.98, False, 4),
+        ("llama-2-70B", 32, 1, 0.98, True, 4),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
