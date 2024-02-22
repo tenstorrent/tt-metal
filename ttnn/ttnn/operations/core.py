@@ -4,7 +4,7 @@
 
 import math
 import pathlib
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, Any
 
 from loguru import logger
 
@@ -411,7 +411,32 @@ def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch
 
     ttl_tensor = tensor.value
     tensor = ttnn.Tensor(ttl_tensor.reshape(tensor.shape.with_tile_padding().value))
-    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor.value)
+    tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor.value)
+
+    import torch
+
+    class TorchTensor(torch.Tensor):
+        @staticmethod
+        def __new__(
+            cls: Any,
+            tensor: Any,
+            *function_args: Any,
+            **function_kwargs: Any,
+        ) -> Any:
+            return super().__new__(cls, tensor, *function_args, **function_kwargs)  # type: ignore[call-arg]
+
+        @classmethod
+        def __torch_function__(
+            cls: Any,
+            function,
+            types: Any,
+            function_args: Any = (),
+            function_kwargs: Any = None,
+        ) -> Any:
+            function = ttl.tensor.decorate_external_operation(function, function_name=function.__name__)
+            return super().__torch_function__(function, types, function_args, function_kwargs)
+
+    return TorchTensor(tensor)
 
 
 def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
