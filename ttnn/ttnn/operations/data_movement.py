@@ -149,6 +149,8 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             output_tensor = ttnn.to_device(output_tensor, device)
         return output_tensor
     else:
+        breakpoint()
+        assert False
 
         def torch_permute(tensor, order):
             return tensor.permute(order).contiguous().clone()
