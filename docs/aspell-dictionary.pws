@@ -1,4 +1,4 @@
-personal_ws-1.1 en 519
+personal_ws-1.1 en 516
 ABI
 ADDI
 API
@@ -166,15 +166,12 @@ abovementioned
 acc
 acos
 acosh
-addcdiv
-addcmul
 addexp
 addr
 agrebenisan
 andi
 api
 apis
-arange
 arg
 args
 asin
