@@ -50,7 +50,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
     uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
-    uint32_t delay_cycles = clk_mhz * 1000000; // 1 second
+    uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
     tt_metal::InterleavedBufferConfig l1_config {
         .device = device,
         .size = sizeof(uint32_t),
