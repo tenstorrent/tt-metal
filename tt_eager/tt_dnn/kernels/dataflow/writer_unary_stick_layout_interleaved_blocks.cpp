@@ -50,6 +50,7 @@ void kernel_main() {
     uint32_t block_start_row_offset = get_arg_val<uint32_t>(10);
 
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(1) == 1;
 
     // NOTE: Row major layout only supports bfp16
     // TT_ASSERT(out_df != DataFormat::Bfp8_b);
@@ -58,7 +59,7 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HEIGHT = 32;                    // TODO: use common source of truth
 
-    const uint32_t block_width_ntiles = block_row_size >> 6; // Assuming 2 bytes per datum, there are 64 bytes per tile row
+    const uint32_t block_width_ntiles = FLOAT32_DTYPE ?  block_row_size >> 7 : block_row_size >> 6; // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
     // const InterleavedAddrGenFast<true> s = {
