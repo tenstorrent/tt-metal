@@ -1,6 +1,6 @@
 ---
 test-list:
-  - repeat_interleave:
+  - reduce-max-w:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -11,21 +11,22 @@ test-list:
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand
+        function: gen_rand_along_dim
         dtype: bfloat16
         args:
           low: -100
           high: 100
+          dim: -1
       comparison:
-        function: comp_pcc
-      args-gen: gen_repeat_interleave_args
-      output-file: repeat_interleave_sweep.csv
+        function: comp_equal
+      args-gen: gen_dtype_layout_device
+      output-file: reduce_max_w_sweep.csv
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-  - repeat_interleave:
+  - reduce-max-w:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -36,17 +37,18 @@ test-list:
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand
+        function: gen_rand_along_dim
         dtype: bfloat16
         args:
           low: -100
           high: 100
+          dim: -1
       comparison:
-        function: comp_pcc
-      args-gen: gen_repeat_interleave_args
-      output-file: repeat_interleave_sweep.csv
+        function: comp_equal
+      args-gen: gen_dtype_layout_device
+      output-file: reduce_max_w_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
