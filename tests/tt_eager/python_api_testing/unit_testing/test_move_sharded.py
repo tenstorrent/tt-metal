@@ -6,19 +6,23 @@ import pytest
 from loguru import logger
 
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
 )
 import torch
 
-shapes = [
-    [1, 1, 25088, 64],
-]
+if is_wormhole_b0():
+    shapes = [
+        [1, 1, 25056, 64],
+    ]
+else:
+    shapes = [
+        [1, 1, 25088, 64],
+    ]
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("shape", shapes)
 def test_move_op(shape, device):
     run_move_op(shape, device)
@@ -29,25 +33,43 @@ def run_move_op(shape, device):
     For non_overlap, multi-core is run for num_tiles > 1.
     """
     torch.manual_seed(1234)
+    if is_wormhole_b0():
+        core_count = 58
+    else:
+        core_count = 98
 
     dtype = ttl.tensor.DataType.BFLOAT16
     layout = ttl.tensor.Layout.ROW_MAJOR
     shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
-    shard_grid = ttl.tensor.CoreRangeSet(
-        {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(11, 7),
-            ),
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 8),
-                ttl.tensor.CoreCoord(1, 8),
-            ),
-        }
-    )
+    if is_wormhole_b0():
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 6),
+                ),
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 7),
+                    ttl.tensor.CoreCoord(1, 7),
+                ),
+            }
+        )
+    else:
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(11, 7),
+                ),
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 8),
+                    ttl.tensor.CoreCoord(1, 8),
+                ),
+            }
+        )
     assert shape[0] == 1 and shape[1] == 1
-    assert shape[2] % 98 == 0 and shape[3] % 32 == 0
-    shard_shape = [(int)(shape[2] / 98), shape[3]]
+    assert shape[2] % core_count == 0 and shape[3] % 32 == 0
+    shard_shape = [(int)(shape[2] / core_count), shape[3]]
     shard_spec = ttl.tensor.ShardSpec(
         shard_grid,
         shard_shape,
@@ -56,7 +78,7 @@ def run_move_op(shape, device):
     )
     # make dummy shape half of shape, so we will test move sharded with overlap
     dummy_shape = [shape[0], shape[1], (int)(shape[2] / 2), shape[3]]
-    dummy_shard_shape = [(int)(dummy_shape[2] / 98), dummy_shape[3]]
+    dummy_shard_shape = [(int)(dummy_shape[2] / core_count), dummy_shape[3]]
     dummy_shard_spec = ttl.tensor.ShardSpec(
         shard_grid,
         dummy_shard_shape,
