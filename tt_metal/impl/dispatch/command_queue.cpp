@@ -133,44 +133,22 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
     // Even when targeting fast dispatch on remote device, commands are tunneled through ethernet to consumer tensix cores
     constexpr bool cmd_consumer_on_ethernet = false;
-    uint32_t tensix_consumer_data_buffer_size = get_consumer_data_buffer_size(cmd_consumer_on_ethernet);
+    uint32_t tensix_consumer_data_buffer_size = get_cq_data_buffer_size(cmd_consumer_on_ethernet);
     uint32_t consumer_cb_num_pages;
     // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
-    bool route_through_ethernet = not device->is_mmio_capable();
-    if (route_through_ethernet) {
-        uint32_t router_data_buffer_size = get_consumer_data_buffer_size(true);
-        uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / padded_page_size;
-        // uint32_t router_tx_num_pages = 1;
-        // if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-        //     router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
-        //     router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
-        // }
-        command.set_producer_router_transfer_num_pages(router_cb_num_pages);
-        command.set_consumer_router_transfer_num_pages(router_cb_num_pages);
-
-        uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
-        TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in router buffer");
-
-        command.set_router_cb_size(router_cb_size);
-        command.set_router_cb_num_pages(router_cb_num_pages);
-
-        uint32_t router_consumer_multiple = tensix_consumer_data_buffer_size / router_data_buffer_size;
-        consumer_cb_num_pages = router_cb_num_pages * router_consumer_multiple;
-    } else {
-        consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
-        // Number of pages that are transferred in one shot from producer to consumer
-        uint32_t producer_consumer_tx_num_pages = 1;
-        if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-            producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
-            consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
-        }
-        command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
+    consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
+    // Number of pages that are transferred in one shot from producer to consumer
+    uint32_t producer_consumer_tx_num_pages = 1;
+    if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+        producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+        consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
     }
+    command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
 
     uint32_t consumer_cb_size = consumer_cb_num_pages * padded_page_size;
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
 
-    uint32_t producer_cb_num_pages = consumer_cb_num_pages * 2;
+    uint32_t producer_cb_num_pages = consumer_cb_num_pages;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
 
     if (this->stall) {
@@ -302,42 +280,19 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
 
     // Even when targeting fast dispatch on remote device, commands are tunneled through ethernet to consumer tensix cores
     constexpr bool cmd_consumer_on_ethernet = false;
-    uint32_t tensix_consumer_data_buffer_size = get_consumer_data_buffer_size(cmd_consumer_on_ethernet);
-    uint32_t consumer_cb_num_pages;
-    // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
+    uint32_t tensix_consumer_data_buffer_size = get_cq_data_buffer_size(cmd_consumer_on_ethernet);
     bool route_through_ethernet = not device->is_mmio_capable();
-    if (route_through_ethernet) {
-        uint32_t router_data_buffer_size = get_consumer_data_buffer_size(true);
-        uint32_t router_cb_num_pages = router_data_buffer_size / padded_page_size;
-        // uint32_t router_tx_num_pages = 1;
-        // if (router_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-        //     router_cb_num_pages = (router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES) * DeviceCommand::SYNC_NUM_PAGES;
-        //     router_tx_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
-        // }
-        command.set_producer_router_transfer_num_pages(router_cb_num_pages);    // can get rid of this and use router_cb_num_pages instead
-        command.set_consumer_router_transfer_num_pages(router_cb_num_pages);
-
-        uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
-        TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in router buffer");
-
-        command.set_router_cb_size(router_cb_size);
-        command.set_router_cb_num_pages(router_cb_num_pages);
-
-        uint32_t router_consumer_multiple = tensix_consumer_data_buffer_size / router_data_buffer_size;
-        consumer_cb_num_pages = router_cb_num_pages * router_consumer_multiple;
-    } else {
-        consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
-        uint32_t producer_consumer_tx_num_pages = 1;
-        if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
-            producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
-            consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
-        }
-        command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
+    uint32_t consumer_cb_num_pages = tensix_consumer_data_buffer_size / padded_page_size;
+    uint32_t producer_consumer_tx_num_pages = 1;
+    if (consumer_cb_num_pages >= DeviceCommand::SYNC_NUM_PAGES) {
+        producer_consumer_tx_num_pages = consumer_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
+        consumer_cb_num_pages = producer_consumer_tx_num_pages * DeviceCommand::SYNC_NUM_PAGES; // want num pages to be previous multiple of SYNC_NUM_PAGES
     }
+    command.set_producer_consumer_transfer_num_pages(producer_consumer_tx_num_pages);
 
     uint32_t consumer_cb_size = consumer_cb_num_pages * padded_page_size;
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
-    uint32_t producer_cb_num_pages = consumer_cb_num_pages * 2;
+    uint32_t producer_cb_num_pages = consumer_cb_num_pages;
     uint32_t producer_cb_size = producer_cb_num_pages * padded_page_size;
     command.set_page_size(padded_page_size);
     command.set_producer_cb_size(producer_cb_size);
@@ -515,29 +470,19 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     }
 
     const uint32_t producer_cb_num_pages =
-        (get_producer_data_buffer_size(/*use_eth_l1=*/false) / DeviceCommand::PROGRAM_PAGE_SIZE);
+        (get_cq_data_buffer_size(/*use_eth_l1=*/false) / DeviceCommand::PROGRAM_PAGE_SIZE);
     const uint32_t producer_cb_size = producer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     // Targeting fast dispatch on remote device means commands have to be tunneled through ethernet
     constexpr bool cmd_consumer_on_ethernet = false;
     const uint32_t consumer_cb_num_pages =
-        (get_consumer_data_buffer_size(cmd_consumer_on_ethernet) / DeviceCommand::PROGRAM_PAGE_SIZE);
+        (get_cq_data_buffer_size(cmd_consumer_on_ethernet) / DeviceCommand::PROGRAM_PAGE_SIZE);
     const uint32_t consumer_cb_size = consumer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     command.set_producer_cb_size(producer_cb_size);
     command.set_consumer_cb_size(consumer_cb_size);
     command.set_producer_cb_num_pages(producer_cb_num_pages);
     command.set_consumer_cb_num_pages(consumer_cb_num_pages);
-
-    bool route_through_ethernet = not device->is_mmio_capable();
-    if (route_through_ethernet) {
-        uint32_t router_cb_num_pages = get_consumer_data_buffer_size(true) / DeviceCommand::PROGRAM_PAGE_SIZE;
-        const uint32_t router_cb_size = router_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
-        command.set_router_cb_size(router_cb_size);
-        command.set_router_cb_num_pages(router_cb_num_pages);
-        command.set_producer_router_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
-        command.set_consumer_router_transfer_num_pages(DeviceCommand::SYNC_NUM_PAGES);
-    }
 
     // Should only ever be set if we are
     // enqueueing a program immediately
@@ -924,7 +869,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     // TODO(agrebenisan): Fix these asserts after implementing multi-core CQ
     // TODO (abhullar): Use eth mem l1 size when issue queue interface kernel is on ethernet core
     TT_ASSERT(
-        buffer.page_size() < MEM_L1_SIZE - get_data_section_l1_address(false),
+        buffer.page_size() < get_cq_data_buffer_size(false),
         "Buffer pages must fit within the command queue data section");
 
     if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or

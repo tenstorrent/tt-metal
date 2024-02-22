@@ -283,16 +283,17 @@ void Device::compile_command_queue_programs() {
 
     uint32_t cmd_start_tensix = get_command_start_l1_address(false);
     uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
-    uint32_t producer_data_buffer_size_tensix = get_producer_data_buffer_size(false);
-    uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size(false);
+    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false); //get_producer_data_buffer_size(false);
+    uint32_t consumer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
 
     uint32_t cmd_start_eth = get_command_start_l1_address(true);
-    uint32_t producer_data_buffer_size_eth = get_producer_data_buffer_size(true);
-    uint32_t consumer_data_buffer_size_eth = get_consumer_data_buffer_size(true);
+    uint32_t producer_data_buffer_size_eth = get_cq_data_buffer_size(true);
+    uint32_t consumer_data_buffer_size_eth = get_cq_data_buffer_size(true);
 
     if (this->is_mmio_capable()) {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id())) {
             // TODO (abhullar): allow for multiple cqs on remote device, atm device initialization asserts one cq for the remote device
+            if (device_id != this->id()) continue;
             uint8_t num_hw_cqs = device_id == this->id() ? this->num_hw_cqs() : 1;
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
             uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), channel) / num_hw_cqs;
@@ -348,6 +349,9 @@ void Device::compile_command_queue_programs() {
 
                 uint32_t consumer_cmd_base_addr =  (device_id != this->id()) ? cmd_start_eth : cmd_start_tensix; // device is MMIO capable but current device_id being set up is remote
                 uint32_t consumer_data_buff_size = (device_id != this->id()) ? consumer_data_buffer_size_eth : consumer_data_buffer_size_tensix; // device is MMIO capable but current device_id being set up is remote
+                uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
                 std::vector<uint32_t> producer_compile_args = {
                     host_issue_queue_read_ptr_addr,
                     issue_queue_start_addr,
@@ -356,15 +360,16 @@ void Device::compile_command_queue_programs() {
                     data_section_addr_tensix,
                     producer_data_buffer_size_tensix,
                     consumer_cmd_base_addr,
-                    consumer_data_buff_size};
+                    consumer_data_buff_size,
+                    host_completion_queue_write_ptr_addr,
+                    completion_queue_start_addr,
+                    completion_queue_size,
+                    };
 
-                uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
-                uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
-                uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
                 uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
-                std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr, cmd_start_tensix, consumer_data_buffer_size_tensix};
+                std::vector<uint32_t> consumer_compile_args = {host_finish_addr, cmd_start_tensix, consumer_data_buffer_size_tensix};
 
-                std::string issue_q_reader_kernel = (device_id == this->id()) ? "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp" : "tt_metal/impl/dispatch/kernels/remote_issue_queue_reader.cpp";
+                std::string issue_q_reader_kernel = "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp";
 
                 tt::tt_metal::CreateKernel(
                     *command_queue_program_ptr,
@@ -379,8 +384,7 @@ void Device::compile_command_queue_programs() {
                 uint32_t num_command_slots = (device_id == this->id()) ? num_tensix_command_slots : num_eth_command_slots;
                 tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, num_command_slots);
 
-                std::string completion_q_writer_kernel = (device_id == this->id()) ?
-                    "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp" : "tt_metal/impl/dispatch/kernels/remote_completion_queue_writer.cpp";
+                std::string completion_q_writer_kernel = "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp";
 
                 tt::tt_metal::CreateKernel(
                     *command_queue_program_ptr,
@@ -397,7 +401,7 @@ void Device::compile_command_queue_programs() {
         }
     } else {
         TT_ASSERT(this->num_hw_cqs() == 1, "Currently can only support one command queue for remote device");
-
+        TT_ASSERT(false);
         uint8_t num_hw_cqs = this->num_hw_cqs();
         const uint8_t cq_id = 0;
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
@@ -436,6 +440,7 @@ void Device::compile_command_queue_programs() {
             producer_data_buffer_size_eth,
             cmd_start_tensix,
             consumer_data_buffer_size_tensix,
+            0
         };
 
         std::map<string, string> processor_defines = {
@@ -448,7 +453,7 @@ void Device::compile_command_queue_programs() {
 
         tt::tt_metal::CreateKernel(
             *command_queue_program_ptr,
-            "tt_metal/impl/dispatch/kernels/remote_command_processor.cpp",
+            "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp",
             remote_processor_location,
             tt::tt_metal::DataMovementConfig {
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -474,7 +479,7 @@ void Device::compile_command_queue_programs() {
 
         tt::tt_metal::CreateKernel(
             *command_queue_program_ptr,
-            "tt_metal/impl/dispatch/kernels/remote_dispatcher.cpp",
+            "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
             dispatch_location,
             tt::tt_metal::DataMovementConfig {
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -486,41 +491,6 @@ void Device::compile_command_queue_programs() {
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
         // second semaphore is between dispatcher and remote completion signaller to signal if the former can send data
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, num_eth_command_slots);
-
-        std::vector<uint32_t> signaller_compile_args = {
-            cmd_start_tensix,
-            data_section_addr_tensix,
-            consumer_data_buffer_size_tensix,
-            cmd_start_tensix,
-            consumer_data_buffer_size_tensix,
-            cmd_start_eth,
-            producer_data_buffer_size_eth,
-        };
-
-        std::map<string, string> signaller_defines = {
-            {"DISPATCH_KERNEL", "1"},
-            {"PRODUCER_NOC_X", std::to_string(dispatch_physical_core.x)},
-            {"PRODUCER_NOC_Y", std::to_string(dispatch_physical_core.y)},
-            {"CONSUMER_NOC_X", std::to_string(physical_eth_router_remote_src.x)},
-            {"CONSUMER_NOC_Y", std::to_string(physical_eth_router_remote_src.y)},
-        };
-
-        tt::tt_metal::CreateKernel(
-            *command_queue_program_ptr,
-            "tt_metal/impl/dispatch/kernels/remote_command_signaller.cpp",
-            remote_signaller_location,
-            tt::tt_metal::DataMovementConfig {
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = signaller_compile_args,
-                .defines = signaller_defines});
-
-
-        // First semaphore is between signaller and src eth router to signal if the former can send data
-        // Create this before the semaphore between remote dispatcher and signaller because eth SRC always acks producer dispatch core's semaphore 0
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_signaller_location, num_eth_command_slots);
-        // Second semaphore is between dispatcher and signaller to signal whether the latter can receive commands
-        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_signaller_location, 0);
     }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
@@ -573,9 +543,9 @@ void Device::configure_command_queue_programs() {
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 vector<uint32_t> completion_queue_last_event = {0x0}; // Reset state in case L1 Clear is disabled.
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
-                detail::WriteToDeviceL1(this, completion_q_writer_location, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event);
+                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
+                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+                detail::WriteToDeviceL1(this, issue_q_reader_location, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event);
             }
         }
     }
