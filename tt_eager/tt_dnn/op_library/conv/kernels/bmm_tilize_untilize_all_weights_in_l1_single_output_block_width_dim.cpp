@@ -31,7 +31,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit();
+    tilize_uninit(in_cb_id);
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option

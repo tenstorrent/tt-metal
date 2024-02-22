@@ -240,7 +240,7 @@ std::optional<uint64_t> FreeList::allocate(uint64_t size_bytes, bool bottom_up, 
 
     this->update_lowest_occupied_address(allocated_block->address);
     if (allocated_block->address + this->offset_bytes_ < address_limit) {
-        TT_THROW("Out of Memory: Cannot allocate at an address below {}", address_limit);
+        TT_THROW("Out of Memory: Cannot allocate at an address below {}. Tried to allocate at {}", address_limit, allocated_block->address + this->offset_bytes_);
     }
     return allocated_block->address + this->offset_bytes_;
 }

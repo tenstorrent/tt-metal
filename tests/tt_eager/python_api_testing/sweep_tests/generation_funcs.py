@@ -863,6 +863,29 @@ def gen_unpad_args(
             yield input_info
 
 
+def gen_lamb_optimized_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+        if input_info is not None:
+            beta1 = random.uniform(0.8, 0.99)  # (0.8, 0.99) (0.9, 0.9)
+            beta2 = random.uniform(0.99, 0.9999)  # (0.99, 0.9999) (0.999, 0.999)
+            step_size = random.uniform(1e-4, 1e-2)  # (1e-4, 1e-2) (1e-3, 1e-3)
+            eps = random.uniform(1e-7, 1e-5)  # (1e-7, 1e-5) (1e-6, 1e-6)
+            weight_decay = random.uniform(0.001, 0.05)  # (0.001, 0.05) (0.01, 0.01)
+
+            input_info.update({"beta1": beta1})
+            input_info.update({"beta2": beta2})
+            input_info.update({"step_size": step_size})
+            input_info.update({"eps": eps})
+            input_info.update({"weight_decay": weight_decay})
+            yield input_info
+
+
 def gen_scalar_args(
     input_shapes,
     dtypes,
@@ -1425,6 +1448,28 @@ def gen_logical_immediate_args(
         yield input_info
 
 
+def gen_concat_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            dim = -1
+
+            for i in range(len(input_shapes[0])):
+                if input_shapes[0][i] != input_shapes[1][i]:
+                    dim = i
+
+            if dim == -1:
+                num_dims = len(input_shapes[0])
+                dim = random.randint(0, num_dims - 1)
+
+            input_info.update({"dim": dim})
+            yield input_info
+
+
 def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
     for input_info in gen_dtype_layout_device(
         input_shapes,
@@ -1691,3 +1736,34 @@ def gen_ttnn_layernorm_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_ttnn_rmsnorm_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
+    res = torch.Tensor(size=size).uniform_(low, high)
+    if excluderange is None:
+        return res
+
+    exclude_upper = excluderange[1]
+    exclude_lower = excluderange[0]
+    assert exclude_upper < high
+    assert exclude_lower > low
+
+    list_tensor = torch.flatten(res)
+
+    i = 0
+    for el in list_tensor:
+        while el >= exclude_lower and el <= exclude_upper:
+            list_tensor[i] = random.uniform(low, high)
+        i = i + 1
+    res = torch.reshape(list_tensor, size)
+
+    return res

@@ -8,9 +8,9 @@ from tests.ttnn.sweep_tests.sweep import run_all_tests, print_report
 
 
 def main():
-    device = ttnn.open(0)
+    device = ttnn.open_device(device_id=0)
     run_all_tests(device=device)
-    ttnn.close(device)
+    ttnn.close_device(device)
     print_report()
 
 

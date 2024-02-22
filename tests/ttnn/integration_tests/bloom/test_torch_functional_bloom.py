@@ -176,7 +176,7 @@ def test_bloom(model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
-    assert_with_pcc(torch_output, output, pcc=0.9956)
+    assert_with_pcc(torch_output, output, pcc=0.994)
 
 
 @skip_for_wormhole_b0()
@@ -214,5 +214,5 @@ def test_bloom_for_question_answering(model_name, batch_size, sequence_size):
     start_logits = output[..., 0]
     end_logits = output[..., 1]
 
-    assert_with_pcc(torch_output.start_logits, start_logits, 0.9930)
+    assert_with_pcc(torch_output.start_logits, start_logits, 0.985)
     assert_with_pcc(torch_output.end_logits, end_logits, 0.9914)

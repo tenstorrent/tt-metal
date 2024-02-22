@@ -62,11 +62,15 @@ def t5_dense_act_dense(config, hidden_states, parameters):
         parameters.wi.weight,
         dtype=ttnn.bfloat8_b,
         activation=ff1_activation,
-        core_grid=(height // 32, 12),
+        core_grid=ttnn.CoreGrid(y=height // 32, x=12),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     hidden_states = ttnn.linear(
-        hidden_states, parameters.wo.weight, dtype=ttnn.bfloat16, core_grid=(9, 12), memory_config=ttnn.L1_MEMORY_CONFIG
+        hidden_states,
+        parameters.wo.weight,
+        dtype=ttnn.bfloat16,
+        core_grid=ttnn.CoreGrid(y=9, x=12),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     return hidden_states
 
@@ -111,7 +115,7 @@ def t5_attention(
             parameters.query_key_value.weight,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             # dtype=ttnn.bfloat8_b,
-            core_grid=(batch_size, num_cores_x),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
 
         (
@@ -131,7 +135,7 @@ def t5_attention(
             parameters.q.weight,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             # dtype=ttnn.bfloat8_b,
-            core_grid=(batch_size, num_cores_x),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
 
         key_value_proj = ttnn.linear(
@@ -139,7 +143,7 @@ def t5_attention(
             parameters.key_value.weight,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             # dtype=ttnn.bfloat8_b,
-            core_grid=(batch_size, num_cores_x),
+            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
         query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
             query_proj, key_value_proj, num_heads=config.num_heads
@@ -152,7 +156,7 @@ def t5_attention(
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        # core_grid=(batch_size, num_cores_x),
+        # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
@@ -167,7 +171,7 @@ def t5_attention(
         value,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         # dtype=ttnn.bfloat8_b,
-        # core_grid=(batch_size, num_cores_x),
+        # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
@@ -182,7 +186,7 @@ def t5_attention(
         parameters.o.weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        # core_grid=(batch_size, num_cores_x),
+        # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(context_layer)
 

@@ -22,14 +22,13 @@ def get_bool_env_var(name, default):
 
 TTNN_ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
 
-import tt_lib as ttl
+import tt_lib as _tt_lib
 import ttnn._ttnn
 
 from ttnn._ttnn import TTNN_ENABLE_LOGGING
 
 from ttnn.types import (
     TILE_SIZE,
-    Device,
     DataType,
     uint16,
     uint32,
@@ -42,15 +41,18 @@ from ttnn.types import (
     L1_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
-    DEFAULT_SHARD_ORIENTATION,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
+    CoreGrid,
+    CoreRange,
     Shape,
     Tensor,
 )
+
+from ttnn.device import Device, open_device, close_device, manage_device, dump_device_memory_state
 
 from ttnn.core import (
     has_storage_type_of,
@@ -71,9 +73,7 @@ from ttnn.decorators import (
     disable_validate_decorator,
 )
 
-import ttnn.ttl as ttl
-
-from ttnn.device import open, close
+import ttnn.experimental
 
 from ttnn.program_cache import (
     enable_program_cache,
@@ -93,22 +93,41 @@ from ttnn.operations.core import (
     dump_tensor,
     unsqueeze_to_4D,
     squeeze,
+    clone,
 )
 
 from ttnn.operations.matmul import (
     matmul,
     linear,
+    create_matmul_1d_systolic_array_config,
 )
 
 from ttnn.operations.others import (
     embedding,
-    pad_to_tile,
-    unpad_from_tile,
     # fused operations
     softmax,
     # reduction operations
     mean,
     upsample,
+)
+
+from ttnn.operations.creation import (
+    ones,
+    ones_like,
+    zeros,
+    zeros_like,
+    full,
+    full_like,
+)
+
+from ttnn.operations.reduction import (
+    std,
+    var,
+)
+
+from ttnn.operations.losses import (
+    l1_loss,
+    mse_loss,
 )
 
 from ttnn.operations.data_movement import (
@@ -140,7 +159,7 @@ from ttnn.operations.unary import (
     atanh,
     logical_not,
     logit,
-    clone,
+    signbit,
 )
 
 from ttnn.operations.binary import (
@@ -150,6 +169,13 @@ from ttnn.operations.binary import (
     subtract,
     mul,
     multiply,
+    ldexp,
+    logical_and,
+    logical_or,
+    logical_xor,
+    logaddexp,
+    logaddexp2,
+    xlogy,
     add_and_apply_activation,
     add_and_apply_activation_,
 )
@@ -168,12 +194,14 @@ from ttnn.operations.relational import (
     lte,
     eq,
     ne,
+    isclose,
 )
 
 from ttnn.operations.activation import (
     clip,
     elu,
     hardshrink,
+    hardsigmoid,
     hardswish,
     hardtanh,
     heaviside,
@@ -181,14 +209,19 @@ from ttnn.operations.activation import (
     log_sigmoid,
     mish,
     prelu,
-    relu_max,
-    relu_min,
     relu6,
     sigmoid,
     sign,
     softshrink,
     softsign,
     swish,
+    softplus,
+    tanhshrink,
+    threshold,
+    glu,
+    geglu,
+    reglu,
+    swiglu,
 )
 
 from ttnn.operations.math import (
@@ -204,6 +237,26 @@ from ttnn.operations.math import (
     log2,
     multigammaln,
     neg,
+    abs,
+    cbrt,
+    deg2rad,
+    digamma,
+    erf,
+    erfc,
+    erfinv,
+    exp2,
+    expm1,
+    atan2,
+    hypot,
+    squared_difference,
+    lerp,
+    polygamma,
+    rad2deg,
+    reciprocal,
+    sqrt,
+    square,
+    tril,
+    triu,
 )
 
 from ttnn.operations.normalization import (

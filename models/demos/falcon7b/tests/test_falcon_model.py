@@ -62,7 +62,7 @@ def run_test_FalconModel_inference(
     torch.manual_seed(0)
     base_url = "transformer"
     max_position_embeddings = 2048
-    head_dim = configuration.hidden_size // configuration.n_head
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True
 
     if 1:
@@ -217,8 +217,8 @@ def run_test_FalconModel_inference(
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((2, 0.98), (32, 0.98)),
-    ids=["layers_2", "layers_32"],
+    ((1, 0.98), (2, 0.98), (32, 0.98)),
+    ids=["layers_1", "layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
     "model_version",

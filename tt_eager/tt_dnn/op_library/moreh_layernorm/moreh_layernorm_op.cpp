@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,6 +67,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto input_shape = input.shape();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
+    const bool is_groupnorm = false;
 
     const auto input_shape_without_padding = input_shape.without_padding();
 
@@ -126,7 +127,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    uint32_t in0_t = 2 * Wt;                                      // input
+    uint32_t in0_t = Wt;                                          // input
     const uint32_t in1_t = 1;                                     // scaler
     const uint32_t in2_t = 1;                                     // epsilon
     const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
@@ -270,7 +271,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         static_cast<uint32_t>(beta_has_value),
         static_cast<uint32_t>(mean_has_value),
         static_cast<uint32_t>(rstd_has_value),
-        static_cast<uint32_t>(is_lastdim_layernorm)};
+        static_cast<uint32_t>(is_lastdim_layernorm),
+        static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
         use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
@@ -290,7 +292,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
             static_cast<uint32_t>(beta_has_value),
             static_cast<uint32_t>(mean_has_value),
             static_cast<uint32_t>(rstd_has_value),
-            static_cast<uint32_t>(is_lastdim_layernorm)};
+            static_cast<uint32_t>(is_lastdim_layernorm),
+            static_cast<uint32_t>(is_groupnorm)};
 
         CreateComputeKernel(
             program,

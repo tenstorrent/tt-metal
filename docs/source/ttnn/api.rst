@@ -1,6 +1,17 @@
 APIs
 ####
 
+Device
+******
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/open_device
+   ttnn/close_device
+   ttnn/manage_device
+
+
 Tensor
 ******
 
@@ -31,6 +42,19 @@ Memory Config
 Operations
 **********
 
+Tensor Creation
+===============
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/zeros
+   ttnn/zeros_like
+   ttnn/ones
+   ttnn/ones_like
+   ttnn/full
+   ttnn/full_like
+
 Matrix Multiplication
 =====================
 
@@ -46,28 +70,84 @@ Pointwise Unary
 .. toctree::
    :maxdepth: 1
 
-   ttnn/exp
-   ttnn/gelu
-   ttnn/log
-   ttnn/relu
-   ttnn/rsqrt
-   ttnn/silu
-   ttnn/softmax
-   ttnn/tanh
-   ttnn/sin
-   ttnn/cos
-   ttnn/tan
-   ttnn/asin
+   ttnn/abs
    ttnn/acos
-   ttnn/atan
-   ttnn/sinh
-   ttnn/cosh
-   ttnn/asinh
    ttnn/acosh
+   ttnn/asin
+   ttnn/asinh
+   ttnn/atan
+   ttnn/atan2
    ttnn/atanh
+   ttnn/cbrt
+   ttnn/clip
+   ttnn/clone
+   ttnn/cos
+   ttnn/cosh
+   ttnn/deg2rad
+   ttnn/digamma
+   ttnn/elu
+   ttnn/erf
+   ttnn/erfc
+   ttnn/erfinv
+   ttnn/exp
+   ttnn/exp2
+   ttnn/expm1
+   ttnn/geglu
+   ttnn/gelu
+   ttnn/glu
+   ttnn/hardshrink
+   ttnn/hardsigmoid
+   ttnn/hardswish
+   ttnn/hardtanh
+   ttnn/heaviside
+   ttnn/hypot
+   ttnn/i0
+   ttnn/isfinite
+   ttnn/isinf
+   ttnn/isnan
+   ttnn/isneginf
+   ttnn/isposinf
+   ttnn/leaky_relu
+   ttnn/lerp
+   ttnn/lgamma
+   ttnn/log
+   ttnn/log10
+   ttnn/log1p
+   ttnn/log2
+   ttnn/log_sigmoid
    ttnn/logical_not
    ttnn/logit
-   ttnn/clone
+   ttnn/mish
+   ttnn/multigammaln
+   ttnn/neg
+   ttnn/prelu
+   ttnn/reglu
+   ttnn/relu
+   ttnn/relu6
+   ttnn/rsqrt
+   ttnn/sigmoid
+   ttnn/sign
+   ttnn/silu
+   ttnn/sin
+   ttnn/sinh
+   ttnn/softmax
+   ttnn/softplus
+   ttnn/softshrink
+   ttnn/softsign
+   ttnn/swish
+   ttnn/tan
+   ttnn/tanh
+   ttnn/signbit
+   ttnn/polygamma
+   ttnn/rad2deg
+   ttnn/reciprocal
+   ttnn/sqrt
+   ttnn/square
+   ttnn/swiglu
+   ttnn/tril
+   ttnn/triu
+   ttnn/tanhshrink
+   ttnn/threshold
 
 Pointwise Binary
 ================
@@ -79,15 +159,16 @@ Pointwise Binary
    ttnn/mul
    ttnn/sub
    ttnn/pow
+   ttnn/ldexp
+   ttnn/logical_and
+   ttnn/logical_or
+   ttnn/logical_xor
+   ttnn/logaddexp
+   ttnn/logaddexp2
+   ttnn/xlogy
+   ttnn/squared_difference
    ttnn/add_and_apply_activation
    ttnn/add_and_apply_activation_
-
-Pointwise Relational
-====================
-
-.. toctree::
-   :maxdepth: 1
-
    ttnn/gtz
    ttnn/ltz
    ttnn/gez
@@ -100,50 +181,16 @@ Pointwise Relational
    ttnn/lte
    ttnn/eq
    ttnn/ne
+   ttnn/isclose
 
-Pointwise Math
-==============
-
-.. toctree::
-   :maxdepth: 1
-
-   ttnn/i0
-   ttnn/isfinite
-   ttnn/isinf
-   ttnn/isnan
-   ttnn/isneginf
-   ttnn/isposinf
-   ttnn/lgamma
-   ttnn/log10
-   ttnn/log1p
-   ttnn/log2
-   ttnn/multigammaln
-   ttnn/neg
-
-Activation
-==========
+Losses
+======
 
 .. toctree::
    :maxdepth: 1
 
-   ttnn/clip
-   ttnn/elu
-   ttnn/hardshrink
-   ttnn/hardswish
-   ttnn/hardtanh
-   ttnn/heaviside
-   ttnn/leaky_relu
-   ttnn/log_sigmoid
-   ttnn/mish
-   ttnn/prelu
-   ttnn/relu_max
-   ttnn/relu_min
-   ttnn/relu6
-   ttnn/sigmoid
-   ttnn/sign
-   ttnn/softshrink
-   ttnn/softsign
-   ttnn/swish
+   ttnn/l1_loss
+   ttnn/mse_loss
 
 Reduction
 =========
@@ -152,6 +199,8 @@ Reduction
    :maxdepth: 1
 
    ttnn/mean
+   ttnn/std
+   ttnn/var
 
 Data Movement
 =============
@@ -204,7 +253,7 @@ Pooling
    ttnn/global_avg_pool2d
    ttnn/MaxPool2d
 
-Sampling
+Vision
 ========
 
 .. toctree::

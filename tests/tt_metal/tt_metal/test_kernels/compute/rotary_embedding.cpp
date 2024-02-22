@@ -60,7 +60,7 @@ ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32
     // Pop shared cbs after tilize
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit();
+    tilize_uninit(in0_cb);
 }
 
 namespace NAMESPACE {

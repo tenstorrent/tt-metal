@@ -21,15 +21,15 @@
 //     }
 // }
 
-// // Fill an L1 buffer with the given val
-// inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
-//     // simplest impl:
-//     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
-//     for (uint32_t i = 0; i < n; ++ i) {
-//         ptr[i] = val;
-//     }
-//     return true;
-// }
+// Fill an L1 buffer with the given val
+inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
+    // simplest impl:
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
+    for (uint32_t i = 0; i < n; ++ i) {
+        ptr[i] = val;
+    }
+    return true;
+}
 
 inline void push_to_neighbor_async(uint32_t noc_x,
                                    uint32_t noc_y,
@@ -104,9 +104,6 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    // DPRINT << "IN:" << ENDL();
-    // print_sticks(in_base_l1_addr, 0, 300, 32);
-
     uint32_t in_l1_addr = in_base_l1_addr;
 
     // // insert all padding locally
@@ -124,20 +121,20 @@ void kernel_main() {
     //     }
     // }
 
-    // then insert all local data
-    if (local_data_nsegments > 0) {
-        // cb_wait_front(local_data_ss_cb_id, 1);
-        in_l1_addr = in_base_l1_addr + local_data_src_start_offset * stick_nbytes;
-        uint32_t local_data_ss_l1_addr = get_read_ptr(local_data_ss_cb_id);
-        volatile tt_l1_ptr uint16_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_data_ss_l1_addr);
-        for (int32_t i = 0; i < 2 * local_data_nsegments; i += 2) {
-            uint32_t dst_size = local_data_ss[i + 1] * stick_nbytes;
-            uint32_t dst_addr = out_base_l1_addr + local_data_ss[i] * stick_nbytes;
-            // noc_async_read(get_noc_addr(in_l1_addr), dst_addr, dst_size);
-            noc_async_write(in_l1_addr, get_noc_addr(dst_addr), dst_size);
-            in_l1_addr += dst_size;
-        }
-    }
+    // // then insert all local data
+    // if (local_data_nsegments > 0) {
+    //     // cb_wait_front(local_data_ss_cb_id, 1);
+    //     in_l1_addr = in_base_l1_addr + local_data_src_start_offset * stick_nbytes;
+    //     uint32_t local_data_ss_l1_addr = get_read_ptr(local_data_ss_cb_id);
+    //     volatile tt_l1_ptr uint16_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_data_ss_l1_addr);
+    //     for (int32_t i = 0; i < 2 * local_data_nsegments; i += 2) {
+    //         uint32_t dst_size = local_data_ss[i + 1] * stick_nbytes;
+    //         uint32_t dst_addr = out_base_l1_addr + local_data_ss[i] * stick_nbytes;
+    //         // noc_async_read(get_noc_addr(in_l1_addr), dst_addr, dst_size);
+    //         noc_async_write(in_l1_addr, get_noc_addr(dst_addr), dst_size);
+    //         in_l1_addr += dst_size;
+    //     }
+    // }
 
     // push data to neighbors
     if (has_ll && ll_data_nsegments > 0) {
@@ -159,7 +156,4 @@ void kernel_main() {
 
     // noc_async_read_barrier();
     noc_async_write_barrier();
-
-    // DPRINT << "OUT:" << ENDL();
-    // print_sticks(out_base_l1_addr, 0, 500, 32);
 }

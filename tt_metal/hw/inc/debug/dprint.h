@@ -106,26 +106,32 @@ template<typename T> uint8_t DebugPrintTypeToId();
 template<typename T> uint32_t DebugPrintTypeToSize(T val) { return sizeof(T); };
 template<typename T> const uint8_t* DebugPrintTypeAddr(T* val) { return reinterpret_cast<const uint8_t*>(val); }
 
-template<> uint8_t DebugPrintTypeToId<const char*>()   { return DEBUG_PRINT_TYPEID_CSTR; }
-template<> uint8_t DebugPrintTypeToId<char*>()         { return DEBUG_PRINT_TYPEID_CSTR; }
-template<> uint8_t DebugPrintTypeToId<ENDL>()          { return DEBUG_PRINT_TYPEID_ENDL; }
-template<> uint8_t DebugPrintTypeToId<SETW>()          { return DEBUG_PRINT_TYPEID_SETW; }
-template<> uint8_t DebugPrintTypeToId<uint32_t>()      { return DEBUG_PRINT_TYPEID_UINT32; }
-template<> uint8_t DebugPrintTypeToId<float>()         { return DEBUG_PRINT_TYPEID_FLOAT32; }
-template<> uint8_t DebugPrintTypeToId<char>()          { return DEBUG_PRINT_TYPEID_CHAR; }
-template<> uint8_t DebugPrintTypeToId<RAISE>()         { return DEBUG_PRINT_TYPEID_RAISE; }
-template<> uint8_t DebugPrintTypeToId<WAIT>()          { return DEBUG_PRINT_TYPEID_WAIT; }
-template<> uint8_t DebugPrintTypeToId<BF16>()          { return DEBUG_PRINT_TYPEID_BFLOAT16; }
-template<> uint8_t DebugPrintTypeToId<SETPRECISION>()          { return DEBUG_PRINT_TYPEID_SETPRECISION; }
-template<> uint8_t DebugPrintTypeToId<FIXED>()          { return DEBUG_PRINT_TYPEID_FIXED; }
-template<> uint8_t DebugPrintTypeToId<DEFAULTFLOAT>()      { return DEBUG_PRINT_TYPEID_DEFAULTFLOAT; }
-template<> uint8_t DebugPrintTypeToId<HEX>()           { return DEBUG_PRINT_TYPEID_HEX; }
-template<> uint8_t DebugPrintTypeToId<OCT>()           { return DEBUG_PRINT_TYPEID_OCT; }
-template<> uint8_t DebugPrintTypeToId<DEC>()           { return DEBUG_PRINT_TYPEID_DEC; }
-template<> uint8_t DebugPrintTypeToId<F32>()           { return DEBUG_PRINT_TYPEID_FLOAT32; }
-template<> uint8_t DebugPrintTypeToId<U32>()           { return DEBUG_PRINT_TYPEID_UINT32; }
-template<> uint8_t DebugPrintTypeToId<int>()           { return DEBUG_PRINT_TYPEID_INT32; }
-template<> uint8_t DebugPrintTypeToId<uint64_t>()      { return DEBUG_PRINT_TYPEID_UINT64; }
+template<> uint8_t DebugPrintTypeToId<const char*>()   { return DPrintCSTR; }
+template<> uint8_t DebugPrintTypeToId<char*>()         { return DPrintCSTR; }
+template<> uint8_t DebugPrintTypeToId<ENDL>()          { return DPrintENDL; }
+template<> uint8_t DebugPrintTypeToId<SETW>()          { return DPrintSETW; }
+template<> uint8_t DebugPrintTypeToId<uint8_t>()       { return DPrintUINT8; }
+template<> uint8_t DebugPrintTypeToId<uint16_t>()      { return DPrintUINT16; }
+template<> uint8_t DebugPrintTypeToId<uint32_t>()      { return DPrintUINT32; }
+template<> uint8_t DebugPrintTypeToId<uint64_t>()      { return DPrintUINT64; }
+template<> uint8_t DebugPrintTypeToId<int8_t>()        { return DPrintINT8; }
+template<> uint8_t DebugPrintTypeToId<int16_t>()       { return DPrintINT16; }
+template<> uint8_t DebugPrintTypeToId<int32_t>()       { return DPrintINT32; }
+template<> uint8_t DebugPrintTypeToId<int64_t>()       { return DPrintINT64; }
+template<> uint8_t DebugPrintTypeToId<int>()           { return DPrintINT32; }
+template<> uint8_t DebugPrintTypeToId<float>()         { return DPrintFLOAT32; }
+template<> uint8_t DebugPrintTypeToId<char>()          { return DPrintCHAR; }
+template<> uint8_t DebugPrintTypeToId<RAISE>()         { return DPrintRAISE; }
+template<> uint8_t DebugPrintTypeToId<WAIT>()          { return DPrintWAIT; }
+template<> uint8_t DebugPrintTypeToId<BF16>()          { return DPrintBFLOAT16; }
+template<> uint8_t DebugPrintTypeToId<SETPRECISION>()  { return DPrintSETPRECISION; }
+template<> uint8_t DebugPrintTypeToId<FIXED>()         { return DPrintFIXED; }
+template<> uint8_t DebugPrintTypeToId<DEFAULTFLOAT>()  { return DPrintDEFAULTFLOAT; }
+template<> uint8_t DebugPrintTypeToId<HEX>()           { return DPrintHEX; }
+template<> uint8_t DebugPrintTypeToId<OCT>()           { return DPrintOCT; }
+template<> uint8_t DebugPrintTypeToId<DEC>()           { return DPrintDEC; }
+template<> uint8_t DebugPrintTypeToId<F32>()           { return DPrintFLOAT32; }
+template<> uint8_t DebugPrintTypeToId<U32>()           { return DPrintUINT32; }
 static_assert(sizeof(int) == 4);
 
 // Specializations for const char* (string literals), typically you will not need these for other types
@@ -204,7 +210,7 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
             payload_sz = DebugPrintStrCopy(
                 reinterpret_cast<char*>(printbuf+code_sz+sz_sz),
                 debug_print_overflow_error_message);
-            printbuf[0] = DEBUG_PRINT_TYPEID_CSTR;
+            printbuf[0] = DPrintCSTR;
             printbuf[code_sz] = payload_sz;
             wpos = payload_sz + sz_sz + code_sz;
             *dp.wpos() = wpos;
@@ -234,7 +240,14 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
 template DebugPrinter operator<< <const char*>(DebugPrinter dp, const char* val);
 template DebugPrinter operator<< <ENDL>(DebugPrinter, ENDL val);
 template DebugPrinter operator<< <SETW>(DebugPrinter, SETW val);
+template DebugPrinter operator<< <uint8_t>(DebugPrinter, uint8_t val);
+template DebugPrinter operator<< <uint16_t>(DebugPrinter, uint16_t val);
 template DebugPrinter operator<< <uint32_t>(DebugPrinter, uint32_t val);
+template DebugPrinter operator<< <uint64_t>(DebugPrinter, uint64_t val);
+template DebugPrinter operator<< <int8_t>(DebugPrinter, int8_t val);
+template DebugPrinter operator<< <int16_t>(DebugPrinter, int16_t val);
+template DebugPrinter operator<< <int32_t>(DebugPrinter, int32_t val);
+template DebugPrinter operator<< <int64_t>(DebugPrinter, int64_t val);
 template DebugPrinter operator<< <float>(DebugPrinter, float val);
 template DebugPrinter operator<< <char>(DebugPrinter, char val);
 template DebugPrinter operator<< <RAISE>(DebugPrinter, RAISE val);

@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import torch_random
 
 
 def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
@@ -136,8 +137,31 @@ def test_atanh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_clone(device, h, w):
-    run_unary_test(device, h, w, ttnn.clone, torch.clone)
+def test_logical_not(device, h, w):
+    run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
+
+
+def run_unary_test_range(device, h, w, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+    low = -100
+    high = 100
+
+    torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_signbit(device, h, w):
+    run_unary_test_range(device, h, w, ttnn.signbit, torch.signbit, pcc=0.99)
 
 
 def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
@@ -153,27 +177,6 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, torch_functio
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-def run_unary_test_float_key(device, h, w, scalar, ttnn_function, torch_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch_function(torch_input_tensor, scalar=scalar)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, scalar)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_not(device, h, w):
-    run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
 
 
 @pytest.mark.parametrize("scalar", [1, 2])

@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
+          # {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
           {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"], machine-type: "bare_metal"},
         ]
     env:
@@ -25,7 +25,7 @@ jobs:
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
@@ -50,7 +50,7 @@ jobs:
           ls -hal $PERF_REPORT_FILENAME
           echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"

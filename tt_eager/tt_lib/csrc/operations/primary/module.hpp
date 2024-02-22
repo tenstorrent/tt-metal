@@ -20,6 +20,8 @@
 #include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
+#include "tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
@@ -29,6 +31,10 @@
 #include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
+#include "tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
+#include "tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
 
 namespace py = pybind11;
 
@@ -40,9 +46,12 @@ void py_module(py::module& m_primary) {
     auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
     transformers::py_module(m_transformers);
 
-    py::class_<MatmulProgramConfig>(m_primary, "MatmulProgramConfig");
+    py::class_<MatmulProgramConfig>(m_primary, "MatmulProgramConfig")
+        .def("__repr__", [](const MatmulProgramConfig& config) { return fmt::format("{}", config); });
 
-    py::class_<MatmulDefaultProgramConfig>(m_primary, "MatmulDefaultProgramConfig").def(py::init<>());
+    py::class_<MatmulDefaultProgramConfig>(m_primary, "MatmulDefaultProgramConfig")
+        .def(py::init<>())
+        .def("__repr__", [](const MatmulDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<MatmulMultiCoreReuseProgramConfig>(m_primary, "MatmulMultiCoreReuseProgramConfig")
         .def(
@@ -53,10 +62,20 @@ void py_module(py::module& m_primary) {
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert());
+            py::arg("per_core_N").noconvert())
+        .def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) { return fmt::format("{}", config); });
+
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>>(),
+            py::init<
+                CoreCoord,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                bool,
+                std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -65,13 +84,24 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("transpose_mcast").noconvert(),
-            py::arg("fused_activation")
-        )
-        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation);
+            py::arg("fused_activation"))
+        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 
     py::class_<MatmulMultiCoreReuseMultiCast1DProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCast1DProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>, bool>(),
+            py::init<
+                CoreCoord,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                bool,
+                std::optional<UnaryWithParam>,
+                bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -82,7 +112,10 @@ void py_module(py::module& m_primary) {
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
             py::arg("mcast_in0").noconvert())
-        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation);
+        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 
     m_primary.def(
         "get_mcast_1d_config",
@@ -197,6 +230,55 @@ void py_module(py::module& m_primary) {
            const bool packer_l1_acc) {
             return matmul(
                 input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc);
+        },
+        py::arg("input_tensor_a").noconvert(),
+        py::arg("input_tensor_b").noconvert(),
+        py::kw_only(),
+        py::arg("bias").noconvert() = std::nullopt,
+        py::arg("program_config").noconvert() = MatmulDefaultProgramConfig(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_dtype").noconvert() = std::nullopt,
+        py::arg("math_fidelity").noconvert() = MathFidelity::LoFi,
+        py::arg("fp32_dest_acc_en").noconvert() = false,
+        py::arg("math_approx_mode").noconvert() = true,
+        py::arg("packer_l1_acc").noconvert() = false,
+        R"doc(
+            Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_tensor_a",    "First tensor to multiply",                               "Tensor",                                     "Tensor of shape [B_a, C_a, M, K]",                               "Yes"
+                "input_tensor_b",    "Second tensor to multiply",                              "Tensor",                                     "Tensor of shape [B_b, C_b, K, N]",                               "Yes"
+                "bias",              "Bias to add",                                            "Tensor",                                     "Tensor of shape [1, 1, 1, N]",                                   "Yes"
+                "program_config",    "",                                                       "MatmulDefaultProgramConfig", "",                                                               "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
+                "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
+        )doc");
+
+    m_primary.def(
+        "matmul",
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           std::optional<const Tensor> bias,
+           const MatmulMultiCoreReuseProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity,
+           const bool fp32_dest_acc_en,
+           const bool math_approx_mode,
+           const bool packer_l1_acc) {
+            return matmul(
+                input_tensor_a,
+                input_tensor_b,
+                bias,
+                program_config,
+                out_mem_config,
+                output_dtype,
+                math_fidelity,
+                fp32_dest_acc_en,
+                math_approx_mode,
+                packer_l1_acc);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -531,6 +613,31 @@ void py_module(py::module& m_primary) {
         "Performs a moreh_matmul_backward operation.
     )doc");
 
+    // moreh_norm
+    m_primary.def(
+        "moreh_norm",
+        &moreh_norm,
+        py::arg("input").noconvert(),
+        py::arg("p").noconvert() = 2.0f,
+        py::arg("dim").noconvert() = std::nullopt,
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_norm operation.");
+
+    // moreh_norm_backward
+    m_primary.def(
+        "moreh_norm_backward",
+        &moreh_norm_backward,
+        py::arg("input").noconvert(),
+        py::arg("output").noconvert(),
+        py::arg("output_grad").noconvert(),
+        py::arg("p").noconvert() = 2.0f,
+        py::kw_only(),
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_norm_backward operation.");
+
     m_primary.def(
         "moreh_layernorm",
         &moreh_layernorm,
@@ -727,6 +834,63 @@ void py_module(py::module& m_primary) {
         R"doc(
             Performs a groupnorm operation, returna a output tensor the same shape as input.
         )doc");
+
+    // moreh_groupnorm
+    m_primary.def(
+        "moreh_groupnorm",
+        &moreh_groupnorm,
+        py::arg("input").noconvert(),
+        py::arg("num_groups").noconvert(),
+        py::arg("eps").noconvert() = 1e-5f,
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("mean").noconvert() = std::nullopt,
+        py::arg("rstd").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("mean_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("rstd_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_groupnorm operation.
+    )doc");
+
+    // moreh_groupnorm_backward
+    m_primary.def(
+        "moreh_groupnorm_backward",
+        &moreh_groupnorm_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("mean").noconvert(),
+        py::arg("rstd").noconvert(),
+        py::arg("num_groups").noconvert(),
+        py::kw_only(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("gamma_grad").noconvert() = std::nullopt,
+        py::arg("beta_grad").noconvert() = std::nullopt,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("gamma_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("beta_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_groupnorm_backward operation.
+    )doc");
+
+    m_primary.def(
+        "moreh_mean",
+        &moreh_mean,
+        py::arg("input").noconvert(),
+        py::arg("output").noconvert(),
+        py::kw_only(),
+        py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs mean operation. Returns an output tensor.");
+    m_primary.def(
+        "moreh_mean_backward",
+        &moreh_mean_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input_grad").noconvert(),
+        "Performs mean backward operation. Returns an input_grad tensor.");
 }
 
 }  // namespace

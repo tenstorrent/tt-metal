@@ -19,6 +19,7 @@ parameters = {
     "input_dtype": [ttnn.bfloat16],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    "layout": [ttnn.TILE_LAYOUT],
 }
 
 
@@ -37,6 +38,7 @@ def run(
     input_dtype,
     input_memory_config,
     output_memory_config,
+    layout,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
@@ -49,7 +51,7 @@ def run(
     torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config
+        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
     )
 
     output_tensor = ttnn.gelu(input_tensor, memory_config=output_memory_config)

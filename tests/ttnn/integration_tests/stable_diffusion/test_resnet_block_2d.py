@@ -87,7 +87,6 @@ def test_resnet_block_2d_256x256(
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
     ttnn_output = resnetBlock2D(
         input,
         temb=temb,
@@ -117,10 +116,10 @@ def test_resnet_block_2d_256x256(
         (2, 1280, 8, 8, 2, 1, "down", None),
         (2, 2560, 8, 8, 0, 0, "up", 1280),
         (2, 2560, 16, 16, 0, 0, "up", 1280),
-        (2, 1920, 16, 16, 2, 0, "up", 640),
+        (2, 1920, 16, 16, 2, 0, "up", 1280),
         (2, 1920, 32, 32, 2, 0, "up", 640),
         (2, 1280, 32, 32, 3, 0, "down", None),
-        (2, 960, 32, 32, 3, 0, "up", 320),
+        (2, 960, 32, 32, 3, 0, "up", 640),
         (2, 960, 64, 64, 3, 0, "up", 320),
         (2, 640, 64, 64, 3, 1, "up", 320),
     ],
@@ -165,12 +164,12 @@ def test_resnet_block_2d_512x512(
 
     input = ttnn.from_torch(input, ttnn.bfloat16)
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
-    input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
-    temb = ttnn.to_device(temb, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+    temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    reader_patterns_cache = {}
     ttnn_output = resnetBlock2D(
         input,
         temb=temb,
@@ -183,6 +182,7 @@ def test_resnet_block_2d_512x512(
         output_scale_factor=output_scale_factor,
         parameters=parameters,
         device=device,
+        reader_patterns_cache=reader_patterns_cache,
     )
     ttnn_output = ttnn_to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

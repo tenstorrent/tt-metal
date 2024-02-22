@@ -124,9 +124,7 @@ std::string DataMovementKernel::config_hash() const {
     return fmt::format("{}", magic_enum::enum_name(this->config_.noc));
 }
 
-std::string EthernetKernel::config_hash() const {
-    return fmt::format("{}", magic_enum::enum_name(this->config_.eth_mode));
-}
+std::string EthernetKernel::config_hash() const { return fmt::format("{}", magic_enum::enum_name(this->config_.noc)); }
 
 std::string ComputeKernel::config_hash() const {
     return fmt::format("{}_{}_{}", magic_enum::enum_name(this->config_.math_fidelity), this->config_.fp32_dest_acc_en, this->config_.math_approx_mode);

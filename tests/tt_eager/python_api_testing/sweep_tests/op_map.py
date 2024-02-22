@@ -32,6 +32,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.copy,
         "pytorch_op": pytorch_ops.copy,
     },
+    "concat": {
+        "tt_lib_op": tt_lib_ops.concat,
+        "pytorch_op": pytorch_ops.concat,
+    },
     "move": {
         "tt_lib_op": tt_lib_ops.move,
         "pytorch_op": pytorch_ops.move,
@@ -110,6 +114,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.fill_ones_rm,
         "pytorch_op": pytorch_ops.fill_ones_rm,
     },
+    "fill-bw": {
+        "tt_lib_op": tt_lib_ops.fill_bw,
+        "pytorch_op": pytorch_ops.fill_bw,
+    },
+    "fill-zero-bw": {
+        "tt_lib_op": tt_lib_ops.fill_zero_bw,
+        "pytorch_op": pytorch_ops.fill_zero_bw,
+    },
     "eltwise-full": {
         "tt_lib_op": tt_lib_ops.full,
         "pytorch_op": pytorch_ops.full,
@@ -137,6 +149,10 @@ op_map = {
     "eltwise-sub_unary": {
         "tt_lib_op": tt_lib_ops.eltwise_sub_unary,
         "pytorch_op": pytorch_ops.sub_unary,
+    },
+    "sub-unary-bw": {
+        "tt_lib_op": tt_lib_ops.sub_unary_bw,
+        "pytorch_op": pytorch_ops.sub_unary_bw,
     },
     "eltwise-add_unary": {
         "tt_lib_op": tt_lib_ops.eltwise_add_unary,
@@ -282,6 +298,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_tan,
         "pytorch_op": pytorch_ops.tan,
     },
+    "eltwise-tan-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_tan_bw,
+        "pytorch_op": pytorch_ops.tan_bw,
+    },
     "eltwise-asin": {
         "tt_lib_op": tt_lib_ops.eltwise_asin,
         "pytorch_op": pytorch_ops.asin,
@@ -309,6 +329,10 @@ op_map = {
     "eltwise-exp": {
         "tt_lib_op": tt_lib_ops.eltwise_exp,
         "pytorch_op": pytorch_ops.exp,
+    },
+    "eltwise-exp-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_exp_bw,
+        "pytorch_op": pytorch_ops.exp_bw,
     },
     "eltwise-exp2": {
         "tt_lib_op": tt_lib_ops.eltwise_exp2,
@@ -398,6 +422,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_pow,
         "pytorch_op": pytorch_ops.power,
     },
+    "unary-pow-bw": {
+        "tt_lib_op": tt_lib_ops.unary_pow_bw,
+        "pytorch_op": pytorch_ops.power_bw,
+    },
     "bert-large-fused-qkv-matmul": {
         "tt_lib_op": tt_lib_ops.bert_large_fused_qkv_matmul,
         "pytorch_op": pytorch_ops.bert_large_fused_qkv_matmul,
@@ -462,6 +490,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_addalpha,
         "pytorch_op": pytorch_ops.addalpha,
     },
+    "lamb-optimizer": {
+        "tt_lib_op": tt_lib_ops.lamb_optimizer,
+        "pytorch_op": pytorch_ops.lamb_optimizer,
+    },
     "eltwise-logit": {
         "tt_lib_op": tt_lib_ops.eltwise_logit,
         "pytorch_op": pytorch_ops.logit,
@@ -497,6 +529,10 @@ op_map = {
     "eltwise-tanh": {
         "tt_lib_op": tt_lib_ops.eltwise_tanh,
         "pytorch_op": pytorch_ops.tanh,
+    },
+    "eltwise-tanh-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_tanh_bw,
+        "pytorch_op": pytorch_ops.tanh_bw,
     },
     "eltwise-tanhshrink": {
         "tt_lib_op": tt_lib_ops.eltwise_tanhshrink,
@@ -555,21 +591,41 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
     },
+    "eltwise-add-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_add_bw,
+        "pytorch_op": pytorch_ops.add_bw,
+    },
     "eltwise-sub": {
         "tt_lib_op": tt_lib_ops.eltwise_sub,
         "pytorch_op": pytorch_ops.sub,
+    },
+    "eltwise-sub-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_sub_bw,
+        "pytorch_op": pytorch_ops.sub_bw,
     },
     "eltwise-mul": {
         "tt_lib_op": tt_lib_ops.eltwise_mul,
         "pytorch_op": pytorch_ops.mul,
     },
+    "eltwise-mul-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_mul_bw,
+        "pytorch_op": pytorch_ops.mul_bw,
+    },
     "eltwise-min": {
         "tt_lib_op": tt_lib_ops.eltwise_min,
         "pytorch_op": pytorch_ops.min,
     },
+    "eltwise-min-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_min_bw,
+        "pytorch_op": pytorch_ops.min_bw,
+    },
     "eltwise-max": {
         "tt_lib_op": tt_lib_ops.eltwise_max,
         "pytorch_op": pytorch_ops.max,
+    },
+    "eltwise-max-bw": {
+        "tt_lib_op": tt_lib_ops.eltwise_max_bw,
+        "pytorch_op": pytorch_ops.max_bw,
     },
     "eltwise-squared_difference": {
         "tt_lib_op": tt_lib_ops.eltwise_squared_difference,
@@ -643,6 +699,10 @@ op_map = {
     "eltwise-where": {
         "tt_lib_op": tt_lib_ops.where,
         "pytorch_op": pytorch_ops.where,
+    },
+    "where-bw": {
+        "tt_lib_op": tt_lib_ops.where_bw,
+        "pytorch_op": pytorch_ops.where_bw,
     },
     # Matmul
     "matmul": {
@@ -907,6 +967,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.embeddings,
         "pytorch_op": pytorch_ops.embeddings,
     },
+    "embeddings-bw": {
+        "tt_lib_op": tt_lib_ops.tt_embedding_bw,
+        "pytorch_op": pytorch_ops.pt_embedding_bw,
+    },
     "rmsnorm-noweights": {
         "tt_lib_op": tt_lib_ops.rmsnorm_noweights,
         "pytorch_op": pytorch_ops.rmsnorm_noweights,
@@ -943,9 +1007,53 @@ op_map = {
         "tt_lib_op": tt_lib_ops.complex_abs,
         "pytorch_op": pytorch_ops.complex_abs,
     },
+    "complex-polar": {
+        "tt_lib_op": tt_lib_ops.complex_polar,
+        "pytorch_op": pytorch_ops.complex_polar,
+    },
     "complex-imag": {
         "tt_lib_op": tt_lib_ops.complex_imag,
         "pytorch_op": pytorch_ops.complex_imag,
+    },
+    "unary-div-bw": {
+        "tt_lib_op": tt_lib_ops.unary_div_bw,
+        "pytorch_op": pytorch_ops.unary_div_bw,
+    },
+    "unary-add-bw": {
+        "tt_lib_op": tt_lib_ops.unary_add_bw,
+        "pytorch_op": pytorch_ops.unary_add_bw,
+    },
+    "unary-mul-bw": {
+        "tt_lib_op": tt_lib_ops.unary_mul_bw,
+        "pytorch_op": pytorch_ops.unary_mul_bw,
+    },
+    "unary-assign-bw": {
+        "tt_lib_op": tt_lib_ops.unary_assign_bw,
+        "pytorch_op": pytorch_ops.unary_assign_bw,
+    },
+    "binary-assign-bw": {
+        "tt_lib_op": tt_lib_ops.binary_assign_bw,
+        "pytorch_op": pytorch_ops.binary_assign_bw,
+    },
+    "div-bw": {
+        "tt_lib_op": tt_lib_ops.div_bw,
+        "pytorch_op": pytorch_ops.div_bw,
+    },
+    "addcdiv-bw": {
+        "tt_lib_op": tt_lib_ops.addcdiv_bw,
+        "pytorch_op": pytorch_ops.addcdiv_bw,
+    },
+    "addcmul-bw": {
+        "tt_lib_op": tt_lib_ops.addcmul_bw,
+        "pytorch_op": pytorch_ops.addcmul_bw,
+    },
+    "addalpha-bw": {
+        "tt_lib_op": tt_lib_ops.addalpha_bw,
+        "pytorch_op": pytorch_ops.addalpha_bw,
+    },
+    "rsqrt-bw": {
+        "tt_lib_op": tt_lib_ops.rsqrt_bw,
+        "pytorch_op": pytorch_ops.rsqrt_bw,
     },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
@@ -1067,5 +1175,13 @@ op_map = {
     "ttnn-attention_softmax": {
         "tt_lib_op": ttnn_ops.attention_softmax,
         "pytorch_op": pytorch_ops.attention_softmax,
+    },
+    "ttnn-rmsnorm": {
+        "tt_lib_op": ttnn_ops.rmsnorm,
+        "pytorch_op": pytorch_ops.ttnn_rmsnorm,
+    },
+    "ttnn-transformer_concatenate_heads": {
+        "tt_lib_op": ttnn_ops.transformer_concatenate_heads,
+        "pytorch_op": pytorch_ops.transformer_concatenate_heads,
     },
 }

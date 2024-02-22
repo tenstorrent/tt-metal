@@ -49,6 +49,7 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
         assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
 
     if tt_dtype in {
+        ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.DataType.BFLOAT8_B,
         ttl.tensor.DataType.UINT32,
@@ -98,6 +99,7 @@ def test_tensor_conversion_between_torch_and_np(shape, tt_dtype, device):
         assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
 
     if tt_dtype in {
+        ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.DataType.BFLOAT8_B,
         ttl.tensor.DataType.UINT32,

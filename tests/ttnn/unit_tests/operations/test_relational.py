@@ -245,3 +245,30 @@ def test_expand_and_broadcast_1(device, h, w):
     tt_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+def run_relational_isclose_test(device, h, w, atol, rtol, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((h, w), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch_function(torch_input_tensor_a, torch_input_tensor_b, rtol=rtol, atol=atol)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor_a, input_tensor_b, rtol, atol)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("atol", [1e-8, 1e-10])
+@pytest.mark.parametrize("rtol", [1e-5, 1e-9])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_isclose_a(device, h, w, atol, rtol):
+    run_relational_isclose_test(device, h, w, atol, rtol, ttnn.isclose, torch.isclose)

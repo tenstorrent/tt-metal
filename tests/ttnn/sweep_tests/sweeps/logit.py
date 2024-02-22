@@ -20,7 +20,7 @@ parameters = {
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT],
-    "scalar": [1, 0.5, 1.5],
+    "scalar": [1, 2, 3],
 }
 
 

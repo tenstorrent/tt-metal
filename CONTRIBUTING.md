@@ -81,8 +81,8 @@ machines. They have prerequisite dependencies, model files, and other settings
 set up for users.
 
 Please refer to the [README](README.md) for source installation and environment
-setup instructions, then please read the the [developer's
-page](docs/source/dev_onboarding/get_started.rst).
+setup instructions, then please read the the [Getting Started
+page](docs/source/get_started/get_started.rst).
 
 ### Setting up Git
 

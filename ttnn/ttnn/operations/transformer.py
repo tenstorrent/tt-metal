@@ -139,14 +139,14 @@ def split_query_key_value_and_split_heads(
 
     if kv_input_tensor is not None:
         batch_size, sequence_size, hidden_size = input_tensor.shape
-        _, sequence_size_padded, hidden_size_padded = input_tensor.shape.padded()
+        _, sequence_size_padded, hidden_size_padded = input_tensor.shape.with_tile_padding()
         if kv_input_tensor.shape != (batch_size, sequence_size, hidden_size * 2):
             raise RuntimeError(
                 "kv_input_tensor must be of shape (batch_size, sequence_size, hidden_size * 2) when input_tensor is of shape (batch_size, sequence_size, hidden_size)"
             )
     else:
         batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-        _, sequence_size_padded, three_times_hidden_size_padded = input_tensor.shape.padded()
+        _, sequence_size_padded, three_times_hidden_size_padded = input_tensor.shape.with_tile_padding()
         hidden_size = three_times_hidden_size // 3
         hidden_size_padded = three_times_hidden_size_padded // 3
     head_size = hidden_size // num_heads
@@ -181,7 +181,7 @@ def split_query_key_value_and_split_heads(
             )
 
             _, kv_sequence_size, _ = kv_input_tensor.shape
-            _, kv_sequence_size, _ = kv_input_tensor.shape.padded()
+            _, kv_sequence_size, _ = kv_input_tensor.shape.with_tile_padding()
             desired_shape = ttnn.Shape(
                 [batch_size, 1, kv_sequence_size, hidden_size * 2],
                 [batch_size, 1, kv_sequence_size, hidden_size_padded * 2],
@@ -308,7 +308,8 @@ def attention_softmax(
 
     Args:
         * :attr:`input_tensor`: Input Tensor
-        * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
+        * :attr:`head_size`: Number of heads
+        * :attr:`attention_mask`: Attention Mask
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
@@ -347,8 +348,8 @@ def attention_softmax_(
 
     Args:
         * :attr:`input_tensor`: Input Tensor
-        * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
-        * :attr:`memory_config`: Memory Config of the output tensor
+        * :attr:`head_size`: Number of heads
+        * :attr:`attention_mask`: Attention Mask
 
     """
     if len(input_tensor.shape) != 4:
@@ -421,7 +422,7 @@ def concatenate_heads(
 
     """
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
-    batch_size, num_heads, padded_sequence_size, padded_head_size = input_tensor.shape.padded()
+    batch_size, num_heads, padded_sequence_size, padded_head_size = input_tensor.shape.with_tile_padding()
 
     ttl_input_tensor = input_tensor.value
     ttl_output_tensor = ttl.tensor.nlp_concat_heads(

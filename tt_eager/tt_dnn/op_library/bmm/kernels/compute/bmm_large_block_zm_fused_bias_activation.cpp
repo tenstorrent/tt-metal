@@ -18,7 +18,7 @@ namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles, uint32_t out_subblock_w, uint32_t out_subblock_h, uint32_t in0_block_w) {
     // Reconfigure input
-    copy_tile_matmul_partials_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    copy_tile_matmul_partials_init_short_with_dt(mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
     tile_regs_acquire();
 
@@ -65,7 +65,7 @@ void MAIN {
 
     constexpr bool spill = num_blocks > 1;
 
-    mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, out_subblock_w, out_subblock_h, in0_block_w );
+    mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_w, out_subblock_h, in0_block_w );
     for (uint32_t b = 0; b < batch; b++){
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -76,6 +76,10 @@ void MAIN {
             PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
         }
         #endif
+
+        if constexpr(batch > 1) {
+            PACK((  pack_reconfig_data_format(mm_partials_cb_id) ));
+        }
 
         for(uint32_t block = 0; block < num_blocks; block++)
         {
@@ -159,16 +163,13 @@ void MAIN {
                         // Move partial result to interm buffer
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
+
                         #ifdef PACKER_L1_ACC
                             if (block == 0) { // no accumulation for first iteration
                                 PACK((  llk_pack_reconfig_l1_acc(0) ));
-                            } else {
+                            } else if (block == 1){
                                 PACK((  llk_pack_reconfig_l1_acc(1) ));
                             }
-                        #endif
-
-                        #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                            PACK((  pack_reconfig_data_format(mm_partials_cb_id) ));
                         #endif
 
                         uint32_t start_dst_index = 0;
@@ -273,7 +274,7 @@ void MAIN {
                 PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
             #endif
             // reconfigure unpacker df for src B
-            unpack_reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
+            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
         }
         #endif
     }

@@ -1,6 +1,0 @@
-#!/bin/bash -x
-if [[ -z "${TT_METAL_HOME}" ]];
-then
-   exit "need environment variable ${TT_METAL_HOME}"
-fi
-python3 ${TT_METAL_HOME}/tests/scripts/tt_bisect.py $@

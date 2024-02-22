@@ -1,4 +1,4 @@
-personal_ws-1.1 en 485
+personal_ws-1.1 en 516
 ABI
 ADDI
 API
@@ -49,10 +49,12 @@ DataMovementConfig
 DataMovementProcessor
 DataType
 DeallocateBuffer
+DeviceOperation
 DeviceStorage
 DstMode
 DumpDeviceProfileResults
 ENDL
+ETH
 EltwiseUnary
 EnqueueProgram
 EnqueueReadBuffer
@@ -116,6 +118,7 @@ Pytorch
 QueryDevices
 README
 RISCV
+RISCVS
 RISCVs
 RISCs
 ReadFromDevice
@@ -136,6 +139,7 @@ ShardedBufferConfig
 SliceRange
 TRISC
 TSLICE
+TT
 TTNN
 TTNN's
 TensTorrent's
@@ -165,6 +169,7 @@ acosh
 addexp
 addr
 agrebenisan
+andi
 api
 apis
 arg
@@ -190,6 +195,7 @@ brisc
 cachable
 cb
 cbid
+cbrt
 cd
 cin
 ckernel
@@ -207,6 +213,7 @@ cpp
 cpu
 cq
 cref
+csrc
 cstdint
 csv
 ctl
@@ -223,6 +230,7 @@ dest
 dev
 devs
 dfb
+digamma
 dir
 dnn
 doxygendefine
@@ -248,6 +256,7 @@ eqz
 erf
 erfc
 erfinv
+ethernet
 exexp
 exman
 expm
@@ -259,10 +268,12 @@ funcs
 gcc
 gdb
 gdb's
+geglu
 gelu
 genindex
 getitem
 gez
+glu
 grayskull
 grey
 gte
@@ -277,6 +288,7 @@ hpp
 hs
 html
 hw
+hypot
 icb
 idst
 ie
@@ -288,6 +300,7 @@ intrinsics
 iomanip
 ios
 ipynb
+isclose
 isfinite
 isinf
 isinstance
@@ -300,6 +313,8 @@ iy
 jupyter
 labelled
 ld
+ldexp
+lerp
 lez
 lgamma
 linenos
@@ -307,6 +322,7 @@ llk
 llrt
 loadi
 loadis
+logaddexp
 logit
 loopback
 lt
@@ -320,6 +336,7 @@ maxdepth
 md
 mish
 modindex
+mse
 mul
 multicast
 multigammaln
@@ -332,6 +349,7 @@ ne
 networkx
 nez
 noc
+noconvert
 nodebias
 nof
 nop
@@ -344,6 +362,7 @@ numpy
 ocb
 oct
 onboarding
+ori
 parallelization
 parallelizes
 param
@@ -353,6 +372,7 @@ performant
 phiyodr
 phyiscally
 png
+polygamma
 pragma
 pre
 prelu
@@ -363,6 +383,7 @@ profiler
 ptr
 pwd
 py
+pybindings
 pytest
 pytorch
 qkv
@@ -370,8 +391,10 @@ quickstart
 randint
 randn
 rb
+rdiv
 recip
 reconfig
+reglu
 regs
 reigster
 relu
@@ -380,6 +403,7 @@ resnet
 riscv
 rms
 rmsg
+rpow
 rsqrt
 rst
 rsub
@@ -413,6 +437,7 @@ skillset
 smi
 smsg
 softmax
+softplus
 softshrink
 softsign
 sqrt
@@ -423,13 +448,16 @@ srcb
 stderr
 stdout
 storages
+str
 struct
 submodule
 subvec
 sudo
 svg
+swiglu
 sys
 tanh
+tanhshrink
 teardown
 tensix
 tensor's
@@ -442,8 +470,10 @@ toctree
 todo
 tracy
 transp
+tril
 trisc
 triscs
+triu
 tt
 ttDNN
 ttl
@@ -483,4 +513,5 @@ wh
 ws
 xAA
 xFF
+xlogy
 xyz

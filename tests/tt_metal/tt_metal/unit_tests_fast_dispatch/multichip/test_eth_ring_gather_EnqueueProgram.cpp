@@ -200,8 +200,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             sender_program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_ring_gather_send.cpp",
             eth_sender_core,
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::SENDER,
+            tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {
                     uint32_t(num_bytes_per_send),
@@ -258,8 +257,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             receiver_program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_ring_gather_receive.cpp",
             eth_receiver_core,
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::RECEIVER,
+            tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_1,
                 .compile_args = {
                     uint32_t(receiver_sender_core.x),
@@ -362,8 +360,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_eth_ring_gather_send.cpp",
             eth_sender_core,
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::SENDER,
+            tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {
                     uint32_t(num_bytes_per_send),
@@ -397,8 +394,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_eth_ring_gather_receive.cpp",
             eth_receiver_core,
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::RECEIVER,
+            tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_1,
                 .compile_args = {
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),

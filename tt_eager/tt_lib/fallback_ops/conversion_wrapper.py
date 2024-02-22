@@ -49,7 +49,11 @@ def custom_tensor_print_handler(tensor_cls):
 
 def convert_tt_tensor_to_pt_tensor(tt_tensor, output_format):
     # Update output_format with format of first encountered arg
-    if output_format.get("device", None) is None and tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE:
+    if (
+        output_format.get("device", None) is None
+        and tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE
+        and output_format["on_device"]
+    ):
         output_format["device"] = tt_tensor.device()
 
     if ttl_profiler.get_profiler_flag():
@@ -82,7 +86,9 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
     else:
         assert output_format["layout"] == ttl_tensor.Layout.ROW_MAJOR
 
-    if isinstance(output_format["device"], ttl_device.Device):
+    if output_format["on_device"]:
+        assert "device" in output_format
+        assert isinstance(output_format["device"], ttl_device.Device)
         if (
             tt_tensor.layout() == ttl_tensor.Layout.TILE
             or tt_tensor.layout() == ttl_tensor.Layout.ROW_MAJOR
@@ -135,7 +141,15 @@ def convert_tt_tensors_wrapper(func):
     def wrap(*args, **kwargs):
         ttl_tensor.log_external_operation(func, *args, **kwargs)
 
-        output_format = {"layout": ttl_tensor.Layout.TILE}
+        output_format = {}
+        if "output_on_device" in kwargs:
+            output_format["on_device"] = kwargs["output_on_device"]
+        else:
+            output_format["on_device"] = True
+        if "output_layout" in kwargs:
+            output_format["layout"] = kwargs["output_layout"]
+        else:
+            output_format["layout"] = ttl_tensor.Layout.TILE
 
         if ttl_profiler.get_profiler_flag():
             ttl_profiler.start_profiling("fallback_op", ttl_profiler.OpType.python_fallback)
@@ -164,7 +178,7 @@ def convert_tt_tensors_wrapper(func):
         new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, output_format)
 
         # Set default output format
-        if output_format.get("device", None) is None:
+        if output_format.get("device", None) is None and output_format["on_device"]:
             output_format["device"] = ttl_device.GetDefaultDevice()
 
         outputs = func(*new_args, **new_kwargs)

@@ -114,7 +114,7 @@ constexpr op_profiler::OpType get_profiler_operation_type() {
 }
 
 template <typename Function>
-constexpr auto decorate_operation(const Function& function) {
+constexpr auto decorate_host_operation(const Function& function) {
     return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
 #ifndef TTNN_ENABLE_LOGGING
         if (not is_logging_enabled()) {
@@ -136,6 +136,32 @@ constexpr auto decorate_operation(const Function& function) {
         return output_tensors;
     };
 }
+
+template <typename Function>
+constexpr auto decorate_device_operation(const Function& function) {
+    return [function]<typename Operation, typename... Tensors>(
+               std::optional<std::reference_wrapper<CommandQueue>> queue, const Operation& operation, Tensors&&... tensors) {
+#ifndef TTNN_ENABLE_LOGGING
+        if (not is_logging_enabled()) {
+            return function(queue, operation, tensors...);
+        }
+#endif
+
+        const auto start{std::chrono::steady_clock::now()};
+        log_operation(operation, tensors...);
+        auto output_tensors = function(queue, operation, tensors...);
+        const auto end{std::chrono::steady_clock::now()};
+
+#ifdef TTNN_ENABLE_LOGGING
+        const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
+        tt::log_info(
+            tt::LogOp, "Finished Operation {:50} in {:15} nanoseconds", operation.get_type_name(), elapsed_seconds);
+
+#endif
+        return output_tensors;
+    };
+}
+
 std::vector<Tensor> run_host_operation(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
     ZoneScoped;
     ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
@@ -157,6 +183,7 @@ std::vector<Tensor> run_host_operation(const HostOperation& operation, const std
 inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
 std::vector<Tensor> run_device_operation(
+    std::optional<std::reference_wrapper<CommandQueue>> queue,
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -215,14 +242,13 @@ std::vector<Tensor> run_device_operation(
             return std::make_shared<Program>(std::move(program_with_callbacks.program));
         };
     }
-
     operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
 
     // Enqueue or Launch Program
     std::visit(
-        [&operation, &input_tensors, &optional_input_tensors](auto&& program) {
+        [&operation, &input_tensors, &optional_input_tensors, queue](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);
             using T = std::decay_t<decltype(program)>;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>> ) {
@@ -233,12 +259,14 @@ std::vector<Tensor> run_device_operation(
                     }
                 }
                 if (USE_FAST_DISPATCH) {
+                    TT_ASSERT(queue.has_value(), "CommandQueue is required for fast dispatch mode");
+                    CommandQueue& cq = queue.value().get();
 #ifndef TTNN_ENABLE_LOGGING
-                    EnqueueProgram(device->command_queue(), program, false);
+                    EnqueueProgram(cq, program, false);
 #else
                     const auto start{std::chrono::steady_clock::now()};
-                    EnqueueProgram(device->command_queue(), program, false);
-                    Finish(device->command_queue());
+                    EnqueueProgram(cq, program, false);
+                    Finish(cq);
                     const auto end{std::chrono::steady_clock::now()};
                     const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                     tt::log_info(
@@ -264,17 +292,28 @@ std::vector<Tensor> run_device_operation(
                 }
             }
         },
-        program );
+        program);
 
     if (!operation::skip_profile) {
         op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
     }
     return output_tensors;
 }
+
 }  // namespace detail
 
 std::vector<Tensor> run(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
-    return detail::decorate_operation(detail::run_host_operation)(operation, input_tensors);
+    return detail::decorate_host_operation(detail::run_host_operation)(operation, input_tensors);
+}
+
+std::vector<Tensor> run(
+    CommandQueue& queue,
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    return detail::decorate_device_operation(detail::run_device_operation)(
+        queue, operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 
 std::vector<Tensor> run(
@@ -282,7 +321,9 @@ std::vector<Tensor> run(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    return detail::decorate_operation(detail::run_device_operation)(operation, input_tensors, optional_input_tensors, optional_output_tensors);
+    auto device = detail::get_device(input_tensors, optional_input_tensors);
+    return detail::decorate_device_operation(detail::run_device_operation)(
+        detail::USE_FAST_DISPATCH ? std::make_optional(std::ref(device->command_queue())) : std::nullopt, operation, input_tensors, optional_input_tensors, optional_output_tensors);
 }
 
 std::vector<Tensor> run_without_autoformat(

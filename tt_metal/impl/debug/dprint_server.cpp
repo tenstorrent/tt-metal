@@ -196,7 +196,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
-void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled) {
+void WriteInitMagic(chip_id_t chip_id, const CoreCoord& core, int hart_id, bool enabled) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
@@ -210,7 +210,7 @@ void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enable
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(int chip_id, const CoreCoord& core, int hart_id) {
+bool CheckInitMagicCleared(chip_id_t chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetBaseAddr(chip_id, core, hart_id);
 
@@ -284,44 +284,20 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     chip_id_t device_id = device->id();
 
     // A set of all valid printable cores, used for checking the user input. Note that the coords
-    // here are physical, which matches the user input for configuring the print server.
-    set<CoreCoord> all_printable_cores;
+    // here are physical.
+    map<CoreType, set<CoreCoord>> all_physical_printable_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size = device->logical_grid_size();
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             CoreCoord logical_coord(x, y);
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_coord);
-            all_printable_cores.insert(worker_core);
+            all_physical_printable_cores[CoreType::WORKER].insert(worker_core);
         }
     }
     for (const auto& eth_core : device->ethernet_cores()) {
         CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        all_printable_cores.insert(physical_core);
-    }
-
-    // Core range depends on whether dprint_all_cores flag is set.
-    vector<CoreCoord> print_cores_sanitized;
-    if (tt::llrt::OptionsG.get_dprint_all_cores()) {
-        // Print from all worker cores, cores returned here are guaranteed to be valid.
-        print_cores_sanitized = vector<CoreCoord>(all_printable_cores.begin(), all_printable_cores.end());
-    } else {
-        // Only print from the cores specified by the user.
-        vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores();
-
-        // We should also validate that the cores the user specified are valid worker cores.
-        for (auto core : print_cores) {
-            if (all_printable_cores.count(core) > 0) {
-                print_cores_sanitized.push_back(core);
-            } else {
-                log_warning(
-                    tt::LogMetal,
-                    "TT_METAL_DPRINT_CORES included worker core ({}, {}), which is not a valid coordinate. This coordinate will be ignored by the dprint server.",
-                    core.x,
-                    core.y
-                );
-            }
-        }
+        all_physical_printable_cores[CoreType::ETH].insert(physical_core);
     }
 
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
@@ -329,15 +305,89 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
-    for (auto core : all_printable_cores) {
-        int hart_count = GetNumRiscs(device_id, core);
-        for (int hart_index = 0; hart_index < hart_count; hart_index++) {
-            WriteInitMagic(device_id, core, hart_index, false);
+    for (auto &type_and_cores : all_physical_printable_cores) {
+        for (auto &core : type_and_cores.second) {
+            int hart_count = GetNumRiscs(device_id, core);
+            for (int hart_index = 0; hart_index < hart_count; hart_index++) {
+                WriteInitMagic(device_id, core, hart_index, false);
+            }
         }
     }
+
+    // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
+    // to the server.
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
+    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+            return;
+
+    // Helper lambda to convert CoreType to string for printing purposes.
+    auto core_type_to_str = [](CoreType core_type){
+        switch(core_type) {
+            case CoreType::WORKER:
+                return "worker";
+            case CoreType::ETH:
+                return "ethernet";
+            default:
+                TT_THROW("DPRINT server unrecognized CoreType");
+        }
+    };
+
+    // Core range depends on whether dprint_all_cores flag is set.
+    vector<CoreCoord> print_cores_sanitized;
+    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+        if (tt::llrt::OptionsG.get_dprint_all_cores(core_type)) {
+            // Print from all cores of the given type, cores returned here are guaranteed to be valid.
+            for (CoreCoord phys_core: all_physical_printable_cores[core_type])
+                print_cores_sanitized.push_back(phys_core);
+            log_info(
+                tt::LogMetal,
+                "DPRINT enabled on device {}, all {} cores.",
+                device->id(),
+                core_type_to_str(core_type)
+            );
+        } else {
+            // Only print from the cores specified by the user
+            vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores()[core_type];
+
+            // We should also validate that the cores the user specified are valid worker cores.
+            for (auto logical_core : print_cores) {
+                // Need to convert user-specified logical cores to physical cores, this can throw
+                // if the user gave bad coords.
+                CoreCoord phys_core;
+                bool valid_logical_core = true;
+                try {
+                    phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+                } catch (std::runtime_error& error) {
+                    valid_logical_core = false;
+                }
+                if (valid_logical_core && all_physical_printable_cores[core_type].count(phys_core) > 0) {
+                    print_cores_sanitized.push_back(phys_core);
+                    log_info(
+                        tt::LogMetal,
+                        "DPRINT enabled on device {}, {} core {} (physical {}).",
+                        device->id(),
+                        core_type_to_str(core_type),
+                        logical_core.str(),
+                        phys_core.str()
+                    );
+                } else {
+                    log_warning(
+                        tt::LogMetal,
+                        "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (physical coordinates {}), which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
+                        core_type_to_str(core_type),
+                        logical_core.str(),
+                        valid_logical_core? phys_core.str() : "INVALID",
+                        device->id()
+                    );
+            }
+        }
+        }
+    }
+
     // Write print enable magic for the cores the user specified.
     uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
-    for (auto core : print_cores_sanitized) {
+    for (auto &core : print_cores_sanitized) {
         int hart_count = GetNumRiscs(device_id, core);
         for (int hart_index = 0; hart_index < hart_count; hart_index++) {
             if (hart_mask & (1<<hart_index)) {
@@ -355,6 +405,47 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 } // AttachDevice
 
 void DebugPrintServerContext::DetachDevice(Device* device) {
+    // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
+    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+            return;
+
+    // When we detach a device, we should poll to make sure there's no outstanding prints.
+    chip_id_t chip_id = device->id();
+    uint32_t risc_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
+    bool outstanding_prints = true;
+    while (outstanding_prints && !server_killed_due_to_hang_) {
+        // Polling interval of 1ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        // Check all dprint-enabled cores on this device for outstanding prints.
+        outstanding_prints = false;
+        for (auto &core : device_to_core_range_.at(device)) {
+            for (int risc_id = 0; risc_id < GetNumRiscs(chip_id, core); risc_id++) {
+                if (risc_mask & (1<<risc_id)) {
+                    // No need to check if risc is not dprint-enabled.
+                    if (!CheckInitMagicCleared(chip_id, core, risc_id))
+                    continue;
+
+                    // Check if rpos < wpos, indicating unprocessed prints.
+                    constexpr int eightbytes = 8;
+                    uint32_t base_addr = GetBaseAddr(chip_id, core, risc_id);
+                    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, eightbytes);
+                    uint32_t wpos = from_dev[0], rpos = from_dev[1];
+                    if (rpos < wpos) {
+                        outstanding_prints = true;
+                        break;
+                    }
+                }
+            }
+            // If we already detected outstanding prints, no need to check the rest of the cores.
+            if (outstanding_prints)
+                break;
+        }
+    }
+
+    // Remove the device from relevant data structures.
     device_to_core_range_lock_.lock();
     TT_ASSERT(device_to_core_range_.count(device) > 0, "Device {} not present in DPRINT server but tried removing it!", device->id());
     device_to_core_range_.erase(device);
@@ -461,7 +552,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         int nlen = 0;
         uint32_t i = 0, h = 0, w = 0;
         while (rpos < wpos) {
-            uint8_t code = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
+            auto code = static_cast<DPrintTypeID>(l->data[rpos++]); TT_ASSERT(rpos <= bufsize);
             uint8_t sz = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
             uint8_t* ptr = l->data + rpos;
 
@@ -470,8 +561,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
 
             // we are sharing the same output file between debug print threads for multiple cores
             switch(code) {
-                // TODO(AP): better code index sync with debug_print.h
-                case DEBUG_PRINT_TYPEID_CSTR: // const char*
+                case DPrintCSTR: // const char*
                     // terminating zero was included in size and should be present in the buffer
                     cptr = reinterpret_cast<const char*>(ptr);
                     nlen = strnlen(cptr, 200);
@@ -481,60 +571,90 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         stream << cptr;
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
-                case DEBUG_PRINT_TYPEID_TILESLICE:
+                case DPrintTILESLICE:
                     PrintTileSlice(stream, ptr, hart_id);
                 break;
 
-                case DEBUG_PRINT_TYPEID_ENDL:
+                case DPrintENDL:
                     stream << endl;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_SETW:
+                case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_SETPRECISION:
+                case DPrintSETPRECISION:
                     stream << std::setprecision(*ptr);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_FIXED:
+                case DPrintFIXED:
                     stream << std::fixed;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_DEFAULTFLOAT:
+                case DPrintDEFAULTFLOAT:
                     stream << std::defaultfloat;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_HEX:
+                case DPrintHEX:
                     stream << std::hex;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_OCT:
+                case DPrintOCT:
                     stream << std::oct;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_DEC:
+                case DPrintDEC:
                     stream << std::dec;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_UINT32:
+                case DPrintUINT8:
+                    // iostream default uint8_t printing is as char, not an int
+                    stream << *reinterpret_cast<uint8_t*>(ptr);
+                    TT_ASSERT(sz == 1);
+                break;
+                case DPrintUINT16:
+                    stream << *reinterpret_cast<uint16_t*>(ptr);
+                    TT_ASSERT(sz == 2);
+                break;
+                case DPrintUINT32:
                     stream << *reinterpret_cast<uint32_t*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_FLOAT32:
+                case DPrintUINT64:
+                    stream << *reinterpret_cast<uint64_t*>(ptr);
+                    TT_ASSERT(sz == 8);
+                break;
+                case DPrintINT8:
+                    // For int8_ts, we'll print an number instead of a char.
+                    stream << (int) *reinterpret_cast<int8_t*>(ptr);
+                    TT_ASSERT(sz == 1);
+                break;
+                case DPrintINT16:
+                    stream << *reinterpret_cast<int16_t*>(ptr);
+                    TT_ASSERT(sz == 2);
+                break;
+                case DPrintINT32:
+                    stream << *reinterpret_cast<int32_t*>(ptr);
+                    TT_ASSERT(sz == 4);
+                break;
+                case DPrintINT64:
+                    stream << *reinterpret_cast<int64_t*>(ptr);
+                    TT_ASSERT(sz == 8);
+                break;
+                case DPrintFLOAT32:
                     stream << *reinterpret_cast<float*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_BFLOAT16:
+                case DPrintBFLOAT16:
                     stream << bfloat16_to_float(*reinterpret_cast<uint16_t*>(ptr));
                     TT_ASSERT(sz == 2);
                 break;
-                case DEBUG_PRINT_TYPEID_CHAR:
+                case DPrintCHAR:
                     stream << *reinterpret_cast<char*>(ptr);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_RAISE:
+                case DPrintRAISE:
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
                     // Add this newly raised signals to the set of raised signals.
                     raise_wait_lock_.lock();
@@ -543,7 +663,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     //stream << "\nRaised signal=" << sigval << endl;
                     TT_ASSERT(sz == 4);
                 break;
-                case DEBUG_PRINT_TYPEID_WAIT:
+                case DPrintWAIT:
                     {
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
                     // Given that we break immediately on a wait, this core should never be waiting
@@ -558,14 +678,6 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     //stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
                     TT_ASSERT(sz == 4);
                     }
-                break;
-                case DEBUG_PRINT_TYPEID_INT32:
-                    stream << *reinterpret_cast<int32_t*>(ptr);
-                    TT_ASSERT(sz == 4);
-                break;
-                case DEBUG_PRINT_TYPEID_UINT64:
-                    stream << *reinterpret_cast<uint64_t*>(ptr);
-                    TT_ASSERT(sz == 8);
                 break;
                 default:
                     TT_FATAL("Unexpected debug print type code" && false);
@@ -687,13 +799,7 @@ void DprintServerAttach(Device* device) {
        "Device side profiler is running, cannot start print server"
     );
 
-    // Skip if RTOptions doesn't enable DPRINT for this device
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
-    if (!tt::llrt::OptionsG.get_dprint_all_chips())
-        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
-            return;
-
-    // If no server ir running, create one
+    // If no server is running, create one
     if (!DprintServerIsRunning())
         DebugPrintServerContext* ctx = new DebugPrintServerContext();
 

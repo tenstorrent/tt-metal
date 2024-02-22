@@ -18,6 +18,8 @@ const std::string golden_output =
 R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
+e5551234569123456789
+-17-343-44444-5123456789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -40,11 +42,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
             core,
-            tt_metal::experimental::EthernetConfig{
-                .eth_mode = tt_metal::Eth::RECEIVER,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
         // Run the program
         log_info(

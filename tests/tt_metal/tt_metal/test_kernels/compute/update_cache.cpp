@@ -52,7 +52,7 @@ void MAIN {
             // Compute pops both
             cb_pop_front(untilized_cache2_cb, Wt);
             cb_pop_front(untilized_cache_cb, Wt);
-            tilize_uninit();
+            tilize_uninit(untilized_cache2_cb);
         }
     }
 }

@@ -13,6 +13,7 @@
 #include <vector>
 #include <cstdint>
 #include "tt_metal/common/core_coord.h"
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
 
 namespace tt {
 
@@ -28,8 +29,9 @@ class RunTimeOptions {
     bool watcher_dump_all = false;
     bool watcher_append = false;
 
-    std::vector<CoreCoord> dprint_cores;
-    bool dprint_all_cores = false;
+    std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
+    std::map<CoreType, bool> dprint_all_cores;
+    bool dprint_enabled;
     std::vector<int> dprint_chip_ids;
     bool dprint_all_chips = false;
     uint32_t dprint_riscv_mask = 0;
@@ -63,27 +65,26 @@ class RunTimeOptions {
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
-    inline bool get_dprint_enabled() {
-        return dprint_cores.size() != 0 || dprint_all_cores;
-    }
-    // Note: dprint cores are physical
-    inline std::vector<CoreCoord>& get_dprint_cores() {
+    inline bool get_dprint_enabled() { return dprint_enabled; }
+    inline void set_dprint_enabled(bool enable) { dprint_enabled = enable; }
+    // Note: dprint cores are logical
+    inline std::map<CoreType, std::vector<CoreCoord>>& get_dprint_cores() {
         return dprint_cores;
     }
-    inline void set_dprint_cores(std::vector<CoreCoord> cores) {
+    inline void set_dprint_cores(std::map<CoreType, std::vector<CoreCoord>> cores) {
         dprint_cores = cores;
     }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_dprint_all_cores(bool all_cores) {
-        dprint_all_cores = all_cores;
+    inline void set_dprint_all_cores(CoreType core_type, bool all_cores) {
+        dprint_all_cores[core_type] = all_cores;
     }
-    inline bool get_dprint_all_cores() { return dprint_all_cores; }
+    inline bool get_dprint_all_cores(CoreType core_type) { return dprint_all_cores[core_type]; }
     // Note: core range is inclusive
-    inline void set_dprint_core_range(CoreCoord start, CoreCoord end) {
-        dprint_cores.clear();
+    inline void set_dprint_core_range(CoreCoord start, CoreCoord end, CoreType core_type) {
+        dprint_cores[core_type] = std::vector<CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
-                dprint_cores.push_back({x, y});
+                dprint_cores[core_type].push_back({x, y});
             }
         }
     }
@@ -123,7 +124,7 @@ class RunTimeOptions {
 private:
     // Helper functions to parse DPrint-specific environment vaiables.
     void ParseDPrintEnv();
-    void ParseDPrintCoreRange(const char* env_var);
+    void ParseDPrintCoreRange(const char* env_var, CoreType core_type);
     void ParseDPrintChipIds(const char* env_var);
     void ParseDPrintRiscvMask(const char* env_var);
     void ParseDPrintFileName(const char* env_var);

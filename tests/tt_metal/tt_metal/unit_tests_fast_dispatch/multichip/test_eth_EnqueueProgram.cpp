@@ -53,7 +53,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
         program,
         "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel0.cpp",
         eth_core_coord,
-        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
 
@@ -111,7 +111,7 @@ bool reader_kernel_no_send(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_reader_dram_to_l1.cpp",
         eth_reader_core,
-        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -181,7 +181,7 @@ bool writer_kernel_no_receive(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_writer_l1_to_dram.cpp",
         eth_writer_core,
-        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -264,8 +264,7 @@ bool eth_direct_sender_receiver_kernels(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::SENDER,
+        tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
 
@@ -288,8 +287,7 @@ bool eth_direct_sender_receiver_kernels(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -376,7 +374,7 @@ bool chip_to_chip_dram_buffer_transfer(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_sender.cpp",
         eth_sender_core,
-        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -400,8 +398,7 @@ bool chip_to_chip_dram_buffer_transfer(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_receiver.cpp",
         eth_receiver_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -485,8 +482,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_sender.cpp",
         eth_sender_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0, .compile_args = {(uint32_t)input_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {(uint32_t)input_is_dram}});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -515,10 +511,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_receiver.cpp",
         eth_receiver_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::RECEIVER,
-            .noc = tt_metal::NOC::NOC_1,
-            .compile_args = {(uint32_t)output_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = {(uint32_t)output_is_dram}});
 
     tt_metal::SetRuntimeArgs(
         receiver_program,

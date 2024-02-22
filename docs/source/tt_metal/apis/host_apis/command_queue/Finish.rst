@@ -1,3 +1,5 @@
+.. _tt::tt_metal::Finish:
+
 Finish
 ======
 

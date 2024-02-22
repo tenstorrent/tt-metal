@@ -118,7 +118,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
     //UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
-    PACK(( llk_pack_init() ));
+    PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
@@ -211,14 +211,22 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1)
  */
 ALWI void add_bcast_rows_init_short_post_matmul(uint32_t icb0 = 0, uint32_t icb1 = 1)
 {
+    #ifdef ARCH_GRAYSKULL
+    // math
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW, MATH_FIDELITY>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+
+    // unpacker
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1) ));
 
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    // packer
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
+    #else
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1) ));
     #endif
 }
 

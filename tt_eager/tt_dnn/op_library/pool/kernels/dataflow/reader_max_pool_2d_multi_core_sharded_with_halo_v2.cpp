@@ -6,30 +6,22 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
+#define ENABLE_DEBUG_PRINT 0
 
-// SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
-// SliceRange srt = SliceRange{ .h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 2, .ws = 1 };
+#if ENABLE_DEBUG_PRINT == 1
+    #include "debug/dprint.h"
 
-// // inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-// //     DPRINT << "======" << ENDL();
-// //     for (int32_t r = 0; r < 32; ++ r) {
-// //         SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 64, .ws = 2};
-// //         DPRINT << (uint) r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL();
-// //     }
-// //     DPRINT << "++++++" << ENDL();
-// // }
-
-// inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-//     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-//     for (uint32_t page = 0; page < npages; ++ page) {
-//         DPRINT << start + page << ": ";
-//         for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
-//             DPRINT << BF16(*ptr) << " ";
-//         }
-//         DPRINT << ENDL();
-//     }
-// }
+    inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+        volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+        for (uint32_t page = 0; page < npages; ++ page) {
+            DPRINT << start + page << ": ";
+            for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+                DPRINT << BF16(*ptr) << " ";
+            }
+            DPRINT << ENDL();
+        }
+    }
+#endif
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -72,7 +64,6 @@ void kernel_main() {
     // input tensor height / width / channels
     const int32_t in_w = get_arg_val<int32_t>(6);
     const uint32_t in_cb_nsticks = get_arg_val<uint32_t>(7);
-
 
     // compile time args
     // value of 1 in bf16 in a uin32_t
@@ -123,14 +114,11 @@ void kernel_main() {
             uint32_t stick_offset = top_left_local_index + h_multiples;
             uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
             noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+            // noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
             out_l1_write_addr += in_nbytes_c * window_w;
         }
         noc_async_read_barrier();
-
         cb_push_back(in_cb_id, 1);
-
         ++ counter;
     }
-
-    // DPRINT << "READER DONE!!" << ENDL();
 } // kernel_main()

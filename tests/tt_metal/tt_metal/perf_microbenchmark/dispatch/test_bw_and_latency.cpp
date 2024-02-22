@@ -47,7 +47,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
         log_info(LogTest, "  -bs: batch size in K of data to xfer in one iteration (default {}K)", DEFAULT_BATCH_SIZE_K);
         log_info(LogTest, "  -p: page size (default {})", DEFAULT_PAGE_SIZE);
-        log_info(LogTest, "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, 3:ALL_DRAMs (default 0:PCIe)");
+        log_info(LogTest, "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, 3:ALL_DRAMs, 4:HOST_READ, 5:HOST_WRITE (default 0:PCIe)");
         log_info(LogTest, "  -l: measure latency (default is bandwidth)");
         log_info(LogTest, "  -rx: X of core to issue read (default {})", 1);
         log_info(LogTest, "  -ry: Y of core to issue read (default {})", 0);
@@ -141,6 +141,26 @@ int main(int argc, char **argv) {
                 noc_mem_addr = 0;
             }
             break;
+        case 4:
+            {
+                src_mem = "FROM_L1_TO_HOST";
+                log_info(LogTest, "Host bw test overriding page_count to 1");
+                CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
+                page_count_g = 1;
+                noc_addr_x = w.x;
+                noc_addr_y = w.y;
+            }
+            break;
+        case 5:
+            {
+                src_mem = "FROM_HOST_TO_L1";
+                log_info(LogTest, "Host bw test overriding page_count to 1");
+                CoreCoord w = device->physical_core_from_logical_core(src_worker_g, CoreType::WORKER);
+                page_count_g = 1;
+                noc_addr_x = w.x;
+                noc_addr_y = w.y;
+            }
+            break;
         }
 
         std::map<string, string> defines = {
@@ -173,37 +193,68 @@ int main(int argc, char **argv) {
         }
 
         CoreCoord w = device->physical_core_from_logical_core(worker_g.start, CoreType::WORKER);
-        log_info(LogTest, "Reader core: {}", w.str());
+        log_info(LogTest, "Master core: {}", w.str());
         if (source_mem_g == 3) {
             log_info(LogTest, "Reading: {}", src_mem);
+        } else if (source_mem_g == 4) {
+            log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, w.x, w.y);
+        } else if (source_mem_g == 5) {
+            log_info(LogTest, "Writing: {} - core ({}, {})", src_mem, w.x, w.y);
         } else {
             log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
         }
-        log_info(LogTest, "Using API: {}", read_one_packet_g ? "noc_async_read_one_packet" : "noc_async_read");
-        log_info(LogTest, "Lazy: {}", lazy_g);
-        log_info(LogTest, "Page size ({}): {}", page_size_as_runtime_arg_g ? "runtime arg" : "compile time define", page_size_g);
-        log_info(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
+        if (source_mem_g != 4) {
+            log_info(LogTest, "Using API: {}", read_one_packet_g ? "noc_async_read_one_packet" : "noc_async_read");
+            log_info(LogTest, "Lazy: {}", lazy_g);
+            log_info(LogTest, "Page size ({}): {}", page_size_as_runtime_arg_g ? "runtime arg" : "compile time define", page_size_g);
+            log_info(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
+        }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
-        // Cache stuff
-        for (int i = 0; i < warmup_iterations_g; i++) {
+        std::chrono::duration<double> elapsed_seconds;
+        if (source_mem_g < 4) {
+            // Cache stuff
+            for (int i = 0; i < warmup_iterations_g; i++) {
+                EnqueueProgram(cq, program, false);
+            }
+            Finish(cq);
+
+            if (lazy_g) {
+                tt_metal::detail::SetLazyCommandQueueMode(true);
+            }
+
+            auto start = std::chrono::system_clock::now();
             EnqueueProgram(cq, program, false);
-        }
-        Finish(cq);
+            if (time_just_finish_g) {
+                start = std::chrono::system_clock::now();
+            }
+            Finish(cq);
+            auto end = std::chrono::system_clock::now();
+            elapsed_seconds = (end-start);
+        } else {
+            vector<std::uint32_t> vec;
+            vec.resize(page_size_g / sizeof(uint32_t));
 
-        if (lazy_g) {
-            tt_metal::detail::SetLazyCommandQueueMode(true);
+            for (int i = 0; i < warmup_iterations_g; i++) {
+                if (source_mem_g == 4) {
+                    tt::Cluster::instance().read_core(vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE);
+                } else {
+                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE, vec.size() == 1);
+                }
+            }
+
+            auto start = std::chrono::system_clock::now();
+            for (int i = 0; i < iterations_g; i++) {
+                if (source_mem_g == 4) {
+                    tt::Cluster::instance().read_core(vec, page_size_g, tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE);
+                } else {
+                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE, vec.size() == 1);
+                }
+            }
+            auto end = std::chrono::system_clock::now();
+            elapsed_seconds = (end-start);
         }
 
-        auto start = std::chrono::system_clock::now();
-        EnqueueProgram(cq, program, false);
-        if (time_just_finish_g) {
-            start = std::chrono::system_clock::now();
-        }
-        Finish(cq);
-        auto end = std::chrono::system_clock::now();
-
-        std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {}us", std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count());
         if (latency_g) {
             log_info(LogTest, "Latency: {} us",

@@ -567,8 +567,10 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e. hugepage)
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        detail::DispatchStateCheck(true);
         this->initialize_command_queue();
     } else {
+        detail::DispatchStateCheck(false);
         TT_ASSERT(this->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
@@ -795,12 +797,14 @@ const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, co
 }
 
 HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
+    detail::DispatchStateCheck(true);
     TT_ASSERT( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *hw_command_queues_[cq_id];
 }
 
 CommandQueue& Device::command_queue(size_t cq_id) {
+    detail::DispatchStateCheck(true);
     TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *sw_command_queues_[cq_id];

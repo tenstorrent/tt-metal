@@ -16,23 +16,6 @@
 namespace ckernel {
 
 /**
- * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
- */
-ALWI void copy_tile_to_dst_init_short(uint32_t cbid = 0, bool transpose = false)
-{
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(transpose)  ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)  ));
-}
-/**
- * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset registers.
- */
-ALWI void copy_tile_init()
-{
-    copy_tile_to_dst_init_short();
-    PACK(( llk_init_packer_dest_offset_registers<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
-}
-
-/**
  * Copies a single tile from the DST register buffer at a specified index to a
  * specified CB at a given index. For the out_tile_index to be valid for this
  * call, cb_reserve_back(n) had to be called first to reserve at least some
@@ -62,19 +45,60 @@ ALWI void copy_tile_init()
  * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
-ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, bool transpose = false) {
+ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>() ));
+    // This reconfig call does a reconfig for unpack even if previous data format
+    // is same as new operand data format, which might cause less perf
+    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid) ));
+}
+
+ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid) {
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>() ));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK(( llk_unpack_reconfig_data_format_srca(old_cbid, new_cbid) ));
-    copy_tile_to_dst_init_short(new_cbid, transpose);
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_cbid) ));
+}
+
+ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(1) ));
+    #else
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    #endif
+
+    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid) ));
 }
 
 ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid) {
     #ifdef ARCH_GRAYSKULL
-    copy_tile_to_dst_init_short_with_dt(old_cbid, new_cbid, true);
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(1) ));
     #else
-    copy_tile_to_dst_init_short_with_dt(old_cbid, new_cbid, false);
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     #endif
+
+    UNPACK(( llk_unpack_reconfig_data_format_srca(old_cbid, new_cbid) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_cbid) ));
+}
+
+/**
+ * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
+ */
+ALWI void copy_tile_to_dst_init_short()
+{
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>()  ));
+}
+
+/**
+ * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset registers.
+ */
+ALWI void copy_tile_init()
+{
+    copy_tile_to_dst_init_short();
+    PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
 }
 
 
@@ -99,7 +123,11 @@ ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t old_cbid, uint32
 ALWI void copy_tile(uint32_t icb, uint32_t itile, uint32_t idst)
 {
     UNPACK(( llk_unpack_A<BroadcastType::NONE, false>(icb, itile)  ));
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(idst)  ));
+    #else
     MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf, DST_ACCUM_MODE>(idst)  ));
+    #endif
 }
 
 ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles)
@@ -110,7 +138,7 @@ ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_
     UNPACK(( llk_unpack_A_block<BroadcastType::NONE, false>(icb, start_itile, ntiles, false)  ));
     #endif
 
-    MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf>(start_idst, ntiles)  ));
+    MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf, DST_ACCUM_MODE>(start_idst, ntiles, icb)  ));
 }
 
 }

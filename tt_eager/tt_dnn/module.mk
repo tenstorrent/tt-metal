@@ -95,6 +95,12 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_h/moreh_mean_h.cpp \
+	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_w/moreh_mean_w.cpp \
+	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_nc/moreh_mean_nc.cpp \
+	tt_eager/tt_dnn/op_library/moreh_mean/moreh_mean_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward.cpp \
+	tt_eager/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/multi_core/layernorm_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/layernorm_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.cpp \
@@ -106,6 +112,12 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_h/moreh_norm_h.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_w/moreh_norm_w.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm/moreh_norm_other/moreh_norm_other.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/single_core/moreh_dot_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/moreh_dot_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot_backward/single_core/moreh_dot_backward_op_single_core.cpp \
@@ -114,6 +126,11 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/gamma_beta_grad/moreh_layernorm_backward_gamma_beta_grad.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/moreh_groupnorm_backward_input_grad.cpp \
+	tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/moreh_groupnorm_backward_gamma_beta_grad.cpp \
 	tt_eager/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_nc/moreh_cumsum_nc.cpp \
 	tt_eager/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.cpp \

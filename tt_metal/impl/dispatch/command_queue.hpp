@@ -12,13 +12,11 @@
 #include <fstream>
 
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "jit_build/build.hpp"
+#include "tt_metal/impl/dispatch/lock_free_queue.hpp"
 #include "tt_metal/common/base.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "common/env_lib.hpp"
 #include "noc/noc_parameters.h"
-#include "third_party/taskflow/taskflow/taskflow.hpp"
-#include "common/executor.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt::tt_metal {
@@ -31,7 +29,7 @@ using std::tuple;
 using std::unique_ptr;
 
 // Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_RESTART, INVALID };
+enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, FLUSH, INVALID };
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
@@ -52,29 +50,6 @@ class Command {
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
     virtual const DeviceCommand assemble_device_command(uint32_t buffer_size) = 0;
-};
-
-class EnqueueRestartCommand : public Command {
-   private:
-    Device* device;
-    SystemMemoryManager& manager;
-    uint32_t event;
-    uint32_t command_queue_id;
-   public:
-    constexpr bool has_side_effects() { return true; }
-    EnqueueRestartCommand(
-        uint32_t command_queue_id,
-        Device* device,
-        SystemMemoryManager& manager,
-        uint32_t event
-    );
-
-    const DeviceCommand assemble_device_command(uint32_t dst);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_RESTART; };
-
 };
 
 class EnqueueReadBufferCommand : public Command {
@@ -347,7 +322,6 @@ class Trace {
 
 namespace detail {
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
-void EnqueueRestart(CommandQueue& cq);
 
 /*
  Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
@@ -460,65 +434,85 @@ class HWCommandQueue {
     void finish();
     void issue_wrap();
     void completion_wrap(uint32_t event);
-    void restart();
     void launch(launch_msg_t& msg);
-    friend void detail::EnqueueRestart(CommandQueue& cq);
     friend void EnqueueTrace(Trace& trace, bool blocking);
     friend void EndTrace(Trace& trace);
     friend Trace BeginTrace(CommandQueue& cq);
-    friend void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
-    friend void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
-    friend void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer,
-                                          const void* src, bool blocking);
-    friend void Finish(CommandQueue & cq);
+    friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
+    friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
+    friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
+    friend void FinishImpl(CommandQueue & cq);
     friend class Trace;
 };
 
-class CommandQueue
-{
-    public:
-        CommandQueue () = delete;
-        CommandQueue ( Device * device, uint32_t id) : device_ptr(device), cq_id(id){}
-        ~CommandQueue() {}
 
-        template < class F >
-        tf::AsyncTask& submit ( F && func, std::reference_wrapper< std::shared_future< void > > event ){
-            std::lock_guard<std::mutex> lk(this->mutex);
-            std::tie(this->last, event.get()) = this->last.empty() ? detail::GetExecutor().dependent_async ( std::forward<F>(func) ) : detail::GetExecutor().dependent_async ( std::forward<F>(func), this->last);
-            return this->last;
-        }
+// Common interface for all command queue types
+struct CommandInterface {
+    EnqueueCommandType type;
+    std::optional<bool> blocking;
+    std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
+    std::optional<std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>>> program;
+    std::optional<const void*> src;
+    std::optional<void*> dst;
+    std::optional<std::reference_wrapper<Trace>> trace;
+};
 
-        //WARNING: Exceptions thrown by sub-tasks are retieved via future; the silent versions don't return a future object, and therefore exceptions are lost
-        template < class F >
-        void submit ( F && func){
-            std::lock_guard<std::mutex> lk(this->mutex);
-            this->last = this->last.empty() ? detail::GetExecutor().silent_dependent_async(std::forward<F>(func) ) : detail::GetExecutor().silent_dependent_async( std::forward<F>(func), this->last );
-        }
+class CommandQueue {
+   public:
+    enum class CommandQueueMode {
+        PASSTHROUGH = 0,
+        ASYNC = 1,
+    };
+    CommandQueue() = delete;
+    CommandQueue(Device* device, uint32_t id);
+    ~CommandQueue();
 
-        // template < class F >
-        // auto& submit ( F && func){
-        //     std::lock_guard<std::mutex> lk(this->mutex);
-        //     this->last = this->last.has_value() ? detail::GetExecutor().silent_dependent_async((func), this->last.value()) : detail::GetExecutor().silent_dependent_async( func );
-        //     return this->last.value();
-        // }
+    Device* device() const { return this->device_ptr; }
+    uint32_t id() const { return this->cq_id; }
 
-        Device* device() const {
-            return this->device_ptr;
-        }
-        uint32_t id() const{
-            return this->cq_id;
-        }
+    // Blocking method to wait for all commands to drain from the queue
+    // Optional if used in passthrough mode (async_mode = false)
+    void wait_until_empty();
 
-        void reset() {
-            std::lock_guard<std::mutex> lk(this->mutex);
-            this->last.reset();
-        }
+    // Schedule a command to be run on the device
+    // Blocking if in passthrough mode. Non-blocking if in async mode
+    void run_command(const CommandInterface& command);
 
-    private:
-        std::mutex mutex;
-        tf::AsyncTask last;
-        uint32_t cq_id;
-        Device * device_ptr;
+    // API for setting the mode of the command queue
+    // The environment env counterpart is `TT_METAL_ASYNC_QUEUES`
+    void set_mode(const CommandQueueMode& mode);
+
+    // Reference to the underlying hardware command queue, non-const because side-effects are allowed
+    HWCommandQueue& hw_command_queue();
+
+   private:
+    enum class CommandQueueState {
+        IDLE = 0,
+        RUNNING = 1,
+        TERMINATE = 2,
+    };
+    CommandQueueMode mode = CommandQueue::get_mode();
+    CommandQueueState worker_state = CommandQueueState::IDLE;
+    std::unique_ptr<std::thread> worker_thread;
+    LockFreeQueue<CommandInterface> worker_queue;
+    uint32_t cq_id;
+    Device* device_ptr;
+
+    void start_worker();
+    void stop_worker();
+    void run_worker();
+    void run_command_impl(const CommandInterface& command);
+
+    bool async_mode() { return this->mode == CommandQueueMode::ASYNC; }
+    bool passthrough_mode() { return this->mode == CommandQueueMode::PASSTHROUGH; }
+
+    static CommandQueueMode get_mode() {
+        // Envvar is used for bringup and debug only. Will be removed in the future and should not be relied on in production.
+        int value = parse_env<int>("TT_METAL_CQ_ASYNC_MODE", static_cast<int>(CommandQueueMode::PASSTHROUGH));
+        return static_cast<CommandQueue::CommandQueueMode>(value);
+    }
 };
 
 } // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type);

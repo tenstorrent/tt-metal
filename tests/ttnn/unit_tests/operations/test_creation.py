@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+
+import torch
+import torch.nn as nn
+import ttnn
+
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
+def test_zeros_like(device, input_shape):
+    torch_input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
+    torch_output_tensor = torch.zeros_like(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
+    output_tensor = ttnn.zeros_like(input_tensor)
+    assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
+def test_ones_like(device, input_shape):
+    torch_input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
+    torch_output_tensor = torch.ones_like(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.ones_like(input_tensor)
+    assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
+@pytest.mark.parametrize(
+    "fill_value",
+    [-5, 3, 15, 25],
+)
+def test_full_like(device, input_shape, fill_value):
+    torch_input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
+    torch_output_tensor = torch.full_like(torch_input_tensor, fill_value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.full_like(input_tensor, fill_value=fill_value)
+    assert ttnn.has_storage_type_of(output_tensor, ttnn.DEVICE_STORAGE_TYPE)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
+def test_ones(device, input_shape):
+    torch_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
+
+    tensor = ttnn.ones(input_shape, device=device)
+    assert ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+    tensor = ttnn.to_torch(tensor)
+
+    assert_with_pcc(torch_tensor, tensor, 0.9999)
+    assert torch.allclose(torch_tensor, tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
+def test_zeros(device, input_shape):
+    torch_tensor = torch.zeros(input_shape, dtype=torch.bfloat16)
+
+    tensor = ttnn.zeros(input_shape, device=device)
+    assert ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+    tensor = ttnn.to_torch(tensor)
+
+    assert_with_pcc(torch_tensor, tensor, 0.9999)
+    assert torch.allclose(torch_tensor, tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
+@pytest.mark.parametrize(
+    "fill_value",
+    [-5.25, 0, 1.0],
+)
+def test_full(device, input_shape, fill_value):
+    torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
+
+    tensor = ttnn.full(input_shape, device=device, fill_value=fill_value)
+    assert ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+    tensor = ttnn.to_torch(tensor)
+
+    assert_with_pcc(torch_tensor, tensor, 0.9999)
+    assert torch.allclose(torch_tensor, tensor)

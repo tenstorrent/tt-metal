@@ -37,7 +37,7 @@ inline void tilize_in(
         cb_push_back(out_cb_id, block_w);
         cb_pop_front(in_cb_id, block_w);
     }
-    tilize_uninit();
+    tilize_uninit(in_cb_id);
 }
 
 inline void untilize_out(
@@ -154,7 +154,7 @@ void MAIN {
                     tilize_block(cb_in, 1, cb_x);
                     cb_push_back(cb_x, 1);
                     cb_pop_front(cb_in, 1);
-                    tilize_uninit();
+                    tilize_uninit(cb_in);
                 }
             }
 

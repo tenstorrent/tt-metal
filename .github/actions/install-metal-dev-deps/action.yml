@@ -28,7 +28,6 @@ runs:
       run: |
         DEPENDENCIES=$(jq -r --arg os "${{ inputs.os }}" '.[$os] | .[]' $GITHUB_ACTION_PATH/dependencies.json)
         echo $DEPENDENCIES
-        sudo add-apt-repository ppa:git-core/ppa
         sudo apt update
         sudo apt install $DEPENDENCIES
     - name: Install doxygen

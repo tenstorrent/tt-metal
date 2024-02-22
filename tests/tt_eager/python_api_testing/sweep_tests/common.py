@@ -298,6 +298,30 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             ):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "concat":
+            assert len(start_shape) == 4
+            assert len(end_shape) == 4
+
+            shape_start = start_shape + start_shape
+            shape_end = end_shape + end_shape
+            new_interval = interval + interval
+
+            def _concat_shapes(shape):
+                a_shape = [shape[0], shape[1], shape[2], shape[3]]
+                b_shape = [shape[0], shape[1], shape[2], shape[3]]
+
+                dim = random.randint(0, 3)
+
+                # Concatinating dim is different
+                b_shape[dim] = shape[4 + dim]
+
+                return [a_shape, b_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                shape_start, shape_end, new_interval, _concat_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "layernorm":
             assert len(start_shape) == 4
             assert len(end_shape) == 4
@@ -354,10 +378,34 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 num_embeddings = shape[2]
                 embedding_dim = shape[3]
 
-                input_rows_shape = [batch_size, 1, num_rows, 1]
+                input_rows_shape = [batch_size, 1, 1, num_rows]
                 weights_shape = [1, 1, num_embeddings, embedding_dim]
 
                 return [input_rows_shape, weights_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_embeddings_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
+        elif method == "embeddings-bw":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert len(start_shape) == 4
+            assert len(end_shape) == 4
+
+            def _gen_embeddings_shapes(shape):
+                batch_size = shape[0]
+                # num_rows = shape[3]
+                num_embeddings = shape[2]
+                embedding_dim = shape[3]
+                no_of_embeddings = shape[1] * shape[2]
+
+                input_rows_shape = [batch_size, 1, 1, no_of_embeddings]
+                weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
+                grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
+
+                return [grad_shape, input_rows_shape, weights_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
                 start_shape, end_shape, interval, _gen_embeddings_shapes
@@ -644,6 +692,20 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
                 start_shape, end_shape, interval, _gen_ttnn_layernorm_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+        elif method == "ttnn-rmsnorm":
+            assert len(start_shape) == 2
+            assert len(end_shape) == 2
+
+            def _gen_ttnn_rmsnorm_shapes(shape):
+                input_shape = [shape[0], shape[1]]
+                weights_shape = [shape[1]]
+
+                return [input_shape, weights_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_ttnn_rmsnorm_shapes
             ):
                 yield shapes, datagen_funcs, test_args
         else:

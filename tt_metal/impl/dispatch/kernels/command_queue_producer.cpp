@@ -52,7 +52,6 @@ void kernel_main() {
         uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
         bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
-        uint32_t restart = header->restart;
 
         db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
@@ -61,17 +60,6 @@ void kernel_main() {
             cq_read_interface.issue_fifo_rd_ptr = cq_read_interface.issue_fifo_limit - cq_read_interface.issue_fifo_size;  // Head to beginning of command queue
             cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
             notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
-            continue;
-        } else if (restart) {
-            // Restart read/write pointers
-            issue_queue_size = header->new_issue_queue_size;
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CQ_ISSUE_WRITE_PTR)[0] = issue_queue_start_addr >> 4;
-            setup_issue_queue_read_interface(issue_queue_start_addr, issue_queue_size);
-            notify_host_of_issue_queue_read_pointer<host_issue_queue_read_ptr_addr>();
-            wait_consumer_space_available(db_semaphore_addr);
-            relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, consumer_noc_encoding);
-            update_producer_consumer_sync_semaphores(producer_noc_encoding, consumer_noc_encoding, db_semaphore_addr, get_semaphore(0));
-            db_buf_switch = false; // Resteart the db buf switch as well
             continue;
         }
         program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);

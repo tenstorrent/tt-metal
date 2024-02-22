@@ -54,35 +54,13 @@ struct ComputeConfig {
     std::map<std::string, std::string> defines;
 };
 
-namespace experimental {
 struct EthernetConfig {
-    Eth eth_mode = Eth::SENDER;
-    NOC noc = NOC::NOC_0; // TODO: is this needed?
+    NOC noc = NOC::NOC_0;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
 };
-
-struct SenderEthernetConfig : public EthernetConfig {
-    SenderEthernetConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
-        EthernetConfig{
-            .eth_mode = Eth::SENDER,
-            .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
-            .compile_args = compile_args,
-            .defines = defines} {}
-};
-
-struct ReceiverEthernetConfig : public EthernetConfig {
-    ReceiverEthernetConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
-        EthernetConfig{
-            .eth_mode = Eth::RECEIVER,
-            .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
-            .compile_args = compile_args,
-            .defines = defines} {}
-};
-
-} // namespace tt::tt_metal::experimental
 
 } // namespace tt::tt_metal

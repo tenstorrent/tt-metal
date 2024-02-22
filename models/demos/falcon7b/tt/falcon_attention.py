@@ -124,7 +124,6 @@ class TtFalconAttention(nn.Module):
         self.device = device
         self.state_dict = state_dict
         self.model_config = model_config
-        self.temperature = 0.92
 
         if (self.head_dim * num_heads) != self.hidden_size:
             raise ValueError(
@@ -330,7 +329,6 @@ class TtFalconAttention(nn.Module):
         ### SOFTMAX ###
         ###############
         # TODO: Replace with scaled_softmax_attention_mask from BERT
-        attn_weights = tt_lib.tensor.mul_unary(attn_weights, 1 / self.temperature)
         attn_weights = tt_lib.operations.primary.softmax_in_place(
             attn_weights,
         )

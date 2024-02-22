@@ -61,8 +61,6 @@ def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: 
     output_tensor = ttnn.from_torch(
         output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
     )
-
-    # output_tensor = ttnn.reshape(output_tensor, input_tensor.shape + padding)
     return output_tensor
 
 
@@ -395,13 +393,13 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
         output_tensor = ttnn.Tensor(ttl.tensor.repeat_interleave(ttl_input_tensor, repeats, dim=dim))
         *batch, _, _ = output_tensor.shape
         *_, h, w = input_tensor.shape
-        *_, padded_h, padded_w = input_tensor.shape.padded()
+        *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
         if dim == 2:
             *_, h, _ = output_tensor.shape
-            *_, padded_h, _ = output_tensor.shape.padded()
+            *_, padded_h, _ = output_tensor.shape.with_tile_padding()
         elif dim == 3:
             *_, _, w = output_tensor.shape
-            *_, _, padded_w = output_tensor.shape.padded()
+            *_, _, padded_w = output_tensor.shape.with_tile_padding()
         output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
         return output_tensor
     else:

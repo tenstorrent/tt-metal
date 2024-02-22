@@ -86,7 +86,8 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 
 TEST_P(DeviceParamFixture, DeviceLoadBlankKernels){
     unsigned int num_devices = GetParam();
-    if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
+    unsigned int num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+    if ((arch == tt::ARCH::GRAYSKULL && num_devices > 1) || (num_devices > num_pci_devices)) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);

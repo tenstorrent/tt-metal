@@ -103,8 +103,8 @@ using TSLICE8  = TileSlice<8>;
 using TSLICE32 = TileSlice<32>;
 using TSLICE   = TileSlice<32>;
 
-template<> uint8_t DebugPrintTypeToId<TileSlice<8>>()  { return DEBUG_PRINT_TYPEID_TILESLICE; } // TODO(AP): can we use SFINAE here?
-template<> uint8_t DebugPrintTypeToId<TileSlice<32>>() { return DEBUG_PRINT_TYPEID_TILESLICE; }
+template<> uint8_t DebugPrintTypeToId<TileSlice<8>>()  { return DPrintTILESLICE; } // TODO(AP): can we use SFINAE here?
+template<> uint8_t DebugPrintTypeToId<TileSlice<32>>() { return DPrintTILESLICE; }
 
 template DebugPrinter operator<< <TSLICE8>(DebugPrinter, TSLICE8 val);
 template DebugPrinter operator<< <TSLICE32>(DebugPrinter, TSLICE32 val);

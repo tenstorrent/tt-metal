@@ -106,7 +106,7 @@ bool chip_to_chip_dram_buffer_transfer(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_sender.cpp",
         eth_sender_core,
-        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -130,8 +130,7 @@ bool chip_to_chip_dram_buffer_transfer(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_receiver.cpp",
         eth_receiver_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -219,8 +218,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_sender.cpp",
         eth_sender_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0, .compile_args = {(uint32_t)input_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {(uint32_t)input_is_dram}});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -249,10 +247,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_receiver.cpp",
         eth_receiver_core,
-        tt_metal::experimental::EthernetConfig{
-            .eth_mode = tt_metal::Eth::RECEIVER,
-            .noc = tt_metal::NOC::NOC_1,
-            .compile_args = {(uint32_t)output_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = {(uint32_t)output_is_dram}});
 
     tt_metal::SetRuntimeArgs(
         receiver_program,

@@ -13,6 +13,7 @@
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
@@ -147,10 +148,10 @@ class Shape {
     }
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &padded_shape) :
+    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_tile_padding) :
         rank_(Rank), dimensions_{}, padding_{Rank} {
         for (auto index = 0; index < Rank; index++) {
-            auto padded_dimension = padded_shape[index];
+            auto padded_dimension = shape_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
@@ -176,26 +177,22 @@ class Shape {
     friend std::ostream& operator<<(std::ostream& os, const Shape& shape);
 };
 
-inline std::ostream& operator<<(std::ostream& os, const Shape& padded_shape) {
+inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
+    const auto shape_without_padding = shape.without_padding();
+    const auto &padding = shape.padding();
     os << "Shape([";
-    const auto shape = padded_shape.without_padding();
-    const auto& padding = padded_shape.padding();
-    for (auto i = 0; i < shape.rank(); ++i) {
+    for (auto i = 0; i < shape_without_padding.rank(); ++i) {
         if (i > 0) {
             os << ", ";
         }
-        if (padding[i].front > 0) {
-            os << padding[i].front << " + ";
-        }
-        os << shape[i];
+        os << shape_without_padding[i];
         if (padding[i].back > 0) {
-            os << " + " << padding[i].back;
+            os << "[" << shape[i] << "]";
         }
     }
     os << "])";
     return os;
 }
-
 
 bool operator==(const Shape&, const Shape&);
 bool operator!=(const Shape&, const Shape&);
@@ -247,8 +244,8 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
-    static constexpr auto attribute_names = std::make_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+    static constexpr auto attribute_names = std::make_tuple("memory_config", "device_id");
+    const auto attribute_values() const { return std::make_tuple(this->memory_config(), this->buffer->device()->id()); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -355,33 +352,16 @@ struct RankedShape {
 
     explicit RankedShape(const std::array<uint32_t, Rank> &shape) : rank{Rank}, value{shape} {}
 
-    explicit RankedShape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &padded_shape) :
-        rank{Rank}, value{shape, padded_shape} {}
+    explicit RankedShape(
+        const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
+        rank{Rank}, value{shape, shape_with_tile_padding} {}
 
     explicit RankedShape(
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &padding) :
         rank{Rank}, value{detail::compute_ttl_shape(shape, padding)} {}
 
-    RankedShape<Rank> padded() const {
+    RankedShape<Rank> with_tile_padding() const {
         return RankedShape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
-    }
-
-    RankedShape<Rank> operator+(const std::array<std::array<uint32_t, 2>, Rank> &padding) const {
-        auto shape = this->value;
-        const auto &current_padding = this->value.padding();
-        auto accumulated_padding = padding;
-        for (auto index = 0; index < Rank; index++) {
-            shape[index] += padding[index][0] + padding[index][1];
-            accumulated_padding[index][0] += current_padding[index].front;
-            accumulated_padding[index][1] += current_padding[index].back;
-        }
-        return RankedShape<Rank>{tt::tt_metal::Shape{
-            shape, tt::tt_metal::Padding{accumulated_padding, tt::tt_metal::Padding::PadValue::Any}}};
-    }
-
-    template <std::size_t OtherRank>
-    RankedShape<Rank> operator+(const std::array<std::array<uint32_t, 2>, OtherRank> &padding) const {
-        TT_THROW("Invalid padding");
     }
 
     bool operator==(const RankedShape<Rank> &other) const { return this->value == other.value; }
@@ -395,21 +375,17 @@ struct RankedShape {
 };
 
 template <std::size_t Rank>
-static std::ostream &operator<<(std::ostream &os, const RankedShape<Rank> &self) {
+static std::ostream &operator<<(std::ostream &os, const RankedShape<Rank> &shape) {
+    const auto shape_with_tile_padding = shape.with_tile_padding();
+    const auto &padding = shape.value.padding();
     os << "ttnn.Shape([";
-    const auto shape = self.value.without_padding();
-    const auto &padding = self.value.padding();
-    const auto &padded_shape = self.value;
     for (auto i = 0; i < Rank; ++i) {
         if (i > 0) {
             os << ", ";
         }
-        if (padding[i].front > 0) {
-            os << padding[i].front << " + ";
-        }
         os << shape[i];
         if (padding[i].back > 0) {
-            os << " + " << padding[i].back;
+            os << "[" << shape_with_tile_padding[i] << "]";
         }
     }
     os << "])";
@@ -454,26 +430,22 @@ struct Shape {
     explicit Shape(const std::array<uint32_t, Rank> &shape) : ranked_shape{RankedShape<Rank>{shape}} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &padded_shape) :
-        ranked_shape{RankedShape<Rank>{shape, padded_shape}} {}
+    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_tile_padding) :
+        ranked_shape{RankedShape<Rank>{shape, shape_tile_padding}} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &padding) :
-        ranked_shape{RankedShape<Rank>{shape, padding}} {}
+    explicit Shape(
+        const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
+        ranked_shape{RankedShape<Rank>{shape, tile_padding}} {}
 
     const auto rank() const {
         return std::visit(
             []<std::size_t Rank>(const RankedShape<Rank> &shape) -> const auto { return Rank; }, this->ranked_shape);
     }
 
-    Shape padded() const {
-        return std::visit([](const auto &shape) -> Shape { return Shape(shape.padded()); }, this->ranked_shape);
-    }
-
-    template <std::size_t Rank>
-    Shape operator+(const std::array<std::array<uint32_t, 2>, Rank> &padding) const {
+    Shape with_tile_padding() const {
         return std::visit(
-            [&padding](const auto &shape) -> Shape { return Shape(shape + padding); }, this->ranked_shape);
+            [](const auto &shape) -> Shape { return Shape(shape.with_tile_padding()); }, this->ranked_shape);
     }
 
     bool operator==(const Shape &other) const {
@@ -508,7 +480,7 @@ struct Shape {
 
                     for (auto index = 0; index < Rank; index++) {
                         new_shape[index + num_missing_dims] = shape[index];
-                        new_padded_shape[index + num_missing_dims] = shape.padded()[index];
+                        new_padded_shape[index + num_missing_dims] = shape.with_tile_padding()[index];
                     }
                     return Shape(RankedShape<NewRank>(new_shape, new_padded_shape));
                 }

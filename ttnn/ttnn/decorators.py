@@ -143,16 +143,16 @@ def document_input_tensors(name, function, validate_input_tensors):
 REGISTERED_OPERATIONS = set()
 
 
-def query_all_registered_operations(include_ttl=False):
+def query_all_registered_operations(include_experimental=False):
     sorted_operations = sorted(REGISTERED_OPERATIONS)
 
     ttnn_operations = [
         operation
         for operation in sorted_operations
-        if operation.startswith("ttnn.") and not operation.startswith("ttnn.ttl.")
+        if operation.startswith("ttnn.") and not operation.startswith("ttnn.experimental.")
     ]
-    ttl_operations = [operation for operation in sorted_operations if operation.startswith("ttnn.ttl.")]
-    if include_ttl:
+    ttl_operations = [operation for operation in sorted_operations if operation.startswith("ttnn.experimental.")]
+    if include_experimental:
         return ttnn_operations + ttl_operations
     else:
         return ttnn_operations

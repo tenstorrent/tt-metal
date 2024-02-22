@@ -6,6 +6,7 @@
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
@@ -300,6 +301,30 @@ TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
 
     EnqueueProgram(*this->cmd_queue, program, false);
     Finish(*this->cmd_queue);
+}
+
+}
+
+namespace host_command_queue_tests {
+
+TEST_F(CommandQueueFixture, TestAsyncCommandQueue) {
+    Program program;
+
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+    // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+    // added separately
+    auto dummy_reader_kernel = CreateKernel(
+        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    this->cmd_queue->set_mode(CommandQueue::CommandQueueMode::ASYNC);
+
+    // Use scoper timer to benchmark time for pushing 2 commands
+    {
+        tt::ScopedTimer timer("AsyncCommandQueue");
+        EnqueueProgram(*this->cmd_queue, program, false);
+        Finish(*this->cmd_queue);
+    }
 }
 
 }

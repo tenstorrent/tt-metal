@@ -17,6 +17,7 @@
 
 #include <optional>
 #include "tensor/tensor_impl_wrapper.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -70,14 +71,15 @@ std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_
         return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
     } else if constexpr (std::is_same_v<DataType, float>) {
         std::vector<uint32_t> uint32_data;
-        assert(data_to_pack.size() % 2 == 0);
-        for (auto i = 0; i < data_to_pack.size(); i += 2) {
-            auto float_val1 = data_to_pack[i];
-            auto float_val2 = data_to_pack[i + 1];
-            auto bfloat_val1 = bfloat16(float_val1);
-            auto bfloat_val2 = bfloat16(float_val2);
-            auto uint32_val = pack_two_bfloat16_into_uint32({bfloat_val1, bfloat_val2});
-            uint32_data.push_back(uint32_val);
+        union float_uint32_convert {
+            uint32_t u;
+            float f;
+            float_uint32_convert() : u(0) {}
+        };
+        for (auto i = 0; i < data_to_pack.size(); i ++) {
+            float_uint32_convert a;
+            a.f = data_to_pack[i];
+            uint32_data.push_back(a.u);
         }
         return uint32_data;
     } else {
@@ -99,13 +101,16 @@ std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
     } else if constexpr (std::is_same_v<DataType, bfloat16>) {
         return unpack_uint32_vec_into_bfloat16_vec(data_to_unpack);
     } else if constexpr (std::is_same_v<DataType, float>) {
+        union float_uint32_convert {
+            uint32_t u;
+            float f;
+            float_uint32_convert() : u(0) {}
+        };
         std::vector<float> float_data;
         for (auto i = 0; i < data_to_unpack.size(); i++) {
-            auto unpacked = unpack_two_bfloat16_from_uint32(data_to_unpack[i]);
-            auto float_val1 = unpacked.first.to_float();
-            auto float_val2 = unpacked.second.to_float();
-            float_data.push_back(float_val1);
-            float_data.push_back(float_val2);
+            float_uint32_convert a;
+            a.u = data_to_unpack[i];
+            float_data.push_back(a.f);
         }
         return float_data;
     } else {
@@ -127,7 +132,7 @@ constexpr inline uint32_t packed_buffer_size_bytes(uint32_t volume_unpacked_data
 // Specialization for float because it gets converted to bfloat16 before being packed
 template <>
 constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpacked_data) {
-    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(bfloat16);
+    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
@@ -448,8 +453,8 @@ inline void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer
 }
 
 template <typename T, template<typename> typename BufferType>
-inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape,
-            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec) {
+inline DeviceBuffer initialize_data_on_device(BufferType<T>& data_to_write, Device* device, const Shape& shape,
+            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec, std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt ) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
@@ -457,7 +462,7 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        write_data_to_device_buffer<T>(device->command_queue(), data_to_write, device_buffer);
+        write_data_to_device_buffer<T>(queue.has_value() ? queue.value().get() : device->command_queue(), data_to_write, device_buffer);
     } else {
         write_data_to_device_buffer<T>(data_to_write, *device_buffer);
     }
@@ -466,7 +471,7 @@ inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write
 }
 
 template <typename T>
-inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec) {
+inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec, std::optional<std::reference_wrapper<CommandQueue> >queue) {
 
     return std::visit(
         [&device, &shape, &data_type, &layout, memory_config, shard_spec] (auto&& storage) -> DeviceBuffer {
@@ -564,7 +569,7 @@ inline Tensor to_host_sharded(const Tensor &tensor) {
 
 
 template <typename T>
-inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
+inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config, std::optional<std::reference_wrapper<CommandQueue> > queue) {
     TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
     if (tensor.storage_type() ==  StorageType::OWNED) {
         TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
@@ -588,7 +593,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.storage(), target_device, shape,
         data_type, layout, memory_config,
-        shard_spec_buffer_opt
+        shard_spec_buffer_opt, queue
     );
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
@@ -924,27 +929,6 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
             }
         },
         tensor.storage());
-}
-
-template <typename DataType>
-void memcpy(Tensor& dst, const Tensor& src) {
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    TT_ASSERT(dst.dtype() == src.dtype());
-    TT_ASSERT(dst.layout() == src.layout());
-
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        EnqueueReadBuffer(
-            src.device()->command_queue(), src.device_buffer(), get_raw_host_data_ptr(dst), true);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        EnqueueWriteBuffer(
-            dst.device()->command_queue(), dst.device_buffer(), get_raw_host_data_ptr(src), false);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
 }
 
 }  // namespace tensor_impl

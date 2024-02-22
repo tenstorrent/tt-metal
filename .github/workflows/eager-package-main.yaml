@@ -32,14 +32,14 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
           lfs: false
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.os }}
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Set up end-to-end tests environment
@@ -69,11 +69,11 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-hw-info.arch }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
           lfs: false
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
       - name: Set up end-to-end tests environment

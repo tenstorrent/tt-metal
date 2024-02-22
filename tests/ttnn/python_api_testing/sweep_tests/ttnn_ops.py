@@ -218,7 +218,9 @@ def linear(x, weight, bias=None, *args, device, dtype, layout, input_mem_config,
     else:
         tt_bias = None
 
-    t1 = ttnn.linear(t0, tt_weight, bias=tt_bias, dtype=ttnn.bfloat16, core_grid=(batch_size, num_cores_x))
+    t1 = ttnn.linear(
+        t0, tt_weight, bias=tt_bias, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x)
+    )
     return ttnn_tensor_to_torch(t1, output_mem_config)
 
 
@@ -348,3 +350,38 @@ def attention_softmax(
     t2 = ttnn.transformer.attention_softmax(t0, head_size=scalar, attention_mask=t1)
 
     return ttnn_tensor_to_torch(t2, output_mem_config)
+
+
+def rmsnorm(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
+
+    t2 = ttnn.rms_norm(t0, t1)
+
+    return ttnn_tensor_to_torch(t2, output_mem_config)
+
+
+def transformer_concatenate_heads(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transformer.concatenate_heads(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)

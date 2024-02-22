@@ -192,6 +192,16 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
     return make_parameter_dict(parameters)
 
 
+torch_dtype_to_ttnn_dtype = {
+    torch.int16: ttnn.uint16,
+    torch.int32: ttnn.uint32,
+    torch.int64: ttnn.uint32,
+    torch.bfloat16: ttnn.bfloat16,
+    torch.float32: ttnn.bfloat16,
+    torch.float64: ttnn.bfloat16,
+}
+
+
 def convert_torch_model_to_ttnn_model(
     model,
     *,
@@ -234,6 +244,7 @@ def convert_torch_model_to_ttnn_model(
     named_children = list(model.named_children())
     named_parameters = list((name, parameter) for name, parameter in model.named_parameters() if "." not in name)
 
+    parameters = make_parameter_dict({})
     if convert_to_ttnn(model, name):
         default_preprocessor_parameters = default_preprocessor(model, name, ttnn_module_args)
         if default_preprocessor_parameters:
@@ -242,16 +253,23 @@ def convert_torch_model_to_ttnn_model(
                     f"Not all children or parameters were converted using default_preprocessor_parameters!"
                 )
             return make_parameter_dict(default_preprocessor_parameters)
-
-    if not named_children:
+        else:
+            for parameter_name, parameter in named_parameters:
+                parameters[parameter_name] = ttnn.from_torch(
+                    parameter, dtype=torch_dtype_to_ttnn_dtype[parameter.dtype]
+                )
+    else:
         if isinstance(model, torch.nn.Linear):
             parameters = {"weight": model.weight.T.contiguous()}
             if model.bias is not None:
                 parameters["bias"] = model.bias
-            return make_parameter_dict(parameters)
-        return make_parameter_dict(dict(model.named_parameters()))
+        else:
+            for parameter_name, parameter in named_parameters:
+                parameters[parameter_name] = parameter
 
-    parameters = {}
+    if not named_children:
+        return make_parameter_dict(parameters)
+
     for child_name, child in named_children:
         if child_name.isdigit():
             child_name = int(child_name)
@@ -260,24 +278,28 @@ def convert_torch_model_to_ttnn_model(
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
             name=f"{name}.{child_name}" if name else child_name,
-            ttnn_module_args=ttnn_module_args[child_name] if ttnn_module_args is not None else None,
+            ttnn_module_args=ttnn_module_args.get(child_name, None) if ttnn_module_args is not None else None,
         )
         if child_parameters:
             parameters[child_name] = child_parameters
 
-    for parameter_name, parameter in named_parameters:
-        dtype = {
-            torch.int16: ttnn.uint16,
-            torch.int32: ttnn.uint32,
-            torch.int64: ttnn.uint32,
-            torch.bfloat16: ttnn.bfloat16,
-            torch.float32: ttnn.bfloat16,
-            torch.float64: ttnn.bfloat16,
-        }[parameter.dtype]
-        parameters[parameter_name] = ttnn.from_torch(parameter, dtype=dtype)
+    return parameters
 
-    parameters = make_parameter_dict(parameters)
 
+def preprocess_remaining_children_and_parameters(
+    model, name, convert_to_ttnn, custom_preprocessor, parameters, ttnn_module_args, *, already_preprocessed_children
+):
+    named_parameters = tuple((name, parameter) for name, parameter in model.named_parameters() if "." not in name)
+    for child_name, child in tuple(model.named_children()) + named_parameters:
+        if child_name in already_preprocessed_children:
+            continue
+        parameters[child_name] = convert_torch_model_to_ttnn_model(
+            child,
+            name=name,
+            convert_to_ttnn=convert_to_ttnn,
+            custom_preprocessor=custom_preprocessor,
+            ttnn_module_args=ttnn_module_args.get(child_name, None),
+        )
     return parameters
 
 
@@ -289,12 +311,11 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
 
         extension = path.suffix
         name = path.stem
+        if str(name).isdigit():
+            name = int(name)
 
         if path.is_dir():
             parameters = _load_parameters(path)
-            if all(str(key).isdigit() for key in parameters):
-                parameters = {int(key): value for key, value in parameters.items()}
-                parameters = ParameterList([parameters[index] for index in sorted(parameters.keys())])
             output[name] = parameters
         elif extension == ".bin":
             output[name] = ttnn.load_tensor(path)
@@ -315,7 +336,7 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: ParameterDict) 
     model_cache_path.mkdir(parents=True)
     for name, value in parameters.items():
         if isinstance(value, ParameterDict):
-            _dump_parameters(model_cache_path / name, value)
+            _dump_parameters(model_cache_path / f"{name}", value)
         elif isinstance(value, ParameterList):
             for index, element in enumerate(value):
                 _dump_parameters(model_cache_path / name / str(index), element)
@@ -391,18 +412,6 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    if shutil.which("dot") is not None:
-        file_name = ttnn.TMP_DIR / "model_graph.svg"
-        logger.info(f"Dumping graph of the model to {file_name}")
-        torchtrail.visualize(output, file_name=file_name)
-
-    if isinstance(output, torch.Tensor):
-        graph = output.graph
-    elif isinstance(output, tuple):
-        graph = torchtrail.multidigraph.compose_all(*(value.graph for value in output))
-    else:
-        raise RuntimeError(f"Unsupported output type: {type(output)}")
-
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
         for node in graph:
@@ -452,12 +461,15 @@ def infer_ttnn_module_args(*, model, run_model, device):
 
         return make_dot_access_dict(ttnn_module_args, ignore_types=(ModuleArgs,))
 
-    ttnn_module_args = _infer_ttnn_module_args(graph)
+    ttnn_module_args = _infer_ttnn_module_args(torchtrail.get_graph(output))
     return ttnn_module_args[""]
 
 
 def merge_ttnn_module_args_into_parameters(parameters: dict, ttnn_module_args: dict, path=[]):
     if isinstance(ttnn_module_args, ModuleArgs):
+        for key, value in list(ttnn_module_args.items()):
+            if isinstance(value, ttnn.Device):
+                del ttnn_module_args[key]
         parameters["ttnn_module_args"] = ttnn_module_args
     else:
         for key in parameters:
@@ -500,7 +512,7 @@ def preprocess_model(
     device: Optional[ttnn.Device] = None,
     prefix: str = "",
     run_model: Optional[Callable],
-    reader_patterns_cache: Optional[dict],
+    reader_patterns_cache: Optional[dict] = None,
 ) -> ParameterDict:
     """
 
@@ -520,8 +532,11 @@ def preprocess_model(
         * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
     """
 
-    if not ttnn.TTNN_ENABLE_MODEL_CACHE:
-        logger.warning("ttnn model cache can be enabled using TTNN_ENABLE_MODEL_CACHE=True")
+    if reader_patterns_cache is None:
+        reader_patterns_cache = {}
+
+    if model_name is None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
+        logger.warning("ttnn: model cache can be enabled using TTNN_ENABLE_MODEL_CACHE=True")
 
     if convert_to_ttnn is None:
 
@@ -604,6 +619,7 @@ def preprocess_model(
                         bias=model.bias if "bias" in model else None,
                         reader_patterns_cache=reader_patterns_cache,
                         using_parameters_cache=True,
+                        device=device,
                     )
                 elif isinstance(model.ttnn_module_args, MaxPool2dArgs):
                     return ttnn.MaxPool2d(

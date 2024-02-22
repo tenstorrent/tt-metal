@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,13 +18,13 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t num_cols_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t origin_H = get_compile_time_arg_val(1);
-    constexpr uint32_t NCHt = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(4) == 1;
-    constexpr bool beta_grad_has_value = get_compile_time_arg_val(5) == 1;
-    constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(6) == 1;
-
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
+    constexpr uint32_t origin_W = get_compile_time_arg_val(2);
+    constexpr uint32_t NCHt = get_compile_time_arg_val(3);
+    constexpr uint32_t Wt = get_compile_time_arg_val(4);
+    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(5) == 1;
+    constexpr bool beta_grad_has_value = get_compile_time_arg_val(6) == 1;
+    constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(7) == 1;
+    constexpr bool is_groupnorm = get_compile_time_arg_val(8) == 1;
 
     constexpr auto cb_dy = tt::CB::c_in0;      // output_grad(==dy)
     constexpr auto cb_x = tt::CB::c_in1;       // input(==x)
@@ -32,6 +32,7 @@ void MAIN {
     constexpr auto cb_rstd = tt::CB::c_in3;    // rstd
     constexpr auto cb_scaler = tt::CB::c_in4;  // scaler
     constexpr auto cb_mask_h = tt::CB::c_in5;  // mask_h
+    constexpr auto cb_mask_w = tt::CB::c_in6;  // mask_w
 
     // Sum[y * dy]
     constexpr auto cb_dgamma = tt::CB::c_out0;  // gamma_grad(==dgamma)
@@ -49,22 +50,44 @@ void MAIN {
 
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_scaler, onetile);  // comes from the reader
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
 
     constexpr uint32_t TILE_H = 32;
+    constexpr uint32_t TILE_W = 32;
 
-    constexpr bool do_mask_h = (origin_H % TILE_H) != 0 && is_lastdim_layernorm;
+    constexpr bool do_mask_h = (origin_H % TILE_H) != 0 && (is_lastdim_layernorm || is_groupnorm);
     constexpr uint32_t origin_Ht = (origin_H + TILE_H - 1) / TILE_H;
+    constexpr uint32_t Ht = origin_Ht;
+
+    constexpr bool do_mask_w = (origin_W % TILE_W) != 0 && is_groupnorm;
+    constexpr uint32_t origin_Wt = (origin_W + TILE_W - 1) / TILE_W;
+
+    constexpr uint32_t HtWt = Ht * Wt;
+
+    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
+
+    cb_wait_front(cb_scaler, onetile);  // comes from the reader
 
     if (do_mask_h) {
         cb_wait_front(cb_mask_h, onetile);
     }
+    if (do_mask_w) {
+        cb_wait_front(cb_mask_w, onetile);
+    }
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
+    uint32_t h_idx;
+    uint32_t w_idx;
+    for (uint32_t outer_idx = 0; outer_idx < num_cols_per_core; outer_idx++) {
+        for (uint32_t inner_idx = 0; inner_idx < NCHt; inner_idx++) {
+            if (is_groupnorm) {
+                h_idx = (inner_idx % HtWt) / Wt;
+                w_idx = (inner_idx % HtWt) % Wt;
+            } else {
+                h_idx = inner_idx;
+                w_idx = outer_idx;
+            }
 
-    for (uint32_t w_idx = 0; w_idx < num_cols_per_core; w_idx++) {
-        for (uint32_t h_idx = 0; h_idx < NCHt; h_idx++) {
             // Compute cb_dycopy
             // deepcopy and mask(optional)
             ACQ();
@@ -82,6 +105,14 @@ void MAIN {
                 mask_tile(dst0, dst1);
             }
 
+            if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
+                copy_tile_init();
+                copy_tile(cb_mask_w, 0, dst1);
+
+                mask_tile_init();
+                mask_tile(dst0, dst1);
+            }
+
             pack_tile(dst0, cb_dycopy);
 
             cb_pop_front(cb_dy, onetile);
@@ -91,7 +122,7 @@ void MAIN {
             // Compute cb_dyadd
             cb_wait_front(cb_dycopy, onetile);
             if (beta_grad_has_value) {
-                if (h_idx == 0) {
+                if (inner_idx == 0) {
                     ACQ();
                     cb_reserve_back(cb_dyadd, onetile);
 
@@ -138,6 +169,14 @@ void MAIN {
                 if (do_mask_h && ((h_idx + 1) % origin_Ht == 0)) {
                     copy_tile_init();
                     copy_tile(cb_mask_h, 0, dst1);
+
+                    mask_tile_init();
+                    mask_tile(dst0, dst1);
+                }
+
+                if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
+                    copy_tile_init();
+                    copy_tile(cb_mask_w, 0, dst1);
 
                     mask_tile_init();
                     mask_tile(dst0, dst1);
@@ -205,7 +244,7 @@ void MAIN {
                 REL();
 
                 // Compute cb_ydyadd
-                if (h_idx == 0) {
+                if (inner_idx == 0) {
                     ACQ();
                     cb_wait_front(cb_ydy, onetile);
                     cb_reserve_back(cb_ydyadd, onetile);
@@ -237,7 +276,7 @@ void MAIN {
             }  // gamma_grad_has_value
 
             cb_pop_front(cb_dycopy, onetile);
-        }  // h_idx loop
+        }  // inner_idx loop
 
         if (gamma_grad_has_value) {
             // Compute cb_dgamma
@@ -245,7 +284,7 @@ void MAIN {
             cb_wait_front(cb_ydyadd, onetile);
             cb_reserve_back(cb_dgamma, onetile);
 
-            if (is_lastdim_layernorm) {
+            if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
                 reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
                 reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, 0, 0, dst0);
@@ -269,7 +308,7 @@ void MAIN {
             cb_wait_front(cb_dyadd, onetile);
             cb_reserve_back(cb_dbeta, onetile);
 
-            if (is_lastdim_layernorm) {
+            if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
                 reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
                 reduce_tile(REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, 0, 0, dst0);
@@ -287,11 +326,15 @@ void MAIN {
             REL();
         }  // beta_grad_has_value
 
-    }  // w_idx loop
+    }  // outer_idx loop
     cb_pop_front(cb_scaler, onetile);
 
     if (do_mask_h) {
         cb_pop_front(cb_mask_h, onetile);
     }
+    if (do_mask_w) {
+        cb_pop_front(cb_mask_w, onetile);
+    }
+
 }  // void MAIN
 }  // namespace NAMESPACE

@@ -32,7 +32,6 @@ def prepare_conv_input_and_copy_to_device_interleaved(
     tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
 
     if not use_shallow_conv_variant:
-        tt_input_tensor_on_device = ttnn.pad_to_tile(tt_input_tensor_on_device)
         tt_input_tensor_on_device = ttnn.to_layout(tt_input_tensor_on_device, ttnn.TILE_LAYOUT)
     return tt_input_tensor_on_device
 
@@ -503,6 +502,8 @@ def test_resnet50_conv_wh(
         (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # 1x1 conv
+        (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, False, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -536,7 +537,7 @@ def test_sd_conv(
     config_override,
     enable_auto_formatting,
 ):
-    if input_channels > 1280 or (input_channels > 640 and input_height > 16):
+    if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
         if enable_auto_formatting:
             pytest.skip("Not running split SD conv with auto formatting")
         run_conv_with_split(

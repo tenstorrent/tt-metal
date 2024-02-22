@@ -34,9 +34,9 @@ def main():
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
 
-    device = ttnn.open(0)
+    device = ttnn.open_device(device_id=0)
     run_failed_and_crashed_tests(device=device, stepwise=stepwise, include=include, exclude=exclude)
-    ttnn.close(device)
+    ttnn.close_device(device)
 
 
 if __name__ == "__main__":

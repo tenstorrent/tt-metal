@@ -15,7 +15,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+    - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@2.0.0
     - name: Set up dynamic env vars for build
       run: |
         echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -29,7 +29,7 @@ runs:
         ./tests/scripts/run_tests.sh --tt-arch ${{ arch }} --pipeline-type stress_post_commit --dispatch-mode ${{ dispatch }}
     - name: Upload watcher log
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: watcher-log-${{ arch }}-${{ machine }}
         path: built/watcher.log
