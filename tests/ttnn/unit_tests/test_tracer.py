@@ -7,10 +7,9 @@ import pytest
 import networkx as nx
 import torch
 import transformers
-from torchtrail.multidigraph import to_networkx
 
 import ttnn
-from ttnn.tracer import trace, visualize
+from ttnn.tracer import trace, visualize, get_graph, to_networkx
 
 from models.utility_functions import skip_for_wormhole_b0
 
@@ -36,7 +35,7 @@ def test_reshape():
         tensor = ttnn.reshape(tensor, (2, 4, 32))
         tensor = ttnn.to_torch(tensor)
 
-    assert len(tensor.graph) == 4
+    assert len(get_graph(tensor)) == 4
     visualize(tensor)
 
 

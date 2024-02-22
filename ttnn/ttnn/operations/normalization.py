@@ -288,68 +288,22 @@ def group_norm(
         if bias is not None:
             bias = ttnn.unsqueeze_to_4D(bias)
 
-        if weight is not None and bias is not None:
-            output_tensor = ttl.operations.primary.groupnorm(
-                input_tensor.value,
-                num_groups,
-                epsilon,
-                weight.value,
-                bias.value,
-                output_mem_config=memory_config,
-                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-                    out_data_format=output_dtype,
-                    inplace=False
-                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
-                    else True,
-                ),
-            )
-        elif weight is not None:
-            output_tensor = ttl.operations.primary.groupnorm(
-                input_tensor.value,
-                num_groups,
-                epsilon,
-                weight.value,
-                output_mem_config=memory_config,
-                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-                    out_data_format=output_dtype,
-                    inplace=False
-                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
-                    else True,
-                ),
-            )
-        elif bias is not None:
-            output_tensor = ttl.operations.primary.groupnorm(
-                input_tensor.value,
-                num_groups,
-                epsilon,
-                bias.value,
-                output_mem_config=memory_config,
-                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-                    out_data_format=output_dtype,
-                    inplace=False
-                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
-                    else True,
-                ),
-            )
-        else:
-            output_tensor = ttl.operations.primary.groupnorm(
-                input_tensor.value,
-                num_groups,
-                epsilon,
-                output_mem_config=memory_config,
-                program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-                    out_data_format=output_dtype,
-                    inplace=False
-                    if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
-                    else True,
-                ),
-            )
-
-        return ttnn.Tensor(output_tensor)
+        output_tensor = ttnn.experimental.operations.primary.groupnorm(
+            input_tensor,
+            num_groups,
+            epsilon,
+            weight,
+            bias,
+            output_mem_config=memory_config,
+            program_config=ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+                out_data_format=output_dtype,
+                inplace=False
+                if (input_tensor.layout == ttnn.TILE_LAYOUT and input_tensor.dtype == output_dtype)
+                else True,
+            ),
+        )
+        return output_tensor
 
     else:
         output = _torch_group_norm(input_tensor, num_groups=num_groups, epsilon=epsilon, weight=weight, bias=bias)
