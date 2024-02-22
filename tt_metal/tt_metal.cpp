@@ -681,22 +681,19 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 }
 
 
-std::shared_ptr<Buffer> CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> &config)
-{
-    if  (std::holds_alternative<InterleavedBufferConfig>(config)) {
-        auto buff_config = std::get<InterleavedBufferConfig>(config);
-        return std::make_shared<Buffer> (
-                    buff_config.device, buff_config.size, buff_config.page_size,
-                    buff_config.buffer_type, buff_config.buffer_layout
-                    );
-    }
-    else {
-        auto buff_config = std::get<ShardedBufferConfig>(config);
-        return std::make_shared<Buffer>(
-                        buff_config.device, buff_config.size, buff_config.page_size,
-                        buff_config.buffer_type, buff_config.buffer_layout, buff_config.shard_parameters
-                    );
-    }
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
+    return std::make_shared<Buffer>(
+        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout);
+}
+
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
+    return std::make_shared<Buffer>(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
