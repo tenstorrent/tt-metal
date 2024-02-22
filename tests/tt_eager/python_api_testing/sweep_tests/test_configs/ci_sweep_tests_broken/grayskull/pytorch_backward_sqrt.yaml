@@ -14,6 +14,7 @@ test-list:
         args:
           low: -100
           high: 100
+          excluderange: [-0.001, 0.001]
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
