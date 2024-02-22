@@ -26,6 +26,12 @@ def update_ttnn_module_args(ttnn_module_args):
 def custom_preprocessor(model, name, ttnn_module_args):
     parameters = {}
     if isinstance(model, UNet):
+        ttnn_module_args.c1["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c1_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c1_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c1["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c1_2["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1_2["activation"] = "relu"  # Fuse relu with conv1
         ttnn_module_args.c1["deallocate_activation"] = True
@@ -33,18 +39,38 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
         ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
 
+        ttnn_module_args.c2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c2_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c2_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c2["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c2_2["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c2["activation"] = "relu"  # Fuse relu with conv2
         ttnn_module_args.c2_2["activation"] = "relu"  # Fuse relu with conv2
         ttnn_module_args.c2["deallocate_activation"] = True
         ttnn_module_args.c2_2["deallocate_activation"] = True
         ttnn_module_args.c2["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c2_2["conv_blocking_and_parallelization_config_override"] = None
+
+        ttnn_module_args.c3["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c3_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c3["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c3_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c3["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c3_2["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c3["activation"] = "relu"  # Fuse relu with conv3
         ttnn_module_args.c3_2["activation"] = "relu"  # Fuse relu with conv3
         ttnn_module_args.c3["deallocate_activation"] = True
         ttnn_module_args.c3_2["deallocate_activation"] = True
         ttnn_module_args.c3["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c3_2["conv_blocking_and_parallelization_config_override"] = None
+
+        ttnn_module_args.c4["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c4_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c4["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c4_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c4["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c4_2["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c4["activation"] = "relu"  # Fuse relu with conv4
         ttnn_module_args.c4_2["activation"] = "relu"  # Fuse relu with conv4
         ttnn_module_args.c4["deallocate_activation"] = True
@@ -52,6 +78,12 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c4["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
 
+        ttnn_module_args.bnc["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.bnc_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.bnc["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.bnc_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.bnc["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.bnc_2["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.bnc["activation"] = "relu"  # Fuse relu with bottle neck conv
         ttnn_module_args.bnc_2["activation"] = "relu"  # Fuse relu with bottle neck conv
         ttnn_module_args.bnc["deallocate_activation"] = True
@@ -59,6 +91,15 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = None
 
+        ttnn_module_args.c5["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c5_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c5_3["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c5["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c5_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c5_3["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c5["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c5_2["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c5_3["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c5["activation"] = "relu"  # Fuse relu with conv5
         ttnn_module_args.c5_2["activation"] = "relu"  # Fuse relu with conv5
         ttnn_module_args.c5_3["activation"] = "relu"  # Fuse relu with conv5
@@ -69,6 +110,15 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c5_2["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c5_3["conv_blocking_and_parallelization_config_override"] = None
 
+        ttnn_module_args.c6["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c6_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c6_3["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c6["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c6_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c6_3["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c6["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c6_2["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c6_3["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c6["activation"] = "relu"  # Fuse relu with conv6
         ttnn_module_args.c6_2["activation"] = "relu"  # Fuse relu with conv6
         ttnn_module_args.c6_3["activation"] = "relu"  # Fuse relu with conv6
@@ -79,6 +129,15 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c6_2["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c6_3["conv_blocking_and_parallelization_config_override"] = None
 
+        ttnn_module_args.c7["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c7_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c7_3["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c7["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c7_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c7_3["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c7["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c7_2["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c7_3["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c7["activation"] = "relu"  # Fuse relu with conv7
         ttnn_module_args.c7_2["activation"] = "relu"  # Fuse relu with conv7
         ttnn_module_args.c7_3["activation"] = "relu"  # Fuse relu with conv7
@@ -89,6 +148,15 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c7_2["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c7_3["conv_blocking_and_parallelization_config_override"] = None
 
+        ttnn_module_args.c8["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c8_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c8_3["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c8["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c8_2["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c8_3["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c8["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c8_2["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.c8_3["weights_dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c8["activation"] = "relu"  # Fuse relu with conv8
         ttnn_module_args.c8_2["activation"] = "relu"  # Fuse relu with conv8
         ttnn_module_args.c8_3["activation"] = "relu"  # Fuse relu with conv8
