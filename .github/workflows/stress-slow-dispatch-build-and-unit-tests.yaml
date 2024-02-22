@@ -39,7 +39,7 @@ jobs:
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode slow
       - name: Upload watcher log
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: watcher-log-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: built/watcher.log

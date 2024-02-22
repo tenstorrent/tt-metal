@@ -32,7 +32,7 @@ jobs:
           os: ${{ inputs.os }}
       - name: Clean up dirty files
         run: git clean -f -d
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.8'
           cache: 'pip'
@@ -49,7 +49,7 @@ jobs:
       - name: Build Python package distribution
         run: python -m build
       - name: Upload distribution as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
           path: dist/
