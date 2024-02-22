@@ -4,11 +4,18 @@
 
 import pytest
 import torch
+from loguru import logger
 
 import tt_lib as ttl
-from models.utility_functions import untilize
+from models.utility_functions import untilize, comp_pcc
+from models.utility_functions import is_grayskull
 
 
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    ids=["bfloat16", "float"],
+)
 @pytest.mark.parametrize(
     "nb, nc, nh, nw",
     (
@@ -30,13 +37,20 @@ from models.utility_functions import untilize
         (1, 1, 3136, 2),
     ),
 )
-def test_run_untilize_test(nb, nc, nh, nw, device):
+def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
+    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     shape = [nb, nc, 32 * nh, 32 * nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
 
     torch.manual_seed(10)
-    inp = torch.rand(*shape).bfloat16()
+
+    if dtype == ttl.tensor.DataType.FLOAT32:
+        inp = torch.rand(*shape).float() * 1000.0
+    else:
+        inp = torch.rand(*shape).bfloat16()
     # for b in range(0, nb):
     #     for c in range(0, nc):
     #         for h in range(0, 32 * nh):
@@ -47,7 +61,7 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
     a = ttl.tensor.Tensor(
         inp.flatten().tolist(),
         shape,
-        ttl.tensor.DataType.BFLOAT16,
+        dtype,
         ttl.tensor.Layout.TILE,
         device,
     )
@@ -75,7 +89,11 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
     # print(f"{untilized_inp.shape}")
     # torch.save(untilized_inp, "golden.pt")
 
-    passing1 = torch.equal(untilized_inp, c1)
+    if dtype == ttl.tensor.DataType.FLOAT32:
+        passing1, output = comp_pcc(untilized_inp, c1, 0.999999)
+        logger.info(output)
+    else:
+        passing1 = torch.equal(untilized_inp, c1)
     # print(f'OUTPUT: {untilized_inp}')
     # print(f'GOLDEN: {c1}')
     # passing2 = torch.equal(untilized_inp, c2)
