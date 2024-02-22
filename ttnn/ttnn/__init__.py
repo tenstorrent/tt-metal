@@ -111,13 +111,12 @@ from ttnn.operations.others import (
 )
 
 from ttnn.operations.creation import (
-    arange,
-    full,
-    full_like,
     ones,
     ones_like,
     zeros,
     zeros_like,
+    full,
+    full_like,
 )
 
 from ttnn.operations.reduction import (
@@ -181,12 +180,6 @@ from ttnn.operations.binary import (
     add_and_apply_activation_,
 )
 
-from ttnn.operations.ternary import (
-    addcdiv,
-    addcmul,
-    mac,
-    where,
-)
 
 from ttnn.operations.relational import (
     gtz,
