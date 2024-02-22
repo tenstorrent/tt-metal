@@ -61,10 +61,13 @@ def custom_preprocessor(model, name, ttnn_module_args):
 
         ttnn_module_args.c5["activation"] = "relu"  # Fuse relu with conv5
         ttnn_module_args.c5_2["activation"] = "relu"  # Fuse relu with conv5
+        ttnn_module_args.c5_3["activation"] = "relu"  # Fuse relu with conv5
         ttnn_module_args.c5["deallocate_activation"] = True
         ttnn_module_args.c5_2["deallocate_activation"] = True
+        ttnn_module_args.c5_3["deallocate_activation"] = True
         ttnn_module_args.c5["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c5_2["conv_blocking_and_parallelization_config_override"] = None
+        ttnn_module_args.c5_3["conv_blocking_and_parallelization_config_override"] = None
 
         ttnn_module_args.c6["activation"] = "relu"  # Fuse relu with conv6
         ttnn_module_args.c6_2["activation"] = "relu"  # Fuse relu with conv6
@@ -99,6 +102,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         convbn_2_weight, convbn_2_bias = fold_batch_norm2d_into_conv2d(model.bnc_2, model.bnb_2)
         conv5_weight, conv5_bias = fold_batch_norm2d_into_conv2d(model.c5, model.b5)
         conv5_2_weight, conv5_2_bias = fold_batch_norm2d_into_conv2d(model.c5_2, model.b5_2)
+        conv5_3_weight, conv5_3_bias = fold_batch_norm2d_into_conv2d(model.c5_3, model.b5_3)
         conv6_weight, conv6_bias = fold_batch_norm2d_into_conv2d(model.c6, model.b6)
         conv6_2_weight, conv6_2_bias = fold_batch_norm2d_into_conv2d(model.c6_2, model.b6_2)
         conv7_weight, conv7_bias = fold_batch_norm2d_into_conv2d(model.c7, model.b7)
@@ -118,6 +122,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         update_ttnn_module_args(ttnn_module_args.bnc_2)
         update_ttnn_module_args(ttnn_module_args.c5)
         update_ttnn_module_args(ttnn_module_args.c5_2)
+        update_ttnn_module_args(ttnn_module_args.c5_3)
         update_ttnn_module_args(ttnn_module_args.c6)
         update_ttnn_module_args(ttnn_module_args.c6_2)
         update_ttnn_module_args(ttnn_module_args.c7)
@@ -137,6 +142,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         parameters["bnc_2"] = preprocess_conv2d(convbn_2_weight, convbn_2_bias, ttnn_module_args.bnc_2)
         parameters["c5"] = preprocess_conv2d(conv5_weight, conv5_bias, ttnn_module_args.c5)
         parameters["c5_2"] = preprocess_conv2d(conv5_2_weight, conv5_2_bias, ttnn_module_args.c5_2)
+        parameters["c5_3"] = preprocess_conv2d(conv5_3_weight, conv5_3_bias, ttnn_module_args.c5_3)
         parameters["c6"] = preprocess_conv2d(conv6_weight, conv6_bias, ttnn_module_args.c6)
         parameters["c6_2"] = preprocess_conv2d(conv6_2_weight, conv6_2_bias, ttnn_module_args.c6_2)
         parameters["c7"] = preprocess_conv2d(conv7_weight, conv7_bias, ttnn_module_args.c7)
@@ -198,6 +204,9 @@ class UNet(nn.Module):
         self.c5_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
         self.b5_2 = nn.BatchNorm2d(32)
         self.r5_2 = nn.ReLU(inplace=True)
+        self.c5_3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.b5_3 = nn.BatchNorm2d(32)
+        self.r5_3 = nn.ReLU(inplace=True)
         self.u3 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
         self.c6 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
@@ -276,8 +285,10 @@ class UNet(nn.Module):
         c5_2 = self.c5_2(r5)
         b5_2 = self.b5_2(c5_2)
         r5_2 = self.r5_2(b5_2)
-
-        u3 = self.u3(r5_2)
+        c5_3 = self.c5_3(r5_2)
+        b5_3 = self.b5_3(c5_3)
+        r5_3 = self.r5_3(b5_3)
+        u3 = self.u3(r5_3)
         conc2 = torch.cat([u3, r3_2], dim=1)
 
         c6 = self.c6(conc2)
