@@ -433,10 +433,10 @@ def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch
             function_args: Any = (),
             function_kwargs: Any = None,
         ) -> Any:
-            function = ttl.tensor.decorate_external_operation(function, function_name=function.__name__)
+            function = ttl.tensor.decorate_external_operation(function, function_name=f"(torch) {function.__name__}")
             return super().__torch_function__(function, types, function_args, function_kwargs)
 
-    return TorchTensor(tensor)
+    return tensor
 
 
 def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
