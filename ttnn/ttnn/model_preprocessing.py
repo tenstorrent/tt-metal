@@ -46,9 +46,11 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
     if ttnn_module_args is None:
         raise RuntimeError(f"torch.nn.Conv2d modules need run_model to be provided to preprocess_model_parameters")
 
-    weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(weight, dtype=ttnn_module_args.weights_dtype, layout=ttnn.TILE_LAYOUT)
     if bias is not None:
-        bias = ttnn.from_torch(torch.reshape(bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16)
+        bias = ttnn.from_torch(
+            torch.reshape(bias, (1, 1, 1, -1)), dtype=ttnn_module_args.weights_dtype, layout=ttnn.TILE_LAYOUT
+        )
 
     conv = ttnn.Conv2d(
         **ttnn_module_args,
