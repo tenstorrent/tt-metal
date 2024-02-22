@@ -79,18 +79,6 @@ ALWI void tilizeA_B_init_unpack(uint32_t icb0, uint32_t icb1, uint32_t block)
 /**
  * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
  */
-ALWI void tilize_init_short_with_dt(uint32_t icb, uint32_t block) {
-
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
-    // This reconfig call does a reconfig for unpack even if previous data format
-    // is same as new operand data format, which might cause less perf
-    UNPACK(( llk_unpack_reconfig_data_format_srca(icb) ));
-    UNPACK(( llk_unpack_tilize_init(icb, block) ));
-}
-
-/**
- * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
- */
 ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block) {
 
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb) ));
@@ -135,17 +123,17 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 /**
  * Uninitialize tilize operation before re-initializing for another operation.
  */
-ALWI void tilize_uninit()
+ALWI void tilize_uninit(uint32_t icb)
 {
-    UNPACK(( llk_unpack_tilize_uninit() ));
+    UNPACK(( llk_unpack_tilize_uninit(icb) ));
 }
 
 /**
  * Uninitialize the tilize operation along with re-configuring unpacker with the CB data types.
  */
 ALWI void tilize_uninit_with_dt(uint32_t old_icb = 0, uint32_t new_icb = 1) {
-    UNPACK(( llk_unpack_tilize_uninit() ));
-    UNPACK(( llk_unpack_reconfig_data_format(old_icb, new_icb) ));
+    UNPACK(( llk_unpack_tilize_uninit(old_icb) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(old_icb, new_icb) ));
 }
 
 

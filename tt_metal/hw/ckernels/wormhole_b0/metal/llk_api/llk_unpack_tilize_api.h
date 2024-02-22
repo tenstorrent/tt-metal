@@ -46,7 +46,7 @@ inline void llk_unpack_tilize_mop_config(const std::uint32_t operand) {
     _llk_unpack_tilize_mop_config_(narrow_tile);
 }
 
-inline void llk_unpack_tilize_init(const std::uint32_t operand = 0, const std::uint32_t ct_dim = 0) {
+inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -63,7 +63,7 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand = 0, const std::u
 
 }
 
-inline void llk_unpack_tilize_uninit(const std::uint32_t operand=0, const std::uint32_t face_r_dim = FACE_R_DIM) {
+inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
     std::uint32_t operand_id = get_operand_id(operand);
     unpack_config_u config = {0};

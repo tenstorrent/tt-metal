@@ -33,8 +33,7 @@ inline void llk_unpack_tilize_mop_config() {
     _llk_unpack_tilize_mop_config_();
 }
 
-inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uint32_t ct_dim=0) {
-
+inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
 
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t src_format = (std::uint32_t)unpack_src_format[operand_id];
@@ -43,7 +42,7 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uin
     _llk_unpack_tilize_init_(src_format, dst_format, ct_dim);
 }
 
-inline void llk_unpack_tilize_uninit(const std::uint32_t operand=0, const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
+inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
     std::uint32_t input = get_operand_id(operand);
     unpack_config_u config = {0};
 

@@ -60,7 +60,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit();
+    tilize_uninit(in_cb_id);
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -189,9 +189,7 @@ void MAIN {
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
             row_major_to_col_major_init();
 
-            // TODO: unpack_reconfig_data_format_srca(in0_pretilize_cb_id, in1_cb_id) doesn't work if in0 is BFLOATB_B and in1 is BFLOAT16
-            mm_block_init_short(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-            unpack_reconfig_data_format_srca(in1_cb_id);
+            mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, out_subblock_w, out_subblock_h, in0_block_w);
             #endif
 
             bool enable_reload = false;
