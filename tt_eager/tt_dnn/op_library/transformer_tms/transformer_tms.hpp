@@ -132,6 +132,8 @@ inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &inpu
         using T = std::decay_t<decltype(kernel_config_val)>;
         if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
             out_subblock_w = kernel_config_val.fp32_dest_acc_en ? std::min(Nt, HALF_DST_MAX_FP32) : std::min(Nt, HALF_DST_MAX);
+        } else {
+            out_subblock_w = std::min(Nt, HALF_DST_MAX);
         }
     }, kernel_config_val);
 
