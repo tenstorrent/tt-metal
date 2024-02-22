@@ -543,7 +543,7 @@ class TTPyCompositeConv(TTPyOp):
             self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
                 device, self.sliding_window_op_params, reader_patterns_cache["halo"]
             )
-        self.set_input_sharded_mem_config()
+        self.set_input_sharded_memory_config()
 
     def set_input_sharded_memory_config(self):
         num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
