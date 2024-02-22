@@ -71,10 +71,10 @@ jobs:
         run: |
           touch gh_pages/index.html
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3.0.1
         with:
           path: "gh_pages"
       - name: Deploy to GitHub Pages
         if: ${{ github.ref == 'refs/heads/main' }}
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4.0.4
