@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
+#include "dataflow_api.h"
 #include "debug/dprint_test_common.h"
 
 /*
- * Test kernel that wait for a signal that never raises.
+ * Test printing from a kernel running on BRISC.
 */
 
 void kernel_main() {
-    DPRINT << WAIT{1};
     print_test_data_modifiers();
 }
