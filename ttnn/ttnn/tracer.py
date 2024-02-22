@@ -181,6 +181,9 @@ def visualize(*args, file_name=None, **kwargs):
 
 ENABLE_TRACER = False
 
+get_graph = torchtrail.get_graph
+to_networkx = torchtrail.multidigraph.to_networkx
+
 
 @contextmanager
 def trace():
