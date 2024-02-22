@@ -46,11 +46,13 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
     if ttnn_module_args is None:
         raise RuntimeError(f"torch.nn.Conv2d modules need run_model to be provided to preprocess_model_parameters")
 
-    weight = ttnn.from_torch(weight, dtype=ttnn_module_args.weights_dtype, layout=ttnn.TILE_LAYOUT)
+    weights_dtype = ttnn_module_args.weights_dtype
+    if weights_dtype == ttnn.bfloat8_b:
+        weights_dtype = ttnn.float32
+
+    weight = ttnn.from_torch(weight, dtype=weights_dtype)
     if bias is not None:
-        bias = ttnn.from_torch(
-            torch.reshape(bias, (1, 1, 1, -1)), dtype=ttnn_module_args.weights_dtype, layout=ttnn.TILE_LAYOUT
-        )
+        bias = ttnn.from_torch(torch.reshape(bias, (1, 1, 1, -1)), dtype=weights_dtype)
 
     conv = ttnn.Conv2d(
         **ttnn_module_args,
@@ -468,7 +470,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
 def merge_ttnn_module_args_into_parameters(parameters: dict, ttnn_module_args: dict, path=[]):
     if isinstance(ttnn_module_args, ModuleArgs):
         for key, value in list(ttnn_module_args.items()):
-            if isinstance(value, ttnn.Device):
+            if key == "device":
                 del ttnn_module_args[key]
         parameters["ttnn_module_args"] = ttnn_module_args
     else:

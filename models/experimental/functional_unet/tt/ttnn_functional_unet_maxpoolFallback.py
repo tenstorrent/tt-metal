@@ -61,7 +61,7 @@ class UNet:
 
     def torch_call(self, torch_input_tensor):
         device_id = 0
-        device = ttnn.open(device_id)
+        device = ttnn.open_device(device_id=device_id)
         input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         input_tensor = self.c1.copy_input_to_device(input_tensor)
@@ -247,4 +247,5 @@ class UNet:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
+        ttnn.close_device(device)
         return output_tensor

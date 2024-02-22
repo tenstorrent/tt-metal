@@ -430,7 +430,7 @@ class UNet(nn.Module):
 
 
 device_id = 0
-device = ttnn.open(device_id)
+device = ttnn.open_device(device_id=device_id)
 
 torch.manual_seed(0)
 
@@ -460,3 +460,4 @@ parameters = preprocess_model(
 ttnn_model = ttnn_functional_unet_maxpoolFallback.UNet(parameters)
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
 assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
+ttnn.close_device(device)
