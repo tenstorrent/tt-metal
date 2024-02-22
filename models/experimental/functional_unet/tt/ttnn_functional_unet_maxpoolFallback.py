@@ -37,6 +37,7 @@ class UNet:
         self.c7_3 = parameters.c7_3
         self.c8 = parameters.c8
         self.c8_2 = parameters.c8_2
+        self.c8_3 = parameters.c8_3
 
     #    def __call__(self, x):
     #        identity = x
@@ -240,7 +241,8 @@ class UNet:
         output_tensor = self.c8.copy_input_to_device(output_tensor)
         output_tensor = self.c8(output_tensor)
         output_tensor = self.c8_2(output_tensor)
-        output_tensor = self.c8_2.copy_output_from_device(output_tensor)
+        output_tensor = self.c8_3(output_tensor)
+        output_tensor = self.c8_3.copy_output_from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
