@@ -6,6 +6,7 @@
 
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "debug/dprint.h"
 
 #define ATTR_ALIGNL1 __attribute__((aligned(L1_ALIGNMENT)))
 struct db_cb_config_t {
@@ -16,21 +17,15 @@ struct db_cb_config_t {
     volatile uint32_t total_size_16B ATTR_ALIGNL1;  // 16B
     volatile uint32_t rd_ptr_16B ATTR_ALIGNL1;      // 16B
     volatile uint32_t wr_ptr_16B ATTR_ALIGNL1;      // 16B
+    volatile uint32_t fifo_limit_16B ATTR_ALIGNL1;  // 16B
 };
 static constexpr uint32_t l1_db_cb_addr_offset = sizeof(db_cb_config_t);
 
 template <uint32_t cmd_base_address, uint32_t data_buffer_size>
 FORCE_INLINE uint32_t get_command_slot_addr(bool db_buf_switch) {
     static constexpr uint32_t command0_start = cmd_base_address;
-    static constexpr uint32_t command1_start = command0_start + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_buffer_size;
+    static constexpr uint32_t command1_start = cmd_base_address + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     return (not db_buf_switch) ? command0_start : command1_start;
-}
-
-template <uint32_t cmd_base_address, uint32_t data_buffer_size>
-FORCE_INLINE uint32_t get_db_buf_addr(bool db_buf_switch) {
-    static constexpr uint32_t buf0_start = cmd_base_address + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-    static constexpr uint32_t buf1_start = buf0_start + data_buffer_size + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-    return (not db_buf_switch) ? buf0_start : buf1_start;
 }
 
 FORCE_INLINE
@@ -43,21 +38,43 @@ void db_acquire(volatile uint32_t* semaphore, uint64_t noc_encoding) {
 // Local refers to the core that is calling this function
 tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
     // TODO: remove multiply here
-    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
+    // db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
+    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr);
     return db_cb_config;
 }
 
 // Remote refers to any other core on the same chip
-tt_l1_ptr const db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+tt_l1_ptr db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
     // TODO: remove multiply here
-    const db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
+    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr);
     return db_cb_config;
+}
+
+uint32_t get_cb_start_address() {
+    return L1_UNRESERVED_BASE + 2 * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+}
+
+
+FORCE_INLINE
+int32_t multicore_cb_pages_left(volatile tt_l1_ptr db_cb_config_t* db_cb_config) {
+    DEBUG_STATUS('C', 'R', 'B', 'W');
+
+    uint16_t free_space_pages_wrap = db_cb_config->num_pages - (db_cb_config->recv - db_cb_config->ack);
+    int32_t free_space_pages = (int32_t)free_space_pages_wrap;
+    DEBUG_STATUS('C', 'R', 'B', 'D');
+    return free_space_pages;
+}
+
+FORCE_INLINE
+bool multicore_cb_space_available(volatile tt_l1_ptr db_cb_config_t* db_cb_config, int32_t num_pages) {
+    // TODO: delete cb_consumer_space_available and use this one
+    return multicore_cb_pages_left(db_cb_config) >= num_pages;
 }
 
 FORCE_INLINE
 void multicore_cb_push_back(
-    db_cb_config_t* db_cb_config,
-    const db_cb_config_t* remote_db_cb_config,
+    volatile db_cb_config_t* db_cb_config,
+    const volatile db_cb_config_t* remote_db_cb_config,
     uint64_t consumer_noc_encoding,
     uint32_t consumer_fifo_16b_limit,
     uint32_t num_to_write) {

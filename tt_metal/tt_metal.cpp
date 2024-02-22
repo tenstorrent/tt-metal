@@ -596,24 +596,24 @@ Program CreateProgram(){
 
 KernelHandle CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, experimental::EthernetConfig> &config) {
     return std::visit( [&](auto&& cfg) -> KernelHandle
-                        {
-                            CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-                            std::shared_ptr<Kernel> kernel;
-                            using T = std::decay_t<decltype(cfg)>;
-                            if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                                detail::CheckDataMovementConfig(program, file_name, core_ranges);
-                                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
-                            }
-                            else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
-                            }
-                            else if constexpr (std::is_same_v<T, experimental::EthernetConfig>) {
-                                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
-                            }
-                            return detail::AddKernel(program, kernel);
-                        },
-                        config
-                    );
+            {
+                CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+                std::shared_ptr<Kernel> kernel;
+                using T = std::decay_t<decltype(cfg)>;
+                if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                    detail::CheckDataMovementConfig(program, file_name, core_ranges);
+                    kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
+                }
+                else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                    kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+                }
+                else if constexpr (std::is_same_v<T, experimental::EthernetConfig>) {
+                    kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+                }
+                return detail::AddKernel(program, kernel);
+            },
+            config
+        );
 }
 
 CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {

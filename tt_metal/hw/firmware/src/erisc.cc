@@ -11,7 +11,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
-#include "tt_metal/impl/dispatch/kernels/command_queue_producer.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_prefetcher.hpp"
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,8 +86,8 @@ void eth_program_consumer_cb(
     // To account for differences in data location, the consumer is sent cb config with the "correct" rd pointer from its POV
     //  and after sending, producer sets it back to its local L1 address
 
-    uint32_t cb_start_producer_addr = get_db_buf_addr<producer_cmd_base_addr, producer_data_buffer_size>(db_buf_switch);
-    uint32_t cb_start_consumer_addr = get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
+    uint32_t cb_start_producer_addr = 0;//get_db_buf_addr<producer_cmd_base_addr, producer_data_buffer_size>(db_buf_switch);
+    uint32_t cb_start_consumer_addr = 0;//get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
 
     db_cb_config->ack = 0;
     db_cb_config->recv = 0;
@@ -158,6 +158,8 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             kernel_profiler::mark_time(CC_MAIN_END);
         }
         if (my_routing_mode == EthRouterMode::FD_SRC) {
+
+            /*
             eth_db_acquire(eth_db_semaphore_addr, ((uint64_t)eth_router_noc_encoding << 32));
             if (erisc_info->launch_user_kernel == 1) {
                 continue;
@@ -179,13 +181,8 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             bool fwd_path = header->fwd_path;
             command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
 
-            // if (num_buffer_transfers == 0) { removed this when sending fd packet unconditionally even if there is data to tx
-            //                                      removed this when sending fd packet unconditionally even if there is data to tx
-            //                                      because there are cases where programs only have one buffer tx (from dram)
-            //                                      and in that case we weren't sending the cmd at all (because of is_program continue below)
-                 // send cmd even if there is no data associated
-                internal_::send_fd_packets(); // TODO: AL, is this right?
-            // }
+            // send cmd even if there is no data associated
+            internal_::send_fd_packets(); // TODO: AL, is this right?
 
             for (uint32_t i = 0; i < num_buffer_transfers; i++) {
                 const uint32_t num_pages = command_ptr[2];
@@ -197,34 +194,28 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                 bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !fwd_path & !is_program);
 
                 if (!tunnel_data) {
-                    erisc_info->unused_arg2 = 109;
                     continue;
                 }
-                // if (is_program & ((BufferType)src_buf_type == BufferType::DRAM)) {
-                //     continue;
-                // }
 
                 uint32_t num_to_write = min(num_pages, producer_consumer_transfer_num_pages);
 
-                // erisc_info->unused_arg2 = 800 + num_pages *10 + num_buffer_transfers;
-                // erisc_info->unused_arg2 = (uint32_t) (&command_ptr[2]);
                 uint32_t num_pages_tunneled = 0;
                 while (num_pages_tunneled != num_pages) {
                     multicore_eth_cb_wait_front(eth_db_cb_config, num_to_write);
                     internal_::send_fd_packets(); // AL: increment since idx to msg sent
-                    // DPRINT << "src sent data" << ENDL();
                     erisc_info->unused_arg1 = 500 + i;
                     multicore_eth_cb_pop_front(
                         eth_db_cb_config, remote_src_db_cb_config, ((uint64_t)relay_src_noc_encoding << 32), num_to_write);
                     num_pages_tunneled += num_to_write;
-                    // DPRINT << "src-num-remaining: " << (uint32_t)(num_pages - num_pages_tunneled) << ENDL();
                     num_to_write = min(num_pages - num_pages_tunneled, producer_consumer_transfer_num_pages);
                 }
                 command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
             }
             noc_semaphore_inc(((uint64_t)relay_src_noc_encoding << 32) | get_semaphore(0), 1);
             noc_async_write_barrier();  // Barrier for now
+            */
         } else if (routing_info->routing_mode == EthRouterMode::FD_DST) {
+            /*
             // Poll until FD_SRC router sends FD packet
             // Each FD packet comprises of command header followed by command data
             internal_::wait_for_fd_packet();
@@ -252,27 +243,24 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
             uint32_t consumer_cb_num_pages = header->producer_cb_num_pages;
             uint32_t consumer_cb_size = header->producer_cb_size;
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
-            //if (num_pages_transferred == 0) {   // new command
-                eth_program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
-                    eth_db_cb_config,
-                    remote_dst_db_cb_config,
-                    db_buf_switch,
-                    ((uint64_t)relay_dst_noc_encoding << 32),
-                    consumer_cb_num_pages,
-                    page_size,
-                    consumer_cb_size);
-                relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, ((uint64_t)relay_dst_noc_encoding << 32));
 
-                update_producer_consumer_sync_semaphores(((uint64_t)eth_router_noc_encoding << 32), ((uint64_t)relay_dst_noc_encoding << 32), eth_db_semaphore_addr, get_semaphore(0));
-         //   }
+            eth_program_consumer_cb<command_start_addr, data_buffer_size, consumer_cmd_base_addr, consumer_data_buffer_size>(
+                eth_db_cb_config,
+                remote_dst_db_cb_config,
+                db_buf_switch,
+                ((uint64_t)relay_dst_noc_encoding << 32),
+                consumer_cb_num_pages,
+                page_size,
+                consumer_cb_size);
+            relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch, ((uint64_t)relay_dst_noc_encoding << 32));
+
+            update_producer_consumer_sync_semaphores(((uint64_t)eth_router_noc_encoding << 32), ((uint64_t)relay_dst_noc_encoding << 32), eth_db_semaphore_addr, get_semaphore(0));
 
             // Send the data that was in this packet
             bool is_program = header->is_program_buffer;
             bool fwd_path = header->fwd_path;
             command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER; // jump to buffer transfer region
-            // if (num_buffer_transfers == 0 | is_program) { removed this when sending fd packet unconditionally from src even if there is data to tx
-                internal_::ack_fd_packet();
-            // }
+            internal_::ack_fd_packet();
             uint32_t producer_consumer_transfer_num_pages = header->producer_router_transfer_num_pages;
             uint32_t l1_consumer_fifo_limit_16B =
                 (get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch) + consumer_cb_size) >> 4;
@@ -288,7 +276,6 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                 bool tunnel_data = (read_from_sysmem) | (write_to_sysmem & !is_program & !fwd_path);
 
                 if (!tunnel_data) {
-                    // erisc_info->unused_arg2 = 109;
                     continue;
                 }
 
@@ -296,15 +283,11 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
                 uint32_t num_pages_to_tx = min(num_pages, producer_consumer_transfer_num_pages);
                 uint32_t num_pages_transferred = 0;
 
-                // erisc_info->unused_arg2 = 800 + num_pages *10 + num_buffer_transfers;
-                // erisc_info->unused_arg2 = (uint32_t) (&command_ptr[2]);
               while (num_pages_transferred != num_pages) {
-                // if (num_pages_transferred != 0) { removed this when sending fd packet unconditionally from src even if there is data to tx
-                  while (routing_info->fd_buffer_msgs_sent != 1) {
-                    // maybe contesxt switch
+                while (routing_info->fd_buffer_msgs_sent != 1) {
+                    // maybe context switch
                     internal_::risc_context_switch();
-                  }
-                // }
+                }
                 uint32_t src_addr = eth_db_cb_config->rd_ptr_16B << 4;
                 uint64_t dst_noc_addr = ((uint64_t)relay_dst_noc_encoding << 32) | (eth_db_cb_config->wr_ptr_16B << 4);
                 while (!cb_consumer_space_available(eth_db_cb_config, num_pages_to_tx));
@@ -326,6 +309,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
               }
               command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION; // jump to buffer transfer region
             }
+            */
         } else {
             internal_::risc_context_switch();
         }

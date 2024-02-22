@@ -20,21 +20,19 @@ inline uint32_t get_command_start_l1_address(bool use_eth_l1) {
 
 // Where issue queue interface core pulls in data (follows command)
 inline uint32_t get_data_section_l1_address(bool use_eth_l1) {
-    uint32_t l1_base = use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE : L1_UNRESERVED_BASE;
-    return l1_base + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    if (use_eth_l1) {
+        return eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    } else {
+        return L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    }
 }
 
-// Space available in issue queue interface core pushing command data to consumer to dispatch or relay forward
-inline uint32_t get_producer_data_buffer_size(bool use_eth_l1) {
-    uint32_t available_l1 = use_eth_l1 ? eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE : MEM_L1_SIZE;
-    return available_l1 - (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - (((uint32_t)!use_eth_l1) * L1_UNRESERVED_BASE);
-}
-
-// Space available in core receiving command data to dispatch or relay forward
-inline uint32_t get_consumer_data_buffer_size(bool use_eth_l1) {
-    uint32_t num_consumer_cmd_slots = use_eth_l1 ? 1 : 2;
-    uint32_t producer_data_buffer_size = get_producer_data_buffer_size(use_eth_l1);
-    return (producer_data_buffer_size - ((num_consumer_cmd_slots - 1) * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND)) / num_consumer_cmd_slots;
+inline uint32_t get_cq_data_buffer_size(bool use_eth_l1) {
+    if (use_eth_l1) {
+        return eth_l1_mem::address_map::ERISC_APP_RESERVED_SIZE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    } else {
+        return MEM_L1_SIZE - L1_UNRESERVED_BASE -  DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    }
 }
 
 /// @brief Get offset of the command queue relative to its channel

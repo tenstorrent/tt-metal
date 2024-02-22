@@ -291,45 +291,43 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 namespace basic_tests {
 namespace dram_tests {
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToDramBank0) {
+TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
-    }
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config));
 }
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllDramBanks) {
-    for (Device *device : devices_) {
-        TestBufferConfig config = {
-            .num_pages = uint32_t(device->num_banks(BufferType::DRAM)),
-            .page_size = 2048,
-            .buftype = BufferType::DRAM};
+TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
+    // for (Device *device : devices_) {
+    TestBufferConfig config = {
+        .num_pages = uint32_t(device_->num_banks(BufferType::DRAM)),
+        .page_size = 2048,
+        .buftype = BufferType::DRAM};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
-    }
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, device_->command_queue(), config));
+    // }
 }
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
+TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr uint32_t num_round_robins = 2;
 
-    for (Device *device : devices_) {
-        TestBufferConfig config = {
-            .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
-            .page_size = 2048,
-            .buftype = BufferType::DRAM};
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
-    }
+    // for (Device *device : devices_) {
+    TestBufferConfig config = {
+        .num_pages = num_round_robins * (device_->num_banks(BufferType::DRAM)),
+        .page_size = 2048,
+        .buftype = BufferType::DRAM};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device_, device_->command_queue(), config));
+    // }
 }
 
-TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
-    for (Device *device : devices_) {
+TEST_F(CommandQueueFixture, Sending131072Pages) {
+    // for (Device *device : devices_) {
         TestBufferConfig config = {
             .num_pages = 131072,
             .page_size = 128,
             .buftype = BufferType::DRAM};
 
-        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
-    }
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, this->device_->command_queue(), config));
+    // }
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {

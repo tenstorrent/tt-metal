@@ -90,6 +90,7 @@ constexpr static uint32_t CQ_ISSUE_READ_PTR = 110944;
 constexpr static uint32_t CQ_ISSUE_WRITE_PTR = CQ_ISSUE_READ_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_WRITE_PTR = CQ_ISSUE_WRITE_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_READ_PTR = CQ_COMPLETION_WRITE_PTR + L1_ALIGNMENT;
+constexpr static uint32_t EVENT_PTR = CQ_COMPLETION_READ_PTR + L1_ALIGNMENT;
 
 // Host addresses for dispatch
 static constexpr uint32_t HOST_CQ_ISSUE_READ_PTR = 0;

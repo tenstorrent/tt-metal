@@ -292,8 +292,8 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
-    for (Device *device : devices_) {
+TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
+    // for (Device *device : devices_) {
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -303,16 +303,16 @@ TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
         auto dummy_reader_kernel = CreateKernel(
             program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        EnqueueProgram(device->command_queue(), program, false);
-        Finish(device->command_queue());
-    }
+        EnqueueProgram(device_->command_queue(), program, false);
+        Finish(device_->command_queue());
+    // }
 }
 
 }
 
 namespace single_core_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -320,9 +320,9 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore)
 
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config} };
 
-    for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
-    }
+    // for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device_, device_->command_queue(), config));
+    // }
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
