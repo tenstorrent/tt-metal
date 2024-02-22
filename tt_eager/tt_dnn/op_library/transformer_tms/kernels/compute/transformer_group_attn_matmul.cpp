@@ -8,7 +8,6 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
@@ -55,9 +54,12 @@ void MAIN {
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
 
-
-    // mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
-    mm_block_init(cb_in0, cb_in1, cb_intermed0, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w );
+    // need switching between ColMajor and RowMajor for at least 32 times, inefficient
+    #ifdef ARCH_GRAYSKULL
+    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    #else
+    mm_block_init(cb_in0, cb_in1, cb_intermed0, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
+    #endif
 
     for (uint32_t b = 0; b < batch; b++) {
 
@@ -76,6 +78,23 @@ void MAIN {
 
                             tile_regs_acquire();
 
+                            #ifdef ARCH_GRAYSKULL
+                            uint32_t dst_index = 0;
+                            uint32_t in0_index_h_offset = 0;
+                            for (uint32_t h = 0; h < out_subblock_h; h++) {
+                                for (uint32_t w = 0; w < out_subblock_w; w++) {
+                                    uint32_t in1_index_inner_dim_offset = 0;
+                                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                                        uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
+                                        uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        in1_index_inner_dim_offset += in1_per_core_w;
+                                    }
+                                    dst_index++;
+                                }
+                                in0_index_h_offset += in0_block_w;
+                            }
+                            #else
                             // Compute output sub-block
                             uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
                             uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
@@ -89,6 +108,7 @@ void MAIN {
                                 in0_index ++;  // stride right by 1
                                 in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
                             }
+                            #endif
 
                             tile_regs_commit();
 
@@ -121,7 +141,7 @@ void MAIN {
             cb_reserve_back(out_cb_id, out_num_tiles);
 
             // tilize CB::intermed1 and write to CB::c_out0
-            tilize_init_short(cb_intermed1, out_num_tiles);
+            tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles);
             tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
             cb_push_back(out_cb_id, out_num_tiles);
 
