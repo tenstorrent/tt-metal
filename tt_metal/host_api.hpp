@@ -191,15 +191,26 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
 uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
 
 /**
-*  Allocates a DRAM or L1 buffer on device
+*  Allocates an interleaved DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | BufferConfig             |             | Yes      |
+*  | config          | config for buffer                       | InterleavedBufferConfig  |             | Yes      |
 */
-std::shared_ptr<Buffer> CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> & config);
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
+
+/**
+*  Allocates a sharded DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
