@@ -37,14 +37,21 @@ class TtLlamaMLP(nn.Module):
         self.w1_list = []
         self.w3_list = []
         self.w2_list = []
+
+        H = 8 * 1024
+        PADDED_H4 = 32 * 1024
+        H4 = 28 * 1024
+        padded_w1 = torch.zeros(H, PADDED_H4)
+        padded_w3 = torch.zeros(H, PADDED_H4)
+        padded_w2 = torch.zeros(PADDED_H4, H)
+        padded_w1[:, :H4] = self.state_dict[w1_str].transpose(-2, -1)
+        padded_w3[:, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+        padded_w2[:H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+
         for i in range(self.num_devices):
             w1 = torch2tt_tensor(
                 torch.chunk(
-                    torch.transpose(
-                        self.state_dict[w1_str],
-                        -2,
-                        -1,
-                    ),
+                    padded_w1,
                     self.num_devices,
                     dim=-1,
                 )[i],
@@ -54,11 +61,7 @@ class TtLlamaMLP(nn.Module):
             )
             w3 = torch2tt_tensor(
                 torch.chunk(
-                    torch.transpose(
-                        self.state_dict[w3_str],
-                        -2,
-                        -1,
-                    ),
+                    padded_w3,
                     self.num_devices,
                     dim=-1,
                 )[i],
@@ -68,11 +71,7 @@ class TtLlamaMLP(nn.Module):
             )
             w2 = torch2tt_tensor(
                 torch.chunk(
-                    torch.transpose(
-                        self.state_dict[w2_str],
-                        -2,
-                        -1,
-                    ),
+                    padded_w2,
                     self.num_devices,
                     dim=-1,
                 )[i],
