@@ -31,8 +31,10 @@ class UNet:
         self.c5_3 = parameters.c5_3
         self.c6 = parameters.c6
         self.c6_2 = parameters.c6_2
+        self.c6_3 = parameters.c6_3
         self.c7 = parameters.c7
         self.c7_2 = parameters.c7_2
+        self.c7_3 = parameters.c7_3
         self.c8 = parameters.c8
         self.c8_2 = parameters.c8_2
 
@@ -178,6 +180,7 @@ class UNet:
         output_tensor = self.c6.copy_input_to_device(output_tensor)
         output_tensor = self.c6(output_tensor)
         output_tensor = self.c6_2(output_tensor)
+        output_tensor = self.c6_3(output_tensor)
         # output_tensor = self.c6_2.copy_output_from_device(output_tensor)
         # output_tensor = ttnn.to_torch(output_tensor)
         # output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
@@ -207,6 +210,7 @@ class UNet:
         output_tensor = self.c7.copy_input_to_device(output_tensor)
         output_tensor = self.c7(output_tensor)
         output_tensor = self.c7_2(output_tensor)
+        output_tensor = self.c7_3(output_tensor)
         # output_tensor = self.c7_2.copy_output_from_device(output_tensor)
         # output_tensor = ttnn.to_torch(output_tensor)
         # output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
