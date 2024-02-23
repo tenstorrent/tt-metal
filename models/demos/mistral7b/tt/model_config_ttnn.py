@@ -120,6 +120,7 @@ def get_model_config(model_config_str, num_devices=1):
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
+        "DEFAULT_CACHE_PATH": "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1",
     }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})

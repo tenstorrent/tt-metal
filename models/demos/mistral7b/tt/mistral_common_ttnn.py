@@ -131,8 +131,14 @@ def prepare_inputs_ttnn(x, start_pos, hidden_size, n_local_heads, sliding_window
     xs, attn_masks = [], []
     for i in range(num_devices):
         device = devices[i]
-        xs.append(ttnn.from_torch(x.clone(), device=device, dtype=ttnn.bfloat16))
-        attn_masks.append(ttnn.from_torch(attn_mask.clone(), device=device, dtype=ttnn.bfloat16))
+        xs.append(
+            ttnn.from_torch(
+                x.clone().view(batch, hidden_size), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+        )
+        attn_masks.append(
+            ttnn.from_torch(attn_mask.clone(), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        )
 
     return (
         xs,

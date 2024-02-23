@@ -143,7 +143,6 @@ class TtMistralAttention(nn.Module):
         dense_outputs = []
         for i in range(self.num_devices):
             x = xs[i]
-            bsz = x.shape[2]
             attn_mask = attn_masks[i]
             device = self.devices[i]
             wqkv = self.wqkv_list[i]
@@ -153,9 +152,11 @@ class TtMistralAttention(nn.Module):
             # QKV matmuls
             ###
             print("MATMUL START")
-            xqkv_fused = ttnn.matmul(
+            print("X SHAPE", x.shape, wqkv.shape)
+            xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
+                core_grid=(8, 8)
                 # program_config=self.model_config["QKV_MM_PROGCFG"],
                 # output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                 # output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
@@ -170,7 +171,7 @@ class TtMistralAttention(nn.Module):
                 q_heads,  # [seqlen, n_heads, bsz, head_dim]
                 k_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
                 v_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
-            ) = ttnn.ttl.tensor.nlp_create_qkv_heads(
+            ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
                 xqkv_fused,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
@@ -182,9 +183,13 @@ class TtMistralAttention(nn.Module):
 
             print("HEADS DONE")
 
-            q_heads = ttnn.ttl.tensor.rotary_embedding(q_heads, self.tt_cos_cached[i], self.tt_sin_cached[i], start_pos)
+            q_heads = ttnn.experimental.tensor.rotary_embedding(
+                q_heads, self.tt_cos_cached[i], self.tt_sin_cached[i], start_pos
+            )
 
-            k_heads = ttnn.ttl.tensor.rotary_embedding(k_heads, self.tt_cos_cached[i], self.tt_sin_cached[i], start_pos)
+            k_heads = ttnn.experimental.tensor.rotary_embedding(
+                k_heads, self.tt_cos_cached[i], self.tt_sin_cached[i], start_pos
+            )
 
             print("ROT DONE")
             ###
@@ -197,13 +202,13 @@ class TtMistralAttention(nn.Module):
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
             # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
 
-            ttnn.ttl.tensor.update_cache(keys, k_heads, current_pos)  # self.current)
-            ttnn.ttl.tensor.update_cache(values, v_heads, current_pos)  # self.current)
+            ttnn.experimental.tensor.update_cache(keys, k_heads, current_pos)  # self.current)
+            ttnn.experimental.tensor.update_cache(values, v_heads, current_pos)  # self.current)
 
             k_heads.deallocate()
             v_heads.deallocate()
 
-            keys = ttnn.ttl.tensor.unpad(
+            keys = ttnn.experimental.tensor.unpad(
                 layer_past[0],
                 [0, 0, 0, 0],
                 [
@@ -214,7 +219,7 @@ class TtMistralAttention(nn.Module):
                 ],
                 # output_mem_config=self.model_config["KEYS_MEMCFG"],
             )
-            values = ttnn.ttl.tensor.unpad(
+            values = ttnn.experimental.tensor.unpad(
                 layer_past[1],
                 [0, 0, 0, 0],
                 [
@@ -250,7 +255,7 @@ class TtMistralAttention(nn.Module):
 
             keys = ttnn.to_memory_config(keys, memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"])
 
-            attn = ttnn.ttl.operations.primary.transformers.group_attn_matmul(
+            attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                 q_heads,
                 keys,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -258,14 +263,11 @@ class TtMistralAttention(nn.Module):
                 # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )  # seqlen, n_heads, batch, cache_len + seqlen
 
-            scale = 1 / math.sqrt(self.head_dim)
-            attn = ttnn.ttl.tensor.mul_unary(attn, scale)
-            attn = ttnn.add(attn, attn_mask)
-            attn = ttnn.softmax(attn)
+            attn = ttnn.transformer.attention_softmax_(attn, self.head_dim, attn_mask)
 
             print("GQA2:", attn.shape, values.shape)
 
-            attn_output = ttnn.ttl.operations.primary.transformers.group_attn_matmul(
+            attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                 attn,
                 values,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -278,13 +280,13 @@ class TtMistralAttention(nn.Module):
             values.deallocate()
             q_heads.deallocate()
 
-            attn_output = ttnn.ttl.tensor.nlp_concat_heads(
+            attn_output = ttnn.transformer.concatenate_heads(
                 attn_output,
                 # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
 
             print("DENSE SHAPES", attn_output.shape, wo.shape)
-            dense_out = ttnn.ttl.operations.primary.matmul_1d(
+            dense_out = ttnn.experimental.operations.primary.matmul_1d(
                 attn_output,
                 wo,
                 # compute_with_storage_grid_size=device.compute_with_storage_grid_size()
