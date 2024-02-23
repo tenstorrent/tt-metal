@@ -186,6 +186,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sinh,
         "pytorch_op": pytorch_ops.sinh,
     },
+    "ttnn-eltwise-sinh": {
+        "tt_lib_op": ttnn_ops.eltwise_sinh,
+        "pytorch_op": pytorch_ops.sinh,
+    },
     "eltwise-cosh": {
         "tt_lib_op": tt_lib_ops.eltwise_cosh,
         "pytorch_op": pytorch_ops.cosh,
@@ -246,12 +250,20 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sign,
         "pytorch_op": pytorch_ops.sign,
     },
+    "ttnn-eltwise-sign": {
+        "tt_lib_op": ttnn_ops.eltwise_sign,
+        "pytorch_op": pytorch_ops.sign,
+    },
     "eltwise-multigammaln": {
         "tt_lib_op": tt_lib_ops.eltwise_multigammaln,
         "pytorch_op": pytorch_ops.multigammaln,
     },
     "eltwise-silu": {
         "tt_lib_op": tt_lib_ops.eltwise_silu,
+        "pytorch_op": pytorch_ops.silu,
+    },
+    "ttnn-eltwise-silu": {
+        "tt_lib_op": ttnn_ops.eltwise_silu,
         "pytorch_op": pytorch_ops.silu,
     },
     "eltwise-elu": {
@@ -268,6 +280,10 @@ op_map = {
     },
     "eltwise-softplus": {
         "tt_lib_op": tt_lib_ops.eltwise_softplus,
+        "pytorch_op": pytorch_ops.softplus,
+    },
+    "ttnn-eltwise-softplus": {
+        "tt_lib_op": ttnn_ops.eltwise_softplus,
         "pytorch_op": pytorch_ops.softplus,
     },
     "eltwise-log1p": {
@@ -292,6 +308,10 @@ op_map = {
     },
     "eltwise-sin": {
         "tt_lib_op": tt_lib_ops.eltwise_sin,
+        "pytorch_op": pytorch_ops.sin,
+    },
+    "ttnn-eltwise-sin": {
+        "tt_lib_op": ttnn_ops.eltwise_sin,
         "pytorch_op": pytorch_ops.sin,
     },
     "eltwise-tan": {
@@ -414,8 +434,16 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_softshrink,
         "pytorch_op": pytorch_ops.softshrink,
     },
+    "ttnn-eltwise-softshrink": {
+        "tt_lib_op": ttnn_ops.eltwise_softshrink,
+        "pytorch_op": pytorch_ops.softshrink,
+    },
     "eltwise-softsign": {
         "tt_lib_op": tt_lib_ops.eltwise_softsign,
+        "pytorch_op": pytorch_ops.softsign,
+    },
+    "ttnn-eltwise-softsign": {
+        "tt_lib_op": ttnn_ops.eltwise_softsign,
         "pytorch_op": pytorch_ops.softsign,
     },
     "eltwise-relu": {
@@ -460,6 +488,10 @@ op_map = {
     },
     "eltwise-sigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_sigmoid,
+        "pytorch_op": pytorch_ops.sigmoid,
+    },
+    "ttnn-eltwise-sigmoid": {
+        "tt_lib_op": ttnn_ops.eltwise_sigmoid,
         "pytorch_op": pytorch_ops.sigmoid,
     },
     "eltwise-log_sigmoid": {
@@ -1203,8 +1235,8 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_tanh,
         "pytorch_op": pytorch_ops.tanh,
     },
-    "ttnn-softmax": {
-        "tt_lib_op": ttnn_ops.softmax,
+    "ttnn-eltwise-softmax": {
+        "tt_lib_op": ttnn_ops.eltwise_softmax,
         "pytorch_op": pytorch_ops.softmax_in_place,
     },
     "ttnn-mul": {
