@@ -705,7 +705,10 @@ def linear(x, weight, bias=None, *args, device, dtype, layout, input_mem_config,
         tt_bias = None
 
     t1 = ttnn.linear(
-        t0, tt_weight, bias=tt_bias, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x)
+        t0,
+        tt_weight,
+        bias=tt_bias,
+        dtype=ttnn.bfloat16,  # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x)
     )
     return ttnn_tensor_to_torch(t1, output_mem_config)
 
@@ -869,5 +872,56 @@ def transformer_concatenate_heads(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.transformer.concatenate_heads(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def full_like(
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.full_like(t0, fill_value=scalar, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_relu6(
+    x,
+    *args,
+    # fast_and_approx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.relu6(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_rsqrt(
+    x,
+    *args,
+    # fast_and_approx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1, output_mem_config)
