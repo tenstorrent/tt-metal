@@ -42,7 +42,7 @@ jobs:
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv
+          ./tests/scripts/run_python_unit_tests.sh
 
 
   model-and-cpp:
@@ -73,23 +73,22 @@ jobs:
         run: make build
       - name: Build tt-metal CPP tests
         run: make tests
-      - name: Sweep tests
-        timeout-minutes: 20
+      - name: Run API Sweep tests
+        timeout-minutes: 120
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py' -a ! -name 'test_move.py') -vvv
-          env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_move.py -k input_L1 -vvv
-      - name: Model tests
-        timeout-minutes: 20
+          ./tests/scripts/run_python_sweep_tests.sh
+      - name: Run API Model tests
+        timeout-minutes: 120
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_model_tests.sh
-      - name: tt-metal and tt-eager tests
-        timeout-minutes: 20
+      - name: Run tt-metal and tt-eager tests
+        timeout-minutes: 120
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
