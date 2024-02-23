@@ -40,6 +40,7 @@ def cross_attention_down_block_2d(
     parameters,
     device,
     reader_patterns_cache=None,
+    group_norm_sharded_config=None,
 ):
     output_states = ()
 
@@ -62,6 +63,7 @@ def cross_attention_down_block_2d(
             non_linearity=resnet_act_fn,
             output_scale_factor=output_scale_factor,
             pre_norm=resnet_pre_norm,
+            group_norm_sharded_config=group_norm_sharded_config if index == 0 else None,
         )
         if not dual_cross_attention:
             hidden_states = transformer_2d_model(
@@ -79,7 +81,7 @@ def cross_attention_down_block_2d(
                 upcast_attention=upcast_attention,
                 device=device,
                 reader_patterns_cache=reader_patterns_cache,
-        )
+            )
 
         output_states += (hidden_states,)
 

@@ -85,6 +85,7 @@ def resnetBlock2D(
     use_in_shortcut: Optional[bool] = None,
     reader_patterns_cache=None,
     dtype: Optional[ttnn.DataType] = None,
+    group_norm_sharded_config=None,
 ):
     convs_on_device = reader_patterns_cache is not None
     if non_linearity == "mish":
@@ -95,10 +96,40 @@ def resnetBlock2D(
     out_channels = in_channels if out_channels is None else out_channels
 
     hidden_states = input_tensor
-
-    hidden_states = ttnn.group_norm(
-        hidden_states, num_groups=groups, weight=parameters.norm1.weight, bias=parameters.norm1.bias, epsilon=eps
-    )
+    if group_norm_sharded_config is not None:
+        # breakpoint()
+        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.to_layout(
+            hidden_states,
+            ttnn.ROW_MAJOR_LAYOUT,
+            output_memory_config=ttnn.get_memory_config(hidden_states),
+            use_multicore=True,
+        )
+        # sharded_mem_config = ttnn.create_sharded_memory_config(
+        #     hidden_states.shape,
+        #     ttnn.CoreGrid(group_norm_sharded_config["grid_size"][1], group_norm_sharded_config["grid_size"][0]),
+        #     group_norm_sharded_config["shard_strategy"],
+        #     group_norm_sharded_config["shard_orientation"],
+        # )
+        # hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
+        hidden_states = ttnn.group_norm(
+            hidden_states,
+            num_groups=groups,
+            weight=parameters.norm1.weight,
+            bias=parameters.norm1.bias,
+            epsilon=eps,
+            memory_config=ttnn.get_memory_config(hidden_states),
+            core_grid=ttnn.CoreGrid(
+                group_norm_sharded_config["grid_size"][1], group_norm_sharded_config["grid_size"][0]
+            ),
+        )
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+    else:
+        hidden_states = ttnn.group_norm(
+            hidden_states, num_groups=groups, weight=parameters.norm1.weight, bias=parameters.norm1.bias, epsilon=eps
+        )
+    print("Group norm done")
     hidden_states = nonlinearity(hidden_states)
 
     if up:
@@ -116,9 +147,19 @@ def resnetBlock2D(
         # breakpoint()
         in_channels = parameters.conv1.weight.shape[1]
     if convs_on_device:
-        batch_size = hidden_states.shape[0]
-        input_height = hidden_states.shape[2]
-        input_width = hidden_states.shape[3]
+        if group_norm_sharded_config is None:
+            batch_size = hidden_states.shape[0]
+            input_height = hidden_states.shape[2]
+            input_width = hidden_states.shape[3]
+        else:
+            batch_size = 2
+            HW = (int)(hidden_states.shape[2] // 2)
+            # TODO: FIX THIS!!
+            import math
+
+            input_height = (int)(math.sqrt(HW))
+            input_width = input_height
+            # breakpoint()
         parameters.conv1.bias = torch.reshape(parameters.conv1.bias, (1, 1, 1, out_channels))
         conv1_split_chunks = 1
         if (out_channels, in_channels, input_height, input_width) in split_chunks:
@@ -164,7 +205,10 @@ def resnetBlock2D(
                 )
             )
         # breakpoint()
-        hidden_states = pre_process_input(device, hidden_states)
+        if group_norm_sharded_config is None:
+            hidden_states = pre_process_input(device, hidden_states)
+        else:
+            print("THIS IS THE RESNETBLOCK WITH GROUPNORM ON DEVICE!!!!!!!!!!!")
         if conv1_split_chunks == 1:
             hidden_states = [hidden_states]
         else:
@@ -372,6 +416,29 @@ def resnetBlock2D(
             input_tensor = torch_to_ttnn(input_tensor, device=device)
 
     output_sc_recip = 1 / output_scale_factor
+    if group_norm_sharded_config is not None:
+        # breakpoint()
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.from_device(input_tensor)
+        assert hidden_states.shape[1] == input_tensor.shape[3]
+        input_tensor = fallback_ops.reshape(
+            input_tensor.value,
+            hidden_states.shape[0],
+            hidden_states.shape[2],
+            hidden_states.shape[3],
+            hidden_states.shape[1],
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            output_on_device=False,
+        )
+        input_tensor = fallback_ops.permute(
+            input_tensor, (0, 3, 1, 2), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False
+        )
+        input_tensor = ttnn.Tensor(input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        input_tensor = ttnn.to_device(input_tensor, device)
+        # permute
+
     output_tensor = ttnn.add(input_tensor, hidden_states)
     output_tensor = ttnn.mul(output_tensor, output_sc_recip)
 

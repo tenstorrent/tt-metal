@@ -53,12 +53,12 @@ class CoreRange:
     end: CoreGrid
 
 
-class ShardStrategy(Enum):
-    HEIGHT = 1
-    WIDTH = 2
-    BLOCK = 3
+class ShardStrategy:
+    HEIGHT = TensorMemoryLayout.HEIGHT_SHARDED
+    WIDTH = TensorMemoryLayout.WIDTH_SHARDED
+    BLOCK = TensorMemoryLayout.BLOCK_SHARDED
 
 
-class ShardOrientation(Enum):
-    ROW_MAJOR = 1
-    COLUMN_MAJOR = 2
+class ShardOrientation:
+    ROW_MAJOR = ttl.tensor.ShardOrientation.ROW_MAJOR
+    COLUMN_MAJOR = ttl.tensor.ShardOrientation.COL_MAJOR

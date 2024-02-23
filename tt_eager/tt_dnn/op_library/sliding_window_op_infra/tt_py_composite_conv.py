@@ -591,7 +591,7 @@ class TTPyCompositeConv(TTPyOp):
                 }
             )
 
-        shard_orientation = (
+        self.input_shard_orientation = (
             ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
         )
         shard_halo = False
@@ -599,14 +599,18 @@ class TTPyCompositeConv(TTPyOp):
             untilize_with_halo_input_shard_height,
             padded_input_channels if self.is_1d_systolic else (int)(padded_input_channels / act_c_num_blocks),
         ]
-        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
-        self.input_sharded_memory_config = ttl.tensor.MemoryConfig(
+        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.input_shard_orientation, shard_halo)
+        self.input_shard_scheme = (
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
             if self.is_1d_systolic
-            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+        )
+        self.input_sharded_memory_config = ttl.tensor.MemoryConfig(
+            self.input_shard_scheme,
             ttl.tensor.BufferType.L1,
             shard_spec,
         )
+        self.grid_size = (num_cores_w, num_cores_h)
 
     # override abstract methods from base class TTPyOp
     def set_op_configs(

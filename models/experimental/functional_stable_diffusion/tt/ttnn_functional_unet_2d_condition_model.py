@@ -29,6 +29,7 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_downbloc
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    pre_process_input_new,
 )
 
 
@@ -214,11 +215,16 @@ def UNet2DConditionModel(
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
+            # enable_auto_formatting=True,
         )
-        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            device, conv_in, sample, batch_size, input_height, input_width, out_channels
-        )
+        sample = pre_process_input_new(device, sample)
+        # sample in l1 interelaved and tiled and nhwc
+        sample = ttnn.to_memory_config(sample, conv_in.conv.input_sharded_memory_config)
+        sample = conv_in(sample)
+        # sample is sharded
+        # sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+        #     device, conv_in, sample, batch_size, input_height, input_width, out_channels
+        # )
 
     # con_in completes
 
@@ -262,6 +268,13 @@ def UNet2DConditionModel(
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 device=device,
                 reader_patterns_cache=reader_patterns_cache,  # enable convs on device for this module causes failure. Investigating.
+                group_norm_sharded_config={
+                    "shard_strategy": conv_in.conv.input_shard_scheme,
+                    "shard_orientation": conv_in.conv.input_shard_orientation,
+                    "grid_size": conv_in.conv.grid_size,
+                }
+                if i == 0
+                else None,
             )
         elif down_block_type == "DownBlock2D":
             sample, res_samples = downblock2d(
@@ -448,7 +461,7 @@ def UNet2DConditionModel(
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={"act_block_h": 64},
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
+            # enable_auto_formatting=True,
             deallocate_activation=True,
         )
         sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
