@@ -5,6 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import json
+from pathlib import Path
 from models.experimental.mistral.tt.model_config import TtModelArgs, get_model_config
 from models.experimental.mistral.tt.mistral_rms_norm import TtRMSNorm
 from models.experimental.mistral.reference.model import RMSNorm
@@ -21,7 +22,9 @@ from models.utility_functions import (
 )
 def test_mistral_rms_norm_inference(model_config, model_location_generator, device):
     dtype = model_config.split("-")[0]
-    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="mistral")
+    model_config = get_model_config(model_config)
+
+    mistral_path = Path(model_location_generator(model_config["DEFAULT_CACHE_PATH"], model_subdir="mistral"))
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
@@ -35,7 +38,7 @@ def test_mistral_rms_norm_inference(model_config, model_location_generator, devi
         device=device,
         base_address=base_address,
         state_dict=state_dict,
-        model_config=get_model_config(model_config),
+        model_config=model_config,
     )
     input = torch.rand(1, 32, 4096)
     reference_output = reference_model(input)

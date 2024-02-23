@@ -27,7 +27,9 @@ from models.utility_functions import (
 )
 def test_mistral_mlp_inference(pcc, model_config, model_location_generator, device):
     dtype = model_config.split("-")[0]
-    mistral_path = Path(model_location_generator("mistral-7B-v0.1", model_subdir="mistral"))
+    model_config = get_model_config(model_config)
+
+    mistral_path = Path(model_location_generator(model_config["DEFAULT_CACHE_PATH"], model_subdir="mistral"))
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
@@ -43,7 +45,7 @@ def test_mistral_mlp_inference(pcc, model_config, model_location_generator, devi
         device=device,
         state_dict=state_dict,
         base_address=base_address,
-        model_config=get_model_config(model_config),
+        model_config=model_config,
     )
     input = torch.rand(1, 32, 4096)
     reference_output = reference_model(input)

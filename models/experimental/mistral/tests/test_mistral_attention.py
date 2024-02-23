@@ -5,6 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import json
+from pathlib import Path
 
 from models.experimental.mistral.tt.mistral_attention import TtMistralAttention
 from models.experimental.mistral.tt.mistral_common import precompute_freqs, generate_cos_sin_cache, prepare_inputs
@@ -36,7 +37,9 @@ def test_mistral_attention_inference(
     model_location_generator,
     device,
 ):
-    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
+    model_config = get_model_config(model_config)
+
+    mistral_path = Path(model_location_generator(model_config["DEFAULT_CACHE_PATH"], model_subdir="mistral"))
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
 
     base_address = f""
@@ -56,8 +59,6 @@ def test_mistral_attention_inference(
 
     batch = 32
     seq_len = 1
-
-    model_config = get_model_config(model_config)
 
     tt_cos_cached, tt_sin_cached = generate_cos_sin_cache(
         devices, model_args.head_dim, "", model_args.max_seq_len * 2, 10000, model_config

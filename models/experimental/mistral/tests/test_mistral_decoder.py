@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import tt_lib
 import pytest
 from loguru import logger
 import json
@@ -31,9 +30,10 @@ from models.utility_functions import (
     ((0.99),),
 )
 def test_mistral_decoder_inference(pcc, model_config, model_location_generator, device, iterations):
-    dtype = model_config.split("-")[0]
+    dtype_str, mem_config_str = model_config.split("-")
+    model_config = get_model_config(model_config)
 
-    mistral_path = Path(model_location_generator("mistral-7B-v0.1", model_subdir="mistral"))
+    mistral_path = Path(model_location_generator(model_config["DEFAULT_CACHE_PATH"], model_subdir="mistral"))
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
@@ -51,21 +51,6 @@ def test_mistral_decoder_inference(pcc, model_config, model_location_generator, 
         device,
     ]
 
-    # Setup mem config based on the test
-    # TODO move this to model config
-    dtype_str, mem_config_str = model_config.split("-")
-    if mem_config_str == "DRAM":
-        output_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-        )
-    elif mem_config_str == "L1":
-        output_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
-    else:
-        raise ValueError(f"Invalid memory configuration {mem_config_str}")
-
-    model_config = get_model_config(model_config)
     tt_cos_cached, tt_sin_cached = generate_cos_sin_cache(
         devices, model_args.head_dim, "", model_args.max_seq_len * 2, 10000, model_config
     )

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import tt_lib
 import pytest
 from loguru import logger
 import json
@@ -40,7 +39,9 @@ def test_mistral_model_inference(pcc, model_config, model_location_generator, de
         "This is a sample text for single layer execution ",
     ]
 
-    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
+    model_config = get_model_config(model_config)
+
+    mistral_path = Path(model_location_generator(model_config["DEFAULT_CACHE_PATH"], model_subdir="mistral"))
     tokenizer = Tokenizer(str(Path(mistral_path) / "tokenizer.model"))
     base_address = f""
     with open(mistral_path / "params.json", "r") as f:
@@ -66,7 +67,6 @@ def test_mistral_model_inference(pcc, model_config, model_location_generator, de
         device,
     ]
 
-    model_config = get_model_config(model_config)
     tt_cos_cached, tt_sin_cached = generate_cos_sin_cache(
         devices, model_args.head_dim, "", model_args.max_seq_len * 2, 10000, model_config
     )
