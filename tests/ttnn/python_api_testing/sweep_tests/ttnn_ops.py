@@ -651,7 +651,7 @@ def eltwise_tanh(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     return ttnn_tensor_to_torch(t1, output_mem_config)
 
 
-def softmax(
+def eltwise_softmax(
     x,
     *args,
     device,
@@ -662,9 +662,22 @@ def softmax(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    # t2 = ttnn.add(t0, t1, alpha=scalar)
     t1 = ttnn.softmax(t0, dim=-1)
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_softplus(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.softplus(t0)
     return ttnn_tensor_to_torch(t1, output_mem_config)
 
 
@@ -896,7 +909,6 @@ def full_like(
 def eltwise_relu6(
     x,
     *args,
-    # fast_and_approx,
     device,
     dtype,
     layout,
@@ -913,7 +925,6 @@ def eltwise_relu6(
 def eltwise_rsqrt(
     x,
     *args,
-    # fast_and_approx,
     device,
     dtype,
     layout,
@@ -923,5 +934,118 @@ def eltwise_rsqrt(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_sigmoid(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sigmoid(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_sign(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sign(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_silu(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.silu(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_sin(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sin(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_sinh(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sinh(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_softshrink(
+    x,
+    *args,
+    _lambda,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.softshrink(t0, _lambda, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_softsign(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.softsign(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1, output_mem_config)
