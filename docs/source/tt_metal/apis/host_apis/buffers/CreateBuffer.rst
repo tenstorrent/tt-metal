@@ -1,4 +1,5 @@
 CreateBuffer
 =================
 
-.. doxygenfunction:: CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> & config);
+.. doxygenfunction:: CreateBuffer(const InterleavedBufferConfig & config);
+.. doxygenfunction:: CreateBuffer(const ShardedBufferConfig & config);
