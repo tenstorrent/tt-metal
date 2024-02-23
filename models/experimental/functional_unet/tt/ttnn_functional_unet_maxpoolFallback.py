@@ -160,7 +160,6 @@ class UNet:
 
         # output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
 
-        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.to_torch(output_tensor)
@@ -190,7 +189,6 @@ class UNet:
 
         # output_tensor = torch.nn.functional.interpolate(output_tensor, scale_factor=2, mode="bilinear")
 
-        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.to_torch(output_tensor)
