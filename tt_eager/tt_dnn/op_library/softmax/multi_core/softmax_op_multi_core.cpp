@@ -32,9 +32,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const Tensor &output_tensor,
     const std::optional<const Tensor> mask,
     std::optional<float> scale,
-    MathFidelity fidelity,
-    DataType im_data_format,
-    bool causal_mask
+    bool causal_mask,
+    DeviceComputeKernelConfig compute_kernel_config
 ) {
 
     const auto shape = input_tensor.get_legacy_shape();
@@ -46,10 +45,36 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     Program program = CreateProgram();
 
-    uint32_t scalar_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    // This should allocate input_tensor DRAM buffer on the device
+    Device *device = input_tensor.device();
 
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t in0_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
+
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t scalar_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
 
     tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     uint32_t out0_tile_size = tt_metal::detail::TileSize(out0_cb_data_format);
@@ -57,18 +82,23 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().get_dtype()) : tt::DataFormat::Float16_b;
     uint32_t mask_tile_size = tt_metal::detail::TileSize(mask_cb_data_format);
 
-    tt::DataFormat im_cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t im_tile_size = tt_metal::detail::TileSize(im_cb_data_format);
+
+    log_debug("in0_cb_data_format: {}", in0_cb_data_format);
+    log_debug("out0_cb_data_format: {}", out0_cb_data_format);
+    log_debug("mask_cb_data_format: {}", mask_cb_data_format);
+    log_debug("im_cb_data_format: {}", im_cb_data_format);
+    log_debug("math_fidelity: {}", math_fidelity);
+    log_debug("math_approx_mode: {}", math_approx_mode);
+    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
 
     uint32_t num_tiles = input_tensor.volume()/TILE_HW;
 
-    // This should allocate input_tensor DRAM buffer on the device
-    Device *device = input_tensor.device();
-
-    uint32_t block_size = find_max_divisor(Wt, 8);
+    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t in0_t  = block_size*2;
@@ -140,14 +170,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // NCHt, Nt, Wt
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
 
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     auto softmax_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/compute/softmax.cpp", all_device_cores,
         tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
+            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
             .compile_args = {},
             .defines = softmax_defines
     });
@@ -161,7 +189,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto cb_out0_id = CreateCircularBuffer( program, all_device_cores, c_out0_config );
     auto c_intermed1_config = CircularBufferConfig(im1_t * im_tile_size, {{CB::c_intermed1, im_cb_data_format}}).set_page_size(CB::c_intermed1, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer( program, all_device_cores, c_intermed1_config );
-    auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{CB::c_in2, DataFormat::Float16_b}}).set_page_size(CB::c_in2, scalar_tile_size);
+    auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{CB::c_in2, scalar_cb_data_format}}).set_page_size(CB::c_in2, scalar_tile_size);
     auto cb_in2_id = CreateCircularBuffer( program, all_device_cores, c_in2_config );
     auto c_intermed0_config = CircularBufferConfig(im0_t * im_tile_size, {{CB::c_intermed0, im_cb_data_format}}).set_page_size(CB::c_intermed0, im_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer( program, all_device_cores, c_intermed0_config );
@@ -171,7 +199,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (mask.has_value()) {
         CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t * im_tile_size, {{CB::c_intermed3, im_cb_data_format}}).set_page_size(CB::c_intermed3, im_tile_size);
         cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );
-        CircularBufferConfig c_in3_config = CircularBufferConfig(in3_t * scalar_tile_size, {{CB::c_in3, DataFormat::Float16_b}}).set_page_size(CB::c_in3, scalar_tile_size);
+        CircularBufferConfig c_in3_config = CircularBufferConfig(in3_t * scalar_tile_size, {{CB::c_in3, scalar_cb_data_format}}).set_page_size(CB::c_in3, scalar_tile_size);
         cb_in3_id = CreateCircularBuffer( program, all_device_cores, c_in3_config );
         CircularBufferConfig c_in4_config = CircularBufferConfig(in4_t * mask_tile_size, {{CB::c_in4, mask_cb_data_format}}).set_page_size(CB::c_in4, mask_tile_size);
         cb_in4_id = CreateCircularBuffer( program, all_device_cores, c_in4_config);
@@ -348,30 +376,60 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     const Tensor &output_tensor,
     const std::optional<const Tensor> mask,
     std::optional<float> scale,
-    MathFidelity fidelity,
-    DataType im_data_format,
     bool causal_mask,
     CoreCoord grid_size,
     uint32_t subblock_wt,
     uint32_t block_ht,
-    uint32_t block_wt
+    uint32_t block_wt,
+    DeviceComputeKernelConfig compute_kernel_config
 ) {
+    ////////////////////////////////////////////////////////////////////////////
+    //                       Device Setup
+    ////////////////////////////////////////////////////////////////////////////
+    Device *device = input_tensor.device();
+
     // convert data format
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+            if (fp32_dest_acc_en)
+                TT_FATAL(subblock_wt <= 4, "in fp32 mode, subblock width must be smaller/equal than 4");
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
     tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    tt::DataFormat im_cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    // tt::DataFormat scale_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    // log_info(LogTest, "in0 dtype {}", in0_cb_data_format);
-    // log_info(LogTest, "im dtype {}", in0_cb_data_format);
-    // if (mask.has_value()) {
-    //     log_info(LogTest, "mask dtype {}", mask_cb_data_format);
-    //     log_info(LogTest, "scale dtype {}", scale_cb_data_format);
-    // }
-    // log_info(LogTest, "out dtype {}", in0_cb_data_format);
+    log_debug("in0_cb_data_format: {}", in0_cb_data_format);
+    log_debug("out0_cb_data_format: {}", out0_cb_data_format);
+    log_debug("mask_cb_data_format: {}", mask_cb_data_format);
+    log_debug("im_cb_data_format: {}", im_cb_data_format);
+    log_debug("scale_cb_data_format: {}", im_cb_data_format);
+    log_debug("scalar_cb_data_format: {}", im_cb_data_format);
+    log_debug("math_fidelity: {}", math_fidelity);
+    log_debug("math_approx_mode: {}", math_approx_mode);
+    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
@@ -398,10 +456,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // num tiles
     uint32_t num_tiles = input_tensor.volume()/TILE_HW;
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    Device *device = input_tensor.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -469,6 +523,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     if (causal_mask) {
         reader_compile_time_args.push_back((std::uint32_t) block_ht / block_wt); // fused head
     }
+    reader_compile_time_args.push_back((std::uint32_t) (mask_cb_data_format == tt::DataFormat::Float32)); // mask float32
 
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -493,13 +548,11 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         subblock_wt,
         num_subblocks_w,
     };
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     auto softmax_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/compute/softmax_sharded.cpp", all_device_cores,
         tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
+            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = softmax_defines
     });

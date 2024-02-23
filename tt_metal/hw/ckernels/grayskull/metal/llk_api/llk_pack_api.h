@@ -231,7 +231,7 @@ inline void llk_pack_reduce_mask_clear() {
     _llk_pack_reduce_mask_clear_();
 }
 
-template <ReduceDim dim, bool at_kernel_start = false, bool revert=false>
+template <ReduceDim dim, bool at_kernel_start = false, bool revert=false, bool is_fp32_dest_acc_en = false /*unused*/>
 inline void llk_pack_reduce_config_v2(uint32_t output) {
 
     const bool untilize = false;

@@ -239,10 +239,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=False,
                 fused_activation=None,
             ),
-            "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxInterleavedMultiCoreProgramConfig(
-                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
-                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
-            ),
+            "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
             "OP8_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
                 math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
                 im_data_format=tt_lib.tensor.DataType.BFLOAT16,
@@ -407,8 +404,8 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 subblock_w=6,
                 block_h=24,
                 block_w=12,
-                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
-                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+                # math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                # im_data_format=tt_lib.tensor.DataType.BFLOAT16,
             ),
         }
         model_config.update(new_config_values)

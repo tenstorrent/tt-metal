@@ -91,8 +91,8 @@ def update_model_config(config, batch_size):
             subblock_w=6,
             block_h=24,
             block_w=12,
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
         ),
     }
 
