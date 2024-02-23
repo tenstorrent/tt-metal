@@ -38,12 +38,6 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
     uint32_t num_transfers = command_ptr[0];
     command_ptr++;
     uint32_t src = page_addr;
-    // DPRINT << "DISPATCH PAGE" << ENDL();
-    // for (uint32_t i = page_addr; i < page_addr + 2048; i += 4) {
-    //     DPRINT << reinterpret_cast<volatile tt_l1_ptr uint32_t*>(i)[0] << ENDL();
-    // }
-    // DPRINT << ENDL();
-
     for (uint32_t i = 0; i < num_transfers; i++) {
         uint32_t num_bytes = command_ptr[0];
         uint32_t dst = command_ptr[1];
@@ -52,10 +46,6 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
         bool last_transfer_in_group = command_ptr[4];
 
         uint64_t dst_noc_addr = (uint64_t(dst_noc) << 32) | dst;
-
-        // DPRINT << "NUM BYTES: " << num_bytes << ENDL();
-        // DPRINT << "DST: " << dst << ENDL();
-
 
         if constexpr (multicast) {
             noc_async_write_multicast_one_packet_no_path_reserve(src, dst_noc_addr, num_bytes, num_recv);
@@ -71,23 +61,23 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
 }
 
 template <bool multicast>
-FORCE_INLINE void program_page_transfer(
+FORCE_INLINE uint32_t program_page_transfer(
     db_cb_config_t* db_cb_config,
     const db_cb_config_t* remote_db_cb_config,
     volatile tt_l1_ptr uint32_t*& command_ptr,
     uint64_t producer_noc_encoding,
     uint32_t producer_consumer_transfer_num_pages,
-    uint32_t num_pages_in_transfer) {
+    uint32_t num_pages_in_transfer,
+    uint32_t global_page_idx) {
     uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
-    // while(true);
-    // DPRINT << "NUM PAGES IN TRANSFER: " << num_pages_in_transfer << ENDL();
+
     for (uint32_t page_idx = 0; page_idx < num_pages_in_transfer;) {
-        uint32_t num_to_write = min(num_pages_in_transfer - page_idx, producer_consumer_transfer_num_pages);
-        num_to_write = min(num_to_write, multicore_cb_pages_left(db_cb_config));
+        uint32_t next_multiple_of_producer_consumer_transfer_num_pages = align(global_page_idx + 1, producer_consumer_transfer_num_pages);
+        uint32_t num_pages_left_in_transfer = num_pages_in_transfer - page_idx;
+        uint32_t num_to_write = min(num_pages_left_in_transfer, next_multiple_of_producer_consumer_transfer_num_pages - global_page_idx);
+
         multicore_cb_wait_front(db_cb_config, num_to_write);
         uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
-        // DPRINT << "WRITING " << num_to_write << " PAGES TO WORKERS" << ENDL();
-        // DPRINT << "WRITING PAGES FROM " << src_addr << ENDL();
         for (uint32_t i = 0; i < num_to_write; i++) {
             write_program_page<multicast>(src_addr, command_ptr, i == num_to_write - 1);
             src_addr += DeviceCommand::PROGRAM_PAGE_SIZE;
@@ -101,7 +91,10 @@ FORCE_INLINE void program_page_transfer(
             (l1_consumer_fifo_limit >> 4),
             num_to_write,
             (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
+
+        global_page_idx += num_to_write;
     }
+    return global_page_idx;
 }
 
 FORCE_INLINE
@@ -124,6 +117,8 @@ void write_and_launch_program(
     volatile tt_l1_ptr uint32_t* program_dispatch_cmd_ptr,
     uint64_t producer_noc_encoding,
     uint32_t producer_consumer_transfer_num_pages) {
+
+    uint32_t global_page_idx = 0;
     for (uint32_t transfer_type_idx = 0; transfer_type_idx < (uint32_t) DeviceCommand::TransferType::NUM_TRANSFER_TYPES; transfer_type_idx++) {
         uint32_t num_pages_in_transfer;
         bool multicast = true;
@@ -153,21 +148,23 @@ void write_and_launch_program(
         }
 
         if (multicast) {
-            program_page_transfer<true>(
+            global_page_idx = program_page_transfer<true>(
                 db_cb_config,
                 remote_db_cb_config,
                 program_dispatch_cmd_ptr,
                 producer_noc_encoding,
                 producer_consumer_transfer_num_pages,
-                num_pages_in_transfer);
+                num_pages_in_transfer,
+                global_page_idx);
         } else {
-            program_page_transfer<false>(
+            global_page_idx = program_page_transfer<false>(
                 db_cb_config,
                 remote_db_cb_config,
                 program_dispatch_cmd_ptr,
                 producer_noc_encoding,
                 producer_consumer_transfer_num_pages,
-                num_pages_in_transfer);
+                num_pages_in_transfer,
+                global_page_idx);
         }
     }
 }
@@ -182,20 +179,11 @@ FORCE_INLINE void wait_for_program_completion(uint32_t num_workers) {
     volatile tt_l1_ptr uint32_t* message_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
 
+    DPRINT << "WAIT FOR PROG COMPLETION" << ENDL();
     while (*message_addr_ptr != num_workers)
         ;
+    DPRINT << "DONE PROGRAM" << ENDL();
 
 
     DEBUG_STATUS('Q', 'D');
-}
-
-template <uint32_t host_finish_addr>
-FORCE_INLINE void notify_host_complete() {
-    volatile tt_l1_ptr uint32_t* finish_ptr = get_cq_finish_ptr();
-    finish_ptr[0] = 1;
-    constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
-    constexpr static uint64_t finish_noc_addr = pcie_core_noc_encoding | host_finish_addr;
-    noc_async_write(uint32_t(finish_ptr), finish_noc_addr, 4);
-    noc_async_write_barrier();
-    finish_ptr[0] = 0;
 }

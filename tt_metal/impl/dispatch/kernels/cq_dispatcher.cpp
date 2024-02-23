@@ -23,14 +23,10 @@ void kernel_main() {
         uint32_t program_transfer_start_addr = command_start_addr + ((DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER + DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
         volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
-        DPRINT << "ACQUIRE" << ENDL();
         db_acquire(db_semaphore_addr, consumer_noc_encoding);
         uint32_t num_workers = header->num_workers;
         uint32_t num_pages = header->num_pages;
         uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
-
-        DPRINT << "NUM PAGES: " << num_pages << ENDL();
-
 
         db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
@@ -50,6 +46,5 @@ void kernel_main() {
         noc_async_write_barrier(); // Barrier for now
 
         db_buf_switch = not db_buf_switch;
-        DPRINT << "DONE PROGRAM" << ENDL();
     }
 }

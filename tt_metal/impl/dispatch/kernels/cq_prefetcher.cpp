@@ -102,8 +102,6 @@ void kernel_main() {
             // we will also need to poll the program event buffer
             while (not issue_queue_space_available()) {
                 if (consumer_is_idle<2>(db_semaphore_addr)) {
-                    // DPRINT << "SENDING EVENT" << ENDL();
-                    // for (volatile int i = 0; i < 1000000000; i++);
                     program_event_buffer.write_events();
                 }
             }
@@ -166,6 +164,7 @@ void kernel_main() {
                 uint32_t num_pages_in_transfer = program_dynamic_buffers<true, false>(buffer_transfer_ptr, src_pr_cfg, dst_pr_cfg, page_size, num_pages_to_read, num_pages_to_write);
                 pull_and_relay<PullAndRelayType::BUFFER, PullAndRelayType::CIRCULAR_BUFFER>(src_pr_cfg, dst_pr_cfg, num_pages_in_transfer);
                 buffer_transfer_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
+                program_local_cb(data_section_addr, producer_cb_num_pages, page_size, producer_cb_size);
             }
         } else {
             completion_queue_reserve_back(completion_data_size);

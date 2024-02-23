@@ -355,6 +355,7 @@ void pull_and_relay(
         num_pages_to_write = min(num_pages, dst_pr_cfg.num_pages_to_write);
     }
 
+    DPRINT << "NUM PAGES TO RELAY " << num_pages << ENDL();
     while (num_writes_completed != num_pages) {
         if (cb_producer_space_available(num_pages_to_read) and num_reads_issued < num_pages) {
             if constexpr (src_type == PullAndRelayType::CIRCULAR_BUFFER) {
@@ -394,8 +395,6 @@ void pull_and_relay(
                 }
 
                 num_pages_to_write = min(num_pages - num_writes_completed, dst_pr_cfg.num_pages_to_write);
-                num_pages_to_write = min(num_pages_to_write, consumer_num_pages_left);
-                num_pages_to_write = min(num_pages_to_write, num_reads_completed - num_writes_completed);
             }
 
             if (num_writes_completed == num_reads_completed) {
@@ -411,7 +410,11 @@ void pull_and_relay(
                 uint32_t dst_addr = dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << 4;
                 uint64_t dst_noc_addr = dst_pr_cfg.cb_buff_cfg.remote_noc_encoding | dst_addr;
 
+                DPRINT << "WRITING " << num_pages_to_write << " TO DISPATCH ADDR: " << dst_addr << ENDL();
                 noc_async_write(get_read_ptr(0), dst_noc_addr, (dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_write);
+
+                // All pushbacks are snapped to roughly 4
+                // DPRINT << "NUM TO PUSH " <<
                 multicore_cb_push_back(
                     dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,  dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg, dst_pr_cfg.cb_buff_cfg.remote_noc_encoding, dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->fifo_limit_16B, num_pages_to_write);
 
