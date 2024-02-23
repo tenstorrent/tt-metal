@@ -45,3 +45,41 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     }
     Finish(*this->cmd_queue);
 }
+
+// Test where Host synchronously waits for event to be completed.
+TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronize) {
+    size_t num_events = 100;
+    size_t num_events_between_sync = 10;
+    std::vector<Event> sync_events;
+
+    // A bunch of events recorded, occasionally will sync from host.
+    for (size_t i = 0; i < num_events; i++) {
+        auto &event = sync_events.emplace_back(Event());
+
+        // Uncomment this to ensure syncing on uninitialized event would assert.
+        // EventSynchronize(event);
+
+        EnqueueQueueRecordEvent(*this->cmd_queue, event);
+        log_debug(tt::LogTest, "Done recording event. Got Event(event_id: {} cq_id: {})", event.event_id, event.cq_id);
+        EXPECT_EQ(event.event_id, i);
+        EXPECT_EQ(event.cq_id, this->cmd_queue->id());
+
+        // Host synchronize every N number of events.
+        if (i > 0 && ((i % num_events_between_sync) == 0)) {
+            EventSynchronize(event);
+        }
+    }
+
+    // A bunch of bonus syncs where event_id is mod on earlier ID's.
+    EventSynchronize(sync_events.at(2));
+    EventSynchronize(sync_events.at(sync_events.size() - 2));
+    EventSynchronize(sync_events.at(5));
+
+    // Uncomment this to confirm future events not yet seen would hang.
+    // log_debug(tt::LogTest, "The next event is not yet seen, would hang");
+    // Event future_event = sync_events.at(0);
+    // future_event.event_id = num_events + 2;
+    // EventSynchronize(future_event);
+
+    Finish(*this->cmd_queue);
+}

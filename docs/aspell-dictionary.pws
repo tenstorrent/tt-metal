@@ -62,6 +62,7 @@ EnqueueReadBuffer
 EnqueueWriteBuffer
 Enum
 Enums
+EventSynchronize
 FW
 FileCopyrightText
 GGGG
