@@ -72,24 +72,8 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
 }
 
 
-bool valid_page_shape(const std::array<uint32_t, 2> & page_shape, uint32_t size_of_element){
-    const uint32_t MAX_PAGE_SIZE = 4096 * 100;
-    return page_shape[0] * page_shape[1] * size_of_element <= MAX_PAGE_SIZE;
-}
 
-bool enough_work_for_sharding(const Shape& shape, std::array<uint32_t, 2> shard_shape, std::array<uint32_t, 2> page_shape, uint32_t num_shards){
-    uint32_t W = shape[-1];
-    uint32_t NCH = shape[0]*shape[1]*shape[2];
-    std::array<uint32_t,2> num_shard_pages_needed = {NCH/shard_shape[0], W/shard_shape[1]};
-    return num_shards >= num_shard_pages_needed[0]*num_shard_pages_needed[1];
-}
-
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, const Shape& shape, DataType dtype, uint32_t num_shards, std::array<uint32_t, 2> shard_shape) {
-    uint32_t W = shape[-1];
-    uint32_t H = shape[-2];
-    uint32_t C = shape[1];
-    uint32_t N = shape[1];
-    uint32_t NCH = N*C*H;
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout,  DataType dtype, std::array<uint32_t, 2> shard_shape) {
     uint32_t page_size = 0;
     std::array<uint32_t, 2> page_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH};
 
