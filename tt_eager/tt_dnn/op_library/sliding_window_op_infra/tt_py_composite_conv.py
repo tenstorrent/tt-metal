@@ -459,7 +459,6 @@ class TTPyCompositeConv(TTPyOp):
             filter_height == filter_width
             and filter_height == 1
             and stride_h == stride_w
-            and stride_h == 1
             and pad_h == pad_w
             and pad_h == 0
         ):
@@ -487,6 +486,8 @@ class TTPyCompositeConv(TTPyOp):
         self.sliding_window_op_params = sliding_window_op_params
         self.move_utwh_output = move_utwh_output
         self.deallocate_input = deallocate_activation
+        self.kernel_size = [filter_height, filter_width]
+        self.strides = [stride_h, stride_w]
 
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
@@ -726,6 +727,17 @@ class TTPyCompositeConv(TTPyOp):
         else:
             self.weight = weight
             self.bias = bias
+            weight_on_device = weight
+            bias_on_device = bias
+
+        def downsample_if_needed(activation):
+            use_downsample = False
+            for kernel_size, stride in zip(self.kernel_size, self.strides):
+                if kernel_size == 1 and stride > 1:
+                    use_downsample = True
+            if use_downsample:
+                activation = ttl.tensor.downsample(activation, [*self.input_tensor_shape[:-1], *self.strides])
+            return activation
 
         def conv_(activation):
             return ttl.tensor.optimized_conv(
@@ -749,6 +761,7 @@ class TTPyCompositeConv(TTPyOp):
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
         def composite_conv_with_deallocate_input(activation):
+            activation = downsample_if_needed(activation)
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
@@ -756,10 +769,12 @@ class TTPyCompositeConv(TTPyOp):
 
         def composite_conv(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
+            activation = downsample_if_needed(activation)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             return conv_(utwh_output)
 
         def composite_conv_with_move_utwh_output_with_deallocate_input(activation):
+            activation = downsample_if_needed(activation)
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
@@ -768,6 +783,7 @@ class TTPyCompositeConv(TTPyOp):
             return conv_(move_output)
 
         def composite_conv_with_move_utwh_output(activation):
+            activation = downsample_if_needed(activation)
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             move_output = ttl.tensor.move_sharded(utwh_output)
@@ -775,6 +791,7 @@ class TTPyCompositeConv(TTPyOp):
             return conv_(move_output)
 
         def conv1x1_as_matmul(activation):
+            activation = downsample_if_needed(activation)
             # conv1x1 stride 1 padding 0, use matmul op
             output = ttl.operations.primary.matmul(
                 activation,
