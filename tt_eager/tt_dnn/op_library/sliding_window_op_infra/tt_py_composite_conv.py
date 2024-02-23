@@ -761,7 +761,6 @@ class TTPyCompositeConv(TTPyOp):
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
         def composite_conv_with_deallocate_input(activation):
-            activation = downsample_if_needed(activation)
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
@@ -769,12 +768,10 @@ class TTPyCompositeConv(TTPyOp):
 
         def composite_conv(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
-            activation = downsample_if_needed(activation)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             return conv_(utwh_output)
 
         def composite_conv_with_move_utwh_output_with_deallocate_input(activation):
-            activation = downsample_if_needed(activation)
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
@@ -783,7 +780,6 @@ class TTPyCompositeConv(TTPyOp):
             return conv_(move_output)
 
         def composite_conv_with_move_utwh_output(activation):
-            activation = downsample_if_needed(activation)
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             move_output = ttl.tensor.move_sharded(utwh_output)
