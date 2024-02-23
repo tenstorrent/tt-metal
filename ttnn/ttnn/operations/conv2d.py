@@ -116,6 +116,13 @@ class Conv2d:
             deallocate_activation=deallocate_activation,
             padded_input_channels=padded_input_channels,
         )
+        self.batch_size = batch_size
+        self.input_height = input_height
+        self.input_width = input_width
+        self.output_height = (input_height + (2 * pad_h) - dilation_h * (window_h - 1) - 1) // stride_h + 1
+        self.output_width = (input_width + (2 * pad_w) - dilation_w * (window_w - 1) - 1) // stride_w + 1
+        self.in_channels = in_channels
+        self.out_channels = out_channels
 
     @ttnn.register_operation(name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: True)
     def __call__(self, activation: ttnn.Tensor):
