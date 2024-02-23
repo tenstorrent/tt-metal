@@ -137,9 +137,6 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
         subblock_w=per_core_k // 32,
         block_h=seq_len // 32,
         block_w=per_core_k // 32,
-        math_fidelity=fidelity,
-        im_data_format=cb_dtype,
-        out_data_format=out_dtype,
         inplace=True,
     )
 
@@ -295,9 +292,6 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         subblock_w=per_core_k // 32,
         block_h=seq_len // 32,
         block_w=per_core_k // 32,
-        math_fidelity=fidelity,
-        im_data_format=cb_dtype,
-        out_data_format=out_dtype,
         inplace=True,
     )
 

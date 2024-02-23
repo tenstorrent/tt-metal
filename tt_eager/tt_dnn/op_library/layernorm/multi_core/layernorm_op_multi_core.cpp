@@ -36,10 +36,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    MathFidelity fidelity,
-    DataType im_data_format
+    DeviceComputeKernelConfig compute_kernel_config
 ) {
-
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2];
@@ -54,11 +52,44 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
-    uint32_t block_size = find_max_divisor(Wt, 8);
+    ////////////////////////////////////////////////////////////////////////////
+    //                       Device Setup
+    //////////////////////////////////////////////////////////////////////////
+    // This should allocate a DRAM buffer on the device
+    Device *device = a.device();
+    auto dst_addr = output.buffer()->address();
+
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                Circular Buffer Data Format Setup
+    //////////////////////////////////////////////////////////////////////////
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = tt_metal::datatype_to_dataformat_converter(a.get_dtype()) == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
     tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype()) : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt_metal::detail::TileSize(in_data_format);
@@ -67,6 +98,15 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t gamma_single_tile_size = tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt_metal::detail::TileSize(beta_cb_data_format);
+
+    log_debug("in_data_format: {}", in_data_format);
+    log_debug("out_data_format: {}", out_data_format);
+    log_debug("cb_data_format: {}", cb_data_format);
+    log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug("beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug("math_fidelity: {}", math_fidelity);
+    log_debug("math_approx_mode: {}", math_approx_mode);
+    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
@@ -91,14 +131,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
         num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_WIDTH : 0;
     }
-
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
-    auto dst_addr = output.buffer()->address();
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -224,15 +256,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
 
-    vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value() };
+    vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en };
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
     auto compute_kernels_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = compute_defines}
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = compute_defines}
     );
 
     // Create circular buffers
@@ -368,18 +398,50 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    MathFidelity fidelity,
-    DataType im_data_format,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_ht,
-    uint32_t block_wt
+    uint32_t block_wt,
+    DeviceComputeKernelConfig compute_kernel_config
 ) {
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Grayskull Device Setup
+    ////////////////////////////////////////////////////////////////////////////
+    Device *device = a.device();
+
     // convert data format
     tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = in_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    if (fp32_dest_acc_en) {
+        TT_ASSERT(subblock_wt <= 4, "subblock width must less than 4 in fp32 mode");
+    }
+
     tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype()) : tt::DataFormat::Float16_b;
     // tile sizes
@@ -388,6 +450,17 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
     uint32_t gamma_single_tile_size = tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt_metal::detail::TileSize(beta_cb_data_format);
+    uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+
+    log_debug("in_data_format: {}", in_data_format);
+    log_debug("out_data_format: {}", out_data_format);
+    log_debug("cb_data_format: {}", cb_data_format);
+    log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug("beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug("math_fidelity: {}", math_fidelity);
+    log_debug("math_approx_mode: {}", math_approx_mode);
+    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+
     // tensor shape
     const auto shape = a.get_legacy_shape();
     uint32_t M = a.volume() / shape[-1];
@@ -434,11 +507,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    Device *device = a.device();
-
-    ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
@@ -450,9 +518,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // block size for in1 (tensor b)
     uint32_t in1_CB_size = in0_CB_size;
     // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size;
+    uint32_t in2_CB_size = bfloat16_tile_size;
     // in3 - eps
-    uint32_t in3_CB_size = single_tile_size;
+    uint32_t in3_CB_size = bfloat16_tile_size;
     // gamma
     uint32_t in5_CB_size = in0_block_tiles * gamma_single_tile_size / block_ht;
     // beta
@@ -731,6 +799,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         writer_mcast_receiver_compile_time_args.push_back(0);
     }
 
+    writer_mcast_sender_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
+    writer_mcast_sender_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
+    writer_mcast_receiver_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
+    writer_mcast_receiver_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
+
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     std::string writer_kernel = use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_sharded_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_sharded_ln.cpp";
@@ -768,7 +841,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         subblock_wt,
         num_subblocks_w,
         1,
-        block_ht * block_wt
+        block_ht * block_wt,
+        fp32_dest_acc_en
     };
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         0,
@@ -780,7 +854,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         subblock_wt,
         num_subblocks_w,
         1,
-        block_ht * block_wt
+        block_ht * block_wt,
+        fp32_dest_acc_en
     };
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
         0,
@@ -792,24 +867,23 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         subblock_wt,
         num_subblocks_w,
         0,
-        block_ht * block_wt
+        block_ht * block_wt,
+        fp32_dest_acc_en
     };
     // compute kernel
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = true;
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm_sharded.cpp",
         all_to_all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = compute_defines}
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = compute_defines}
     );
     if (num_none_all_to_all_workers > 0) {
         compute_kernels_id = CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/layernorm/kernels/compute/layernorm_sharded.cpp",
             not_all_to_all_workers,
-            tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = compute_defines}
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = compute_defines}
         );
     }
     // Create circular buffers
@@ -828,18 +902,18 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     // in2 scaler
     uint32_t in2_cb_index = CB::c_in2;
-    tt_metal::CircularBufferConfig in2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, cb_data_format}})
-		.set_page_size(in2_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig in2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, tt::DataFormat::Float16_b}})
+		.set_page_size(in2_cb_index, bfloat16_tile_size);
     auto cb_in2 = tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
     // in4 scaler-c
     uint32_t in4_cb_index = CB::c_in4;
-    tt_metal::CircularBufferConfig in4_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, cb_data_format}})
-		.set_page_size(in4_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig in4_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
+		.set_page_size(in4_cb_index, bfloat16_tile_size);
     auto cb_in4 = tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
     // in3 eps
     uint32_t in3_cb_index = CB::c_in3;
-    tt_metal::CircularBufferConfig in3_cb_config = tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, cb_data_format}})
-		.set_page_size(in3_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig in3_cb_config = tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
+		.set_page_size(in3_cb_index, bfloat16_tile_size);
     auto cb_in3 = tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
     // gamma
     if (gamma.has_value()) {

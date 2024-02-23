@@ -27,6 +27,7 @@ void MAIN {
     constexpr uint32_t blk = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -144,6 +145,9 @@ void MAIN {
          * x - E[x]
          * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
          */
+        if constexpr (FLOAT32_DTYPE) {
+            unpack_reconfig_data_format(cb_x, cb_ex);
+        }
         cb_wait_front(cb_ex, 1); // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short();
@@ -190,6 +194,9 @@ void MAIN {
          * IIRC E[x^2] - E[x]^2 trick was unstable
          * TODO(AP): can save space here by reusing CB
          */
+        if constexpr (FLOAT32_DTYPE) {
+            unpack_reconfig_data_format(cb_xmm2, cb_scaler);
+        }
         cb_reserve_back(cb_ex2, 1);
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         ACQ();
@@ -212,6 +219,9 @@ void MAIN {
         /* Var(x) + eps
          * add epsilon E[(x-E[x])^2]+eps
          */
+        if constexpr (FLOAT32_DTYPE) {
+            unpack_reconfig_data_format(cb_ex2, cb_eps);
+        }
         ACQ();
         add_tiles_init();
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
