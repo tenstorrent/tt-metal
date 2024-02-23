@@ -33,6 +33,7 @@ void MAIN {
     constexpr uint32_t num_subblocks_w                = get_compile_time_arg_val(7);
     const bool is_allgather_worker                    = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t num_tiles_per_block            = get_compile_time_arg_val(9);
+    constexpr bool FLOAT32_DTYPE                    = get_compile_time_arg_val(10) == 1;
 
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(0) : 0;
 
@@ -119,8 +120,8 @@ void MAIN {
     #else
     #ifndef RMSNORM
     unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
-    #endif
-    #endif
+    #endif // RMSNORM
+    #endif // FUSE_PRE_ADD
 
     #ifndef RMSNORM
     // E[x],
@@ -168,6 +169,9 @@ void MAIN {
     }
 
     // x - E[x]
+    if constexpr (FLOAT32_DTYPE) {
+        unpack_reconfig_data_format(cb_in, cb_ex_global);
+    }
     index_h_offset = 0;
     unpack_reconfig_data_format_srca(cb_ex_external, cb_in);
     sub_bcast_cols_init_short();
@@ -225,6 +229,10 @@ void MAIN {
 
     #if defined RMSNORM and not defined FUSED_PRE_ADD
     unpack_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+    #else
+    if constexpr (FLOAT32_DTYPE) {
+        unpack_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+    }
     #endif
 
     cb_wait_front(cb_xmm2, num_tiles_per_block);
@@ -300,7 +308,15 @@ void MAIN {
     }
     // (x - Ex) * 1/[sqrt(Var + eps)]
     #if defined RMSNORM and not defined FUSE_PRE_ADD
-    unpack_reconfig_data_format_srca(cb_ex2, cb_xmm);
+    if constexpr (FLOAT32_DTYPE) {
+        unpack_reconfig_data_format(cb_xmm, cb_ex_global);
+    } else {
+        unpack_reconfig_data_format_srca(cb_ex2, cb_xmm);
+    }
+    #else
+    if constexpr (FLOAT32_DTYPE) {
+        unpack_reconfig_data_format(cb_xmm, cb_ex_global);
+    }
     #endif
     mul_bcast_cols_init_short();
     index_h_offset = 0;
