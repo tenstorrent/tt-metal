@@ -40,20 +40,19 @@ import ttnn
             # [64, 32, 264, 40],    ## oom
             # [128, 32, 264, 40],   ## oom
             # [256, 32, 264, 40],   ## oom
-            # ## not supported yet
-            # [4, 16, 1056, 160],
-            # [8, 16, 1056, 160],
-            # [16, 16, 1056, 160],
-            # [32, 16, 1056, 160],
-            # [64, 16, 1056, 160],
-            # [128, 16, 1056, 160],
-            # [256, 16, 1056, 160],
-            # [8, 16, 528, 80],
-            # [16, 16, 528, 80],
-            # [32, 16, 528, 80],
-            # [64, 16, 528, 80],
-            # [128, 16, 528, 80],
-            # [256, 16, 528, 80],
+            [4, 16, 1056, 160],  ## pass
+            # [8, 16, 1056, 160],     ## oom
+            # [16, 16, 1056, 160],    ## oom
+            # [32, 16, 1056, 160],    ## oom
+            # [64, 16, 1056, 160],    ## oom
+            # [128, 16, 1056, 160],   ## oom
+            # [256, 16, 1056, 160],   ## oom
+            [8, 16, 528, 80],  ## pass
+            [16, 16, 528, 80],  ## pass
+            # [32, 16, 528, 80],  ## oom
+            # [64, 16, 528, 80],  ## oom
+            # [128, 16, 528, 80], ## oom
+            # [256, 16, 528, 80], ## oom
         )
     ),
 )
@@ -111,6 +110,9 @@ def test_run_max_pool(
     if in_c % 16 != 0:
         pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
 
+    if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
+        pytest.skip("This case runs out of memory on Grayskull")
+
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
@@ -123,7 +125,9 @@ def test_run_max_pool(
     #     for c in range(act_shape[1]):
     #         for h in range(act_shape[2]):
     #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c + torch.rand(1) * 0.15
+    #                 act[n, c, h, w] = 1 + n + h + w + c # + torch.rand(1) * 0.15
+    # torch.save(act, "act.pt")
+    # act = torch.load("act.pt")
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width

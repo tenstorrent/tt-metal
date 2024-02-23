@@ -29,36 +29,44 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
  * Max-pool 2D.
  */
 void kernel_main() {
-    // const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_nbytes_c = get_arg_val<uint32_t>(1);
-    const uint32_t out_ntiles_c = get_arg_val<uint32_t>(2);
-
-    constexpr bool is_out_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
+    constexpr uint32_t nblocks = get_compile_time_arg_val(3);
 
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
-
-    uint32_t nsticks_per_core = get_arg_val<uint32_t>(3);
-    uint32_t core_offset_out_row_id = get_arg_val<uint32_t>(4);
-    uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(5);
-
-    uint64_t out_noc_addr;
     constexpr uint32_t sharded_out_cb_id = tt::CB::c_out1;
-    out_noc_addr = get_noc_addr(get_read_ptr(sharded_out_cb_id));
 
-    cb_reserve_back(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
+    const uint32_t out_nbytes_c = get_arg_val<uint32_t>(1);
+    const uint32_t out_ntiles_c = get_arg_val<uint32_t>(2);
+    const uint32_t nsticks_per_core = get_arg_val<uint32_t>(3);
+    // uint32_t core_offset_out_row_id = get_arg_val<uint32_t>(4);
+    const uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(5);
+    const uint32_t out_c = get_arg_val<uint32_t>(6);
+    const bool is_partial_tile = out_c < 32;
+
+    uint64_t out_noc_addr = get_noc_addr(get_read_ptr(sharded_out_cb_id));
+
+    cb_reserve_back(sharded_out_cb_id, nsticks_per_core);
+
+    uint32_t npages_to_wait_on = is_partial_tile ? 1 : nblocks;
 
     for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
-        cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
+        cb_wait_front(out_cb_id, npages_to_wait_on * out_ntiles_c);
         uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
 
-        noc_async_write(out_l1_read_addr, out_noc_addr, out_nbytes_c);
-        out_noc_addr += out_nbytes_c;
+        if (is_partial_tile) {
+            for (uint32_t block = 0; block < nblocks; ++ block) {
+                noc_async_write(out_l1_read_addr, out_noc_addr, out_nbytes_c);
+                out_noc_addr += out_nbytes_c;
+                out_l1_read_addr += out_nbytes_c;
+            }
+        } else {
+            noc_async_write(out_l1_read_addr, out_noc_addr, out_nbytes_c);
+            out_noc_addr += out_nbytes_c;
+        }
 
         noc_async_write_barrier();
 
-        cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
+        cb_pop_front(out_cb_id, npages_to_wait_on * out_ntiles_c);
     }
-    cb_push_back(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
-    cb_wait_front(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
+    cb_push_back(sharded_out_cb_id, nsticks_per_core);
+    cb_wait_front(sharded_out_cb_id, nsticks_per_core);
 } // kernel_main()
