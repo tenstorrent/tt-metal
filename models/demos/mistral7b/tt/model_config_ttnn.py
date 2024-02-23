@@ -93,7 +93,7 @@ def pretty_print_model_config(model_config):
     for key, val in model_config.items():
         if key.endswith("MEMCFG"):
             print_str.append(f"{key}: {val.buffer_type}")
-        elif key.endswith("DTYPE") or key.endswith("BOOL") or key.endswith("PROGCFG"):
+        elif key.endswith("DTYPE") or key.endswith("BOOL") or key.endswith("PROGCFG") or key == "DEFAULT_CACHE_PATH":
             print_str.append(f"{key}: {val}")
         else:
             raise NotImplementedError(f"Unknown key: {key}")

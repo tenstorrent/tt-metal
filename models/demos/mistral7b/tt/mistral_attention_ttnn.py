@@ -156,7 +156,7 @@ class TtMistralAttention(nn.Module):
             xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
-                core_grid=(8, 8)
+                core_grid=ttnn.CoreGrid(8, 8)
                 # program_config=self.model_config["QKV_MM_PROGCFG"],
                 # output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                 # output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
@@ -166,7 +166,7 @@ class TtMistralAttention(nn.Module):
             ###
             # Reshape and rotary embeddings
             ###
-
+            print(type(xqkv_fused))
             (
                 q_heads,  # [seqlen, n_heads, bsz, head_dim]
                 k_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
