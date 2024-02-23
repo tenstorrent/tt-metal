@@ -214,10 +214,16 @@ If you are using a machine with bare metal machine specs, please use
   - In the kernel: `#include "debug/dprint.h"`
   - To print in the kernel : `DPRINT << <variable to print> << ENDL();`
 - To use GDB to debug the C++ python binding itself:
-  - Build with debug symbols `make build config=debug`
+  - Build with debug symbols `make build CONFIG=debug`
   - Ensure the python file you wish to debug, is standalone and has a main function
   - Run `gdb --args python <python file> `
   - You can add breakpoints for future loaded libraries
+- To log the compile time arguments passed with `-D` during the kernel build phase:
+  - Build with debug symbols `make build CONFIG=debug`
+  - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
+- To examine the compile time arguments of a kernel:
+  - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
+  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-constexprs.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf`
 
 ## Contribution standards
 

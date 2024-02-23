@@ -16,6 +16,8 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tools/profiler/profiler_state.hpp"
+#include "jit_build/kernel_args.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace std;
 using namespace tt;
@@ -392,7 +394,6 @@ void JitBuildEthernet::pre_compile(const string& kernel_in_path, const string& o
     copy_kernel(kernel_in_path, op_out_path);
 }
 
-
 void JitBuildState::compile_one(const string& log_file,
                                 const string& out_dir,
                                 const JitBuildSettings *settings,
@@ -424,6 +425,13 @@ void JitBuildState::compile_one(const string& log_file,
     cmd += "-c -o " + obj + " " + src;
 
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+
+#ifdef DEBUG
+    if (settings) {
+        log_kernel_defines_and_args(env_.get_out_kernel_root_path(), settings->get_full_kernel_name(), defines_, defines);
+    }
+#endif
+
     if (!tt::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
     }
