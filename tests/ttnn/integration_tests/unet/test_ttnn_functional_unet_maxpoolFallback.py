@@ -26,6 +26,10 @@ def update_ttnn_module_args(ttnn_module_args):
 def custom_preprocessor(model, name, ttnn_module_args):
     parameters = {}
     if isinstance(model, UNet):
+        print("\n\n\n")
+        print("model output weights: ", type(model.output_layer.weight))
+        print("model output weights: ", list(model.output_layer.weight))
+
         ttnn_module_args.c1["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c1_2["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
@@ -167,7 +171,15 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
         ttnn_module_args.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
+        ttnn_module_args.output_layer["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.output_layer["dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.output_layer["weights_dtype"] = ttnn.bfloat8_b
+        ttnn_module_args.output_layer["conv_blocking_and_parallelization_config_override"] = None
+        ttnn_module_args.output_layer["activation"] = None
+        ttnn_module_args.output_layer["deallocate_activation"] = True
+
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.c1, model.b1)
+        print("model output weights for c1: ", type(conv1_weight))
         conv1_2_weight, conv1_2_bias = fold_batch_norm2d_into_conv2d(model.c1_2, model.b1_2)
         conv2_weight, conv2_bias = fold_batch_norm2d_into_conv2d(model.c2, model.b2)
         conv2_2_weight, conv2_2_bias = fold_batch_norm2d_into_conv2d(model.c2_2, model.b2_2)
@@ -212,6 +224,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         update_ttnn_module_args(ttnn_module_args.c8)
         update_ttnn_module_args(ttnn_module_args.c8_2)
         update_ttnn_module_args(ttnn_module_args.c8_3)
+        update_ttnn_module_args(ttnn_module_args.output_layer)
 
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv1_2_weight, conv1_2_bias, ttnn_module_args.c1_2)
@@ -235,6 +248,9 @@ def custom_preprocessor(model, name, ttnn_module_args):
         parameters["c8"] = preprocess_conv2d(conv8_weight, conv8_bias, ttnn_module_args.c8)
         parameters["c8_2"] = preprocess_conv2d(conv8_2_weight, conv8_2_bias, ttnn_module_args.c8_2)
         parameters["c8_3"] = preprocess_conv2d(conv8_3_weight, conv8_3_bias, ttnn_module_args.c8_3)
+        parameters["output_layer"] = preprocess_conv2d(
+            model.output_layer.weight, model.output_layer.bias, ttnn_module_args.output_layer
+        )
 
     return parameters
 
@@ -328,7 +344,7 @@ class UNet(nn.Module):
         self.r8_3 = nn.ReLU(inplace=True)
 
         # Output layer
-        # self.output_layer = nn.Conv2d(16, 1, kernel_size=1)
+        self.output_layer = nn.Conv2d(16, 1, kernel_size=1)
 
     def forward(self, x):
         # Contracting Path
@@ -423,10 +439,10 @@ class UNet(nn.Module):
         r8_3 = self.r8_3(b8_3)
 
         # Output layer
-        # output = self.output_layer(c8)
+        output = self.output_layer(r8_3)
 
-        # return output
-        return r8_3
+        return output
+        # return r8_3
 
 
 device_id = 0
@@ -459,5 +475,9 @@ parameters = preprocess_model(
 
 ttnn_model = ttnn_functional_unet_maxpoolFallback.UNet(parameters)
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
+output_tensor = output_tensor[:, 0, :, :]
+output_tensor = torch.reshape(
+    output_tensor, (output_tensor.shape[0], 1, output_tensor.shape[1], output_tensor.shape[2])
+)
 assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
 ttnn.close_device(device)
