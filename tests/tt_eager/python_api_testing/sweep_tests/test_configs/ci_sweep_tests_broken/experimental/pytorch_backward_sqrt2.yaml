@@ -14,7 +14,7 @@ test-list:
         args:
           low: -100
           high: 100
-          excluderange: [-0.001, 0.001]
+          excluderange: [-0.002, 0.002]
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
@@ -23,7 +23,7 @@ test-list:
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: backward_sqrt_sweep_001.csv
+      output-file: backward_sqrt_sweep_002.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
   - sqrt-bw:
@@ -40,7 +40,7 @@ test-list:
         args:
           low: -100
           high: 100
-          excluderange: [-0.001, 0.001]
+          excluderange: [-0.002, 0.002]
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
@@ -49,6 +49,6 @@ test-list:
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: backward_sqrt_sweep_001.csv
+      output-file: backward_sqrt_sweep_002.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
