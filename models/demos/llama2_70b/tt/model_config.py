@@ -844,8 +844,8 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            # im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     elif num_devices == 8:
         model_config[
@@ -855,8 +855,8 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            # im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     elif num_devices == 32:
         model_config[
@@ -866,8 +866,8 @@ def get_model_config(model_config_str, num_devices=8):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            # im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
