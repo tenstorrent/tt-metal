@@ -40,13 +40,17 @@ void kernel_main() {
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
+    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(4);
+    uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE ? 64 : 32;
+    uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE ? 1024 : 512;
+
     cb_reserve_back(cb_attn, block_wt);
     uint32_t l1_write_addr = get_write_ptr(cb_attn);
     for (uint32_t w = 0; w<block_wt; w++) {
         uint64_t mask_noc_addr = get_noc_addr(mask_start_tile_id + w, addr_mask);
-        noc_async_read(mask_noc_addr, l1_write_addr, 32);
-        mask_noc_addr += 32;
-        noc_async_read(mask_noc_addr, l1_write_addr + 512, 32);
+        noc_async_read(mask_noc_addr, l1_write_addr, mask_read_tile_face_bytes);
+        mask_noc_addr += mask_read_tile_face_bytes;
+        noc_async_read(mask_noc_addr, l1_write_addr + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
         l1_write_addr += mask_tile_bytes;
     }
     noc_async_read_barrier();

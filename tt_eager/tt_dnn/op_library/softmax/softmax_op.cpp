@@ -28,7 +28,7 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
     if (optional_input_tensors.size() == 1) {
         if (optional_input_tensors.at(0).has_value()) {
             auto& mask = optional_input_tensors.at(0).value();
@@ -122,24 +122,16 @@ operation::ProgramWithCallbacks Softmax::create_program(
             if constexpr (
                 std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>
             ) {
-                MathFidelity fidelity = program_config.math_fidelity;
                 return scale_mask_softmax_sharded_multi_core(
-                                            input_tensor, output_tensor, mask, this->scale,
-                                            fidelity,
-                                            program_config.im_data_format,
-                                            causal_mask,
+                                            input_tensor, output_tensor, mask, this->scale, causal_mask,
                                             program_config.compute_with_storage_grid_size,
                                             program_config.subblock_w,
                                             program_config.block_h,
-                                            program_config.block_w
+                                            program_config.block_w,
+                                            this->compute_kernel_config
                                             );
-            } else if constexpr (
-                std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxInterleavedMultiCoreProgramConfig>
-            ) {
-                MathFidelity fidelity = program_config.math_fidelity;
-                return scale_mask_softmax_multi_core(input_tensor, output_tensor, mask, this->scale, fidelity, program_config.im_data_format, causal_mask);
             } else {
-                return scale_mask_softmax_multi_core(input_tensor, output_tensor, mask, this->scale, MathFidelity::HiFi4, DataType::BFLOAT16, causal_mask);
+                return scale_mask_softmax_multi_core(input_tensor, output_tensor, mask, this->scale, causal_mask, this->compute_kernel_config);
             }
         },
         this->program_config
@@ -168,13 +160,14 @@ const operation::Hash Softmax::compute_program_hash(
         this->output_mem_config);
 }
 
-Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgramConfig& program_config) {
-    return transformers::scale_mask_softmax_in_place(input_tensor, std::nullopt, std::nullopt, program_config);
+Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgramConfig& program_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return transformers::scale_mask_softmax_in_place(input_tensor, std::nullopt, std::nullopt, program_config, false, compute_kernel_config);
 }
 
 namespace transformers {
-Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask) {
-    operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=is_causal_mask}, {input_tensor}, {mask});
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+    operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {mask});
     return input_tensor;
 }
 
@@ -183,12 +176,12 @@ Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> sc
 }  // namespace operations
 
 namespace tt_metal {
-Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return transformers::scale_mask_softmax(input_tensor, std::nullopt, std::nullopt, output_mem_config);
+Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return transformers::scale_mask_softmax(input_tensor, std::nullopt, std::nullopt, output_mem_config, false, compute_kernel_config);
 }
 
 namespace transformers {
-Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask) {
+Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
     std::optional<FormatParams> mask_format_params = std::nullopt;
@@ -202,7 +195,8 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
         Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
         mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
     }
-    return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params}).at(0);
+    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+    return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params}).at(0);
 }
 }  // namespace transformers
 }  // namespace tt_metal

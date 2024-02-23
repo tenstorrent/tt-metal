@@ -690,8 +690,8 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            # im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     elif num_devices == 8:
         model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
@@ -699,8 +699,8 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             subblock_w=1,
             block_h=1,
             block_w=1,  # Dynamic
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            im_data_format=ttl.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            # im_data_format=ttl.tensor.DataType.BFLOAT16,
         )
     model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["CONCAT_HEADS_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG

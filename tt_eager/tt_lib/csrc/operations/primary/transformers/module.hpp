@@ -53,26 +53,16 @@ void py_module(py::module& m_transformers) {
     py::class_<SoftmaxDefaultProgramConfig>(m_transformers, "SoftmaxDefaultProgramConfig")
         .def(py::init<>());
 
-    py::class_<SoftmaxInterleavedMultiCoreProgramConfig>(m_transformers, "SoftmaxInterleavedMultiCoreProgramConfig")
-        .def(
-            py::init<MathFidelity, DataType>(),
-            py::kw_only(),
-            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-            py::arg("im_data_format").noconvert()
-        );
-
     py::class_<SoftmaxShardedMultiCoreProgramConfig>(m_transformers, "SoftmaxShardedMultiCoreProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, MathFidelity, DataType>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
             py::arg("block_h").noconvert(),
-            py::arg("block_w").noconvert(),
-            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-            py::arg("im_data_format").noconvert())
-        .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w)
-        .def("__repr__", [](const SoftmaxShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
+            py::arg("block_w").noconvert()
+        )
+        .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
 
     m_transformers.def(
         "scale_mask_softmax_in_place",
@@ -82,6 +72,7 @@ void py_module(py::module& m_transformers) {
         py::arg("mask").noconvert() = std::nullopt,
         py::arg("program_config").noconvert() = SoftmaxDefaultProgramConfig{},
         py::arg("is_causal_mask").noconvert() = false,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place."
         );
 }
