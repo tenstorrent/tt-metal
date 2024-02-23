@@ -1587,20 +1587,7 @@ def test_reshard(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttl.tensor.BufferType.DRAM,
     )
-    debug = True
-    if debug:
-        if input_layout == ttl.tensor.Layout.TILE:
-            num_tiles_height = int(input_shape[2] / 32)
-            num_tiles_width = int(input_shape[3] / 32)
-            torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, torch.bfloat16)
-        else:
-            num_tiles_width = int(input_shape[3] / input_shard_shape[1])
-            num_tiles_height = int(input_shape[2])
-            torch_tensor = get_debug_tensor(
-                num_tiles_width, num_tiles_height, torch.bfloat16, page_width=input_shard_shape[1], page_height=1
-            )
-    else:
-        torch_tensor = torch.randn(input_shape).bfloat16()
+    torch_tensor = torch.randn(input_shape).bfloat16()
     tt_tensor_sharded = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttl.tensor.interleaved_to_sharded(
