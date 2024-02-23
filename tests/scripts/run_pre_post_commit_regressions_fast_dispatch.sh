@@ -26,10 +26,5 @@ env python tests/scripts/run_tt_metal.py --dispatch-mode fast
 env python tests/scripts/run_tt_eager.py --dispatch-mode fast
 ./build/test/tt_metal/unit_tests_fast_dispatch
 
-
-echo "Checking docs build..."
-
-cd $TT_METAL_HOME/docs
-python -m pip install -r requirements-docs.txt
-make clean
-make html
+# build docs
+./tests/scripts/run_build_docs.sh
