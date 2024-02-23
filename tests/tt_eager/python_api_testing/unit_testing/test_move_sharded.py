@@ -6,21 +6,15 @@ import pytest
 from loguru import logger
 
 
-from models.utility_functions import is_wormhole_b0
 import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
 )
 import torch
 
-if is_wormhole_b0():
-    shapes = [
-        [1, 1, 25056, 64],
-    ]
-else:
-    shapes = [
-        [1, 1, 25088, 64],
-    ]
+shapes = [
+    [1, 1, 25088, 64],
+]
 
 
 @pytest.mark.parametrize("shape", shapes)
@@ -33,15 +27,17 @@ def run_move_op(shape, device):
     For non_overlap, multi-core is run for num_tiles > 1.
     """
     torch.manual_seed(1234)
-    if is_wormhole_b0():
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (compute_grid_size.x * compute_grid_size.y) < 98:
         core_count = 58
+        shape[2] = 25056
     else:
         core_count = 98
 
     dtype = ttl.tensor.DataType.BFLOAT16
     layout = ttl.tensor.Layout.ROW_MAJOR
     shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
-    if is_wormhole_b0():
+    if (compute_grid_size.x * compute_grid_size.y) < 98:
         shard_grid = ttl.tensor.CoreRangeSet(
             {
                 ttl.tensor.CoreRange(
