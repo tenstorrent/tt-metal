@@ -20,12 +20,12 @@ from models.experimental.mistral.reference.tokenizer import Tokenizer
         (32),
     ),
 )
-def test_gs_demo_single_input_inference(batch_size, model_location_generator, device):
+def test_gs_demo_single_input_inference(batch_size, model_location_generator, device, get_tt_cache_path):
     prompts = batch_size * [
         "A man is sitting on a roof ",
     ]
 
-    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
+    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="mistral")
     tokenizer = Tokenizer(str(Path(mistral_path) / "tokenizer.model"))
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     base_address = f""
@@ -35,7 +35,8 @@ def test_gs_demo_single_input_inference(batch_size, model_location_generator, de
     model_args.max_batch_size = batch_size
     model_args.n_layers = 32
 
-    tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
+    tt_cache_path = str(get_tt_cache_path("mistral-7B-v0.1", model_subdir="mistral")) + "/"
+
     tt_model = TtTransformer(
         args=model_args,
         device=device,

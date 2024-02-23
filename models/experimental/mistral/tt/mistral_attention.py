@@ -1,287 +1,275 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
-import torch.nn as nn
-from typing import Optional, Tuple
+import math
 import tt_lib
-from tt_lib import fallback_ops
-from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
-from models.experimental.mistral.mistral_helper_funcs import Linear as TtLinear, format_tensor, unpad_from_zero
+
+from models.utility_functions import (
+    torch2tt_tensor,
+    nearest_32,
+)
+from models.experimental.mistral.tt.mistral_common import tt_all_reduce
 
 
-class TtAttention(nn.Module):
+class TtMistralAttention(torch.nn.Module):
     def __init__(
-        self,
-        args: TtModelArgs,
-        base_address=None,
-        device=None,
-        tt_cache_path=None,
-        output_mem_config=None,
+        self, devices, state_dict, base_url, layer_num, model_config, configuration, tt_cos_cached, tt_sin_cached
     ):
         super().__init__()
-        self.args = args
-        self.device = device
-        self.base_address = base_address
-        self.output_mem_config = output_mem_config
-        self.n_heads: int = args.n_heads
-        self.n_kv_heads: int = args.n_kv_heads
 
-        self.repeats = self.n_heads // self.n_kv_heads
-        self.sliding_window = self.args.sliding_window
+        self.state_dict = state_dict
+        self.devices = devices
+        self.num_devices = len(devices)
 
-        self.scale = self.args.head_dim**-0.5
+        self.hidden_size = configuration.dim
+        self.n_heads = configuration.n_heads
+        self.head_dim = self.hidden_size // self.n_heads
+        self.max_seq_len = configuration.max_seq_len
+        self.max_batch_size = configuration.max_batch_size
+        self.n_kv_heads = configuration.n_kv_heads
+        self.sliding_window = configuration.sliding_window
 
-        self.wq_weights = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + "wq.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
-        )
-        self.wq = TtLinear(
-            args.dim,
-            args.n_heads * args.head_dim,
-            self.wq_weights,
-            device=self.device,
-            output_mem_config=self.args.out_mem_config,
-        )
+        self.n_local_heads = self.n_heads // self.num_devices
+        self.n_local_kv_heads = self.n_kv_heads // self.num_devices
 
-        self.wk_weights = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + "wk.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
-        )
-        self.wk = TtLinear(
-            args.dim,
-            args.n_kv_heads * args.head_dim,
-            self.wk_weights,
-            device=self.device,
-            output_mem_config=self.args.out_mem_config,
-        )
+        self.model_config = model_config
 
-        self.wv_weights = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + "wv.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
-        )
-        self.wv = TtLinear(
-            args.dim,
-            args.n_kv_heads * args.head_dim,
-            self.wv_weights,
-            device=self.device,
-            output_mem_config=self.args.out_mem_config,
-        )
-
-        self.wo_weights = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + "wo.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
-        )
-        self.wo = TtLinear(
-            args.n_heads * args.head_dim,
-            args.dim,
-            self.wo_weights,
-            device=self.device,
-            output_mem_config=self.args.out_mem_config,
-        )
-
-        if self.args.FALLBACK_EMPTY:
-            self.cache_k = torch.empty(
-                args.max_batch_size,
-                args.sliding_window,
-                self.n_kv_heads,
-                self.args.head_dim,
-            )
-            self.cache_v = torch.empty(args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim)
+        if layer_num:
+            layer_name = f"{base_url}.{layer_num}.attention."
         else:
-            cache_k = tt_lib.tensor.empty(
-                [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
-                layout=tt_lib.tensor.Layout.ROW_MAJOR,
-                device=self.device,
-                output_mem_config=self.args.out_mem_config,
-            )
-            self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
-            cache_v = tt_lib.tensor.empty(
-                [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
-                layout=tt_lib.tensor.Layout.ROW_MAJOR,
-                device=self.device,
-                output_mem_config=self.args.out_mem_config,
-            )
-            self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
+            layer_name = base_url
+        wq_str = f"{layer_name}wq.weight"
+        wk_str = f"{layer_name}wk.weight"
+        wv_str = f"{layer_name}wv.weight"
+        wo_str = f"{layer_name}wo.weight"
 
-    def repeat_kv(self, keys: torch.Tensor, values: torch.Tensor, repeats: int) -> tt_lib.tensor.Tensor:
-        dim = 2
-        keys = torch_to_tt_tensor_rm(keys, self.device)
-        values = torch_to_tt_tensor_rm(values, self.device)
-        keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim, output_mem_config=self.args.out_mem_config)
-        values = tt_lib.tensor.repeat_interleave(values, repeats, dim, output_mem_config=self.args.out_mem_config)
-        return keys, values
+        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
+        assert self.n_heads % self.num_devices == 0
+        assert self.n_kv_heads % self.num_devices == 0
+
+        self.wqkv_list = []
+        self.wo_list = []
+        self.layer_past_list = []
+
+        for i in range(self.num_devices):
+            wqkv = torch2tt_tensor(
+                torch.concat(
+                    [
+                        torch.transpose(
+                            torch.chunk(self.state_dict[wq_str], self.num_devices)[i],
+                            -2,
+                            -1,
+                        ),
+                        torch.transpose(
+                            torch.chunk(self.state_dict[wk_str], self.num_devices)[i],
+                            -2,
+                            -1,
+                        ),
+                        torch.transpose(
+                            torch.chunk(self.state_dict[wv_str], self.num_devices)[i],
+                            -2,
+                            -1,
+                        ),
+                    ],
+                    dim=-1,
+                ),
+                self.devices[i],
+                tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
+            )
+
+            wo = torch2tt_tensor(
+                torch.transpose(
+                    torch.chunk(self.state_dict[wo_str], self.num_devices, dim=-1)[i],
+                    -2,
+                    -1,
+                ),
+                self.devices[i],
+                tt_memory_config=self.model_config["WO_MM_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["WO_MM_WEIGHTS_DTYPE"],
+            )
+
+            cache_k = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads // self.num_devices,
+                    self.sliding_window,
+                    self.head_dim,
+                )
+            )
+            cache_v = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads // self.num_devices,
+                    self.sliding_window,
+                    self.head_dim,
+                )
+            )
+            layer_past = [cache_k, cache_v]
+            layer_past = [torch2tt_tensor(lp, self.devices[i]) for lp in layer_past]
+
+            # add to the list
+            self.wqkv_list.append(wqkv)
+            self.wo_list.append(wo)
+            self.layer_past_list.append(layer_past)
+        self.tt_sin_cached = tt_sin_cached
+        self.tt_cos_cached = tt_cos_cached
 
     def forward(
         self,
-        x: tt_lib.tensor.Tensor,
-        bcast_freq_xq: tt_lib.tensor.complex_tensor,
-        bcast_freq_xk: tt_lib.tensor.complex_tensor,
-        positions: tt_lib.tensor.Tensor,
-        mask: Optional[torch.Tensor],
-        seqlen: int,
+        xs: tt_lib.tensor.Tensor,
+        start_pos: int,
+        current_pos: int,
+        attn_masks: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
-        _, bsz, _, _ = x.shape()
+        """
+        x: (seq_len, 1, batch, hidden_dim)
+        start_pos: the length of the KV cache. Same as current token's index.
+        attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
+        """
+        padded_layer_past_len = min(nearest_32(start_pos + 1), self.sliding_window)
+        dense_outputs = []
+        for i in range(self.num_devices):
+            x = xs[i]
+            bsz = x.shape()[2]
+            attn_mask = attn_masks[i]
+            device = self.devices[i]
+            wqkv = self.wqkv_list[i]
+            wo = self.wo_list[i]
+            layer_past = self.layer_past_list[i]
 
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+            # QKV matmuls
+            xqkv_fused = tt_lib.operations.primary.matmul_1d(
+                x,
+                wqkv,
+                # program_config=self.model_config["QKV_MM_PROGCFG"],
+                # output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                # output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+            )
 
-        xq = tt_to_torch_tensor(xq).to(torch.float32)
-        xk = tt_to_torch_tensor(xk).to(torch.float32)
-        xv = tt_to_torch_tensor(xv).to(torch.float32)
+            # Reshape and rotary embeddings
+            (
+                q_heads,  # [seqlen, n_heads, bsz, head_dim]
+                k_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
+                v_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
+            ) = tt_lib.tensor.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                # output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+            )
+            xqkv_fused.deallocate()
 
-        xq = xq[:, :, :seqlen, :]
-        xk = xk[:, :, :seqlen, :]
-        xv = xv[:, :, :seqlen, :]
+            q_heads = tt_lib.tensor.rotary_embedding(q_heads, self.tt_cos_cached[i], self.tt_sin_cached[i], start_pos)
+            k_heads = tt_lib.tensor.rotary_embedding(k_heads, self.tt_cos_cached[i], self.tt_sin_cached[i], start_pos)
 
-        xq = torch_to_tt_tensor_rm(xq, self.device, put_on_device=True)
-        xk = torch_to_tt_tensor_rm(xk, self.device, put_on_device=True)
-        xv = torch_to_tt_tensor_rm(xv, self.device, put_on_device=True)
+            # KV update
+            keys = layer_past[0]  # [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
+            values = layer_past[1]
+            tt_lib.tensor.update_cache(keys, k_heads, current_pos)
+            tt_lib.tensor.update_cache(values, v_heads, current_pos)
 
-        xq = tt_lib.tensor.reshape(xq, bsz, seqlen, self.n_heads, self.args.head_dim)
-        xk = tt_lib.tensor.reshape(xk, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
-        xv = tt_lib.tensor.reshape(xv, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
+            k_heads.deallocate()
+            v_heads.deallocate()
 
-        xq = tt_to_torch_tensor(xq).to(torch.float32)
-        xk = tt_to_torch_tensor(xk).to(torch.float32)
-        xv = tt_to_torch_tensor(xv).to(torch.float32)
+            keys = tt_lib.tensor.unpad(
+                layer_past[0],
+                [0, 0, 0, 0],
+                [
+                    self.max_batch_size - 1,
+                    self.n_local_kv_heads - 1,
+                    padded_layer_past_len - 1,
+                    self.head_dim - 1,
+                ],
+                # output_mem_config=self.model_config["KEYS_MEMCFG"],
+            )
+            values = tt_lib.tensor.unpad(
+                layer_past[1],
+                [0, 0, 0, 0],
+                [
+                    self.max_batch_size - 1,
+                    self.n_local_kv_heads - 1,
+                    padded_layer_past_len - 1,
+                    self.head_dim - 1,
+                ],
+                # output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
 
-        xq, xk = apply_rotary_emb(
-            xq, xk, bcast_freq_xq, bcast_freq_xk, device=self.device, mem_config=self.args.out_mem_config
-        )
+            # Attention
+            keys = tt_lib.tensor.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
 
-        # The cache is a rotating buffer
-        positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
-        if self.args.FALLBACK_SCATTER:
-            scatter_pos = (positions[-self.sliding_window :] % self.sliding_window)[None, :, None, None]
-            scatter_pos = scatter_pos.to(torch.int64)
-            scatter_pos = scatter_pos.repeat(bsz, 1, self.n_kv_heads, self.args.head_dim)
-            self.cache_k[:bsz].scatter_(dim=1, index=scatter_pos, src=xk[:, -self.sliding_window :])
-            self.cache_v[:bsz].scatter_(dim=1, index=scatter_pos, src=xv[:, -self.sliding_window :])
+            q_heads = tt_lib.tensor.interleaved_to_sharded(
+                q_heads, sharded_mem_config=self.model_config["QHEADS_MEMCFG"]
+            )
+            # dynamic sharding
+            self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.ShardSpec(
+                    tt_lib.tensor.CoreRangeSet(
+                        {
+                            tt_lib.tensor.CoreRange(
+                                tt_lib.tensor.CoreCoord(0, 0),
+                                tt_lib.tensor.CoreCoord(7, 3),
+                            ),
+                        }
+                    ),
+                    [
+                        8 * 1 * 128,
+                        padded_layer_past_len,
+                    ],
+                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+            keys = tt_lib.tensor.interleaved_to_sharded(
+                keys, sharded_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
+            )
+
+            attn = tt_lib.operations.primary.transformers.group_attn_matmul(
+                q_heads,
+                keys,
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                # output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+            )  # seqlen, n_heads, batch, cache_len + seqlen
+
+            scale = 1 / math.sqrt(self.head_dim)
+            attn = tt_lib.tensor.mul_unary(attn, scale)
+            attn = tt_lib.tensor.add(attn, attn_mask)
+            attn = tt_lib.tensor.softmax(attn)
+
+            attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(
+                attn,
+                values,
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                # output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+            )  # seqlen, n_heads, batch, dhead
+
+            attn.deallocate()
+            keys.deallocate()
+            values.deallocate()
+            q_heads.deallocate()
+
+            attn_output = tt_lib.tensor.nlp_concat_heads(
+                attn_output,
+                # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            )  # seqlen, 1, batch, hidden_size
+
+            dense_out = tt_lib.operations.primary.matmul_1d(
+                attn_output,
+                wo,
+                # compute_with_storage_grid_size=device.compute_with_storage_grid_size()
+            )  # seqlen, 1, batch, hidden_size
+
+            dense_outputs.append(dense_out)
+
+        # return the sum of the outputs
+        if len(dense_outputs) > 1:
+            return tt_all_reduce(dense_outputs)
         else:
-            self.cache_k = tt_to_torch_tensor(
-                tt_lib.tensor.scatter(
-                    torch_to_tt_tensor_rm(xk, self.device), torch_to_tt_tensor_rm(self.cache_k, self.device)
-                )
-            )
-            self.cache_v = tt_to_torch_tensor(
-                tt_lib.tensor.scatter(
-                    torch_to_tt_tensor_rm(xv, self.device), torch_to_tt_tensor_rm(self.cache_v, self.device)
-                )
-            )
-
-        if positions.shape[0] > 1:
-            # prefill
-            key, value = self.repeat_kv(xk, xv, self.repeats)
-        else:
-            cur_pos = int(positions[-1].item() + 1)
-            key, value = self.repeat_kv(
-                self.cache_k[:bsz, :cur_pos, ...], self.cache_v[:bsz, :cur_pos, ...], self.repeats
-            )
-
-        xq = torch_to_tt_tensor(xq, self.device)
-
-        query = tt_lib.tensor.transpose(xq, 1, -2, output_mem_config=self.args.out_mem_config)
-        desired_score_shape = [
-            query.shape()[-1],
-            query.shape()[-2],
-            query.shape()[-3],
-            query.shape()[-4],
-        ]
-        desired_score_shape[-1] = key.shape()[1]
-        xq.deallocate()
-
-        key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-        key = tt_lib.tensor.permute(key, [0, 2, 3, 1])
-        key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-
-        value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-        value = tt_lib.tensor.transpose(value, 1, -2, output_mem_config=self.args.out_mem_config)
-        value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-
-        query = format_tensor(query, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-
-        scores = tt_lib.tensor.bmm(query, key, output_mem_config=self.args.out_mem_config)
-        key.deallocate()
-        scores = tt_lib.tensor.mul_unary(scores, self.scale, output_mem_config=self.args.out_mem_config)
-
-        if mask is not None:
-            mask = tt_lib.tensor.permute(mask, [2, 3, 0, 1])
-            scores = tt_lib.tensor.permute(scores, [2, 3, 0, 1])
-
-            scores = tt_lib.tensor.bcast(
-                scores,
-                mask,
-                tt_lib.tensor.BcastOpMath.ADD,
-                tt_lib.tensor.BcastOpDim.HW,
-                output_mem_config=self.output_mem_config,
-            )
-            scores = tt_lib.tensor.permute(scores, [2, 3, 0, 1])
-        desired_output_shape = [bsz, 32, seqlen, seqlen]
-        desired_output_shape[-1] = value.shape()[-1]
-
-        if self.args.FALLBACK_SOFTMAX:
-            scores = fallback_ops.softmax(scores, dim=-1)
-        else:
-            scores = tt_lib.tensor.softmax(scores, output_mem_config=self.args.out_mem_config)
-        output = tt_lib.tensor.bmm(
-            scores, value, output_mem_config=self.args.out_mem_config
-        )  # (bs, n_local_heads, slen, head_dim)
-
-        value.deallocate()
-        scores.deallocate()
-        output = unpad_from_zero(output, desired_output_shape)
-        output = torch_to_tt_tensor_rm(output, self.device, put_on_device=False)
-
-        output = tt_lib.tensor.transpose(output, 1, -2, output_mem_config=self.args.out_mem_config)
-
-        output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
-
-        desired_output_shape = output.shape()
-        output = format_tensor(output, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
-        output = self.wo(output)
-        return output
-
-
-def apply_rotary_emb(
-    t_xq: torch.Tensor, t_xk: torch.Tensor, bcast_freq_xq, bcast_freq_xk, device, mem_config
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq_real = torch_to_tt_tensor_rm(t_xq[..., :, :, ::2], device)
-    xq_img = torch_to_tt_tensor_rm(t_xq[..., :, :, 1::2], device)
-
-    xq = tt_lib.tensor.complex_tensor(xq_real, xq_img)
-
-    xq_real.deallocate()
-    xq_img.deallocate()
-
-    xk_real = torch_to_tt_tensor_rm(t_xk[..., :, :, ::2], device)
-    xk_img = torch_to_tt_tensor_rm(t_xk[..., :, :, 1::2], device)
-    xk = tt_lib.tensor.complex_tensor(xk_real, xk_img)
-
-    xk_real.deallocate()
-    xk_img.deallocate()
-
-    xq_out = tt_lib.tensor.complex_mul(xq, bcast_freq_xq, output_mem_config=mem_config)
-
-    xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
-
-    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1, mem_config)
-    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1, mem_config)
-    xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
-
-    xq_out.deallocate()
-    xk_out.deallocate()
-    # FIXME: move this operation to on-device - should be easy.
-
-    shapes = xq.shape
-    dindex = shapes[3] // 2
-    xq_out = torch.empty(xq.shape)
-    # for col in range(dindex):
-    #    xq_out[:,:,:,2*col] = xq[:,:,:,col]
-    #    xq_out[:,:,:,2*col+1] = xq[:,:,:,col+dindex]
-    xq_out[:, :, :, ::2] = xq[:, :, :, :dindex]
-    xq_out[:, :, :, 1::2] = xq[:, :, :, dindex:]
-
-    shapes = xk.shape
-    dindex = shapes[3] // 2
-    xk_out = torch.empty(xk.shape)
-    xk_out[:, :, :, ::2] = xk[:, :, :, :dindex]
-    xk_out[:, :, :, 1::2] = xk[:, :, :, dindex:]
-
-    return xq_out, xk_out
+            return dense_outputs
