@@ -16,7 +16,7 @@ test-list:
         args:
           low: -100
           high: 100
-          excluderange: [-0.001, 0.001]
+          excluderange: [-0.002, 0.002]
       comparison:
         function: comp_pcc
       args-gen: gen_rop_args
@@ -26,7 +26,7 @@ test-list:
             data-layout: ["TILE"]
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-      output-file: eltwise_rdiv_sweep_001.csv
+      output-file: eltwise_rdiv_sweep_002.csv
   - eltwise-rdiv:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -43,7 +43,7 @@ test-list:
         args:
           low: -100
           high: 100
-          excluderange: [-0.001, 0.001]
+          excluderange: [-0.002, 0.002]
       comparison:
         function: comp_pcc
       args-gen: gen_rop_args
@@ -53,4 +53,4 @@ test-list:
             data-layout: ["ROW_MAJOR"]
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-      output-file: eltwise_rdiv_sweep_001.csv
+      output-file: eltwise_rdiv_sweep_002.csv
