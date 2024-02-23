@@ -202,11 +202,13 @@ def resnetBlock2D(
                     conv_blocking_and_parallelization_config_override=conv1_config_override,
                     use_shallow_conv_variant=False,
                     enable_auto_formatting=True,
+                    reallocate_halo_output=True,
                 )
             )
         # breakpoint()
         if group_norm_sharded_config is None:
             hidden_states = pre_process_input(device, hidden_states)
+            print("THIS IS REGULAR RESNETBLOCK")
         else:
             print("THIS IS THE RESNETBLOCK WITH GROUPNORM ON DEVICE!!!!!!!!!!!")
         if conv1_split_chunks == 1:
@@ -223,6 +225,7 @@ def resnetBlock2D(
                 output_tensor_end_width_dim += split_input_channels
             hidden_states = split_hidden_states
         if conv1_split_chunks == 1:
+            ttnn.dump_device_memory_state(device)
             hidden_states = conv1s[0](hidden_states[0])
         else:
             for i in range(conv1_split_chunks):

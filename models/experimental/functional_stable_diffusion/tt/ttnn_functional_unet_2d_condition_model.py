@@ -221,6 +221,7 @@ def UNet2DConditionModel(
         # sample in l1 interelaved and tiled and nhwc
         sample = ttnn.to_memory_config(sample, conv_in.conv.input_sharded_memory_config)
         sample = conv_in(sample)
+        sample = ttnn.reallocate(sample)
         # sample is sharded
         # sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     device, conv_in, sample, batch_size, input_height, input_width, out_channels
@@ -235,7 +236,8 @@ def UNet2DConditionModel(
         attention_head_dim = (attention_head_dim,) * len(down_block_types)
 
     # 3.down
-    down_block_res_samples = (sample,)
+    sample_copied_to_dram = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
+    down_block_res_samples = (sample_copied_to_dram,)
     output_channel = block_out_channels[0]
     for i, down_block_type in enumerate(down_block_types):
         input_channel = output_channel
@@ -362,6 +364,8 @@ def UNet2DConditionModel(
             upsample_size = down_block_res_samples[-1].shape[2:]
 
         if up_block_type == "CrossAttnUpBlock2D":
+            ttnn.dump_device_memory_state(device)
+            assert False
             sample = cross_attention_upblock2d(
                 hidden_states=sample,
                 temb=emb,

@@ -893,7 +893,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     def impl(input_tensor):
         ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
+        ttl_output_tensor = ttl.tensor.move_sharded(ttl_input_tensor)
         return ttnn.Tensor(ttl_output_tensor)
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.reallocate")(input_tensor)
