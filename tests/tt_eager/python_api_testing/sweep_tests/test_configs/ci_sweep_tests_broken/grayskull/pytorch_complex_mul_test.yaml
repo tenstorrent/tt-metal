@@ -2,11 +2,11 @@
 test-list:
   - complex-mul:
       shape:
-        start-shape: [1, 1, 32, 64]
+        start-shape: [1, 1, 32, 256]
         end-shape: [6, 12, 256, 512]
         interval: [1, 1, 32, 64]
         num-shapes: 2
-        num-samples: 64
+        num-samples: 256
         args-sampling-strategy: "all"
         method: complex_bin
       datagen:
@@ -21,8 +21,8 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
-        buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM"]
       output-file: complex_mul_sweep.csv
   - complex-mul:
       shape:
