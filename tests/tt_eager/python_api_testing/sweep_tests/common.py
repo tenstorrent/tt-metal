@@ -543,20 +543,21 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 yield shapes, datagen_funcs, test_args
 
         elif method == "ttnn-linear":
-            # Only supports dim = 4;
-            assert len(start_shape) == 4
-            assert len(end_shape) == 4
+            # Only supports dim = 5;
+            assert len(start_shape) == 5
+            assert len(end_shape) == 5
 
             def _gen_ttnn_linear_shapes(shape):
-                b, c, h, w = shape
+                b, c, h, w, outer_dim = shape
 
+                b, c, h, w, outer_dim = shape
                 shape1 = [b, c, h, w]
-                shape2 = [b, c, h, w]
+                shape2 = [1, 1, outer_dim, w]
                 shapes = [shape1, shape2]
 
-                # if num_shapes == 3:
-                #     shape3 = [1, 1, 1, outer_dim]
-                #     shapes.append(shape3)
+                if num_shapes == 3:
+                    shape3 = [1, 1, 1, outer_dim]
+                    shapes.append(shape3)
 
                 return shapes
 

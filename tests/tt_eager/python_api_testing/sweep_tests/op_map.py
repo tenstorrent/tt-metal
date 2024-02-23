@@ -366,6 +366,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_rsqrt,
         "pytorch_op": pytorch_ops.rsqrt,
     },
+    "ttnn-rsqrt": {
+        "tt_lib_op": ttnn_ops.eltwise_rsqrt,
+        "pytorch_op": pytorch_ops.rsqrt,
+    },
     "eltwise-xlogy": {
         "tt_lib_op": tt_lib_ops.eltwise_xlogy,
         "pytorch_op": pytorch_ops.xlogy,
@@ -657,6 +661,10 @@ op_map = {
     },
     "eltwise-relu6": {
         "tt_lib_op": tt_lib_ops.eltwise_relu6,
+        "pytorch_op": pytorch_ops.relu6,
+    },
+    "ttnn-relu6": {
+        "tt_lib_op": ttnn_ops.eltwise_relu6,
         "pytorch_op": pytorch_ops.relu6,
     },
     "eltwise-ldexp": {
@@ -1291,5 +1299,9 @@ op_map = {
     "ttnn-transformer_concatenate_heads": {
         "tt_lib_op": ttnn_ops.transformer_concatenate_heads,
         "pytorch_op": pytorch_ops.transformer_concatenate_heads,
+    },
+    "ttnn-full-like": {
+        "tt_lib_op": ttnn_ops.full_like,
+        "pytorch_op": pytorch_ops.full_like,
     },
 }
