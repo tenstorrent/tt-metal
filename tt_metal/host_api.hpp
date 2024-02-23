@@ -408,6 +408,14 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
  */
 void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
 
+/**
+ * Blocking function for host to synchronize (wait) on an event completion on device.
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | event        | The event object that host will wait on for completion.                | Event &                       |                                    | Yes      |
+ */
+void EventSynchronize(Event &event);
 
 }  // namespace tt_metal
 
