@@ -102,8 +102,6 @@ def test_softmax(device, in_dtype, in0_mem_config, casual_mask):
         subblock_w=4 if in_dtype == ttl.tensor.DataType.FLOAT32 else 6,
         block_h=12 * fuse_head,
         block_w=12,
-        # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        # im_data_format=cb_dtype,
     )
 
     tt_output_sharded = sm_op(
@@ -211,8 +209,6 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, casual_mask):
         subblock_w=4 if in_dtype == ttl.tensor.DataType.FLOAT32 else 6,
         block_h=12 * fuse_head,
         block_w=12,
-        # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        # im_data_format=cb_dtype,
     )
 
     tt_output_sharded = sm_op(
@@ -302,8 +298,6 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         subblock_w=4 if in_dtype == ttl.tensor.DataType.FLOAT32 else 8,
         block_h=1,
         block_w=32,
-        # math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-        # im_data_format=cb_dtype,
     )
 
     tt_output_sharded = sm_op(
