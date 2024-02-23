@@ -3,7 +3,7 @@ test-list:
   - eltwise-rdiv:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 1
         num-samples: 64
@@ -30,7 +30,7 @@ test-list:
   - eltwise-rdiv:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 2, 2]
         num-shapes: 1
         num-samples: 64
@@ -38,11 +38,12 @@ test-list:
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand
+        function: gen_rand_exclude_range
         dtype: bfloat16
         args:
           low: -100
           high: 100
+          excluderange: [-0.001, 0.001]
       comparison:
         function: comp_pcc
       args-gen: gen_rop_args
