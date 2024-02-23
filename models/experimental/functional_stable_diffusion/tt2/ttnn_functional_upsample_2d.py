@@ -10,9 +10,9 @@ from models.utility_functions import (
     tt_to_torch_tensor,
 )
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from tt_lib.fallback_ops import fallback_ops
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
 )
 
@@ -30,19 +30,20 @@ config_override = {
 }
 
 
-def upsample2d(device, input, parameters, in_channels, out_channels, scale_factor=2.0, reader_patterns_cache=None):
-    conv_on_device = reader_patterns_cache is not None
-    tt_out = upsample_nearest2d(input, scale_factor)
+class upsample2d:
+    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+        self.device = device
+        self.parameters = parameters
+        weight = ttnn.to_layout(parameters.conv.weight, layout=ttnn.ROW_MAJOR_LAYOUT)
+        weight = ttnn.to_torch(weight)
+        weight = torch.permute(weight, (2, 3, 0, 1))
+        bias = ttnn.to_layout(parameters.conv.bias, layout=ttnn.ROW_MAJOR_LAYOUT)
+        bias = ttnn.to_torch(bias)
 
-    weight = ttnn.to_layout(parameters.conv.weight, layout=ttnn.ROW_MAJOR_LAYOUT)
-    weight = ttnn.to_torch(weight)
-    weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_layout(parameters.conv.bias, layout=ttnn.ROW_MAJOR_LAYOUT)
-    bias = ttnn.to_torch(bias)
-    if conv_on_device:
-        batch_size = tt_out.shape[0]
-        input_height = tt_out.shape[2]
-        input_width = tt_out.shape[3]
+        self.scale_factor = 2
+        input_height = input_height * self.scale_factor
+        input_width = input_width * self.scale_factor
+
         out_channels = weight.shape[0]
         in_channels = weight.shape[1]
         # breakpoint()
@@ -52,7 +53,7 @@ def upsample2d(device, input, parameters, in_channels, out_channels, scale_facto
         conv_config_override = {}
         if (out_channels, in_channels, input_height, input_width) in config_override:
             conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
-        conv = ttnn.Conv2d(
+        self.conv = ttnn.Conv2d(
             in_channels,
             out_channels,
             kernel_size=(3, 3),
@@ -74,28 +75,20 @@ def upsample2d(device, input, parameters, in_channels, out_channels, scale_facto
             enable_auto_formatting=True,
             deallocate_activation=True,
         )
+        self.output_height = self.conv.output_height
+        self.output_width = self.conv.output_width
+
+    def __call__(self, input, in_channels, out_channels):
+        tt_out = upsample_nearest2d(input, self.scale_factor)
+
         tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            device, conv, tt_out, batch_size, input_height, input_width, out_channels
-        )
-    else:
-        tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
-        tt_out = ttnn.to_torch(tt_out)
-        tt_out = torch_to_tt_tensor_rm(tt_out, device)
-        weight = torch_to_tt_tensor_rm(weight, device, put_on_device=False)
-        bias = torch_to_tt_tensor_rm(bias, device, put_on_device=False)
-
-        conv = fallback_ops.Conv2d(
-            weight,
-            bias,
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=1,
-            padding=1,
+            self.device,
+            self.conv,
+            tt_out,
+            self.conv.batch_size,
+            self.conv.input_height,
+            self.conv.input_width,
+            self.conv.out_channels,
         )
 
-        tt_out = conv(tt_out)
-        torch_out = tt_to_torch_tensor(tt_out)
-        tt_out = ttnn.from_torch(torch_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    return tt_out
+        return tt_out
