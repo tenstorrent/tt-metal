@@ -54,22 +54,9 @@ struct Sharded {
 };
 
 
-
-
-// start is inclusive, end is exclusive
-struct PageRange {
-    uint32_t start;
-    uint32_t end;
-};
-
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range;
-};
-
-
 //TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
+    const MemoryConfig input_mem_config;
     const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -80,9 +67,10 @@ struct Reshard {
     ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("output_mem_config");
+        std::make_tuple("input_mem_config", "output_mem_config");
     const auto attribute_values() const {
         return std::make_tuple(
+            std::cref(this->input_mem_config),
             std::cref(this->output_mem_config)
             );
     }
@@ -185,9 +173,11 @@ inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem
 
     return operation::run(
                Reshard{
+                   .input_mem_config = input_tensor.memory_config(),
                    .output_mem_config = output_mem_config
                    },
-               {input_tensor}).at(0);
+               {input_tensor})
+        .at(0);
 
 
 

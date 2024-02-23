@@ -599,19 +599,11 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
         if ttl_tensor.is_sharded():
             # reshard
             def impl(ttl_tensor, sharded_memory_config):
-                input_memory_config = ttnn.get_memory_config(tensor)
-                input_shard_spec = input_memory_config.shard_spec
-                output_shard_spec = sharded_memory_config.shard_spec
-                if tensor.layout == ttnn.TILE_LAYOUT or input_shard_spec.shape[1] == output_shard_spec.shape[1]:
-                    return ttl.tensor.reshard(ttl_tensor, sharded_memory_config)
-
-                else:
-                    # for row-major tensors where shard-spec[1] is different for input shard and output shard
-                    ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
-                    return ttl.tensor.interleaved_to_sharded(
-                        ttl_tensor,
-                        sharded_memory_config,
-                    )
+                ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
+                return ttl.tensor.interleaved_to_sharded(
+                    ttl_tensor,
+                    sharded_memory_config,
+                )
 
             ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
                 ttl_tensor, memory_config
