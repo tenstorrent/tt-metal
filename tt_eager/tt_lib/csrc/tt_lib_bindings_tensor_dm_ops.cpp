@@ -497,11 +497,6 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
         );
-        m_tensor.def("reshard", &reshard,
-            py::arg("input"), py::arg("output_mem_config").noconvert(),
-            R"doc(Converts a tensor sharded one way to another way)doc"
-        );
-
 
         // Multi-Device ops
         m_tensor.def("all_gather", &all_gather,
