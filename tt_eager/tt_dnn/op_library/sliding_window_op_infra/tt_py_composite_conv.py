@@ -726,6 +726,8 @@ class TTPyCompositeConv(TTPyOp):
         else:
             self.weight = weight
             self.bias = bias
+            weight_on_device = weight
+            bias_on_device = bias
 
         def conv_(activation):
             return ttl.tensor.optimized_conv(
@@ -1012,7 +1014,7 @@ class TTPyCompositeConv(TTPyOp):
             self.conv_output_shape[0],
             self.conv_output_shape[1],
             self.conv_output_shape[2],
-            self.conv_output_shape[3],
+            conv_output_on_device.shape_without_padding()[3],
         )
 
         # Copy to host
