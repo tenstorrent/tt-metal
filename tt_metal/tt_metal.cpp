@@ -146,20 +146,32 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
         TT_ASSERT(buffer.buffer_type() == BufferType::L1 && "Only L1 Buffers support sharding");
 
-        auto total_pages = buffer.num_pages();
-        for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
-            auto core = buffer.get_core_from_dev_page_id(dev_page_id);
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
-            auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
-            auto host_page_id = buffer.get_mapped_page_id(dev_page_id);
-            auto data_index = host_page_id * num_entries_per_page;
-            std::vector<uint32_t> page;
-            page.insert(
+        #ifdef DEBUG_PRINT_SHARD
+            std::cout << "Writing to Device Sharded " << std::endl;
+        #endif
+        auto core_host_page_ids = buffer.core_host_page_indices();
+
+
+        int dev_page_index = 0;
+        for(int core_index = 0; core_index < buffer.num_cores(); core_index++){
+            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_index);
+            auto host_page_ids = core_host_page_ids[core_index];
+            for(auto host_page_id: host_page_ids){
+                auto absolute_address = buffer.page_address(dev_page_index);
+                auto data_index = host_page_id * num_entries_per_page;
+                std::vector<uint32_t> page;
+                page.insert(
                     page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
 
-            auto noc_coordinates = buffer.noc_coordinates(bank_id);
+                auto noc_coordinates = buffer.noc_coordinates(bank_id);
                 llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                #ifdef DEBUG_PRINT_SHARD
+                    print_page(dev_page_index, core, host_page_id, noc_coordinates, absolute_address, bank_id,  page);
+                #endif
+                dev_page_index++;
+            }
         }
+
     }
 
 
@@ -282,7 +294,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                                   const uint32_t & dev_page_id,
                                   const uint32_t & bank_id
     ){
-        auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
+        auto absolute_address = dev_buffer.page_address(dev_page_id);
         auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
 
         uint32_t num_entries_per_page = page_size/sizeof(uint32_t);
@@ -316,8 +328,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
 
         for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
-            auto core = buffer.get_core_from_dev_page_id(dev_page_id);
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_id);
             auto host_page_id = buffer.get_mapped_page_id(dev_page_id);
             if(!shard_order){
                 read_pages_to_host_helper(
@@ -403,8 +414,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
         uint32_t host_page_id = 0;
         for(auto dev_page_id: page_ids){
-            auto core = buffer.get_core_from_dev_page_id(dev_page_id);
-            auto bank_id = device->bank_ids_from_logical_core(core)[0];
+            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_id);
             read_pages_to_host_helper(
                 device,
                 buffer,

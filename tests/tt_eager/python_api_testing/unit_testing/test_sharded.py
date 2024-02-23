@@ -15,8 +15,6 @@ from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
-from models.utility_functions import get_debug_tensor
-
 
 @pytest.mark.parametrize(
     "input_shape, shard_scheme, shard_size",
@@ -1484,88 +1482,23 @@ def test_sharded_concat_heads(
     logger.info(output)
     assert passing
 
+    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))})
+
 
 @pytest.mark.parametrize(
-    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme ",
+    "input_shard_grid, input_shard_shape, input_shard_orientation, input_sharding_scheme ",
     [
-        (
-            [1, 1, 64, 64],
-            ttl.tensor.Layout.TILE,
-            (0, 1),
-            (64, 32),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            (0, 1),
-            (32, 64),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-        (
-            [1, 1, 128, 64],
-            ttl.tensor.Layout.TILE,
-            (0, 1),
-            (64, 64),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 7),
-            (32, 32),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
-        (
-            [1, 1, 32, 128],
-            ttl.tensor.Layout.TILE,
-            (0, 3),
-            (32, 32),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 1),
-            (32, 64),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
-        (
-            [1, 1, 32, 2304],
-            ttl.tensor.Layout.TILE,
-            (0, 7),
-            (32, 288),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 1),
-            (32, 1152),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
-        (
-            [1, 1, 32, 16],
-            ttl.tensor.Layout.ROW_MAJOR,
-            (0, 0),
-            (32, 16),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 1),
-            (16, 16),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
-        (
-            [1, 1, 32, 8192],
-            ttl.tensor.Layout.TILE,
-            (7, 7),
-            (32, 128),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (0, 7),
-            (32, 1024),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
+        ((0, 3), (64, 64), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize(
+    "output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme ",
+    [
+        ((3, 3), (32, 32), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
     ],
 )
 def test_reshard(
     device,
-    input_shape,
-    input_layout,
     input_shard_grid,
     input_shard_shape,
     input_shard_orientation,
@@ -1575,8 +1508,11 @@ def test_reshard(
     output_shard_orientation,
     output_sharding_scheme,
 ):
+    input_shape = (1, 4, 64, 64)
     compute_grid = ttl.tensor.CoreCoord(input_shard_grid[0], input_shard_grid[1])
     input_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
+    input_shard_spec = ttl.tensor.ShardSpec(input_shard_grid, input_shard_shape, input_shard_orientation, False)
+    input_mem_config = ttl.tensor.MemoryConfig(input_sharding_scheme, ttl.tensor.BufferType.L1, input_shard_spec)
 
     compute_grid = ttl.tensor.CoreCoord(output_shard_grid[0], output_shard_grid[1])
     output_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
@@ -1584,49 +1520,14 @@ def test_reshard(
     output_mem_config = ttl.tensor.MemoryConfig(output_sharding_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
     tt_dtype = ttl.tensor.DataType.BFLOAT16
 
-    dram_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-    )
-    debug = True
-    if debug:
-        if input_layout == ttl.tensor.Layout.TILE:
-            num_tiles_height = int(input_shape[2] / 32)
-            num_tiles_width = int(input_shape[3] / 32)
-            torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, torch.bfloat16)
-        else:
-            num_tiles_width = int(input_shape[3] / input_shard_shape[1])
-            num_tiles_height = int(input_shape[2])
-            torch_tensor = get_debug_tensor(
-                num_tiles_width, num_tiles_height, torch.bfloat16, page_width=input_shard_shape[1], page_height=1
-            )
-    else:
-        torch_tensor = torch.randn(input_shape).bfloat16()
-    tt_tensor_sharded = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(input_layout)
-    tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
-    tt_tensor_sharded = ttl.tensor.interleaved_to_sharded(
-        tt_tensor_sharded,
-        input_shard_grid,
-        input_shard_shape,
-        input_sharding_scheme,
-        input_shard_orientation,
-        output_dtype=tt_dtype,
-    )
-
-    tt_tensor_reshard = ttl.tensor.reshard(tt_tensor_sharded, output_mem_config)
-
-    tt_tensor_interleaved = ttl.tensor.sharded_to_interleaved(
-        tt_tensor_reshard,
-        dram_memory_config,
-    )
-
-    tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
+    torch_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
+    tt_tensor = tt_tensor.to(device, input_mem_config)
+    tt_tensor = ttl.tensor.reshard(tt_tensor, output_mem_config)
+    tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    torch_tensor_after_round_trip = tt_tensor.to_torch()
 
     assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
     passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
-    if not passing:
-        print(torch_tensor)
-        print(torch_tensor_after_round_trip)
     assert passing

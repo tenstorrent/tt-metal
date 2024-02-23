@@ -24,7 +24,7 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape);
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, const Shape& shape, DataType dtype, uint32_t num_shards, std::array<uint32_t, 2> shard_shape);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
@@ -583,7 +583,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
 
     std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
     if(memory_config.is_sharded()){
-        auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape);
+        auto page_shape = get_sharded_page_shape(layout, shape, data_type, memory_config.shard_spec.value().num_cores(), memory_config.shard_spec.value().shape);
         std::array<uint32_t, 2> tensor2d_size = {shape[0]*shape[1] * shape[2]/ page_shape[0],
                                                 shape[3]/page_shape[1]
                                             };
