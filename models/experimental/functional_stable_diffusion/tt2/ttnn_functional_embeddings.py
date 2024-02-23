@@ -5,20 +5,25 @@
 import ttnn
 
 
-def TtTimestepEmbedding(sample, parameters, act_fn: str = "silu"):
-    sample = ttnn.matmul(sample, parameters.linear_1.weight)
-    sample = ttnn.add(sample, parameters.linear_1.bias)
+class TtTimestepEmbedding():
+    def __init__(self, parameters):
+        self.parameters = parameters
 
-    act = None
-    if act_fn == "silu":
-        act = ttnn.silu
-    elif act_fn == "mish":
-        assert False, "ttnn does not support nn.Mist() yet"
+    def __call__(self, sample, act_fn: str = "silu"):
 
-    if act is not None:
-        sample = act(sample)
+        sample = ttnn.matmul(sample, self.parameters.linear_1.weight)
+        sample = ttnn.add(sample, self.parameters.linear_1.bias)
 
-    sample = ttnn.matmul(sample, parameters.linear_2.weight)
-    sample = ttnn.add(sample, parameters.linear_2.bias)
+        act = None
+        if act_fn == "silu":
+            act = ttnn.silu
+        elif act_fn == "mish":
+            assert False, "ttnn does not support nn.Mist() yet"
 
-    return sample
+        if act is not None:
+            sample = act(sample)
+
+        sample = ttnn.matmul(sample, self.parameters.linear_2.weight)
+        sample = ttnn.add(sample, self.parameters.linear_2.bias)
+
+        return sample
