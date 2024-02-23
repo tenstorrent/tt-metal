@@ -69,11 +69,11 @@ static std::atomic<bool> watcher_killed_due_to_error = false;
 WatcherDevice::WatcherDevice(int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()> storage_only_cores) : device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical), storage_only_cores_(storage_only_cores) {
 }
 
-static uint32_t get_elapsed_secs() {
+static double get_elapsed_secs() {
     std::chrono::time_point now_time = std::chrono::system_clock::now();
     std::chrono::duration<double> elapsed_secs = now_time - start_time;
 
-    return (uint32_t)elapsed_secs.count();
+    return elapsed_secs.count();
 }
 
 static FILE * create_file(const string& log_path) {
@@ -87,7 +87,7 @@ static FILE * create_file(const string& log_path) {
     }
     log_info(LogLLRuntime, "Watcher log file: {}", fname);
 
-    fprintf(f, "At %ds starting\n", watcher::get_elapsed_secs());
+    fprintf(f, "At %.3lfs starting\n", watcher::get_elapsed_secs());
     fprintf(f, "Legend:\n");
     fprintf(f, "\tComma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
     fprintf(f, "\tI=initialization sequence\n");
@@ -484,16 +484,21 @@ static void watcher_loop(int sleep_usecs) {
 
     log_info(LogLLRuntime, "Watcher thread watching...");
 
+    double last_elapsed_time = watcher::get_elapsed_secs();
     while (true) {
-        // Odds are this thread will be killed during the usleep
-        usleep(sleep_usecs);
+        // Delay an amount such that we wait a minimum of the set sleep_usecs between polls.
+        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double) sleep_usecs) / 1000000.) {
+            // Odds are this thread will be killed during the usleep
+            usleep(1);
+        }
         count++;
+        last_elapsed_time = watcher::get_elapsed_secs();
 
         {
             const std::lock_guard<std::mutex> lock(watch_mutex);
 
             fprintf(logfile, "-----\n");
-            fprintf(logfile, "Dump #%d at %ds\n", count, watcher::get_elapsed_secs());
+            fprintf(logfile, "Dump #%d at %.3lfs\n", count, watcher::get_elapsed_secs());
 
             if (devices.size() == 0) {
                 fprintf(logfile, "No active devices\n");
@@ -512,7 +517,7 @@ static void watcher_loop(int sleep_usecs) {
                 }
             }
 
-            fprintf(logfile, "\n");
+            fprintf(logfile, "Dump #%d completed at %.3lfs\n", count, watcher::get_elapsed_secs());
         }
 
         // If all devices are detached, we can turn off the server, it will be turned back on when a
@@ -647,7 +652,7 @@ void watcher_attach(void *dev,
     }
 
     if (llrt::watcher::logfile != nullptr) {
-        fprintf(watcher::logfile, "At %ds attach device %d\n", watcher::get_elapsed_secs(), device_id);
+        fprintf(watcher::logfile, "At %.3lfs attach device %d\n", watcher::get_elapsed_secs(), device_id);
     }
 
     if (watcher::enabled) {
@@ -668,7 +673,7 @@ void watcher_detach(void *old) {
     TT_ASSERT(pair != watcher::devices.end());
     if (watcher::enabled && watcher::logfile != nullptr) {
         log_info(LogLLRuntime, "Watcher detached device {}", pair->second->device_id_);
-        fprintf(watcher::logfile, "At %ds detach device %d\n", watcher::get_elapsed_secs(), pair->second->device_id_);
+        fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), pair->second->device_id_);
     }
     watcher::devices.erase(old);
     if (watcher::enabled && watcher::devices.empty()) {

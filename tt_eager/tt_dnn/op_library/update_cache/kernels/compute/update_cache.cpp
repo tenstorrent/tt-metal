@@ -55,8 +55,7 @@ void MAIN {
             // Compute pops both
             cb_pop_front(untilized_cache2_cb, Wt);
             cb_pop_front(untilized_cache_cb, Wt);
-            tilize_uninit();
-            unpack_reconfig_data_format_srca(untilized_cache2_cb, cache_cb);
+            tilize_uninit_with_dt(untilized_cache2_cb, cache_cb);
             pack_reconfig_data_format(out_cb, untilized_cache_cb);
         }
         unpack_reconfig_data_format_srca(cache_cb, in_cb);

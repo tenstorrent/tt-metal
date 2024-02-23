@@ -1191,6 +1191,7 @@ class Bottleneck:
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
                 move_utwh_output=move_utwh_output,
+                deallocate_activation=True,
             )
         else:
             self.conv2 = resnet50_optimized_conv(
@@ -1500,6 +1501,7 @@ class ResNet(nn.Module):
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
                 use_shallow_conv_variant=True,
+                deallocate_activation=True,
             )
             self.first_conv_op_params = sliding_window_op_params
         else:

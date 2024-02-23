@@ -49,8 +49,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit();
-    UNPACK(( llk_unpack_reconfig_data_format(0, 1, 0, 0) ));
+    tilize_uninit_with_dt(0, 1);
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -188,8 +187,7 @@ void MAIN {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short();
-                            UNPACK(( llk_unpack_reconfig_data_format(matmul_partials_cb, 1, 0, 0) ));
+                            mm_init_short_with_dt(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
                         } // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;

@@ -167,6 +167,7 @@ def test_optimized_conv_v2(
         weights_dtype=weights_dtype,
         output_dtype=activations_dtype,
         math_fidelity=math_fidelity,
+        deallocate_activation=True,
     )
 
     conv_input = tt_lib.tensor.Tensor(

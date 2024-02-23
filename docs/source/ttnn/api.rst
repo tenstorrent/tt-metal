@@ -48,7 +48,6 @@ Tensor Creation
 .. toctree::
    :maxdepth: 1
 
-   ttnn/arange
    ttnn/zeros
    ttnn/zeros_like
    ttnn/ones
@@ -183,17 +182,6 @@ Pointwise Binary
    ttnn/eq
    ttnn/ne
    ttnn/isclose
-
-Pointwise Ternary
-=================
-
-.. toctree::
-   :maxdepth: 1
-
-   ttnn/addcdiv
-   ttnn/addcmul
-   ttnn/mac
-   ttnn/where
 
 Losses
 ======

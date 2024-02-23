@@ -78,7 +78,7 @@ void MAIN {
         cb_push_back(out_cb_id, 1);
 
         cb_pop_front(cb_intermed2, 1);
-        tilize_uninit();
+        tilize_uninit(cb_intermed2);
 
         mm_init_short(tt::CB::c_in0, tt::CB::c_in1, transpose_hw);
     }

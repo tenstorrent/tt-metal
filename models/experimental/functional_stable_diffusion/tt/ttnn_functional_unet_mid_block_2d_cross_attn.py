@@ -30,6 +30,7 @@ def unet_mid_block_2d_cross_attn(
     dual_cross_attention=False,
     use_linear_projection=False,
     upcast_attention=False,
+    reader_patterns_cache=None,
 ):
     has_cross_attention = True
 
@@ -50,6 +51,7 @@ def unet_mid_block_2d_cross_attn(
         pre_norm=resnet_pre_norm,
         eps=resnet_eps,
         use_in_shortcut=None,
+        reader_patterns_cache=reader_patterns_cache,
     )
 
     for attn, resnet in zip(parameters.attentions, parameters.resnets[1:]):
@@ -73,6 +75,7 @@ def unet_mid_block_2d_cross_attn(
                 device=device,
                 cross_attention_dim=cross_attention_dim,
                 upcast_attention=upcast_attention,
+                reader_patterns_cache=reader_patterns_cache,
             )
         else:
             assert False, "We do not support Dual Transformer"
@@ -92,6 +95,7 @@ def unet_mid_block_2d_cross_attn(
             pre_norm=resnet_pre_norm,
             eps=resnet_eps,
             use_in_shortcut=None,
+            reader_patterns_cache=reader_patterns_cache,
         )
 
     return hidden_states

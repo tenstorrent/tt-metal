@@ -39,7 +39,7 @@ jobs:
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.os }}
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Set up end-to-end tests environment
@@ -73,7 +73,7 @@ jobs:
         with:
           submodules: recursive
           lfs: false
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
       - name: Set up end-to-end tests environment

@@ -167,19 +167,22 @@ struct DebugPrinter {
     }
 };
 
-template<typename T>
-__attribute__((__noinline__))
-DebugPrinter operator <<(DebugPrinter dp, T val) {
+struct DebugPrintData {
+    uint32_t sz;
+    const uint8_t* data_ptr;
+    uint8_t type_id;
+};
 
-#if defined(DEBUG_PRINT_ENABLED) && !defined(PROFILE_KERNEL)
+__attribute__((__noinline__))
+void debug_print(DebugPrinter &dp, DebugPrintData data) {
     if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
         // skip all prints if this hart+core was not specifically enabled on the host
-        return dp;
+        return;
     }
 
-    uint32_t payload_sz = DebugPrintTypeToSize<T>(val); // includes terminating 0 for char*
-    uint8_t typecode = DebugPrintTypeToId<T>();
-
+    uint32_t payload_sz = data.sz;
+    const uint8_t *valaddr = data.data_ptr;
+    uint8_t typecode = data.type_id;
     constexpr int code_sz = 1; // size of type code
     constexpr int sz_sz = 1; // size of serialized size
     uint32_t wpos = *dp.wpos(); // copy wpos into local storage
@@ -214,7 +217,7 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
             printbuf[code_sz] = payload_sz;
             wpos = payload_sz + sz_sz + code_sz;
             *dp.wpos() = wpos;
-            return dp;
+            return;
         }
     }
 
@@ -224,7 +227,6 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
     wpos += code_sz;
     printbuf[wpos] = payload_sz;
     wpos += sz_sz;
-    const uint8_t* valaddr = DebugPrintTypeAddr<T>(&val);
     for (uint32_t j = 0; j < payload_sz; j++)
         printbuf[wpos+j] = valaddr[j];
     wpos += payload_sz;
@@ -232,6 +234,18 @@ DebugPrinter operator <<(DebugPrinter dp, T val) {
     // our message needs to be atomic w.r.t code, size and payload
     // so we only update wpos in the end
     *dp.wpos() = wpos;
+}
+
+template<typename T>
+__attribute__((__noinline__))
+DebugPrinter operator <<(DebugPrinter dp, T val) {
+#if defined(DEBUG_PRINT_ENABLED) && !defined(PROFILE_KERNEL)
+    DebugPrintData data{
+        .sz = DebugPrintTypeToSize<T>(val), // includes terminating 0 for char*
+        .data_ptr = DebugPrintTypeAddr<T>(&val),
+        .type_id = DebugPrintTypeToId<T>()
+    };
+    debug_print(dp, data);
 #endif // ENABLE_DEBUG_PRINT && !PROFILE_KERNEL
     return dp;
 }

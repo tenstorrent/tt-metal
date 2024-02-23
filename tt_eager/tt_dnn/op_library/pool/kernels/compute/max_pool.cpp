@@ -55,7 +55,7 @@ inline void tilize(uint32_t out_nelems,
         cb_push_back(out_cb_id, in_ntiles_hwc);
         cb_pop_front(in_cb_id, 1);
     }
-    tilize_uninit();
+    tilize_uninit(in_cb_id);
 }
 
 inline void reduce_h_orig(uint32_t out_nelems,

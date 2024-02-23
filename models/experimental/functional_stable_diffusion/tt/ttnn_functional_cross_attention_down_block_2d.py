@@ -39,6 +39,7 @@ def cross_attention_down_block_2d(
     *,
     parameters,
     device,
+    reader_patterns_cache=None,
 ):
     output_states = ()
 
@@ -54,6 +55,7 @@ def cross_attention_down_block_2d(
             parameters=resnet,
             device=device,
             use_in_shortcut=use_in_shortcut,
+            reader_patterns_cache=reader_patterns_cache,
             eps=resnet_eps,
             groups=resnet_groups,
             time_embedding_norm=resnet_time_scale_shift,
@@ -76,7 +78,8 @@ def cross_attention_down_block_2d(
                 only_cross_attention=only_cross_attention,
                 upcast_attention=upcast_attention,
                 device=device,
-            )
+                reader_patterns_cache=reader_patterns_cache,
+        )
 
         output_states += (hidden_states,)
 
@@ -89,6 +92,7 @@ def cross_attention_down_block_2d(
             device=device,
             parameters=parameters.downsamplers[0],
             use_conv=True,
+            reader_patterns_cache=reader_patterns_cache,
         )
         output_states += (hidden_states,)
     return hidden_states, output_states

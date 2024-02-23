@@ -297,7 +297,6 @@ def determine_per_core_block_config(
         assert (
             "out_subblock_h" in config_override
         ), "out_subblock_h must also be provided as override config if out_subblock_w is provided"
-
     conv_blocking_config = ttl.tensor.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h_ntiles,
         act_block_w_ntiles=act_block_w_ntiles,
@@ -308,6 +307,42 @@ def determine_per_core_block_config(
         out_subblock_w_ntiles=out_subblock_w_ntiles,
     )
     return conv_blocking_config
+
+
+def determine_1x1conv_as_matmul_config(
+    conv_parallelization_config, conv_blocking_config, use_1d_systolic_array, fuse_relu
+):
+    if use_1d_systolic_array:
+        matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=conv_parallelization_config.grid_size,
+            in0_block_w=conv_blocking_config.act_block_w_ntiles,
+            out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
+            out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
+            per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
+            per_core_N=conv_parallelization_config.per_core_weight_matrix_width_ntiles,
+            fuse_batch=True,
+            fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
+            if fuse_relu
+            else None,
+            mcast_in0=False,
+        )
+    else:
+        assert (
+            conv_blocking_config.act_block_w_ntiles % conv_blocking_config.act_c_num_blocks == 0
+        ), "Expected act block width to be divisible by act channel num blocks."
+        matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=conv_parallelization_config.grid_size,
+            in0_block_w=conv_blocking_config.act_block_w_ntiles // conv_blocking_config.act_c_num_blocks,
+            out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
+            out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
+            per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
+            per_core_N=conv_parallelization_config.per_core_weight_matrix_width_ntiles,
+            transpose_mcast=True,
+            fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
+            if fuse_relu
+            else None,
+        )
+    return matmul_config
 
 
 class TTPyCompositeConv(TTPyOp):
@@ -418,7 +453,20 @@ class TTPyCompositeConv(TTPyOp):
         pad_w = sliding_window_op_params.pad_w
         filter_height = sliding_window_op_params.window_h
         filter_width = sliding_window_op_params.window_w
-
+        self.matmul_config = None
+        self.use_matmul_for_1x1_conv = False
+        if (
+            filter_height == filter_width
+            and filter_height == 1
+            and stride_h == stride_w
+            and stride_h == 1
+            and pad_h == pad_w
+            and pad_h == 0
+        ):
+            self.use_matmul_for_1x1_conv = True
+            self.matmul_config = determine_1x1conv_as_matmul_config(
+                self.opt_conv_parall_conf_auto, self.opt_conv_block_conf_auto, is_1d_systolic, fuse_relu
+            )
         if isinstance(sliding_window_op_params, SlidingWindowOpParams):
             # populate parallelization params in sliding_window_op_params
             sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
@@ -438,6 +486,7 @@ class TTPyCompositeConv(TTPyOp):
 
         self.sliding_window_op_params = sliding_window_op_params
         self.move_utwh_output = move_utwh_output
+        self.deallocate_input = deallocate_activation
 
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
@@ -455,17 +504,19 @@ class TTPyCompositeConv(TTPyOp):
             1,
             1,
         ]
-        # set_op_configs populates reader_patterns_cache["conv"][sliding_window_op_params_hash] with conv_reader_indices sharded tensor
-        self.set_op_configs(
-            self.device,
-            sliding_window_op_params_hash,
-            sliding_window_op_params,
-            conv_params,
-            not is_1d_systolic,
-            reader_patterns_cache["conv"],
-        )
-        assert sliding_window_op_params_hash in reader_patterns_cache["conv"]
-        conv_reader_indices = reader_patterns_cache["conv"][sliding_window_op_params_hash]
+        conv_reader_indices = None
+        if not self.use_matmul_for_1x1_conv:
+            # set_op_configs populates reader_patterns_cache["conv"][sliding_window_op_params_hash] with conv_reader_indices sharded tensor
+            self.set_op_configs(
+                self.device,
+                sliding_window_op_params_hash,
+                sliding_window_op_params,
+                conv_params,
+                not is_1d_systolic,
+                reader_patterns_cache["conv"],
+            )
+            assert sliding_window_op_params_hash in reader_patterns_cache["conv"]
+            conv_reader_indices = reader_patterns_cache["conv"][sliding_window_op_params_hash]
 
         self.set_op_weights_biases(
             weight,
@@ -487,10 +538,11 @@ class TTPyCompositeConv(TTPyOp):
             move_weights_to_device=move_weights_to_device,
         )
 
-        # create untilize with halo op
-        self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
-            device, self.sliding_window_op_params, reader_patterns_cache["halo"]
-        )
+        if not self.use_matmul_for_1x1_conv:
+            # create untilize with halo op
+            self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(
+                device, self.sliding_window_op_params, reader_patterns_cache["halo"]
+            )
 
     # override abstract methods from base class TTPyOp
     def set_op_configs(
@@ -696,28 +748,61 @@ class TTPyCompositeConv(TTPyOp):
             )
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
+        def composite_conv_with_deallocate_input(activation):
+            # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
+            utwh_output = self.tt_py_untilize_with_halo_op(activation)
+            activation.deallocate()
+            return conv_(utwh_output)
+
         def composite_conv(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            if self.deallocate_activation:
-                activation.deallocate()
             return conv_(utwh_output)
 
-        def composite_conv_with_move_utwh_output(activation):
+        def composite_conv_with_move_utwh_output_with_deallocate_input(activation):
             # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            if self.deallocate_activation:
-                activation.deallocate()
+            activation.deallocate()
             move_output = ttl.tensor.move_sharded(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)
 
-        if self.move_utwh_output:
-            self.conv = composite_conv_with_move_utwh_output
+        def composite_conv_with_move_utwh_output(activation):
+            # assert(activation.layout() == ttl.tensor.Layout.ROW_MAJOR)
+            utwh_output = self.tt_py_untilize_with_halo_op(activation)
+            move_output = ttl.tensor.move_sharded(utwh_output)
+            utwh_output.deallocate()
+            return conv_(move_output)
+
+        def conv1x1_as_matmul(activation):
+            # conv1x1 stride 1 padding 0, use matmul op
+            output = ttl.operations.primary.matmul(
+                activation,
+                weight_on_device,
+                bias=bias_on_device,
+                program_config=self.matmul_config,
+                output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
+                output_dtype=output_dtype,
+                math_fidelity=math_fidelity,
+            )
+            return output
+
+        if self.use_matmul_for_1x1_conv:
+            self.conv = conv1x1_as_matmul
+        elif self.move_utwh_output:
+            if self.deallocate_input:
+                self.conv = composite_conv_with_move_utwh_output_with_deallocate_input
+            else:
+                self.conv = composite_conv_with_move_utwh_output
         else:
-            self.conv = composite_conv
+            if self.deallocate_input:
+                self.conv = composite_conv_with_deallocate_input
+            else:
+                self.conv = composite_conv
 
     def __call__(self, activation):
+        # print("Going to run conv with input shape-", self.input_tensor_shape)
+        # print("with output shape = ", self.conv_output_shape)
         if self.enable_auto_formatting:
             activation = self.conv_input_interleaved_to_sharded(activation)
         activation = self.conv(activation)

@@ -38,7 +38,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "acosh": torch.acosh,
             "atanh": torch.atanh,
             "logical_not": torch.logical_not,
-            "clone": torch.clone,
             "signbit": torch.signbit,
         }
         torch_function = name_to_torch_function[name]
@@ -123,7 +122,6 @@ TTL_UNARY_FUNCTIONS = [
     ("acosh", ttl.tensor.acosh),
     ("atanh", ttl.tensor.atanh),
     ("logical_not", ttl.tensor.logical_not_unary),
-    ("clone", ttl.tensor.clone),
     ("signbit", ttl.tensor.signbit),
 ]
 

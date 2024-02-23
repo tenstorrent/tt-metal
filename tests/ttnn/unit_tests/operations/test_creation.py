@@ -136,31 +136,3 @@ def test_full(device, input_shape, fill_value):
 
     assert_with_pcc(torch_tensor, tensor, 0.9999)
     assert torch.allclose(torch_tensor, tensor)
-
-
-@pytest.mark.parametrize(
-    "start",
-    [4, 8, 16, 32],
-)
-@pytest.mark.parametrize(
-    "end",
-    [100, 200, 300],
-)
-@pytest.mark.parametrize(
-    "step",
-    [1, 2],
-)
-def test_arange(device, start, end, step):
-    torch_input_tensor = torch.rand((start, end, step), dtype=torch.bfloat16)
-    torch_output_tensor = torch.arange(start, end, step)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
-
-    output_tensor = ttnn.arange(input_tensor.shape[0], input_tensor.shape[1], input_tensor.shape[2], device)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor[-1, -1, -1, :]
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

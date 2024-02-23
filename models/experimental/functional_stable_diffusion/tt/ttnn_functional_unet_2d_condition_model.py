@@ -4,6 +4,7 @@
 
 import tt_lib
 import torch.nn as nn
+import math
 import ttnn
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
@@ -26,6 +27,9 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_at
 )
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_downblock_2d import downblock2d
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+)
 
 
 def permute_conv_weights(weight, bias):
@@ -93,6 +97,8 @@ def UNet2DConditionModel(
     upcast_attention: bool = False,
     resnet_time_scale_shift: str = "default",
     return_dict: bool = True,
+    reader_patterns_cache: Optional[Dict] = None,
+    dtype: Optional[ttnn.DataType] = None,
 ):
     num_upsamplers = len(block_out_channels) - 1
     default_overall_up_factor = 2**num_upsamplers
@@ -155,29 +161,64 @@ def UNet2DConditionModel(
 
         class_emb = class_embedding(class_labels)
         emb = emb + class_emb
-
     # params change
     parameters.conv_in.weight, parameters.conv_in.bias = permute_conv_weights(
         parameters.conv_in.weight, parameters.conv_in.bias
     )
-    parameters.conv_in.weight = torch_to_tt_tensor_rm(parameters.conv_in.weight, device, put_on_device=False)
-    parameters.conv_in.bias = torch_to_tt_tensor_rm(parameters.conv_in.bias, device, put_on_device=False)
-    # params change
-    # Using fallback Conv2D as we face issue with ttnn.Conv2D
-    conv_in = fallback_ops.Conv2d(
-        parameters.conv_in.weight,
-        parameters.conv_in.bias,
-        in_channels,
-        block_out_channels[0],
-        kernel_size=3,
-        padding=(1, 1),
-    )
-
-    sample = ttnn_to_torch(sample)
-    sample = torch_to_tt_tensor_rm(sample, device)
-    sample = conv_in(sample)
-    sample = tt_to_torch_tensor(sample)
-    sample = torch_to_ttnn(sample, device=device)
+    convs_on_device = reader_patterns_cache is not None
+    if not convs_on_device:
+        parameters.conv_in.weight = torch_to_tt_tensor_rm(parameters.conv_in.weight, device, put_on_device=False)
+        parameters.conv_in.bias = torch_to_tt_tensor_rm(parameters.conv_in.bias, device, put_on_device=False)
+        # params change
+        # Using fallback Conv2d as we face issue with ttnn.Conv2d
+        conv_in = fallback_ops.Conv2d(
+            parameters.conv_in.weight,
+            parameters.conv_in.bias,
+            in_channels,
+            block_out_channels[0],
+            kernel_size=3,
+            padding=(1, 1),
+        )
+        sample = ttnn_to_torch(sample)
+        sample = torch_to_tt_tensor_rm(sample, device)
+        sample = conv_in(sample)
+        sample = tt_to_torch_tensor(sample)
+        sample = torch_to_ttnn(sample, device=device)
+    else:
+        # breakpoint()
+        parameters.conv_in.bias = torch.reshape(parameters.conv_in.bias, (1, 1, 1, parameters.conv_in.bias.shape[-1]))
+        tt_weight_tensor = ttnn.from_torch(parameters.conv_in.weight, ttnn.float32)
+        tt_bias_tensor = ttnn.from_torch(parameters.conv_in.bias, ttnn.float32)
+        # breakpoint()
+        out_channels = parameters.conv_in.weight.shape[0]
+        in_channels = parameters.conv_in.weight.shape[1]
+        batch_size = sample.shape[0]
+        input_height = sample.shape[2]
+        input_width = sample.shape[3]
+        conv_in = ttnn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            use_1d_systolic_array=True if in_channels < 320 else False,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            reader_patterns_cache=reader_patterns_cache,
+            weight=tt_weight_tensor,
+            bias=tt_bias_tensor,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            weights_dtype=ttnn.bfloat8_b,
+            conv_blocking_and_parallelization_config_override={},
+            use_shallow_conv_variant=False,
+            enable_auto_formatting=True,
+        )
+        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv_in, sample, batch_size, input_height, input_width, out_channels
+        )
 
     # con_in completes
 
@@ -220,6 +261,7 @@ def UNet2DConditionModel(
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 device=device,
+                reader_patterns_cache=reader_patterns_cache,  # enable convs on device for this module causes failure. Investigating.
             )
         elif down_block_type == "DownBlock2D":
             sample, res_samples = downblock2d(
@@ -237,6 +279,8 @@ def UNet2DConditionModel(
                 downsample_padding=downsample_padding,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 device=device,
+                dtype=dtype,
+                reader_patterns_cache=reader_patterns_cache,
             )
         else:
             assert (
@@ -268,6 +312,7 @@ def UNet2DConditionModel(
             upcast_attention=upcast_attention,
             parameters=parameters.mid_block,
             device=device,
+            reader_patterns_cache=reader_patterns_cache,
         )
     elif mid_block_type == "UNetMidBlock2DSimpleCrossAttn":
         assert False, "This is not happening"
@@ -331,6 +376,7 @@ def UNet2DConditionModel(
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 parameters=parameters.up_blocks[i],
                 device=device,
+                reader_patterns_cache=reader_patterns_cache,
             )
         elif up_block_type == "UpBlock2D":
             sample = upblock_2d(
@@ -350,6 +396,7 @@ def UNet2DConditionModel(
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 parameters=parameters.up_blocks[i],
                 device=device,
+                reader_patterns_cache=reader_patterns_cache,
             )
         else:
             assert (
@@ -370,25 +417,62 @@ def UNet2DConditionModel(
     parameters.conv_out.weight, parameters.conv_out.bias = permute_conv_weights(
         parameters.conv_out.weight, parameters.conv_out.bias
     )
-    parameters.conv_out.weight = torch_to_tt_tensor_rm(parameters.conv_out.weight, device, put_on_device=False)
-    parameters.conv_out.bias = torch_to_tt_tensor_rm(parameters.conv_out.bias, device, put_on_device=False)
-    # params change
 
-    # Using fallback Conv2D as we face issue with ttnn.Conv2D
-    conv_out = fallback_ops.Conv2d(
-        parameters.conv_out.weight,
-        parameters.conv_out.bias,
-        block_out_channels[0],
-        out_channels,
-        kernel_size=3,
-        padding=1,
-    )
+    if convs_on_device:
+        parameters.conv_out.bias = torch.reshape(
+            parameters.conv_out.bias, (1, 1, 1, parameters.conv_out.bias.shape[-1])
+        )
+        tt_weight_tensor = ttnn.from_torch(parameters.conv_out.weight, ttnn.float32)
+        tt_bias_tensor = ttnn.from_torch(parameters.conv_out.bias, ttnn.float32)
+        out_channels = parameters.conv_out.weight.shape[0]
+        in_channels = parameters.conv_out.weight.shape[1]
+        batch_size = sample.shape[0]
+        input_height = sample.shape[2]
+        input_width = sample.shape[3]
+        conv_out = ttnn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            use_1d_systolic_array=True,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            reader_patterns_cache=reader_patterns_cache,
+            weight=tt_weight_tensor,
+            bias=tt_bias_tensor,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            weights_dtype=ttnn.bfloat8_b,
+            conv_blocking_and_parallelization_config_override={"act_block_h": 64},
+            use_shallow_conv_variant=False,
+            enable_auto_formatting=True,
+            deallocate_activation=True,
+        )
+        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+            device, conv_out, sample, batch_size, input_height, input_width, out_channels
+        )
+    else:
+        parameters.conv_out.weight = torch_to_tt_tensor_rm(parameters.conv_out.weight, device, put_on_device=False)
+        parameters.conv_out.bias = torch_to_tt_tensor_rm(parameters.conv_out.bias, device, put_on_device=False)
+        # params change
 
-    sample = ttnn_to_torch(sample)
-    sample = torch_to_tt_tensor_rm(sample, device)
-    sample = conv_out(sample)
-    sample = tt_to_torch_tensor(sample)
-    sample = torch_to_ttnn(sample, device=device)
+        # Using fallback Conv2d as we face issue with ttnn.Conv2d
+        conv_out = fallback_ops.Conv2d(
+            parameters.conv_out.weight,
+            parameters.conv_out.bias,
+            block_out_channels[0],
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        sample = ttnn_to_torch(sample)
+        sample = torch_to_tt_tensor_rm(sample, device)
+        sample = conv_out(sample)
+        sample = tt_to_torch_tensor(sample)
+        sample = torch_to_ttnn(sample, device=device)
 
     # con_in completes
 

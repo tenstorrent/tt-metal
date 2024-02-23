@@ -137,12 +137,6 @@ def test_atanh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_clone(device, h, w):
-    run_unary_test(device, h, w, ttnn.clone, torch.clone)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_logical_not(device, h, w):
     run_unary_test(device, h, w, ttnn.logical_not, torch.logical_not)
 

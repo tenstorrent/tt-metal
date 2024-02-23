@@ -4,11 +4,16 @@
 
 import ttnn
 import torch
+from typing import Optional, Dict
 
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block,
+)
+from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
+    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    post_process_output,
 )
 
 
@@ -48,7 +53,9 @@ def transformer_2d_model(
     eps=1e-5,
     device=None,
     norm_elementwise_affine: bool = True,
+    reader_patterns_cache: Optional[Dict] = None,
 ):
+    conv_on_device = reader_patterns_cache is not None
     inner_dim = num_attention_heads * attention_head_dim
 
     is_input_continuous = (in_channels is not None) and (patch_size is None)
@@ -87,31 +94,69 @@ def transformer_2d_model(
         )
 
         if not use_linear_projection:
-            hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))
-            hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
-
             parameters.proj_in.weight, parameters.proj_in.bias = permute_conv_parameters(
                 parameters.proj_in.weight, parameters.proj_in.bias
             )
-            parameters.proj_in.weight = torch_to_tt_tensor_rm(parameters.proj_in.weight, device, put_on_device=False)
-            parameters.proj_in.bias = torch_to_tt_tensor_rm(parameters.proj_in.bias, device, put_on_device=False)
+            if conv_on_device:
+                batch_size = hidden_states.shape[0]
+                input_height = hidden_states.shape[2]
+                input_width = hidden_states.shape[3]
+                parameters.proj_in.bias = torch.reshape(
+                    parameters.proj_in.bias, (1, 1, 1, parameters.proj_in.bias.shape[-1])
+                )
+                tt_weight_tensor = ttnn.from_torch(parameters.proj_in.weight, ttnn.float32)
+                tt_bias_tensor = ttnn.from_torch(parameters.proj_in.bias, ttnn.float32)
+                out_channels = parameters.proj_in.weight.shape[0]
+                in_channels = parameters.proj_in.weight.shape[1]
+                proj_in = ttnn.Conv2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=(1, 1),
+                    stride=(1, 1),
+                    padding=(0, 0),
+                    dtype=ttnn.bfloat8_b,
+                    device=device,
+                    use_1d_systolic_array=False,
+                    batch_size=batch_size,
+                    input_height=input_height,
+                    input_width=input_width,
+                    reader_patterns_cache=reader_patterns_cache,
+                    weight=tt_weight_tensor,
+                    bias=tt_bias_tensor,
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    weights_dtype=ttnn.bfloat8_b,
+                    conv_blocking_and_parallelization_config_override={},
+                    use_shallow_conv_variant=False,
+                    enable_auto_formatting=True,
+                )
+                hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+                    device, proj_in, hidden_states, batch_size, input_height, input_width, out_channels
+                )
+            else:
+                hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))
+                hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
+                parameters.proj_in.weight = torch_to_tt_tensor_rm(
+                    parameters.proj_in.weight, device, put_on_device=False
+                )
+                parameters.proj_in.bias = torch_to_tt_tensor_rm(parameters.proj_in.bias, device, put_on_device=False)
+                # assert False
 
-            proj_in = fallback_ops.Conv2d(
-                weights=parameters.proj_in.weight,
-                biases=parameters.proj_in.bias,
-                in_channels=in_channels,
-                out_channels=inner_dim,
-                kernel_size=1,
-                stride=1,
-                padding=0,
-            )
-            hidden_states = proj_in(hidden_states)
+                proj_in = fallback_ops.Conv2d(
+                    weights=parameters.proj_in.weight,
+                    biases=parameters.proj_in.bias,
+                    in_channels=in_channels,
+                    out_channels=inner_dim,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                )
+                hidden_states = proj_in(hidden_states)
 
-            hidden_states = tt_to_torch_tensor(hidden_states)
-            hidden_states = ttnn.to_layout(
-                ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
-                layout=ttnn.TILE_LAYOUT,
-            )
+                hidden_states = tt_to_torch_tensor(hidden_states)
+                hidden_states = ttnn.to_layout(
+                    ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
+                    layout=ttnn.TILE_LAYOUT,
+                )
 
             inner_dim = hidden_states.shape[1]
 
@@ -154,36 +199,75 @@ def transformer_2d_model(
     out_channels = in_channels if out_channels is None else out_channels
     if is_input_continuous:
         if not use_linear_projection:
-            hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(hidden_states, (batch, height, width, inner_dim))
-
-            hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
-
-            hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))
-            hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
-
             parameters.proj_out.weight, parameters.proj_out.bias = permute_conv_parameters(
                 parameters.proj_out.weight, parameters.proj_out.bias
             )
-            parameters.proj_out.weight = torch_to_tt_tensor_rm(parameters.proj_out.weight, device, put_on_device=False)
-            parameters.proj_out.bias = torch_to_tt_tensor_rm(parameters.proj_out.bias, device, put_on_device=False)
+            if conv_on_device:
+                batch_size = batch
+                input_height = height
+                input_width = width
+                parameters.proj_out.bias = torch.reshape(
+                    parameters.proj_out.bias, (1, 1, 1, parameters.proj_out.bias.shape[-1])
+                )
+                tt_weight_tensor = ttnn.from_torch(parameters.proj_out.weight, ttnn.float32)
+                tt_bias_tensor = ttnn.from_torch(parameters.proj_out.bias, ttnn.float32)
+                out_channels = parameters.proj_out.weight.shape[0]
+                in_channels = parameters.proj_out.weight.shape[1]
+                proj_out = ttnn.Conv2d(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    kernel_size=(1, 1),
+                    stride=(1, 1),
+                    padding=(0, 0),
+                    dtype=ttnn.bfloat8_b,
+                    device=device,
+                    use_1d_systolic_array=False,
+                    batch_size=batch_size,
+                    input_height=input_height,
+                    input_width=input_width,
+                    reader_patterns_cache=reader_patterns_cache,
+                    weight=tt_weight_tensor,
+                    bias=tt_bias_tensor,
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    weights_dtype=ttnn.bfloat8_b,
+                    conv_blocking_and_parallelization_config_override={},
+                    use_shallow_conv_variant=False,
+                    enable_auto_formatting=True,
+                )
+                hidden_states = proj_out(hidden_states)
+                hidden_states = post_process_output(
+                    device, hidden_states, batch_size, input_height, input_width, out_channels
+                )
+            else:
+                hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
+                hidden_states = ttnn.reshape(hidden_states, (batch, height, width, inner_dim))
 
-            proj_out = fallback_ops.Conv2d(
-                weights=parameters.proj_out.weight,
-                biases=parameters.proj_out.bias,
-                in_channels=inner_dim,
-                out_channels=in_channels,
-                kernel_size=1,
-                stride=1,
-                padding=0,
-            )
-            hidden_states = proj_out(hidden_states)
+                hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
 
-            hidden_states = tt_to_torch_tensor(hidden_states)
-            hidden_states = ttnn.to_layout(
-                ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
-                layout=ttnn.TILE_LAYOUT,
-            )
+                hidden_states = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)))
+                hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
+
+                parameters.proj_out.weight = torch_to_tt_tensor_rm(
+                    parameters.proj_out.weight, device, put_on_device=False
+                )
+                parameters.proj_out.bias = torch_to_tt_tensor_rm(parameters.proj_out.bias, device, put_on_device=False)
+
+                proj_out = fallback_ops.Conv2d(
+                    weights=parameters.proj_out.weight,
+                    biases=parameters.proj_out.bias,
+                    in_channels=inner_dim,
+                    out_channels=in_channels,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                )
+                hidden_states = proj_out(hidden_states)
+
+                hidden_states = tt_to_torch_tensor(hidden_states)
+                hidden_states = ttnn.to_layout(
+                    ttnn.to_device(ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16), device),
+                    layout=ttnn.TILE_LAYOUT,
+                )
 
         else:
             hidden_states = ttnn.to_device(hidden_states, device)
