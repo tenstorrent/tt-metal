@@ -1,4 +1,4 @@
-name: "Slow Dispatch stress test"
+name: "Stress slow dispatch tests"
 
 on:
   workflow_dispatch:
