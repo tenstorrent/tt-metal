@@ -18,6 +18,8 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     get_hash_from_sliding_window_op_params,
 )
 from tt_lib.utils import _nearest_32, _nearest_y
+from models.utility_functions import is_wormhole_b0, is_grayskull
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 import tt_lib as ttl
 import torch
@@ -786,6 +788,19 @@ class TTPyCompositeConv(TTPyOp):
             utwh_output.deallocate()
             return conv_(move_output)
 
+        if is_grayskull():
+            compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=math_fidelity,
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+                math_fidelity=math_fidelity,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         def conv1x1_as_matmul(activation):
             activation = downsample_if_needed(activation)
             # conv1x1 stride 1 padding 0, use matmul op
@@ -796,7 +811,7 @@ class TTPyCompositeConv(TTPyOp):
                 program_config=self.matmul_config,
                 output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
                 output_dtype=output_dtype,
-                math_fidelity=math_fidelity,
+                compute_kernel_config=compute_kernel_config,
             )
             return output
 
