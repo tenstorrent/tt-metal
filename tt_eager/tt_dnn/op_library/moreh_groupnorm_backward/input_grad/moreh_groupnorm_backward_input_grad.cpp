@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     const uint32_t in2_t{1};
     const uint32_t in3_t{1};
     const uint32_t in4_t{1};
-    const uint32_t in5_t{1};
+    const uint32_t in5_t{2};
     const uint32_t in6_t = gamma_has_value ? 1 : 0;
     const uint32_t in7_t = (do_mask_h || do_mask_w) ? 2 : 0;
 
@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     const uint32_t im4_t{1};
     const uint32_t im5_t{1};
     const uint32_t im6_t{1};
-    const uint32_t im7_t{1};
+    uint32_t im7_t{1};
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -123,6 +123,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
         log_info(LogTest, "Large moreh_layernorm_backward_input_grad algorithm is selected.");
         im0_t = 1;
         im1_t = 1;
+        im7_t = 0;
     } else {
         log_info(LogTest, "Small moreh_layernorm_backward_input_grad algorithm is selected.");
     }
