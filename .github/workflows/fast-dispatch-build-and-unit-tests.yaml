@@ -31,9 +31,13 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        run: make build
+        run: |
+          make build
+          strip -d build/lib/*.a build/lib/*.so
       - name: Build tt-metal CPP tests
-        run: make tests
+        run: |
+          make tests
+          find ./build/test -type f | xargs strip -d
       - name: Run pre/post regression tests
         timeout-minutes: 120
         run: |
