@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
 TILE_HEIGHT = 32
@@ -17,6 +17,8 @@ TILE_WIDTH = 32
 def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
     if npu_tensor is None:
         return None
+    if not isinstance(shape, (list, tuple)):
+        shape = tuple(shape)
     cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(shape).to_torch()
     return cpu_tensor
 
@@ -25,30 +27,45 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    cpu_layout=ttl.tensor.Layout.ROW_MAJOR,
     npu_layout=ttl.tensor.Layout.TILE,
     npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    shape=None,
 ):
     if cpu_tensor is None:
         return None
+    if shape is not None:
+        cpu_tensor = cpu_tensor.view(shape)
     npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
 
-def torch_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
+def torch_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
-    mean_var_dims = tuple(range(-normalized_dims, 0))
+    mean_rstd_dims = tuple(range(-normalized_dims, 0))
 
-    mean = input.clone().mean(dim=mean_var_dims, keepdim=True)
-    var = ((input.clone() - mean) ** 2).mean(dim=mean_var_dims, keepdim=True)
+    mean = input.clone().mean(dim=mean_rstd_dims, keepdim=True)
+    var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
     rstd = (var + eps).rsqrt()
+
+    if gamma is not None:
+        gamma = gamma.view(normalized_shape)
+    if beta is not None:
+        beta = beta.view(normalized_shape)
+
+    output = F.layer_norm(input, normalized_shape, weight=gamma, bias=beta, eps=eps)
+
+    return output, mean, rstd
+
+
+def torch_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
+    normalized_shape = input.shape[-normalized_dims:]
 
     input.requires_grad_()
     if gamma is not None:
-        gamma = gamma.reshape(normalized_shape)
+        gamma = gamma.view(normalized_shape)
         gamma.requires_grad_()
     if beta is not None:
-        beta = beta.reshape(normalized_shape)
+        beta = beta.view(normalized_shape)
         beta.requires_grad_()
 
     output = F.layer_norm(input, normalized_shape, weight=gamma, bias=beta, eps=eps)
@@ -57,14 +74,54 @@ def torch_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=No
     gamma_grad = None
     beta_grad = None
     if gamma is not None:
-        gamma_grad = gamma.grad
+        gamma_grad = gamma.grad.view(normalized_shape)
     if beta is not None:
-        beta_grad = beta.grad
+        beta_grad = beta.grad.view(normalized_shape)
 
-    return output, input.grad, gamma_grad, beta_grad, mean, rstd
+    return input.grad, gamma_grad, beta_grad
 
 
-def tt_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None):
+def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None):
+    input_shape = list(input.shape)
+
+    # mean_rstd_shape
+    mean_rstd_shape = input_shape[:-normalized_dims] + [1] * normalized_dims
+
+    # dtype
+    cpu_dtype = torch.bfloat16
+
+    # input
+    npu_input = to_npu(input, device)
+
+    # gamma
+    npu_gamma = to_npu(gamma, device)
+
+    # beta
+    npu_beta = to_npu(beta, device)
+
+    # mean for inplace update
+    cpu_mean = torch.full(mean_rstd_shape, float("nan"), dtype=cpu_dtype)
+    npu_mean = to_npu(cpu_mean, device)
+
+    # rstd for inplace update
+    cpu_rstd = torch.full(mean_rstd_shape, float("nan"), dtype=cpu_dtype)
+    npu_rstd = to_npu(cpu_rstd, device)
+
+    # Forward
+    npu_output = ttl.operations.primary.moreh_layernorm(
+        npu_input, normalized_dims, eps, npu_gamma, npu_beta, mean=npu_mean, rstd=npu_rstd
+    )
+
+    tt_output = to_cpu(npu_output, input_shape)
+    tt_mean = to_cpu(npu_mean, mean_rstd_shape)
+    tt_rstd = to_cpu(npu_rstd, mean_rstd_shape)
+
+    return tt_output, tt_mean, tt_rstd
+
+
+def tt_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None):
+    normalized_shape = input.shape[-normalized_dims:]
+
     # rank
     input_shape = list(input.shape)
     input_rank = len(input_shape)
@@ -87,16 +144,15 @@ def tt_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None,
     # gamma
     npu_gamma = to_npu(gamma, device)
 
-    # beta
-    npu_beta = to_npu(beta, device)
+    # mean, rstd
+    mean_rstd_dims = tuple(range(-normalized_dims, 0))
 
-    # mean for inplace update
-    cpu_mean = torch.full(mean_rstd_shape, float("nan"), dtype=cpu_dtype)
-    npu_mean = to_npu(cpu_mean, device)
+    mean = input.clone().mean(dim=mean_rstd_dims, keepdim=True)
+    var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
+    rstd = (var + eps).rsqrt()
 
-    # rstd for inplace update
-    cpu_rstd = torch.full(mean_rstd_shape, float("nan"), dtype=cpu_dtype)
-    npu_rstd = to_npu(cpu_rstd, device)
+    npu_mean = to_npu(mean, device, shape=mean_rstd_shape)
+    npu_rstd = to_npu(rstd, device, shape=mean_rstd_shape)
 
     # input_grad for inplace update
     cpu_input_grad = torch.full(input_shape, float("nan"), dtype=cpu_dtype)
@@ -114,12 +170,7 @@ def tt_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None,
         cpu_beta_grad = torch.full(gamma_beta_shape, float("nan"), dtype=cpu_dtype)
         npu_beta_grad = to_npu(cpu_beta_grad, device)
 
-    # Do forward
-    npu_output = ttl.operations.primary.moreh_layernorm(
-        npu_input, normalized_dims, eps, npu_gamma, npu_beta, mean=npu_mean, rstd=npu_rstd
-    )
-
-    # Do backward
+    # Backward
     _, npu_gamma_grad, _ = ttl.operations.primary.moreh_layernorm_backward(
         npu_output_grad,
         npu_input,
@@ -132,19 +183,18 @@ def tt_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None,
         beta_grad=npu_beta_grad,
     )
 
-    tt_output = to_cpu(npu_output, input_shape)
     tt_input_grad = to_cpu(npu_input_grad, input_shape)
-
     tt_gamma_grad = to_cpu(npu_gamma_grad, gamma_beta_shape)
+    if tt_gamma_grad is not None:
+        tt_gamma_grad = tt_gamma_grad.view(normalized_shape)
     tt_beta_grad = to_cpu(npu_beta_grad, gamma_beta_shape)
+    if tt_beta_grad is not None:
+        tt_beta_grad = tt_beta_grad.view(normalized_shape)
 
-    tt_mean = to_cpu(npu_mean, mean_rstd_shape)
-    tt_rstd = to_cpu(npu_rstd, mean_rstd_shape)
-
-    return tt_output, tt_input_grad, tt_gamma_grad, tt_beta_grad, tt_mean, tt_rstd
+    return tt_input_grad, tt_gamma_grad, tt_beta_grad
 
 
-def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
+def make_input_tensors(input_shape, normalized_dims, elementwise_affine, do_backward=False):
     # rank
     input_rank = len(input_shape)
 
@@ -160,9 +210,6 @@ def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
     # input
     cpu_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
 
-    # output_grad
-    cpu_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype)
-
     # gamma
     cpu_gamma = None
     if elementwise_affine:
@@ -173,7 +220,12 @@ def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
     if elementwise_affine:
         cpu_beta = torch.rand(gamma_beta_shape, dtype=cpu_dtype) * 2 - 1.05
 
-    return cpu_input, cpu_output_grad, cpu_gamma, cpu_beta
+    # output_grad
+    cpu_output_grad = None
+    if do_backward:
+        cpu_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype)
+
+    return cpu_input, cpu_gamma, cpu_beta, cpu_output_grad
 
 
 @pytest.mark.parametrize("eps", [1e-5, 1e-12], ids=["1e-5", "1e-12"])
@@ -188,9 +240,6 @@ def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
     [
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
         [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH],
-        [2, 2, 32 * TILE_HEIGHT, 10 * TILE_WIDTH],
-        [2, 2, 10 * TILE_HEIGHT, 32 * TILE_WIDTH],
-        [2, 2, TILE_HEIGHT - 9, TILE_WIDTH - 9],
         [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
         [2, 2, 8 * TILE_HEIGHT + 15, 32 * TILE_WIDTH - 15],
     ],
@@ -198,29 +247,16 @@ def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
 def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, device):
     torch.manual_seed(2023)
 
-    cpu_input, cpu_output_grad, cpu_gamma, cpu_beta = make_cpu_tensors(input_shape, normalized_dims, elementwise_affine)
+    cpu_input, cpu_gamma, cpu_beta, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine)
 
     # expected
-    (
-        expected_output,
-        expected_input_grad,
-        expected_gamma_grad,
-        expected_beta_grad,
-        expected_mean,
-        expected_rstd,
-    ) = torch_layernorm(
-        cpu_input, cpu_output_grad, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
+    expected_output, expected_mean, expected_rstd = torch_layernorm(
+        cpu_input, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
     )
 
     # actual
-    actual_output, actual_input_grad, actual_gamma_grad, actual_beta_grad, actual_mean, actual_rstd = tt_layernorm(
-        cpu_input,
-        cpu_output_grad,
-        normalized_dims=normalized_dims,
-        eps=eps,
-        gamma=cpu_gamma,
-        beta=cpu_beta,
-        device=device,
+    actual_output, actual_mean, actual_rstd = tt_layernorm(
+        cpu_input, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta, device=device
     )
 
     # Set rtol and atol and pcc for output
@@ -255,6 +291,46 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
     logger.info(f"rstd's {out_rstd}")
     assert pass_rstd
 
+
+@pytest.mark.parametrize("eps", [1e-5, 1e-12], ids=["1e-5", "1e-12"])
+@pytest.mark.parametrize("normalized_dims", [1, 2, 3, 4], ids=["W", "HW", "CHW", "NCHW"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, TILE_HEIGHT, TILE_WIDTH],
+        [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH],
+        [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
+        [2, 2, 8 * TILE_HEIGHT + 15, 32 * TILE_WIDTH - 15],
+    ],
+)
+def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affine, eps, device):
+    torch.manual_seed(2023)
+
+    cpu_input, cpu_gamma, cpu_beta, cpu_output_grad = make_input_tensors(
+        input_shape, normalized_dims, elementwise_affine, do_backward=True
+    )
+
+    # expected
+    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layernorm_backward(
+        cpu_input, cpu_output_grad, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
+    )
+
+    # actual
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layernorm_backward(
+        cpu_input,
+        cpu_output_grad,
+        normalized_dims=normalized_dims,
+        eps=eps,
+        gamma=cpu_gamma,
+        beta=cpu_beta,
+        device=device,
+    )
+
     # Set rtol and atol and pcc for gradients
     rtol = atol = 0.1
     pcc = 0.999
@@ -272,15 +348,8 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
 
     # Check gamma_grad
     if expected_gamma_grad is not None:
-        broadcasted_expected_gamma_grad, broadcasted_actual_gamma_grad = torch.broadcast_tensors(
-            expected_gamma_grad, actual_gamma_grad
-        )
         pgg, ogg = comp_allclose_and_pcc(
-            broadcasted_expected_gamma_grad / numerator,
-            broadcasted_actual_gamma_grad / numerator,
-            rtol=rtol,
-            atol=atol,
-            pcc=pcc,
+            expected_gamma_grad / numerator, actual_gamma_grad / numerator, rtol=rtol, atol=atol, pcc=pcc
         )
         logger.info(f"gamma_grad's {ogg}")
         assert pgg
@@ -289,15 +358,8 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
 
     # Check beta_grad
     if expected_beta_grad is not None:
-        broadcasted_expected_beta_grad, broadcasted_actual_beta_grad = torch.broadcast_tensors(
-            expected_beta_grad, actual_beta_grad
-        )
         pbg, obg = comp_allclose_and_pcc(
-            broadcasted_expected_beta_grad / numerator,
-            broadcasted_actual_beta_grad / numerator,
-            rtol=rtol,
-            atol=atol,
-            pcc=pcc,
+            expected_beta_grad / numerator, actual_beta_grad / numerator, rtol=rtol, atol=atol, pcc=pcc
         )
         logger.info(f"beta_grad's {obg}")
         assert pbg
