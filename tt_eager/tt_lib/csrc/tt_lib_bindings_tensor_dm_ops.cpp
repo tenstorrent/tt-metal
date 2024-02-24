@@ -194,7 +194,9 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("untilize_with_halo_v2", &untilize_with_halo_v2,
+        m_tensor.def(
+            "untilize_with_halo_v2",
+            &untilize_with_halo_v2,
             py::arg("input_tensor").noconvert(),
             py::arg("local_pad_start_and_size").noconvert(),
             py::arg("ll_data_start_and_size").noconvert(),
@@ -202,6 +204,9 @@ namespace tt::tt_metal::detail{
             py::arg("local_data_start_and_size").noconvert(),
             py::arg("r_data_start_and_size").noconvert(),
             py::arg("rr_data_start_and_size").noconvert(),
+            py::arg("padding_config").noconvert(),
+            py::arg("local_config").noconvert(),
+            py::arg("remote_config").noconvert(),
             py::arg("pad_val").noconvert(),
             py::arg("ncores_height").noconvert(),
             py::arg("max_out_nsticks_per_core").noconvert(),
