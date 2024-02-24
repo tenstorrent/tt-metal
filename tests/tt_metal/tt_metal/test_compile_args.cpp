@@ -83,6 +83,29 @@ int main(int argc, char **argv) {
         std::filesystem::path binary_path{binary_path_str};
         auto num_built_kernels = std::distance(std::filesystem::directory_iterator(binary_path), std::filesystem::directory_iterator{});
         TT_FATAL(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
+
+#ifdef DEBUG
+        // Test that the kernel_args.csv file was generated for both kernels
+        auto kernel_args_path = binary_path.parent_path() / "kernel_args.csv";
+        TT_FATAL(std::filesystem::exists(kernel_args_path), "Expected kernel_args.csv to be generated in path {}", kernel_args_path);
+
+        std::ifstream compile_args_file(kernel_args_path);
+        std::string line;
+        int num_found = 0;
+        while (std::getline(compile_args_file, line)) {
+            if (line.find("test_compile_args") != std::string::npos) {
+                if (line.find("ARG_0=0,ARG_1=68,ARG_2=0,ARG_3=124") != std::string::npos) {
+                    num_found++;
+                } else if (line.find("ARG_0=1,ARG_1=5,ARG_2=0,ARG_3=124") != std::string::npos) {
+                    num_found++;
+                } else {
+                    TT_FATAL(false, "Expected kernel_args.csv to contain the compile args for test_compile_args");
+                }
+            }
+        }
+        TT_ASSERT(num_found == 2, "Expected kernel_args.csv to contain the compile args for both kernels. Instead, found {} entries", num_found);
+#endif
+
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message
