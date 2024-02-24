@@ -223,7 +223,7 @@ If you are using a machine with bare metal machine specs, please use
   - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
-  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-constexprs.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf`
+  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`
 
 ## Contribution standards
 
