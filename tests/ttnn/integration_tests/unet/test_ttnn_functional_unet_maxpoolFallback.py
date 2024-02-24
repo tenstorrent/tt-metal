@@ -31,6 +31,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         print("model output weights: ", list(model.output_layer.weight))
 
         ttnn_module_args.c1["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c1["use_shallow_conv_variant"] = True
         ttnn_module_args.c1_2["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1_2["dtype"] = ttnn.bfloat8_b
