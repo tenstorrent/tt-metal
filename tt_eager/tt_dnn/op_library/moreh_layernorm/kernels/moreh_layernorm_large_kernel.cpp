@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
@@ -326,8 +327,14 @@ void MAIN {
             add_tiles_init();
             add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
 
-            sqrt_tile_init();
-            sqrt_tile(dst0);
+            rsqrt_tile_init();
+            rsqrt_tile(dst0);
+
+            // sqrt_tile_init();
+            // sqrt_tile(dst0);
+
+            // recip_tile_init();
+            // recip_tile(dst0);
 
             pack_tile(dst0, cb_rstd);
 
@@ -346,11 +353,14 @@ void MAIN {
         add_tiles_init();
         add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
 
-        sqrt_tile_init();
-        sqrt_tile(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
 
-        recip_tile_init();
-        recip_tile(dst0);
+        // sqrt_tile_init();
+        // sqrt_tile(dst0);
+
+        // recip_tile_init();
+        // recip_tile(dst0);
 
         pack_tile(dst0, cb_recip_rstd);
 
