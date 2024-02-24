@@ -655,6 +655,7 @@ def test_resnet50_conv(
             math_fidelity=math_fidelity,
             use_shallow_conv_variant=(C == 16),
             deallocate_activation=True,
+            padded_input_channels=16 if C == 16 else None,
         )
 
         conv_input = tt_lib.tensor.Tensor(

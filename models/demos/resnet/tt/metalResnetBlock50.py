@@ -1542,6 +1542,7 @@ class ResNet(nn.Module):
                 math_fidelity=model_config["MATH_FIDELITY"],
                 use_shallow_conv_variant=True,
                 deallocate_activation=True,
+                padded_input_channels=16,
             )
             self.first_conv_op_params = sliding_window_op_params
         else:

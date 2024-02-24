@@ -43,6 +43,7 @@ class Conv2d:
         use_shallow_conv_variant: bool = False,
         enable_auto_formatting: bool = False,
         deallocate_activation: bool = False,
+        padded_input_channels: Optional[int] = None,
     ):
         assert (
             padding_mode == "zeros"
@@ -113,6 +114,7 @@ class Conv2d:
             use_shallow_conv_variant=use_shallow_conv_variant,
             enable_auto_formatting=enable_auto_formatting,
             deallocate_activation=deallocate_activation,
+            padded_input_channels=padded_input_channels,
         )
 
     @ttnn.register_operation(name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: True)
