@@ -17,16 +17,17 @@ void kernel_main() {
     const auto num_rows_per_core = get_arg_val<uint32_t>(5);
     const auto Wt = get_arg_val<uint32_t>(6);
     const auto tile_offset = get_arg_val<uint32_t>(7);
-    const auto normalized_numel = get_arg_val<uint32_t>(8);
-    const auto mask_h = get_arg_val<uint32_t>(9);
-    const auto mask_w = get_arg_val<uint32_t>(10);
+    const auto n = get_arg_val<uint32_t>(8);
+    const auto recip_n = get_arg_val<uint32_t>(9);
+    const auto mask_h = get_arg_val<uint32_t>(10);
+    const auto mask_w = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t cb_id_output_grad = 0;
     constexpr uint32_t cb_id_input = 1;
     constexpr uint32_t cb_id_mean = 2;
     constexpr uint32_t cb_id_rstd = 3;
     constexpr uint32_t cb_id_scaler = 4;
-    constexpr uint32_t cb_id_numel = 5;
+    constexpr uint32_t cb_id_n_recip_n = 5;
     constexpr uint32_t cb_id_gamma = 6;
     constexpr uint32_t cb_id_mask_h_w = 7;
 
@@ -76,7 +77,8 @@ void kernel_main() {
     } scaler;
     scaler.f = 1.0f;
     fill_cb_with_value(cb_id_scaler, scaler.u);
-    fill_cb_with_value(cb_id_numel, normalized_numel);
+    fill_cb_with_value(cb_id_n_recip_n, n);
+    fill_cb_with_value(cb_id_n_recip_n, recip_n);
 
     if (do_mask_h || do_mask_w) {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);

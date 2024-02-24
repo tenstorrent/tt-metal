@@ -41,7 +41,7 @@ def torch_layernorm(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=No
 
     mean = input.clone().mean(dim=mean_var_dims, keepdim=True)
     var = ((input.clone() - mean) ** 2).mean(dim=mean_var_dims, keepdim=True)
-    rstd = (var + eps).sqrt()
+    rstd = (var + eps).rsqrt()
 
     input.requires_grad_()
     if gamma is not None:
@@ -176,7 +176,6 @@ def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
     return cpu_input, cpu_output_grad, cpu_gamma, cpu_beta
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("eps", [1e-5, 1e-12], ids=["1e-5", "1e-12"])
 @pytest.mark.parametrize("normalized_dims", [1, 2, 3, 4], ids=["W", "HW", "CHW", "NCHW"])
 @pytest.mark.parametrize(
