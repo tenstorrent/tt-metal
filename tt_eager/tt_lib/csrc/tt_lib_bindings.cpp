@@ -30,17 +30,17 @@ void DeviceModule(py::module &m_device) {
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
 
     auto pyDevice = py::class_<Device>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
-    pyDevice
-        .def(
-            py::init<>(
-                [](int device_id) {
-                    return Device(device_id, 1);
-                }
-            ), "Create device."
-        )
+    pyDevice.def(py::init<>([](int device_id) { return Device(device_id, 1); }), "Create device.")
         .def("id", &Device::id, "Device's ID")
         .def("arch", &Device::arch, "Device's arch")
-        .def("compute_with_storage_grid_size", &Device::compute_with_storage_grid_size, "Grid size (x, y) denoting region that can be targeted by ops");
+        .def(
+            "compute_with_storage_grid_size",
+            &Device::compute_with_storage_grid_size,
+            "Grid size (x, y) denoting region that can be targeted by ops")
+        .def(
+            "worker_core_from_logical_core",
+            &Device::worker_core_from_logical_core,
+            "Convert a logical core coordinate into a physical worker core coordinate");
 
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;

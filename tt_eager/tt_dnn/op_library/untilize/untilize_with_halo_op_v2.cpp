@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+
 #include <algorithm>
 
+#include "tensor/owned_buffer_functions.hpp"
+#include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/sharding_utilities.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 
@@ -57,8 +59,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const std::vector<int32_t>& l_data_src_start_offsets_per_core,
     const std::vector<int32_t>& r_data_src_start_offsets_per_core,
     const std::vector<int32_t>& rr_data_src_start_offsets_per_core,
+    const Tensor& padding_config,
+    const Tensor& local_config,
+    const Tensor& remote_config,
     Tensor& output_tensor) {
-
     Program program = CreateProgram();
 
     Device *device = input_tensor.device();
@@ -162,10 +166,124 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t l_data_ss_cb_id = CB::c_in5;
     uint32_t r_data_ss_cb_id = CB::c_in6;
     uint32_t rr_data_ss_cb_id = CB::c_in7;
+    uint32_t padding_config_cb_id = CB::c_in2;
+    uint32_t local_config_cb_id = CB::c_in3;
+    uint32_t remote_config_cb_id = CB::c_in4;
 
     DataFormat kernel_config_df = DataFormat::RawUInt16;        // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes = datum_size(kernel_config_df) * 2;  // each config is a pair "start, size", so double the size
     uint32_t pagesize = 0;
+
+    // Gather data
+    bool use_halo_gather_data_kernel = parse_env<bool>("HALO_GATHER_DATA", true);
+    if (use_halo_gather_data_kernel) {
+        if (!skip_untilize) {
+            // compute kernel
+            std::vector<uint32_t> compute_ct_args = {nblocks_per_core, ntiles_per_block};
+            std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+            if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
+                log_debug(
+                    LogOp,
+                    "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
+                    ntiles_per_block,
+                    MAX_PACK_UNTILIZE_WIDTH);
+                compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+            }
+            KernelHandle untilize_kernel_id =
+                CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
+        }
+
+        TT_ASSERT(padding_config.dtype() == DataType::UINT16);
+        TT_ASSERT(local_config.dtype() == DataType::UINT16);
+        TT_ASSERT(remote_config.dtype() == DataType::UINT16);
+
+        Buffer* padding_config_buffer = padding_config.buffer();
+        auto padding_config_cb_config =
+            CircularBufferConfig(padding_config_buffer->size(), {{padding_config_cb_id, kernel_config_df}})
+                .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
+                .set_globally_allocated_address(*padding_config_buffer);
+        CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
+
+        Buffer* local_config_buffer = local_config.buffer();
+        auto local_config_cb_config =
+            CircularBufferConfig(local_config_buffer->size(), {{local_config_cb_id, kernel_config_df}})
+                .set_page_size(local_config_cb_id, local_config_buffer->page_size())
+                .set_globally_allocated_address(*local_config_buffer);
+        CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
+
+        Buffer* remote_config_buffer = remote_config.buffer();
+        auto remote_config_cb_config =
+            CircularBufferConfig(remote_config_buffer->size(), {{remote_config_cb_id, kernel_config_df}})
+                .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
+                .set_globally_allocated_address(*remote_config_buffer);
+        CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
+
+        bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+
+        // reader kernel
+        std::vector<uint32_t> reader_ct_args = {
+            0,  // padding_config_cb_id
+            0,  // local_config_cb_id
+            0,  // remote_config_cb_id
+            src_cb_id,
+            input_to_writer_cb_id,
+            out_cb_id,
+            pad_cb_id,
+            pad_val,
+            input_npages,
+            out_stick_nbytes,
+            is_block_sharded,
+        };
+
+        reader_ct_args[0] = 0;
+        reader_ct_args[1] = local_config_cb_id;
+        reader_ct_args[2] = 0;
+
+        KernelHandle reader_kernel_id0 = CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
+            all_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = reader_ct_args});
+
+        reader_ct_args[0] = padding_config_cb_id;
+        reader_ct_args[1] = 0;
+        reader_ct_args[2] = remote_config_cb_id;
+
+        KernelHandle reader_kernel_id1 = CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
+            all_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_ct_args});
+
+        auto override_runtime_arguments_callback =
+            [src_cb, out_cb, padding_config_cb, local_config_cb, remote_config_cb](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>&,
+                const std::vector<Tensor>& output_tensors) {
+                auto src_buffer = input_tensors.at(0).buffer();
+                auto padding_config_buffer = input_tensors.at(7).buffer();
+                auto local_config_buffer = input_tensors.at(8).buffer();
+                auto remote_config_buffer = input_tensors.at(9).buffer();
+                auto dst_buffer = output_tensors.at(0).buffer();
+
+                UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
+                UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+                UpdateDynamicCircularBufferAddress(program, padding_config_cb, *padding_config_buffer);
+                UpdateDynamicCircularBufferAddress(program, local_config_cb, *local_config_buffer);
+                UpdateDynamicCircularBufferAddress(program, remote_config_cb, *remote_config_buffer);
+            };
+
+        return {
+            .program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    }
 
     // local_pad_start_and_size
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(local_pad_nsegments_per_core);
@@ -586,85 +704,101 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::ve
     const auto& local_data_start_and_size = inputs.at(4);
     const auto& r_data_start_and_size = inputs.at(5);
     const auto& rr_data_start_and_size = inputs.at(6);
+    const auto& padding_config = inputs.at(7);
+    const auto& local_config = inputs.at(8);
+    const auto& remote_config = inputs.at(9);
     auto& output_tensor = outputs.at(0);
 
-    return { untilize_with_halo_multi_core_v2(input_tensor,
-                                              local_pad_start_and_size,
-                                              ll_data_start_and_size,
-                                              l_data_start_and_size,
-                                              local_data_start_and_size,
-                                              r_data_start_and_size,
-                                              rr_data_start_and_size,
-                                              pad_val_,
-                                              ncores_nhw_,
-                                              max_out_nsticks_per_core_,
-                                              local_pad_nsegments_per_core_,
-                                              ll_data_nsegments_per_core_,
-                                              l_data_nsegments_per_core_,
-                                              local_data_nsegments_per_core_,
-                                              r_data_nsegments_per_core_,
-                                              rr_data_nsegments_per_core_,
-                                              local_data_src_start_offsets_per_core_,
-                                              ll_data_src_start_offsets_per_core_,
-                                              l_data_src_start_offsets_per_core_,
-                                              r_data_src_start_offsets_per_core_,
-                                              rr_data_src_start_offsets_per_core_,
-                                              output_tensor) };
+    return {untilize_with_halo_multi_core_v2(
+        input_tensor,
+        local_pad_start_and_size,
+        ll_data_start_and_size,
+        l_data_start_and_size,
+        local_data_start_and_size,
+        r_data_start_and_size,
+        rr_data_start_and_size,
+        pad_val_,
+        ncores_nhw_,
+        max_out_nsticks_per_core_,
+        local_pad_nsegments_per_core_,
+        ll_data_nsegments_per_core_,
+        l_data_nsegments_per_core_,
+        local_data_nsegments_per_core_,
+        r_data_nsegments_per_core_,
+        rr_data_nsegments_per_core_,
+        local_data_src_start_offsets_per_core_,
+        ll_data_src_start_offsets_per_core_,
+        l_data_src_start_offsets_per_core_,
+        r_data_src_start_offsets_per_core_,
+        rr_data_src_start_offsets_per_core_,
+        padding_config,
+        local_config,
+        remote_config,
+        output_tensor)};
 }
 
-Tensor untilize_with_halo_v2(const Tensor& input_tensor,
-                             const Tensor& local_pad_start_and_size,
-                             const Tensor& ll_data_start_and_size,
-                             const Tensor& l_data_start_and_size,
-                             const Tensor& local_data_start_and_size,
-                             const Tensor& r_data_start_and_size,
-                             const Tensor& rr_data_start_and_size,
-                             const uint32_t pad_val,
-                             const uint32_t ncores_nhw,
-                             const uint32_t max_out_nsticks_per_core,
-                             const std::vector<int32_t>& local_pad_nsegments_per_core,
-                             const std::vector<int32_t>& ll_data_nsegments_per_core,
-                             const std::vector<int32_t>& l_data_nsegments_per_core,
-                             const std::vector<int32_t>& local_data_nsegments_per_core,
-                             const std::vector<int32_t>& r_data_nsegments_per_core,
-                             const std::vector<int32_t>& rr_data_nsegments_per_core,
-                             const std::vector<int32_t>& local_data_src_start_offsets_per_core,
-                             const std::vector<int32_t>& ll_data_src_start_offsets_per_core,
-                             const std::vector<int32_t>& l_data_src_start_offsets_per_core,
-                             const std::vector<int32_t>& r_data_src_start_offsets_per_core,
-                             const std::vector<int32_t>& rr_data_src_start_offsets_per_core,
-                             const MemoryConfig& mem_config) {
+Tensor untilize_with_halo_v2(
+    const Tensor& input_tensor,
+    const Tensor& local_pad_start_and_size,
+    const Tensor& ll_data_start_and_size,
+    const Tensor& l_data_start_and_size,
+    const Tensor& local_data_start_and_size,
+    const Tensor& r_data_start_and_size,
+    const Tensor& rr_data_start_and_size,
+    const Tensor& padding_config,
+    const Tensor& local_config,
+    const Tensor& remote_config,
+    const uint32_t pad_val,
+    const uint32_t ncores_nhw,
+    const uint32_t max_out_nsticks_per_core,
+    const std::vector<int32_t>& local_pad_nsegments_per_core,
+    const std::vector<int32_t>& ll_data_nsegments_per_core,
+    const std::vector<int32_t>& l_data_nsegments_per_core,
+    const std::vector<int32_t>& local_data_nsegments_per_core,
+    const std::vector<int32_t>& r_data_nsegments_per_core,
+    const std::vector<int32_t>& rr_data_nsegments_per_core,
+    const std::vector<int32_t>& local_data_src_start_offsets_per_core,
+    const std::vector<int32_t>& ll_data_src_start_offsets_per_core,
+    const std::vector<int32_t>& l_data_src_start_offsets_per_core,
+    const std::vector<int32_t>& r_data_src_start_offsets_per_core,
+    const std::vector<int32_t>& rr_data_src_start_offsets_per_core,
+    const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     TT_ASSERT(ncores_nhw == local_data_nsegments_per_core.size());
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
 
-    return operation::run_without_autoformat(UntilizeWithHaloV2{
-                                                pad_val,
-                                                ncores_nhw,
-                                                max_out_nsticks_per_core,
-                                                local_pad_nsegments_per_core,
-                                                ll_data_nsegments_per_core,
-                                                l_data_nsegments_per_core,
-                                                local_data_nsegments_per_core,
-                                                r_data_nsegments_per_core,
-                                                rr_data_nsegments_per_core,
-                                                local_data_src_start_offsets_per_core,
-                                                ll_data_src_start_offsets_per_core,
-                                                l_data_src_start_offsets_per_core,
-                                                r_data_src_start_offsets_per_core,
-                                                rr_data_src_start_offsets_per_core,
-                                                mem_config},
-                                             {input_tensor,
-                                              local_pad_start_and_size,
-                                              ll_data_start_and_size,
-                                              l_data_start_and_size,
-                                              local_data_start_and_size,
-                                              r_data_start_and_size,
-                                              rr_data_start_and_size})
-                                            .at(0);
-
+    return operation::run_without_autoformat(
+               UntilizeWithHaloV2{
+                   pad_val,
+                   ncores_nhw,
+                   max_out_nsticks_per_core,
+                   local_pad_nsegments_per_core,
+                   ll_data_nsegments_per_core,
+                   l_data_nsegments_per_core,
+                   local_data_nsegments_per_core,
+                   r_data_nsegments_per_core,
+                   rr_data_nsegments_per_core,
+                   local_data_src_start_offsets_per_core,
+                   ll_data_src_start_offsets_per_core,
+                   l_data_src_start_offsets_per_core,
+                   r_data_src_start_offsets_per_core,
+                   rr_data_src_start_offsets_per_core,
+                   mem_config},
+               {
+                   input_tensor,
+                   local_pad_start_and_size,
+                   ll_data_start_and_size,
+                   l_data_start_and_size,
+                   local_data_start_and_size,
+                   r_data_start_and_size,
+                   rr_data_start_and_size,
+                   padding_config,
+                   local_config,
+                   remote_config,
+               })
+        .at(0);
 }
 
 }  // namespace tt_metal
