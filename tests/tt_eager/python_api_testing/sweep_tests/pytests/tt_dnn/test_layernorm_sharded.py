@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0, skip_for_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
@@ -35,6 +35,7 @@ seq_lens = [32, 256, 384]
 per_core_ks = [32, 64, 128]
 
 
+@skip_for_grayskull("disable due to watcher error, see issue #5797")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "grid_size",
