@@ -103,6 +103,7 @@ class TtFalconMLP(nn.Module):
             self.dense_4h_to_h_weights,
             output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+            packer_l1_acc=True,
         )
 
         # return TT Tensor

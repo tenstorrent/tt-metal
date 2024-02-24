@@ -109,7 +109,7 @@ namespace tt::tt_metal::detail
             Perform a falcon_selfout non-batched matmul ``A x B`` with two tensors.
         )doc");
         m_tensor.def("falcon_dense_4h_to_h_matmul", &falcon_dense_4h_to_h_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("packer_l1_acc").noconvert() = std::nullopt, R"doc(
             Perform a falcon_dense_4h_to_h non-batched matmul ``A x B`` with two tensors.
         )doc");
         m_tensor.def("falcon_dense_h_to_4h_matmul", &falcon_dense_h_to_4h_matmul,
