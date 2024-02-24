@@ -5,7 +5,7 @@
 import pytest
 import torch
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_moreh_matmul import get_tensors
 from loguru import logger
 
@@ -98,6 +98,7 @@ def test_moreh_linear(shapes, has_bias, device):
         ([2, 4, 4, 1024], [1, 1, 1300, 1024], [1, 1, 1, 1], [2, 4, 4, 1300]),
     ),
 )
+@skip_for_wormhole_b0("disabled due to watcher error, see issue #5868")
 @pytest.mark.parametrize(
     "requires_grads",
     (
