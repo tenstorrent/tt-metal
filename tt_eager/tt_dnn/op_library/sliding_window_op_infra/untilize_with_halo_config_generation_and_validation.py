@@ -339,6 +339,110 @@ def validate_tensor_metadata(
     return unpadded_input_tensor_shards
 
 
+# Makes all sublists the same length, optionally tile aligns too
+def align_up_2d_python_list(list2d: list, extend_value, align_granularity=0):
+    assert type(list2d) is list
+    if len(list2d) == 0:
+        return list2d
+    assert type(list2d[0]) is list
+    max_len = 0
+    for l in list2d:
+        max_len = max(len(l), max_len)
+    if align_granularity > 0:
+        align_amount = max_len % align_granularity
+        if align_amount > 0:
+            max_len += align_granularity - align_amount
+    for l in list2d:
+        extend_amount = max_len - len(l)
+        if extend_amount > 0:
+            l.extend([extend_value] * extend_amount)
+
+
+def generate_untilize_with_halo_kernel_configs2(
+    tensor_metadata: list, resharded_start_and_end: list, core_id_to_physical_coord
+):
+    ncores = len(resharded_start_and_end)
+
+    per_core_gather_data = {}
+    pad_local = 0xFFFF  # uint16_t max index means pad
+
+    def run_length_encode(l, src, dst, is_pad):
+        if len(l) > 0:
+            src_start, dst_start, length = l[-3], l[-2], l[-1]
+            # src index is always 0 if is_pad, so we only need to RLE the dst
+            if (src == (src_start + length) or is_pad) and dst == (dst_start + length):
+                l[-1] = length + 1
+                return False
+        l.extend([src, dst, 1])
+        return True
+
+    ## NOTE: assuming the core_id's are contiguous
+    for core_id in np.arange(ncores):
+        dst_global_start_idx, dst_global_end_idx = resharded_start_and_end[core_id][1]
+
+        for dst_global_idx in np.arange(dst_global_start_idx, dst_global_end_idx + 1):
+            dst_core_id = core_id
+            dst_local_idx = dst_global_idx - dst_global_start_idx
+            is_pad, src_core_id, src_local_idx = tensor_metadata[dst_global_idx]
+            if is_pad:
+                assert src_local_idx == 0
+                src_core_id = core_id
+                dst_core_id = pad_local
+            if src_core_id not in per_core_gather_data:
+                per_core_gather_data[src_core_id] = {}
+            if dst_core_id not in per_core_gather_data[src_core_id]:
+                per_core_gather_data[src_core_id][dst_core_id] = []
+            assert src_local_idx < 0xFFFF, "Index overflows uint16_t storage type"
+            assert dst_local_idx < 0xFFFF, "Index overflows uint16_t storage type"
+            run_length_encode(per_core_gather_data[src_core_id][dst_core_id], src_local_idx, dst_local_idx, is_pad)
+
+    padding_config = []
+    local_config = []
+    remote_config = []
+
+    for src_core_id in np.arange(ncores):
+        core_data = per_core_gather_data[src_core_id]
+
+        padding_config.append([])
+        local_config.append([])
+        remote_config.append([])
+
+        # Padding Encoding: [dst_idx0, num_elems0, dst_idx1, num_elems1, ...]
+        # Local/Remote encoding: [dst_core_id0, num_elems0, ...G0..., dst_core_id1, num_elems1, ...G1..., ...]
+        for dst_core_id in core_data.keys():
+            is_padding = dst_core_id == pad_local
+            is_local = dst_core_id == src_core_id
+            is_remote = not is_padding and not is_local
+
+            if is_padding:
+                noc_x, noc_y = (0xFFFF, 0xFFFF)
+            else:
+                coord = core_id_to_physical_coord(dst_core_id)
+                noc_x, noc_y = (coord.x, coord.y)
+
+            if is_padding:
+                del core_data[dst_core_id][0::3]
+                padding_config[-1].extend(core_data[dst_core_id])
+            elif is_local:
+                local_config[-1].extend([noc_x, noc_y, len(core_data[dst_core_id])])
+                local_config[-1].extend(core_data[dst_core_id])
+            else:
+                assert is_remote
+                remote_config[-1].extend([noc_x, noc_y, len(core_data[dst_core_id])])
+                remote_config[-1].extend(core_data[dst_core_id])
+
+        # NULL plug
+        padding_config[-1].extend([0, 0])
+        local_config[-1].extend([0, 0, 0])
+        remote_config[-1].extend([0, 0, 0])
+
+    align_up_2d_python_list(padding_config, 0, align_granularity=2)
+    align_up_2d_python_list(local_config, 0, align_granularity=2)
+    align_up_2d_python_list(remote_config, 0, align_granularity=2)
+
+    return padding_config, local_config, remote_config
+
+
 NEIGHBORHOOD_DIST = 2  ## ll, l, r, rr
 
 
@@ -580,6 +684,7 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
             for core_id in range(ncores)
         ]
     )
+
     return (
         local_data_start_and_size,
         local_pad_start_and_size,

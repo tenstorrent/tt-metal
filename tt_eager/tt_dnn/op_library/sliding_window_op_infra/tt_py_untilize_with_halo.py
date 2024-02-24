@@ -8,6 +8,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
     generate_untilize_with_halo_kernel_configs,
+    generate_untilize_with_halo_kernel_configs2,
 )
 from tt_lib.utils import _nearest_y
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
@@ -64,6 +65,9 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 utwh_kernel_configs["local_data_tensor"],
                 utwh_kernel_configs["r_data_tensor"],
                 utwh_kernel_configs["rr_data_tensor"],
+                utwh_kernel_configs["padding_config"],
+                utwh_kernel_configs["local_config"],
+                utwh_kernel_configs["remote_config"],
                 pad_val,
                 self.sliding_window_op_params.num_cores_nhw,
                 utwh_kernel_configs["max_out_nsticks_per_core"],
@@ -231,6 +235,39 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
                 return tt_tensor
 
+            def gen_per_core_gather_data_uint16_tensor(config: list):
+                assert type(config) is list
+                if block_sharding:
+                    assert len(config) == num_cores_w, f"{len(config)} {num_cores_w}"
+                else:
+                    assert len(config) == num_cores_nhw, f"{len(config)} {num_cores_nhw}"
+                assert type(config[0]) is list
+                assert len(config[0]) > 0
+
+                torch_tensor = torch.tensor(config, dtype=torch.short)
+                shard_shape = [1, torch_tensor.shape[-1]]
+
+                if block_sharding:
+                    torch_tensor = torch_tensor.repeat(1, num_cores_h)
+
+                torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
+
+                shard_orientation = (
+                    ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
+                )
+                shard_halo = False
+                shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+                mem_layout = (
+                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+                    if block_sharding
+                    else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+                )
+                mem_config = ttl.tensor.MemoryConfig(mem_layout, ttl.tensor.BufferType.L1, shard_spec)
+
+                tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16)
+                tt_tensor = tt_tensor.to(device, mem_config) if device is not None else tt_tensor
+                return tt_tensor
+
             # print("gen local data config tt tensor")
             local_data_tensor = gen_config_tt_tensors_uint16(local_data)
             # print("gen local pad config tt tensor")
@@ -243,6 +280,21 @@ class TTPyUntilizeWithHalo(TTPyOp):
             r_data_tensor = gen_config_tt_tensors_uint16(r_data)
             # print("gen rr data config tt tensor")
             rr_data_tensor = gen_config_tt_tensors_uint16(rr_data)
+
+            def core_id_to_physical_coord(core_id):
+                if block_sharding:
+                    core_coord = ttl.tensor.CoreCoord(core_id, 0)
+                else:
+                    core_coord = ttl.tensor.CoreCoord(core_id % num_cores_w, core_id // num_cores_w)
+                return device.worker_core_from_logical_core(core_coord)
+
+            padding_config, local_config, remote_config = generate_untilize_with_halo_kernel_configs2(
+                tensor_metadata, req_conv_input_shard_start_end, core_id_to_physical_coord
+            )
+
+            padding_config_tensor = gen_per_core_gather_data_uint16_tensor(padding_config)
+            local_config_tensor = gen_per_core_gather_data_uint16_tensor(local_config)
+            remote_config_tensor = gen_per_core_gather_data_uint16_tensor(remote_config)
 
             halo_reader_patterns_cache[sliding_window_op_params_hash] = {
                 "local_pad_tensor": local_pad_tensor,
@@ -263,6 +315,9 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 "l_data_src_start_offsets_per_core": l_data_src_start_offsets_per_core,
                 "r_data_src_start_offsets_per_core": r_data_src_start_offsets_per_core,
                 "rr_data_src_start_offsets_per_core": rr_data_src_start_offsets_per_core,
+                "padding_config": padding_config_tensor,
+                "local_config": local_config_tensor,
+                "remote_config": remote_config_tensor,
             }
 
         return
