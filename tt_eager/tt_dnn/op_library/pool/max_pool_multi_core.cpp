@@ -419,6 +419,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     auto reader_config = ReaderDataMovementConfig(reader_ct_args);
     std::string reader_kernel_fname;
     if (input.memory_config().is_sharded()) {
+        // sharded, without halo
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
     } else {
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
@@ -460,6 +461,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             out_nhw_per_core,
                                             out_nhw_per_core,
                                             out_nhw_per_core / nblocks,     // loop count with blocks
+                                            input_shape[3],
                                             };
     auto compute_ct_args_cliff = compute_ct_args;
     auto reduce_op = ReduceOpMath::MAX;
