@@ -1,4 +1,4 @@
-personal_ws-1.1 en 519
+personal_ws-1.1 en 521
 ABI
 ADDI
 API
@@ -350,6 +350,7 @@ ncrisc
 nd
 ne
 networkx
+nextafter
 nez
 noc
 noconvert
@@ -376,6 +377,7 @@ phiyodr
 phyiscally
 png
 polygamma
+polyval
 pragma
 pre
 prelu
