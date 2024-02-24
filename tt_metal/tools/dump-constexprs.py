@@ -42,7 +42,7 @@ def find_constexpr_values(dwarfinfo, function_name, die_index):
                 constexprs_map[die_function_name] = []
                 if die_function_name == function_name or not function_name:
                     for child in DIE.iter_children():
-                        if child.tag == "DW_TAG_variable" and "DW_AT_const_expr" in child.attributes:
+                        if child.tag == "DW_TAG_variable":
                             name = (
                                 child.attributes["DW_AT_name"].value.decode("utf-8")
                                 if "DW_AT_name" in child.attributes
@@ -57,7 +57,7 @@ def find_constexpr_values(dwarfinfo, function_name, die_index):
         if constexprs:
             if not function_name:
                 print(f"Function: {die_function_name}")
-            print(", ".join(f"{name}={hex(value)}" for name, value in constexprs))
+            print("\n".join(f"  {name} = {value} ({hex(value)})" for name, value in constexprs))
 
 
 def main():
