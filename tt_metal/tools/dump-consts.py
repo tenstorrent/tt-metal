@@ -4,17 +4,18 @@
 
 """
 Usage:
-    dump-constexprs.py <elf_file_path> [--function=<function_name>]
+    dump-consts.py <elf_file_path> [--function=<function_name>]
 
 Options:
     -h --help                   Show this screen
     --function=<function_name>  Limits the search to a specific function
 
 Description:
-    This script prints compiler-assigned constexpr values from the ELF file. It parses
+    This script prints compiler-assigned constant values from the ELF file. It will
+    print constants found in all functions if no function name is provided.
 
 Example:
-    python dump-constexprs.py built/0/kernels/command_queue_producer/266580784283234019/brisc/brisc.elf --function=kernel_main
+    python dump-consts.py built/0/kernels/command_queue_producer/266580784283234019/brisc/brisc.elf --function=kernel_main
 """
 from docopt import docopt
 from elftools.elf.elffile import ELFFile
