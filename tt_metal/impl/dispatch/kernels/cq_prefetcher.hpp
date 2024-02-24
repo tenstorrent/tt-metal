@@ -250,7 +250,6 @@ void completion_queue_push_back(uint32_t push_size_B, uint32_t completion_queue_
 FORCE_INLINE void write_event(uint32_t event_address) {
     uint32_t completion_write_ptr = *get_cq_completion_write_ptr() << 4;
     constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
-    DPRINT << "WRITING EVENT " << *reinterpret_cast<volatile uint32_t*>(event_address) << " TO " << completion_write_ptr << ENDL();
     uint64_t host_completion_queue_write_addr = pcie_core_noc_encoding | completion_write_ptr;
     noc_async_write(event_address, host_completion_queue_write_addr, 4);
     noc_async_write_barrier();
@@ -281,12 +280,8 @@ class ProgramEventBuffer {
 
     void write_events() {
         uint32_t event_addr;
-        if (this->num_events) {
-            DPRINT << "SENDING " << this->num_events << " EVENTS" << ENDL();
-        }
         while (this->num_events) {
             uint32_t event = (this->buffer >> 32);
-            DPRINT << "EVENT SENT: " << event << ENDL();
             completion_queue_reserve_back(32); // Need to clean up
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
             write_event(event_addr);
@@ -355,7 +350,6 @@ void pull_and_relay(
         num_pages_to_write = min(num_pages, dst_pr_cfg.num_pages_to_write);
     }
 
-    DPRINT << "NUM PAGES TO RELAY " << num_pages << ENDL();
     while (num_writes_completed != num_pages) {
         if (cb_producer_space_available(num_pages_to_read) and num_reads_issued < num_pages) {
             if constexpr (src_type == PullAndRelayType::CIRCULAR_BUFFER) {
@@ -410,7 +404,6 @@ void pull_and_relay(
                 uint32_t dst_addr = dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << 4;
                 uint64_t dst_noc_addr = dst_pr_cfg.cb_buff_cfg.remote_noc_encoding | dst_addr;
 
-                DPRINT << "WRITING " << num_pages_to_write << " TO DISPATCH ADDR: " << dst_addr << ENDL();
                 noc_async_write(get_read_ptr(0), dst_noc_addr, (dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_write);
 
                 // All pushbacks are snapped to roughly 4

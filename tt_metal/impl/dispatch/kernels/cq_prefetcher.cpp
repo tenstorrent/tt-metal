@@ -155,7 +155,7 @@ void kernel_main() {
         }
 
         volatile tt_l1_ptr uint32_t* buffer_transfer_ptr = command_ptr + DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
-        uint32_t num_pages_to_read = remote_cb_num_pages / 2;
+        uint32_t num_pages_to_read = producer_cb_num_pages / 2;
         uint32_t num_pages_to_write = producer_consumer_transfer_num_pages;
         if (is_program) {
             program_event_buffer.push_event(event);
