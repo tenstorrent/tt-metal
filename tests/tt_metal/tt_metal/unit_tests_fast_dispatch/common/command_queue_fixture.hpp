@@ -82,6 +82,7 @@ class CommandQueuePCIDevicesFixture : public ::testing::Test {
             GTEST_SKIP();
 
         num_devices_ = tt::tt_metal::GetNumPCIeDevices();
+        num_devices_ = 8;
         if (num_devices_ < 2) {
             GTEST_SKIP();
         }

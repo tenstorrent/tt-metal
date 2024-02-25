@@ -328,7 +328,7 @@ void Device::compile_command_queue_programs() {
                     tt_cxy_pair logical_eth_router_dst = tt::Cluster::instance().get_eth_core_for_dispatch_core(
                         completion_q_writer_location, EthRouterMode::BI_DIR_TUNNELING, device_id);
                     producer_physical_core = this->ethernet_core_from_logical_core(logical_eth_router_dst);
-                    producer_physical_core = CoreCoord(9,6); // TODO: remove hardcoded return path
+                   // producer_physical_core = CoreCoord(9,6); // TODO: remove hardcoded return path
 
 
                     std::cout << "CQ prefetcher core: " << issue_q_physical_core.str() << std::endl;
@@ -370,6 +370,7 @@ void Device::compile_command_queue_programs() {
                     command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/temp_return_path.cpp";
                     std::cout << "chip " << device_id << " ethernet bi dir src core " << logical_eth_router_src.str() << std::endl;
                     std::cout << "chip " << device_id << " ethernet bi dir dst core " << logical_eth_router_dst.str() << std::endl;
+                    /*
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
                         command_q_tunneller_kernel,
@@ -377,7 +378,7 @@ void Device::compile_command_queue_programs() {
                         tt::tt_metal::EthernetConfig {
                             .noc = tt::tt_metal::NOC::RISCV_0_default,
                             .compile_args = eth_tunneller_compile_args,
-                            .defines = eth_tunneller_defines});
+                            .defines = eth_tunneller_defines}); */
                 }
                 std::cout << "Issue q phy: " << issue_q_physical_core.str() << " completion q phy: " << completion_q_physical_core.str() << std::endl;
 
@@ -536,7 +537,7 @@ void Device::compile_command_queue_programs() {
 
         // remote_signaller writing to eth SRC, semaphore 0
         CoreCoord physical_eth_router_remote_src = this->ethernet_core_from_logical_core(logical_eth_router_remote_src);
-        physical_eth_router_remote_src = CoreCoord(9,0); // TODO: remove hardcoded return path
+        //physical_eth_router_remote_src = CoreCoord(9,0); // TODO: remove hardcoded return path
         tt::Cluster::instance().write_core(&accept_cmd_sem_value, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_remote_src), eth_l1_mem::address_map::SEMAPHORE_BASE);
         // TODO: aliu add more bidirection tunneling kernels for multihop dispatch
           // Setup eth core for bidirectional tunneling
@@ -548,7 +549,7 @@ void Device::compile_command_queue_programs() {
                 {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
             };
             // TODO: remove hardcoding for return path
-            std::vector<uint32_t> eth_tunneller_compile_args = {true}; // SENDER is ISSUE
+            std::vector<uint32_t> eth_tunneller_compile_args = {false}; // SENDER is ISSUE
             std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
             std::cout << "chip " << this->id() << " ethernet bi dir src core " << logical_eth_router_remote_src.str() << std::endl;
             std::cout << "chip " << this->id() << " ethernet bi dir dst core " << logical_eth_router_remote_dst.str() << std::endl;
@@ -571,6 +572,7 @@ void Device::compile_command_queue_programs() {
            };
           eth_tunneller_compile_args = {false}; // TODO: what is this? SENDER is ISSUE?
            command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/temp_return_path.cpp";
+           /*
            tt::tt_metal::CreateKernel(
                *command_queue_program_ptr,
                command_q_tunneller_kernel,
@@ -578,7 +580,7 @@ void Device::compile_command_queue_programs() {
                tt::tt_metal::EthernetConfig {
                    .noc = tt::tt_metal::NOC::RISCV_0_default,
                    .compile_args = eth_tunneller_compile_args,
-                   .defines = eth_tunneller_defines});
+                   .defines = eth_tunneller_defines});*/
 
         std::cout << "Remote pull and push core: " << remote_processor_physical_core.str() << std::endl;
         std::cout << "DST router (R): " << physical_eth_router_remote_dst.str() << std::endl;

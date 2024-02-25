@@ -903,8 +903,8 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     // we do not always context switch to base FW
     const routing_info_t routing_info_disabled = {
         .routing_enabled = 0,
-        .routing_mode = EthRouterMode::SD,
-        .connected_chip_id = 0,
+        .src_sent_valid_cmd = 0,
+        .dst_acked_valid_cmd = 0,
         .relay_src_x = 0xffffffff,
         .relay_src_y = 0xffffffff,
         .relay_dst_x = 0xffffffff,
@@ -912,8 +912,8 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
       };
     const routing_info_t routing_info_enabled = {
         .routing_enabled = 1,
-        .routing_mode = EthRouterMode::SD,
-        .connected_chip_id = 0,
+        .src_sent_valid_cmd = 0,
+        .dst_acked_valid_cmd = 0,
         .relay_src_x = 0xffffffff,
         .relay_src_y = 0xffffffff,
         .relay_dst_x = 0xffffffff,

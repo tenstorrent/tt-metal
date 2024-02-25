@@ -27,10 +27,11 @@ void kernel_main() {
                                                                   get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
 
     int i = 0;
-   // while(true) {
-   //     erisc_info->unused_arg1 = 99999990 + buffer_id;
-   //     internal_::risc_context_switch();
-   // }
+    while(routing_info->routing_enabled) {
+        erisc_info->unused_arg1 = 99999990 + buffer_id;
+        internal_::risc_context_switch();
+    }
+    /*
   while(routing_info->routing_enabled) {
     while(routing_info->routing_enabled && eth_src_db_semaphore_addr[0] == 0 && routing_info->fd_buffer_msgs[buffer_id].bytes_sent != 1) {
         internal_::risc_context_switch();
@@ -56,5 +57,5 @@ void kernel_main() {
     erisc_info->unused_arg0 = 21300004 + i * 1000;
     }
     i++;
-  }
+  }*/
 }

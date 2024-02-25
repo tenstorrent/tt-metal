@@ -115,9 +115,9 @@ static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 
 struct eth_word_t {
     volatile uint32_t bytes_sent;
+    volatile uint32_t dst_cmd_valid;
     uint32_t reserved_0;
     uint32_t reserved_1;
-    uint32_t reserved_2;
 };
 
 enum class CQTunnelPath: uint8_t {
@@ -134,8 +134,8 @@ enum EthRouterMode : uint32_t {
 
 struct routing_info_t {
     volatile uint32_t routing_enabled;
-    volatile uint32_t routing_mode;
-    volatile uint32_t connected_chip_id;
+    volatile uint32_t src_sent_valid_cmd;
+    volatile uint32_t dst_acked_valid_cmd;
     volatile uint32_t unused_arg0;
     volatile uint32_t relay_src_x;
     volatile uint32_t relay_src_y;

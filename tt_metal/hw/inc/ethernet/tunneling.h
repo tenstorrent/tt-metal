@@ -189,26 +189,49 @@ void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
     bool db_buf_switch = false;
     const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE);
 
-
-            noc_semaphore_inc(
-                ((uint64_t)eth_router_noc_encoding << 32) | uint32_t(eth_db_semaphore_addr),
-                -1);  // Two's complement addition
-            noc_async_write_barrier();
-
-            volatile tt_l1_ptr uint32_t *command_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t *>(command_start_addr);
-            volatile tt_l1_ptr CommandHeader *header = (CommandHeader *)command_ptr;
-            uint32_t num_buffer_transfers = header->num_buffer_transfers;
-            uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
-            bool is_program = header->is_program_buffer;
-            bool fwd_path = header->fwd_path;
-            command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
+    volatile tt_l1_ptr uint32_t *command_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t *>(command_start_addr);
+    volatile tt_l1_ptr CommandHeader *header = (CommandHeader *)command_ptr;
+    uint32_t num_buffer_transfers = header->num_buffer_transfers;
+    uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
+    bool is_program = header->is_program_buffer;
+    bool fwd_path = header->fwd_path;
+    command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
+    if (routing_info->src_sent_valid_cmd != 1) {
 
             // DPRINT << "SRC got" << ENDL();
 
             // send cmd even if there is no data associated
             erisc_info->unused_arg2 = 66666666;
-            internal_::send_fd_packets(buffer_id); // TODO: AL, is this right?
+            // unpack send fd packets
+            //internal_::send_fd_packets(buffer_id); // TODO: AL, is this right?
+            internal_::eth_send_packet(
+                0,
+                (eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + buffer_id * eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE) >> 4,
+                (eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + buffer_id * eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE) >> 4,
+                (eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE) >> 4);
+            routing_info->fd_buffer_msgs[buffer_id].bytes_sent = 1;
+            internal_::eth_send_packet(
+                0,
+                ((uint32_t)(&(routing_info->fd_buffer_msgs[buffer_id].bytes_sent))) >> 4,
+                ((uint32_t)(&(routing_info->fd_buffer_msgs[buffer_id].bytes_sent))) >> 4,
+                1);
+            routing_info->src_sent_valid_cmd = 1;
+    }
+
+            // There should always be a valid cmd here, since eth_db_acquire completed
+            while (routing_info->fd_buffer_msgs[buffer_id].bytes_sent != 0) {
+              internal_::risc_context_switch();
+              if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
+                return;
+              }
+                // TODO: add timer to restrict this
+            }
+            routing_info->src_sent_valid_cmd = 0;
+            noc_semaphore_inc(
+                ((uint64_t)eth_router_noc_encoding << 32) | uint32_t(eth_db_semaphore_addr),
+                -1);  // Two's complement addition
+            noc_async_write_barrier();
             erisc_info->unused_arg2 = 66666667;
             // DPRINT << "SRC2DST" << ENDL();
 
@@ -264,7 +287,9 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
             RISC_POST_STATUS(0x02140000);
         }
     }*/
-    volatile tt_l1_ptr uint32_t *eth_db_semaphore_addr =
+    volatile tt_l1_ptr uint32_t *eth_src_db_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
+    volatile tt_l1_ptr uint32_t *eth_dst_db_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(1));
 
     bool db_buf_switch = false;
@@ -296,16 +321,25 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
             // Initially 1
             // After update_producer_consumer_sync_semaphores goes to 0
             // At some point pull_and_relay will set it to 1 once it reads in the command
-            update_producer_consumer_sync_semaphores(((uint64_t)eth_router_noc_encoding << 32), ((uint64_t)relay_noc_encoding << 32), eth_db_semaphore_addr, get_semaphore(1));
+            if (routing_info->dst_acked_valid_cmd != 1) {
+                update_producer_consumer_sync_semaphores(((uint64_t)eth_router_noc_encoding << 32), ((uint64_t)relay_noc_encoding << 32), eth_dst_db_semaphore_addr, get_semaphore(1));
+                routing_info->dst_acked_valid_cmd = 1;
+            }
 
             // Wait until push and pull kernel has read in the command
             // Before pull and push kernel signal to DST router that it has read in a command, it also programs the DST router CB
-            while (eth_db_semaphore_addr[0] == 0) {
+            erisc_info->unused_arg1 = 12200000 + eth_dst_db_semaphore_addr[0];
+            while (eth_dst_db_semaphore_addr[0] == 0) {
                 internal_::risc_context_switch();
+                if (eth_src_db_semaphore_addr[0] != 0) {
+                  return;
+                }
             }
 
             // Ack because pull and push kernel signalled that it got the command
             internal_::ack_fd_packet(buffer_id);
+
+            routing_info->dst_acked_valid_cmd = 0;
 
             for (uint32_t i = 0; i < num_buffer_transfers; i++) {
                 const uint32_t num_pages = command_ptr[2];
