@@ -582,7 +582,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 }
 
 // This purely supports input block shard -> output interleaved for now
-operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
+operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize) {
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -706,9 +706,17 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         (uint32_t) ntiles_per_block,    // per_block_ntiles
     };
 
+    std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+        log_debug(LogOp, "Using slow untilize.");
+        compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+    } else {
+        log_debug(LogOp, "Using fast pack untilize.");
+    }
+
     auto untilize_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+        compute_kernel,
         all_cores,
         ComputeConfig{
             .compile_args = compute_args});

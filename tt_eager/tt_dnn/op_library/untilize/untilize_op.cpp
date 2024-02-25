@@ -202,10 +202,10 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std:
     auto& output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UntilizeWithUnpaddingOpParallelizationStrategy::MULTI_CORE:
-            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize);
             break;
         case UntilizeWithUnpaddingOpParallelizationStrategy::SINGLE_CORE:
-        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize);
     }
 }
 
@@ -217,7 +217,7 @@ UntilizeWithUnpaddingOpParallelizationStrategy UntilizeWithUnpadding::get_parall
     }
 }
 
-Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config) {
+Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config, bool use_pack_untilize) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     const Shape output_tensor_shape = {
@@ -234,7 +234,7 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output
             TT_FATAL(false, "Cannot untilize and unpad input which is not tilized");
         }
     }
-    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

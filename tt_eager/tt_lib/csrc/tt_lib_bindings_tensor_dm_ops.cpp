@@ -233,7 +233,9 @@ namespace tt::tt_metal::detail{
             )doc");
 
         m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
-            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("use_pack_untilize").noconvert() = true,
+            R"doc(
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
             Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
