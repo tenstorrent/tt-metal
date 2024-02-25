@@ -304,6 +304,7 @@ class TtFalconAttention:
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
+
         ###########
         ### TMs ###
         ###########
@@ -409,6 +410,7 @@ class TtFalconAttention:
                 )
                 query_layer[i].deallocate(True)
                 key_layer_transposed[i].deallocate(True)
+
         ###############
         ### SOFTMAX ###
         ###############

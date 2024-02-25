@@ -547,7 +547,11 @@ def test_demo(
     disable_compilation_reports()
     tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon40b")
 
-    model_config = get_model_config("BFLOAT8_B-SHARDED")
+    # TODO: Prefill and decode will likely require different configs for sharding
+    # Currently, prefill is on host so only generate for decode
+    llm_mode = "decode"
+    num_devices = 4
+    model_config = get_model_config("BFLOAT8_B-SHARDED", llm_mode, num_devices)
     model_version = model_config_entries["_name_or_path"]
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]

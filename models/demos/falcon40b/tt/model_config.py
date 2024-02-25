@@ -92,8 +92,11 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str):
+def get_model_config(model_config_str, llm_mode, num_devices):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
+    assert llm_mode == "decode"
+    assert num_devices in (4,)
+
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
@@ -119,7 +122,7 @@ def get_model_config(model_config_str):
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
-        "NUM_DEVICES": 4,
+        "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 2,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon40b/datasets/"),
@@ -157,6 +160,8 @@ def get_model_config(model_config_str):
         model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
 
     if mem_config_str == "SHARDED":
+        head_dim = 64
+
         # Embeddings
         model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
@@ -320,6 +325,7 @@ def get_model_config(model_config_str):
                 False,
             ),
         )
+
         # ATTN
         model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
@@ -407,8 +413,8 @@ def get_model_config(model_config_str):
                     }
                 ),
                 [
-                    1,
-                    64,  # Dynamic
+                    1,  # Dynamic
+                    head_dim,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
