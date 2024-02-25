@@ -721,18 +721,42 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         raise RuntimeError(f"Unsupported datatype conversion to {dtype}")
 
     if not requires_padding_change(layout, tensor.shape):
-        ttl_tensor = tensor.value
         if is_on_device:
             if layout == ttnn.ROW_MAJOR_LAYOUT:
-                return ttnn.Tensor(ttl.tensor.untilize(ttl_tensor))
+                ## since the default of untilize is to use single core, set use_multicore if the input is sharded
+                ## additionally, default output is INTERLEAVED, so provide sharded memory config to untilize
+                if ttnn.is_sharded(tensor):
+                    return ttnn.Tensor(
+                        ttl.tensor.untilize(
+                            tensor.value, use_multicore=True, output_mem_config=ttnn.get_memory_config(tensor)
+                        )
+                    )
+                else:
+                    return ttnn.Tensor(ttl.tensor.untilize(tensor.value))
             elif layout == ttnn.TILE_LAYOUT:
+                ## since the default of tilize is to use single core, set use_multicore if the input is sharded
+                use_multicore = False
+                if ttnn.is_sharded(tensor):
+                    use_multicore = True
+                    ## check if the shard shape is already tile sized, or needs padding
+                    shard_shape = ttnn.get_memory_config(tensor).shard_spec.shape
+                    if shard_shape[0] % ttnn.TILE_SIZE != 0 or shard_shape[1] % ttnn.TILE_SIZE != 0:
+                        ## use single core tilize after a sharded to interleaved
+                        ## TODO: can we pad each shard to keep it multicore?
+                        use_multicore = False
+                        tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
                 return ttnn.Tensor(
-                    ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config(), output_dtype=dtype)
+                    ttl.tensor.tilize(
+                        tensor.value,
+                        output_mem_config=ttnn.get_memory_config(tensor),
+                        use_multicore=use_multicore,
+                        output_dtype=dtype,
+                    )
                 )
             else:
                 raise RuntimeError(f"Unsupported layout: {layout}")
         else:
-            return ttnn.Tensor(ttl_tensor.to(layout))
+            return ttnn.Tensor(tensor.value.to(layout))
 
     # def unpad_with_pytorch(ttnn_tensor):
     #     desired_shape = list(ttnn_tensor.shape)
@@ -754,13 +778,28 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
                 input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
                 intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
                 ttl_input_tensor = input_tensor.value
-                output_tensor = ttnn.Tensor(
-                    ttl.tensor.untilize_with_unpadding(
-                        ttl_input_tensor,
-                        (0, 0, 0, 0),
-                        intended_4D_shape,
+
+                if input_tensor.value.is_sharded():
+                    memory_layout_config = input_tensor.value.memory_config()
+                    output_mem_config = ttl.tensor.MemoryConfig(
+                        memory_layout_config.memory_layout, ttl.tensor.BufferType.L1
                     )
-                )
+                    output_tensor = ttnn.Tensor(
+                        ttl.tensor.untilize_with_unpadding(
+                            ttl_input_tensor,
+                            (0, 0, 0, 0),
+                            intended_4D_shape,
+                            output_mem_config,
+                        )
+                    )
+                else:
+                    output_tensor = ttnn.Tensor(
+                        ttl.tensor.untilize_with_unpadding(
+                            ttl_input_tensor,
+                            (0, 0, 0, 0),
+                            intended_4D_shape,
+                        )
+                    )
             else:
                 input_tensor = ttnn.from_device(input_tensor)
                 input_tensor = ttnn.unsqueeze_to_4D(input_tensor)

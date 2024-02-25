@@ -139,6 +139,8 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
             TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+        } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            // TODO ...
         } else if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
             // Minor host code changes required to remove this restriction
@@ -179,8 +181,13 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vect
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         uint32_t fused_height = tt_metal::compute_volume(output_shape) / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
-        std::array<uint32_t, 2> shard_shape = {fused_height, output_shape[-1] / num_cores};
+        std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
+        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            shard_shape = {div_up(fused_height, num_cores), output_shape[-1]};
+        } else {
+            shard_shape = {fused_height, output_shape[-1] / num_cores};
+        }
         shard_spec.shape = shard_shape;
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;

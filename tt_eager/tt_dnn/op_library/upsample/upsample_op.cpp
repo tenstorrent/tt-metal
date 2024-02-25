@@ -57,7 +57,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
             auto output_shape = compute_output_shapes(inputs).at(0);
             if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 auto ncores = input_shard_spec.num_cores();
-                array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] / ncores, output_shape[-1]};
+                array<uint32_t, 2> output_shard_shape = {div_up(output_shape[0] * output_shape[1] * output_shape[2], ncores), output_shape[-1]};
                 auto output_shard_spec = input_shard_spec;
                 output_shard_spec.shape = output_shard_shape;
                 mem_config.shard_spec = output_shard_spec;
