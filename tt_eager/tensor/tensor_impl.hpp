@@ -212,7 +212,7 @@ std::string to_string_row_major_0D(const BufferType& buffer, const Shape& shape,
 }
 
 // TODO: make these configurable
-const Shape MAX_NUM_ELEMENTS_TO_PRINT = Shape({1, 1, 4, 4});
+const Shape MAX_NUM_ELEMENTS_TO_PRINT = Shape({4, 4, 32, 32});
 
 template <typename BufferType>
 std::string to_string_row_major_1D(const BufferType& buffer, const Shape& shape, DataType dtype) {
