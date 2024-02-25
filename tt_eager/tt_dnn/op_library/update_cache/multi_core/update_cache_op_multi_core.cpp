@@ -36,8 +36,6 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.shape()[0];
     uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.shape()[1];
 
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-
     uint32_t B = input_tensor.shape()[-2];
     uint32_t num_batched_heads = input_tensor.shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
@@ -70,10 +68,10 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     } else {
         row_major = true;
         std::tie(num_cores, all_cores, core_group_1, core_group_2, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size, num_batched_heads, row_major);
-        num_input_tiles = 2 * Wt;
+        num_input_tiles = 2 * Wt; // double buffered
     }
     uint32_t src0_cb_index = CB::c_in0;
-    uint32_t num_cache_tiles = 2 * Wt;
+    uint32_t num_cache_tiles = 2 * Wt; // double buffered
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_cache_tiles * cache_single_tile_size, {{src0_cb_index, cache_cb_data_format}})
 		.set_page_size(src0_cb_index, cache_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
@@ -280,24 +278,55 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
+    // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
+    // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
+    // For either case, assume that work doesn't spill over to next head, so we just increment by Wt within reader/writer
+    uint32_t num_blocks_of_work = input_tensor.shape()[1] * input_tensor.shape()[-2] / TILE_HEIGHT;
 
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-
-    uint32_t cache_Ht = cache_tensor.shape()[-2] / TILE_HEIGHT, cache_Wt = cache_tensor.shape()[-1] / TILE_WIDTH;
-    uint32_t cache_HtWt = cache_Ht * cache_Wt;
+    uint32_t Wt = cache_tensor.shape()[-1] / TILE_WIDTH;
+    uint32_t input_Ht = input_tensor.shape()[-2] / TILE_HEIGHT; // seq_len
+    uint32_t cache_HtWt = cache_tensor.shape()[-2] * Wt / TILE_HEIGHT;
+    uint32_t cache_CHtWt = cache_tensor.shape()[1] * cache_HtWt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
-    uint32_t start_idx = batch_idx * cache_HtWt + update_idxt * cache_Wt;
+    uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
     tt_metal::Device *device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+
+    bool row_major;
+    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+
+    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+
+    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+
+    uint32_t num_input_tiles;
+    if (shard_spec.has_value()) {
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        all_cores = shard_spec.value().grid;
+        num_cores = all_cores.num_cores();
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet({});
+        num_blocks_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
+        num_blocks_per_core_group_2 = 0;
+        num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
+        auto bbox = all_cores.bounding_box();
+        num_cores_x = bbox.end.x + 1;
+        num_cores_y = bbox.end.y + 1;
+    } else {
+        row_major = true;
+        std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size, num_blocks_of_work, row_major);
+        num_input_tiles = 2; // double buffered
+    }
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
+    if (shard_spec.has_value()) {
+        cb_src0_config = cb_src0_config.set_globally_allocated_address(*input_tensor.buffer());
+    }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = src0_cb_index;
@@ -314,11 +343,16 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
         (std::uint32_t) dst_is_dram
     };
 
+    std::map<string, string> reader_kernel_defines;
+    if (shard_spec.has_value()) {
+        reader_kernel_defines["INPUT_SHARDED"] = "1";
+    }
+
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/update_cache/kernels/dataflow/reader_fill_cache_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -326,15 +360,18 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+    uint32_t g1_numcores = core_group_1.num_cores();
+    uint32_t g2_numcores = core_group_2.num_cores();
+
+    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
+        const CoreCoord &core = cores.at(i);
+        uint32_t num_blocks_per_core = 0;
+        if (i < g1_numcores) {
+            num_blocks_per_core = num_blocks_per_core_group_1;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            num_blocks_per_core = num_blocks_per_core_group_2;
         }
 
         tt_metal::SetRuntimeArgs(
@@ -343,10 +380,14 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
             core,
             {
                 src_buffer->address(),
-                num_tiles_per_core,
-                num_tiles_written
+                num_blocks_per_core * Wt,
+                num_blocks_written * Wt,
             }
         );
+
+        const uint32_t cache_start_id = start_idx // user batch start
+            + num_blocks_written / input_Ht * cache_HtWt // cache head offset
+            + (num_blocks_written % input_Ht) * Wt; // seq_len offset
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -354,28 +395,31 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
             core,
             {
                 dst_buffer->address(),
-                num_tiles_per_core,
-                start_idx + num_tiles_written
+                num_blocks_per_core * Wt,
+                cache_start_id,
             }
         );
-        num_tiles_written+=num_tiles_per_core;
+        num_blocks_written+=num_blocks_per_core;
     }
 
     auto override_runtime_args_callback = [
             unary_reader_kernel_id,
             unary_writer_kernel_id,
-            num_cores,
-            num_cores_y,
+            cb_src0,
+            cores,
+            g1_numcores,
             core_group_1,
-            num_tiles_per_core_group_1,
+            num_blocks_per_core_group_1,
             core_group_2,
-            num_tiles_per_core_group_2,
+            num_blocks_per_core_group_2,
+            Wt,
+            input_Ht,
             cache_HtWt,
-            cache_Wt
+            cache_CHtWt
         ]
     (
         const void* operation,
-        const Program& program,
+        Program& program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -384,21 +428,23 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
         const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
 
         uint32_t update_idxt = update_idx / TILE_HEIGHT;
-        uint32_t start_idx = batch_idx * cache_HtWt + update_idxt * cache_Wt;
+        uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
 
         auto src_buffer = input_tensors.at(1).buffer();
 
         auto dst_buffer = input_tensors.at(0).buffer();
 
-        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            uint32_t num_tiles_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
-                num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
-                num_tiles_per_core = num_tiles_per_core_group_2;
+        if (input_tensors.at(1).is_sharded()) {
+            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        }
+
+        for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++){
+            const CoreCoord &core = cores.at(i);
+            uint32_t num_blocks_per_core = 0;
+            if (i < g1_numcores) {
+                num_blocks_per_core = num_blocks_per_core_group_1;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                num_blocks_per_core = num_blocks_per_core_group_2;
             }
 
             {
@@ -407,11 +453,15 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
             }
 
             {
+                const uint32_t cache_start_id = start_idx // user batch start
+                    + num_blocks_written / input_Ht * cache_HtWt // cache head offset
+                    + (num_blocks_written % input_Ht) * Wt; // seq_len offset
+
                 auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
-                runtime_args[2] = start_idx + num_tiles_written;
+                runtime_args[2] = cache_start_id;
             }
-            num_tiles_written += num_tiles_per_core;
+            num_blocks_written += num_blocks_per_core;
         }
     };
 
