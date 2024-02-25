@@ -99,14 +99,14 @@ class UNet:
         output_tensor = self.bnc.copy_input_to_device(output_tensor)
         output_tensor = self.bnc(output_tensor)
         output_tensor = self.bnc_2(output_tensor)
-        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+        ## upsample block
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.reshape(output_tensor, (1, 132, 10, 64))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 5280, 64))
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
-        logger.debug(f"output_tensor: {output_tensor.shape}")
-        logger.debug(f"output_tensor: {save_c4_2_out.shape}")
         output_tensor = ttnn.concat([output_tensor, save_c4_2_out], dim=3)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.reshape(output_tensor, (2, 132, 20, 96))
@@ -116,6 +116,7 @@ class UNet:
         output_tensor = self.c5_3(output_tensor)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.reshape(output_tensor, (1, 264, 20, 32))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 21120, 32))
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
@@ -129,6 +130,7 @@ class UNet:
         output_tensor = self.c6_3(output_tensor)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.reshape(output_tensor, (1, 528, 40, 32))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 84480, 32))
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
@@ -141,10 +143,11 @@ class UNet:
         output_tensor = self.c7_2(output_tensor)
         output_tensor = self.c7_3(output_tensor)
 
-        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.reshape(output_tensor, (1, 1056, 80, 16))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 160 * 1056 * 2, 16))
+        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
         output_tensor = ttnn.concat([output_tensor, save_c1_2_out], dim=3)
