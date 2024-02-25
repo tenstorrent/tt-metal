@@ -20,6 +20,8 @@
 #include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
+#include "tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
 #include "tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
@@ -573,6 +575,35 @@ void py_module(py::module& m_primary) {
         R"doc(
         "Performs a moreh_matmul_backward operation.
     )doc");
+
+    // moreh_nll_loss
+    m_primary.def(
+        "moreh_nll_loss",
+        &moreh_nll_loss,
+        py::arg("input_tensor").noconvert(),
+        py::arg("target_tensor").noconvert(),
+        py::arg("weight_tensor").noconvert(),
+        py::arg("divisor_tensor").noconvert(),
+        py::arg("output_tensor").noconvert(),
+        py::arg("ignore_index").noconvert(),
+        py::arg("reduction_mean").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a nll_loss operation. Returns an output tensor.");
+
+    // moreh_nll_loss_backward
+    m_primary.def(
+        "moreh_nll_loss_backward",
+        &moreh_nll_loss_backward,
+        py::arg("input_tensor").noconvert(),
+        py::arg("target_tensor").noconvert(),
+        py::arg("weight_tensor").noconvert(),
+        py::arg("divisor_tensor").noconvert(),
+        py::arg("output_grad_tensor").noconvert(),
+        py::arg("input_grad_tensor").noconvert(),
+        py::arg("ignore_index").noconvert(),
+        py::arg("reduction_mean").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a nll_loss_backward operation. Returns an output tensor.");
 
     // moreh_norm
     m_primary.def(

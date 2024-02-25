@@ -77,6 +77,11 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/moreh_clip_grad_norm_step2.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/moreh_clip_grad_norm_step3.cpp \
+  tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.cpp \
+  tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/moreh_nll_loss_step1.cpp \
+  tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/moreh_nll_loss_step2.cpp \
+  tt_eager/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.cpp \
+  tt_eager/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward/moreh_nll_loss_backward.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_small/softmax_w_small.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_small/softmax_h_small.cpp \
