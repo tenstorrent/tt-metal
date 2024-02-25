@@ -42,7 +42,7 @@ Tensor upsample(const Tensor &input,
                   int scale_factor_w,
                   const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-operation::ProgramWithCallbacks upsample_single_core(const Tensor &a, Tensor& output, int scale_factor_h, int scale_factor_w);
+operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 
 }  // namespace tt_metal

@@ -316,9 +316,9 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
 
     uint32_t num_shards;
     uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
-        uint32_t total_width = shape[-1];
+    uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_ASSERT(total_width == shard_shape[1], "Shard shape does not divide tensor shape correctly according to sharding scheme");
+        TT_ASSERT(total_width == shard_shape[1], "Shard shape {} does not divide tensor shape {} correctly according to sharding scheme", shard_shape[1], total_width);
         num_shards = div_up(total_height, shard_shape[0]);
     } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_ASSERT(total_height == shard_shape[0], "Shard shape does not divide tensor shape correctly according to sharding scheme");
@@ -329,7 +329,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
         TT_FATAL(false, "Unsupported sharding scheme");
     }
 
-    TT_ASSERT(num_shards == num_cores, "Number of shards must match number of cores");
+    TT_ASSERT(num_shards == num_cores, "Number of shards {} must match number of cores {}", num_shards, num_cores);
 
     if (layout == Layout::TILE) {
         TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
