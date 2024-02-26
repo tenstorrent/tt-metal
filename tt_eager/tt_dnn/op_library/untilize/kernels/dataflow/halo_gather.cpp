@@ -17,7 +17,7 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
 }
 
 template <uint32_t stick_nbytes, bool is_block_sharded>
-void copy_sticks(
+void copy_sticks_async(
     tt_l1_ptr uint16_t const* config_data,
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
@@ -105,13 +105,14 @@ void kernel_main() {
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks<stick_nbytes, is_block_sharded>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+        copy_sticks_async<stick_nbytes, is_block_sharded>(
+            config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks<stick_nbytes, is_block_sharded>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+        copy_sticks_async<stick_nbytes, is_block_sharded>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     noc_async_read_barrier();

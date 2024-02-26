@@ -39,26 +39,9 @@ int32_t my_max(const std::vector<int32_t>& in) {
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& input_tensor,
-    const Tensor& local_pad_start_and_size,
-    const Tensor& ll_data_start_and_size,
-    const Tensor& l_data_start_and_size,
-    const Tensor& local_data_start_and_size,
-    const Tensor& r_data_start_and_size,
-    const Tensor& rr_data_start_and_size,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const std::vector<int32_t>& local_pad_nsegments_per_core,
-    const std::vector<int32_t>& ll_data_nsegments_per_core,
-    const std::vector<int32_t>& l_data_nsegments_per_core,
-    const std::vector<int32_t>& local_data_nsegments_per_core,
-    const std::vector<int32_t>& r_data_nsegments_per_core,
-    const std::vector<int32_t>& rr_data_nsegments_per_core,
-    const std::vector<int32_t>& local_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& ll_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& l_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& r_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& rr_data_src_start_offsets_per_core,
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
@@ -158,14 +141,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", pad_cb_id, pad_cb_npages, pad_cb_pagesize);
 
     // Additional CBs for sharded data kernel configs
-    // //
-
-    uint32_t local_pad_ss_cb_id = CB::c_in2;
-    uint32_t local_data_ss_cb_id = CB::c_in3;
-    uint32_t ll_data_ss_cb_id = CB::c_in4;
-    uint32_t l_data_ss_cb_id = CB::c_in5;
-    uint32_t r_data_ss_cb_id = CB::c_in6;
-    uint32_t rr_data_ss_cb_id = CB::c_in7;
     uint32_t padding_config_cb_id = CB::c_in2;
     uint32_t local_config_cb_id = CB::c_in3;
     uint32_t remote_config_cb_id = CB::c_in4;
@@ -175,429 +150,112 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t pagesize = 0;
 
     // Gather data
-    bool use_halo_gather_data_kernel = parse_env<bool>("HALO_GATHER_DATA", true);
-    if (use_halo_gather_data_kernel) {
-        if (!skip_untilize) {
-            // compute kernel
-            std::vector<uint32_t> compute_ct_args = {nblocks_per_core, ntiles_per_block};
-            std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
-            if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
-                log_debug(
-                    LogOp,
-                    "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
-                    ntiles_per_block,
-                    MAX_PACK_UNTILIZE_WIDTH);
-                compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
-            }
-            KernelHandle untilize_kernel_id =
-                CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
+    if (!skip_untilize) {
+        // compute kernel
+        std::vector<uint32_t> compute_ct_args = {nblocks_per_core, ntiles_per_block};
+        std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+        if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
+            log_debug(
+                LogOp,
+                "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
+                ntiles_per_block,
+                MAX_PACK_UNTILIZE_WIDTH);
+            compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
         }
-
-        TT_ASSERT(padding_config.dtype() == DataType::UINT16);
-        TT_ASSERT(local_config.dtype() == DataType::UINT16);
-        TT_ASSERT(remote_config.dtype() == DataType::UINT16);
-
-        Buffer* padding_config_buffer = padding_config.buffer();
-        auto padding_config_cb_config =
-            CircularBufferConfig(padding_config_buffer->size(), {{padding_config_cb_id, kernel_config_df}})
-                .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
-                .set_globally_allocated_address(*padding_config_buffer);
-        CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
-
-        Buffer* local_config_buffer = local_config.buffer();
-        auto local_config_cb_config =
-            CircularBufferConfig(local_config_buffer->size(), {{local_config_cb_id, kernel_config_df}})
-                .set_page_size(local_config_cb_id, local_config_buffer->page_size())
-                .set_globally_allocated_address(*local_config_buffer);
-        CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
-
-        Buffer* remote_config_buffer = remote_config.buffer();
-        auto remote_config_cb_config =
-            CircularBufferConfig(remote_config_buffer->size(), {{remote_config_cb_id, kernel_config_df}})
-                .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
-                .set_globally_allocated_address(*remote_config_buffer);
-        CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
-
-        bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-
-        // reader kernel
-        std::vector<uint32_t> reader_ct_args = {
-            0,  // padding_config_cb_id
-            0,  // local_config_cb_id
-            0,  // remote_config_cb_id
-            src_cb_id,
-            input_to_writer_cb_id,
-            out_cb_id,
-            pad_cb_id,
-            pad_val,
-            input_npages,
-            out_stick_nbytes,
-            is_block_sharded,
-        };
-
-        reader_ct_args[0] = 0;
-        reader_ct_args[1] = local_config_cb_id;
-        reader_ct_args[2] = 0;
-
-        KernelHandle reader_kernel_id0 = CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
-            all_cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = reader_ct_args});
-
-        reader_ct_args[0] = padding_config_cb_id;
-        reader_ct_args[1] = 0;
-        reader_ct_args[2] = remote_config_cb_id;
-
-        KernelHandle reader_kernel_id1 = CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
-            all_cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = reader_ct_args});
-
-        auto override_runtime_arguments_callback =
-            [src_cb, out_cb, padding_config_cb, local_config_cb, remote_config_cb](
-                const void* operation,
-                Program& program,
-                const std::vector<Tensor>& input_tensors,
-                const std::vector<std::optional<const Tensor>>&,
-                const std::vector<Tensor>& output_tensors) {
-                auto src_buffer = input_tensors.at(0).buffer();
-                auto padding_config_buffer = input_tensors.at(7).buffer();
-                auto local_config_buffer = input_tensors.at(8).buffer();
-                auto remote_config_buffer = input_tensors.at(9).buffer();
-                auto dst_buffer = output_tensors.at(0).buffer();
-
-                UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
-                UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-                UpdateDynamicCircularBufferAddress(program, padding_config_cb, *padding_config_buffer);
-                UpdateDynamicCircularBufferAddress(program, local_config_cb, *local_config_buffer);
-                UpdateDynamicCircularBufferAddress(program, remote_config_cb, *remote_config_buffer);
-            };
-
-        return {
-            .program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+        KernelHandle untilize_kernel_id =
+            CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
-    // local_pad_start_and_size
-    pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(local_pad_nsegments_per_core);
-    bool local_pad_ss_exists = pagesize > 0;
-    CBHandle local_pad_ss_cb = 0;
-    if (local_pad_ss_exists) {
-        TT_ASSERT(local_pad_start_and_size.dtype() == DataType::UINT16);
-        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", local_pad_ss_cb_id, 1, pagesize);
-        Buffer *local_pad_ss_buffer = local_pad_start_and_size.buffer();
-        auto local_pad_ss_cb_config = CircularBufferConfig(pagesize * 1, {{local_pad_ss_cb_id, kernel_config_df}})
-                                        .set_page_size(local_pad_ss_cb_id, pagesize)
-                                        .set_globally_allocated_address(*local_pad_ss_buffer);
-        local_pad_ss_cb = CreateCircularBuffer(program, all_cores, local_pad_ss_cb_config);
-    }
+    TT_ASSERT(padding_config.dtype() == DataType::UINT16);
+    TT_ASSERT(local_config.dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config.dtype() == DataType::UINT16);
 
-    // ll_data_start_and_size
-    pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(ll_data_nsegments_per_core);
-    bool ll_data_ss_exists = pagesize > 0;
-    CBHandle ll_data_ss_cb = 0;
-    if (ll_data_ss_exists) {
-        TT_ASSERT(ll_data_start_and_size.dtype() == DataType::UINT16);
-        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", ll_data_ss_cb_id, 1, pagesize);
-        Buffer *ll_data_ss_buffer = ll_data_start_and_size.buffer();
-        auto ll_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{ll_data_ss_cb_id, kernel_config_df}})
-                                        .set_page_size(ll_data_ss_cb_id, pagesize)
-                                        .set_globally_allocated_address(*ll_data_ss_buffer);
-        ll_data_ss_cb = CreateCircularBuffer(program, all_cores, ll_data_ss_cb_config);
-    }
+    Buffer* padding_config_buffer = padding_config.buffer();
+    auto padding_config_cb_config =
+        CircularBufferConfig(padding_config_buffer->size(), {{padding_config_cb_id, kernel_config_df}})
+            .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
+            .set_globally_allocated_address(*padding_config_buffer);
+    CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
-    // l_data_start_and_size
-    pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(l_data_nsegments_per_core);
-    bool l_data_ss_exists = pagesize > 0;
-    CBHandle l_data_ss_cb = 0;
-    if (l_data_ss_exists) {
-        TT_ASSERT(l_data_start_and_size.dtype() == DataType::UINT16);
-        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", l_data_ss_cb_id, 1, pagesize);
-        Buffer *l_data_ss_buffer = l_data_start_and_size.buffer();
-        auto l_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{l_data_ss_cb_id, kernel_config_df}})
-                                        .set_page_size(l_data_ss_cb_id, pagesize)
-                                        .set_globally_allocated_address(*l_data_ss_buffer);
-        l_data_ss_cb = CreateCircularBuffer(program, all_cores, l_data_ss_cb_config);
-    }
+    Buffer* local_config_buffer = local_config.buffer();
+    auto local_config_cb_config =
+        CircularBufferConfig(local_config_buffer->size(), {{local_config_cb_id, kernel_config_df}})
+            .set_page_size(local_config_cb_id, local_config_buffer->page_size())
+            .set_globally_allocated_address(*local_config_buffer);
+    CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
-    // local_data_start_and_size
-    pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(local_data_nsegments_per_core);
-    bool local_data_ss_exists = pagesize > 0;
-    CBHandle local_data_ss_cb = 0;
-    if (local_data_ss_exists) {
-    TT_ASSERT(local_data_start_and_size.dtype() == DataType::UINT16);
-        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", local_data_ss_cb_id, 1, pagesize);
-        Buffer *local_data_ss_buffer = local_data_start_and_size.buffer();
-        auto local_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{local_data_ss_cb_id, kernel_config_df}})
-                                        .set_page_size(local_data_ss_cb_id, pagesize)
-                                        .set_globally_allocated_address(*local_data_ss_buffer);
-        local_data_ss_cb = CreateCircularBuffer(program, all_cores, local_data_ss_cb_config);
-    }
+    Buffer* remote_config_buffer = remote_config.buffer();
+    auto remote_config_cb_config =
+        CircularBufferConfig(remote_config_buffer->size(), {{remote_config_cb_id, kernel_config_df}})
+            .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
+            .set_globally_allocated_address(*remote_config_buffer);
+    CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
-    // r_data_start_and_size
-    pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(r_data_nsegments_per_core);
-    bool r_data_ss_exists = pagesize > 0;
-    CBHandle r_data_ss_cb = 0;
-    if (r_data_ss_exists) {
-        TT_ASSERT(r_data_start_and_size.dtype() == DataType::UINT16);
-        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", r_data_ss_cb_id, 1, pagesize);
-        Buffer *r_data_ss_buffer = r_data_start_and_size.buffer();
-        auto r_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{r_data_ss_cb_id, kernel_config_df}})
-                                        .set_page_size(r_data_ss_cb_id, pagesize)
-                                        .set_globally_allocated_address(*r_data_ss_buffer);
-        r_data_ss_cb = CreateCircularBuffer(program, all_cores, r_data_ss_cb_config);
-    }
-
-    // rr_data_start_and_size
-    pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(rr_data_nsegments_per_core);
-    bool rr_data_ss_exists = pagesize > 0;
-    CBHandle rr_data_ss_cb = 0;
-    if (rr_data_ss_exists) {
-        TT_ASSERT(rr_data_start_and_size.dtype() == DataType::UINT16);
-        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", rr_data_ss_cb_id, 1, pagesize);
-        Buffer *rr_data_ss_buffer = rr_data_start_and_size.buffer();
-        auto rr_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{rr_data_ss_cb_id, kernel_config_df}})
-                                        .set_page_size(rr_data_ss_cb_id, pagesize)
-                                        .set_globally_allocated_address(*rr_data_ss_buffer);
-        rr_data_ss_cb = CreateCircularBuffer(program, all_cores, rr_data_ss_cb_config);
-    }
-
-    // Construct kernels
-    // //
+    bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
+        0,  // padding_config_cb_id
+        0,  // local_config_cb_id
+        0,  // remote_config_cb_id
+        src_cb_id,
         input_to_writer_cb_id,
         out_cb_id,
         pad_cb_id,
-        local_pad_ss_cb_id,
-        local_data_ss_cb_id,
-        ll_data_ss_cb_id,
-        l_data_ss_cb_id,
-        r_data_ss_cb_id,
-        rr_data_ss_cb_id,
         pad_val,
-        shard_shape[1],         // pad stick length == output stick size in nelems
+        input_npages,
         out_stick_nbytes,
-        (uint32_t) std::log2(out_stick_nbytes),
-        src_cb_id };     // output stick size in bytes
-    KernelHandle reader_kernel_id = CreateKernel(
+        is_block_sharded,
+    };
+
+    reader_ct_args[0] = 0;
+    reader_ct_args[1] = local_config_cb_id;
+    reader_ct_args[2] = 0;
+
+    KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/reader_unary_sharded_with_halo_v2.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_ct_args});
+
+    reader_ct_args[0] = padding_config_cb_id;
+    reader_ct_args[1] = 0;
+    reader_ct_args[2] = remote_config_cb_id;
+
+    KernelHandle reader_kernel_id1 = CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_ct_args});
 
-    // writer kernel
-    std::vector<uint32_t> writer_ct_args = reader_ct_args;
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_v2.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_ct_args});
+    auto override_runtime_arguments_callback =
+        [src_cb, out_cb, padding_config_cb, local_config_cb, remote_config_cb](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto padding_config_buffer = input_tensors.at(1).buffer();
+            auto local_config_buffer = input_tensors.at(2).buffer();
+            auto remote_config_buffer = input_tensors.at(3).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
-    if (!skip_untilize) {
-        // compute kernel
-        std::vector<uint32_t> compute_ct_args = {
-            nblocks_per_core,
-            ntiles_per_block };
-        std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
-        if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
-            log_debug(LogOp, "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}", ntiles_per_block, MAX_PACK_UNTILIZE_WIDTH);
-            compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
-        }
-        KernelHandle untilize_kernel_id = CreateKernel(
-            program,
-            compute_kernel,
-            all_cores,
-            ComputeConfig{
-                .compile_args = compute_ct_args});
-    }
+            UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
+            UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, padding_config_cb, *padding_config_buffer);
+            UpdateDynamicCircularBufferAddress(program, local_config_cb, *local_config_buffer);
+            UpdateDynamicCircularBufferAddress(program, remote_config_cb, *remote_config_buffer);
+        };
 
-    // runtime args for reader
-    std::vector<uint32_t> reader_rt_args = { input_npages };
-
-    // runtime args for writer
-    std::vector<uint32_t> writer_rt_args = {
-        input_npages,                                   // 0
-        0,  // has ll
-        0,  // ll noc.x
-        0,  // ll noc.y
-        0,  // has l
-        0,  // l noc.x                                  // 5
-        0,  // l noc.y
-        0,  // has r
-        0,  // r noc.x
-        0,  // r noc.y
-        0,  // has rr                                   // 10
-        0,  // rr noc.x
-        0,  // rr noc.y
-        0,  // local_pad_nsegments
-        0,  // local_data_src_start_offset
-        0,  // local_data_nsegments                     // 15
-        0,  // ll_data_src_start_offset
-        0,  // ll_data_nsegments
-        0,  // l_data_src_start_offset
-        0,  // l_data_nsegments
-        0,  // r_data_src_start_offset                  // 20
-        0,  // r_data_nsegments
-        0,  // rr_data_src_start_offset
-        0,  // rr_data_nsegments
-    };
-
-    log_debug(LogOp, "local_pad_nsegments: {}", local_pad_nsegments_per_core);
-    log_debug(LogOp, "local_data_nsegments: {}", local_data_nsegments_per_core);
-    log_debug(LogOp, "local_data_src_start_offsets: {}", local_data_src_start_offsets_per_core);
-    log_debug(LogOp, "ll_data_nsegments: {}", ll_data_nsegments_per_core);
-    log_debug(LogOp, "ll_data_src_start_offsets: {}", ll_data_src_start_offsets_per_core);
-    log_debug(LogOp, "l_data_nsegments: {}", l_data_nsegments_per_core);
-    log_debug(LogOp, "l_data_src_start_offsets: {}", l_data_src_start_offsets_per_core);
-    log_debug(LogOp, "r_data_nsegments: {}", r_data_nsegments_per_core);
-    log_debug(LogOp, "r_data_src_start_offsets: {}", r_data_src_start_offsets_per_core);
-    log_debug(LogOp, "rr_data_nsegments: {}", rr_data_nsegments_per_core);
-    log_debug(LogOp, "rr_data_src_start_offsets: {}", rr_data_src_start_offsets_per_core);
-
-    for (uint32_t core = 0; core < ncores_nhw; ++ core) {
-        writer_rt_args[13] = local_pad_nsegments_per_core[core];
-        writer_rt_args[14] = local_data_src_start_offsets_per_core[core];
-        writer_rt_args[15] = local_data_nsegments_per_core[core];
-        writer_rt_args[16] = ll_data_src_start_offsets_per_core[core];
-        writer_rt_args[17] = ll_data_nsegments_per_core[core];
-        writer_rt_args[18] = l_data_src_start_offsets_per_core[core];
-        writer_rt_args[19] = l_data_nsegments_per_core[core];
-        writer_rt_args[20] = r_data_src_start_offsets_per_core[core];
-        writer_rt_args[21] = r_data_nsegments_per_core[core];
-        writer_rt_args[22] = rr_data_src_start_offsets_per_core[core];
-        writer_rt_args[23] = rr_data_nsegments_per_core[core];
-
-        for (uint32_t core_c = 0; core_c < ncores_c; ++ core_c) {
-            CoreCoord core_coord;   // logical
-            if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                core_coord = { core, core_c };
-            } else {
-                core_coord = { core % ncores_x, core / ncores_x};
-            }
-            // left neighbor args
-            if (left_neighbor_core.count(core_coord) > 0) {
-                CoreCoord left_core = left_neighbor_core.at(core_coord);
-                CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
-                writer_rt_args[4] = 1;
-                writer_rt_args[5] = left_noc.x;
-                writer_rt_args[6] = left_noc.y;
-                if (left_neighbor_core.count(left_core) > 0) {
-                    CoreCoord left_left_core = left_neighbor_core.at(left_core);
-                    CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
-                    writer_rt_args[1] = 1;
-                    writer_rt_args[2] = left_left_noc.x;
-                    writer_rt_args[3] = left_left_noc.y;
-                } else {
-                    // no left-left neighbor
-                    writer_rt_args[1] = 0;
-                }
-            } else {
-                // no left neighbors
-                writer_rt_args[1] = 0;
-                writer_rt_args[4] = 0;
-            }
-            // right neighbor args
-            if (right_neighbor_core.count(core_coord) > 0) {
-                CoreCoord right_core = right_neighbor_core.at(core_coord);
-                CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
-                writer_rt_args[7] = 1;
-                writer_rt_args[8] = right_noc.x;
-                writer_rt_args[9] = right_noc.y;
-                if (right_neighbor_core.count(right_core) > 0) {
-                    CoreCoord right_right_core = right_neighbor_core.at(right_core);
-                    CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
-                    writer_rt_args[10] = 1;
-                    writer_rt_args[11] = right_right_noc.x;
-                    writer_rt_args[12] = right_right_noc.y;
-                } else {
-                    // no right-right neighbor
-                    writer_rt_args[10] = 0;
-                }
-            } else {
-                // no right neighbors
-                writer_rt_args[7] = 0;
-                writer_rt_args[10] = 0;
-            }
-
-            SetRuntimeArgs(program, reader_kernel_id, core_coord, writer_rt_args);
-            SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
-        }
-    }
-
-    auto override_runtime_arguments_callback = [
-        reader_kernel_id=reader_kernel_id,
-        writer_kernel_id=writer_kernel_id,
-        src_cb=src_cb,
-        out_cb=out_cb,
-        local_pad_ss_exists=local_pad_ss_exists,
-        ll_data_ss_exists=ll_data_ss_exists,
-        l_data_ss_exists=l_data_ss_exists,
-        local_data_ss_exists=local_data_ss_exists,
-        r_data_ss_exists=r_data_ss_exists,
-        rr_data_ss_exists=rr_data_ss_exists,
-        local_pad_ss_cb=local_pad_ss_cb,
-        ll_data_ss_cb=ll_data_ss_cb,
-        l_data_ss_cb=l_data_ss_cb,
-        local_data_ss_cb=local_data_ss_cb,
-        r_data_ss_cb=r_data_ss_cb,
-        rr_data_ss_cb=rr_data_ss_cb
-    ](
-        const void* operation,
-        Program& program,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        const std::vector<Tensor>& output_tensors
-    ) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-
-        // kernel config data
-        if (local_pad_ss_exists) {
-            auto local_pad_ss_buffer = input_tensors.at(1).buffer();
-            UpdateDynamicCircularBufferAddress(program, local_pad_ss_cb, *local_pad_ss_buffer);
-        }
-        if (ll_data_ss_exists) {
-            auto ll_data_ss_buffer = input_tensors.at(2).buffer();
-            UpdateDynamicCircularBufferAddress(program, ll_data_ss_cb, *ll_data_ss_buffer);
-        }
-        if (l_data_ss_exists) {
-            auto l_data_ss_buffer = input_tensors.at(3).buffer();
-            UpdateDynamicCircularBufferAddress(program, l_data_ss_cb, *l_data_ss_buffer);
-        }
-        if (local_data_ss_exists) {
-            auto local_data_ss_buffer = input_tensors.at(4).buffer();
-            UpdateDynamicCircularBufferAddress(program, local_data_ss_cb, *local_data_ss_buffer);
-        }
-        if (r_data_ss_exists) {
-            auto r_data_ss_buffer = input_tensors.at(5).buffer();
-            UpdateDynamicCircularBufferAddress(program, r_data_ss_cb, *r_data_ss_buffer);
-        }
-        if (rr_data_ss_exists) {
-            auto rr_data_ss_buffer = input_tensors.at(6).buffer();
-            UpdateDynamicCircularBufferAddress(program, rr_data_ss_cb, *rr_data_ss_buffer);
-        }
-    };
-
-    return { .program = std::move(program),
-             .override_runtime_arguments_callback = override_runtime_arguments_callback };
+    return {
+        .program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 void validate_untilize_with_halo_v2_config_tensor(const Tensor& tensor) {
@@ -609,12 +267,6 @@ void validate_untilize_with_halo_v2_config_tensor(const Tensor& tensor) {
 
 void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& local_pad_start_and_size = input_tensors.at(1);
-    const auto& ll_data_start_and_size = input_tensors.at(2);
-    const auto& l_data_start_and_size = input_tensors.at(3);
-    const auto& local_data_start_and_size = input_tensors.at(4);
-    const auto& r_data_start_and_size = input_tensors.at(5);
-    const auto& rr_data_start_and_size = input_tensors.at(6);
 
     // validate input data tensor
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -625,31 +277,6 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) cons
     }
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     TT_FATAL(input_tensor.shard_spec().has_value());
-
-    // validate all other config tensors
-    int32_t max_size = untilize_with_halo_v2_helpers::my_max(local_data_nsegments_per_core_);
-    log_debug(LogOp, "max local data nsegments: {}", max_size);
-    if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(local_data_start_and_size);
-
-    max_size = untilize_with_halo_v2_helpers::my_max(local_pad_nsegments_per_core_);
-    log_debug(LogOp, "max local pad nsegments: {}", max_size);
-    if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(local_pad_start_and_size);
-
-    max_size = untilize_with_halo_v2_helpers::my_max(ll_data_nsegments_per_core_);
-    log_debug(LogOp, "max ll data nsegments: {}", max_size);
-    if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(ll_data_start_and_size);
-
-    max_size = untilize_with_halo_v2_helpers::my_max(l_data_nsegments_per_core_);
-    log_debug(LogOp, "max l data nsegments: {}", max_size);
-    if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(l_data_start_and_size);
-
-    max_size = untilize_with_halo_v2_helpers::my_max(r_data_nsegments_per_core_);
-    log_debug(LogOp, "max r data nsegments: {}", max_size);
-    if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(r_data_start_and_size);
-
-    max_size = untilize_with_halo_v2_helpers::my_max(rr_data_nsegments_per_core_);
-    log_debug(LogOp, "max rr data nsegments: {}", max_size);
-    if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(rr_data_start_and_size);
 }
 
 std::vector<Shape> UntilizeWithHaloV2::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -698,39 +325,16 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
 
 operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input_tensor = inputs.at(0);
-    const auto& local_pad_start_and_size = inputs.at(1);
-    const auto& ll_data_start_and_size = inputs.at(2);
-    const auto& l_data_start_and_size = inputs.at(3);
-    const auto& local_data_start_and_size = inputs.at(4);
-    const auto& r_data_start_and_size = inputs.at(5);
-    const auto& rr_data_start_and_size = inputs.at(6);
-    const auto& padding_config = inputs.at(7);
-    const auto& local_config = inputs.at(8);
-    const auto& remote_config = inputs.at(9);
+    const auto& padding_config = inputs.at(1);
+    const auto& local_config = inputs.at(2);
+    const auto& remote_config = inputs.at(3);
     auto& output_tensor = outputs.at(0);
 
     return {untilize_with_halo_multi_core_v2(
         input_tensor,
-        local_pad_start_and_size,
-        ll_data_start_and_size,
-        l_data_start_and_size,
-        local_data_start_and_size,
-        r_data_start_and_size,
-        rr_data_start_and_size,
         pad_val_,
         ncores_nhw_,
         max_out_nsticks_per_core_,
-        local_pad_nsegments_per_core_,
-        ll_data_nsegments_per_core_,
-        l_data_nsegments_per_core_,
-        local_data_nsegments_per_core_,
-        r_data_nsegments_per_core_,
-        rr_data_nsegments_per_core_,
-        local_data_src_start_offsets_per_core_,
-        ll_data_src_start_offsets_per_core_,
-        l_data_src_start_offsets_per_core_,
-        r_data_src_start_offsets_per_core_,
-        rr_data_src_start_offsets_per_core_,
         padding_config,
         local_config,
         remote_config,
@@ -739,61 +343,22 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::ve
 
 Tensor untilize_with_halo_v2(
     const Tensor& input_tensor,
-    const Tensor& local_pad_start_and_size,
-    const Tensor& ll_data_start_and_size,
-    const Tensor& l_data_start_and_size,
-    const Tensor& local_data_start_and_size,
-    const Tensor& r_data_start_and_size,
-    const Tensor& rr_data_start_and_size,
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const std::vector<int32_t>& local_pad_nsegments_per_core,
-    const std::vector<int32_t>& ll_data_nsegments_per_core,
-    const std::vector<int32_t>& l_data_nsegments_per_core,
-    const std::vector<int32_t>& local_data_nsegments_per_core,
-    const std::vector<int32_t>& r_data_nsegments_per_core,
-    const std::vector<int32_t>& rr_data_nsegments_per_core,
-    const std::vector<int32_t>& local_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& ll_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& l_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& r_data_src_start_offsets_per_core,
-    const std::vector<int32_t>& rr_data_src_start_offsets_per_core,
     const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    TT_ASSERT(ncores_nhw == local_data_nsegments_per_core.size());
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
 
     return operation::run_without_autoformat(
-               UntilizeWithHaloV2{
-                   pad_val,
-                   ncores_nhw,
-                   max_out_nsticks_per_core,
-                   local_pad_nsegments_per_core,
-                   ll_data_nsegments_per_core,
-                   l_data_nsegments_per_core,
-                   local_data_nsegments_per_core,
-                   r_data_nsegments_per_core,
-                   rr_data_nsegments_per_core,
-                   local_data_src_start_offsets_per_core,
-                   ll_data_src_start_offsets_per_core,
-                   l_data_src_start_offsets_per_core,
-                   r_data_src_start_offsets_per_core,
-                   rr_data_src_start_offsets_per_core,
-                   mem_config},
+               UntilizeWithHaloV2{pad_val, ncores_nhw, max_out_nsticks_per_core, mem_config},
                {
                    input_tensor,
-                   local_pad_start_and_size,
-                   ll_data_start_and_size,
-                   l_data_start_and_size,
-                   local_data_start_and_size,
-                   r_data_start_and_size,
-                   rr_data_start_and_size,
                    padding_config,
                    local_config,
                    remote_config,
