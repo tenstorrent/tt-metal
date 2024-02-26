@@ -61,7 +61,7 @@ def get_log_locations():
         with open(PROFILER_LOG_LOCATIONS_RECORD, "r") as recordFile:
             for line in recordFile.readlines():
                 logLocation = line.strip()
-                if os.path.isdir(f"{TT_METAL_HOME}/{logLocation}"):
+                if os.path.isdir(f"{logLocation}") or os.path.isdir(f"{TT_METAL_HOME}/{logLocation}"):
                     logLocations.add(logLocation)
                     tmpSplit = logLocation.rsplit("_", 1)
                     if tmpSplit[-1] == "device":
