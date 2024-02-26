@@ -22,6 +22,7 @@
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_binary_api.h"
 #include "llk_math_unary_sfpu_api.h"
+#include "llk_math_eltwise_unary_sfpu_expm1.h"
 #include "llk_math_reduce_api.h"
 #define MATH(x) x
 #define MAIN math_main()
