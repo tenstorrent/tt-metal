@@ -563,6 +563,8 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
     #     ),
     # )
 
+    model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+    model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     if num_devices == 8:
         model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(1, 1),
@@ -575,7 +577,6 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             fused_activation=None,
             mcast_in0=False,
         )
-        model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
 
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
@@ -588,7 +589,30 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             fused_activation=None,
             mcast_in0=False,
         )
-        model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+    elif num_devices == 4:
+        model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+
+        model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 2),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
 
     model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
     model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"] = L1_MEMCFG

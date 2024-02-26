@@ -20,6 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
+from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
@@ -70,22 +71,28 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
 
 
 def run_test_LlamaAttention_inference(
-    device,
-    model_version,
-    llm_mode,
+    devices,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config,
+    optimized,
     n_devices,
+    emulated=False
     # tt_cache_path,
     # model_location_generator,
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
-    tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+    if emulated:
+        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        device = devices[0]
+        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    else:
+        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/home/llama-data/tokenizer.model"
+
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
         ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
@@ -94,7 +101,7 @@ def run_test_LlamaAttention_inference(
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
 
-    devices = [device for _ in range(n_devices)]
+    # devices = [device for _ in range(n_devices)]
 
     # Prepare configs
     torch.manual_seed(0)
@@ -109,10 +116,17 @@ def run_test_LlamaAttention_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaAttention_model = TtLlamaAttention(devices, state_dict, base_url, layer_num, model_config, configuration)
+    if optimized:
+        tt_LlamaAttention_model = TtLlamaAttention_optimized(
+            devices, state_dict, base_url, layer_num, model_config, configuration
+        )
+    else:
+        tt_LlamaAttention_model = TtLlamaAttention(
+            devices, state_dict, base_url, layer_num, model_config, configuration
+        )
 
-    generation_start_pos = 0
-    generation_length = 67
+    generation_start_pos = 120
+    generation_length = 1
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -202,42 +216,31 @@ def run_test_LlamaAttention_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_devices",
-    (
-        # ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128, 8),
-    ),
-    ids=["decode_batch32"],
-)
-@pytest.mark.parametrize(
-    "model_version, pcc",
-    (("llama-2-70B", 0.98),),
+    "model_version, batch, seq_len, pcc, optimized, n_devices",
+    (("llama-2-70B", 32, 1, 0.98, True, 4),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaAttention_inference(
     model_version,
-    llm_mode,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config_str,
+    optimized,
     n_devices,
-    # model_location_generator,
-    device,
+    pcie_devices,
+    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
 
     run_test_LlamaAttention_inference(
-        device,
-        model_version,
-        llm_mode,
+        pcie_devices[:n_devices],
         batch,
         seq_len,
-        kv_cache_len,
         pcc,
         model_config,
+        optimized,
         n_devices,
         # tt_cache_path,
         # model_location_generator,

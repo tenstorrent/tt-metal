@@ -124,7 +124,7 @@ class TtLlamaMLP_optimized(nn.Module):
             hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
                 hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
-        breakpoint()
+
         hidden_states = tt_lib.tensor.all_gather(
             hidden_states,
             dim=3,
