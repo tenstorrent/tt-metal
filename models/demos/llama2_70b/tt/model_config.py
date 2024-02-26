@@ -95,8 +95,9 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, num_devices=1, all_gather=True):
+def get_model_config(model_config_str, num_devices=4, all_gather=True):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
+    assert num_devices in (4, 8)
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
@@ -126,7 +127,13 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         "NUM_DEVICES": 4,
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 2,
-        "DEFAULT_CACHE_PATH": Path(f"models/demos/llama70b/datasets/"),
+        "DEFAULT_CACHE_PATH": Path(f"models/demos/llama2_70b/datasets/"),
+        "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
