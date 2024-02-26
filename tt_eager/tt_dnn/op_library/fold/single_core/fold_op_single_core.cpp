@@ -5,10 +5,6 @@
 #include "tt_dnn/op_library/fold/fold_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
-namespace {
-uint32_t single_row_all_channels_size(const Tensor &x) { return x.shape()[2] * x.shape()[3] * x.element_size(); }
-}  // namespace
-
 namespace tt::tt_metal {
 operation::ProgramWithCallbacks fold_single_core(
     const Tensor &input, const Tensor &output, uint8_t stride_h, uint8_t stride_w) {
@@ -68,9 +64,8 @@ operation::ProgramWithCallbacks fold_single_core(
         src_log2_unit_size,
     };
 
-    uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(pixel_size * stride_h * stride_w);
-    uint32_t dst_log2_unit_size =
-        src_unit_size_is_power_of_two ? (std::uint32_t)log2(pixel_size * stride_h * stride_w) : 0;
+    uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_dst_pixel_size);
+    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)log2(aligned_dst_pixel_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_dst0_index,
