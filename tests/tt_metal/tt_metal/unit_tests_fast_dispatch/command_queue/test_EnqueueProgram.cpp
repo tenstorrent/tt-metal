@@ -295,8 +295,9 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
-    // for (Device *device : devices_) {
+TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -306,15 +307,15 @@ TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
         auto dummy_reader_kernel = CreateKernel(
             program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        EnqueueProgram(device_->command_queue(), program, false);
-        Finish(device_->command_queue());
-    // }
+        EnqueueProgram(device->command_queue(), program, false);
+        Finish(device->command_queue());
+    }
 }
 
 }
 namespace single_core_tests {
 
-TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -322,272 +323,286 @@ TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
 
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config} };
 
-    // for (Device *device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device_, device_->command_queue(), config));
-    // }
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    }
 }
 
-// TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
-//     CoreRange cr({0, 0}, {0, 0});
-//     CoreRangeSet cr_set({cr});
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
 
-//     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-
-
-//     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
-
-//     for (Device *device : devices_) {
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
-//     }
-// }
-
-// TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
-//     CoreRange cr({0, 0}, {0, 0});
-//     CoreRangeSet cr_set({cr});
-
-//     CBConfig cb_config_0 = {.cb_id = 1, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_1 = {.cb_id = 0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_2 = {.cb_id = 24, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_3 = {.cb_id = 16, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
 
-//     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
+    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-//     for (Device *device : devices_) {
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
-//     }
-// }
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    }
+}
 
-// TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
 
-//     CoreRange cr({0, 0}, {0, 0});
-//     CoreRangeSet cr_set({cr});
-
-//     uint32_t intermediate_cb = 24;
-//     uint32_t out_cb = 16;
-//     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
-//         {intermediate_cb, tt::DataFormat::Float16_b},
-//         {out_cb, tt::DataFormat::Float16_b}
-//     };
-//     uint32_t num_bytes_for_df = 2;
-//     uint32_t single_tile_size = num_bytes_for_df * 1024;
-//     uint32_t num_tiles = 2;
-//     uint32_t cb_size = num_tiles * single_tile_size;
-
-//     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-//     CoreCoord core_coord(0,0);
-
-//     for (Device *device : devices_) {
-//         Program program;
-//         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
-//             .set_page_size(intermediate_cb, single_tile_size)
-//             .set_page_size(out_cb, single_tile_size);
-//         auto cb = CreateCircularBuffer(program, cr_set, cb_config);
-
-//         local_test_functions::initialize_dummy_kernels(program, cr_set);
-
-//         EnqueueProgram(device->command_queue(), program, false);
-
-//         Finish(device->command_queue());
-
-//         vector<uint32_t> cb_config_vector;
-
-//         tt::tt_metal::detail::ReadFromDeviceL1(
-//             device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
-//         uint32_t cb_addr = L1_UNRESERVED_BASE;
-//         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
-
-//         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
-//         bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
-//         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
-//         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
-//         EXPECT_TRUE(pass_intermediate);
-
-//         uint32_t out_index = out_cb * sizeof(uint32_t);
-//         bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
-//         bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
-//         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
-//         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
-//         EXPECT_TRUE(pass_out);
-//     }
-// }
+    CBConfig cb_config_0 = {.cb_id = 1, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_1 = {.cb_id = 0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_2 = {.cb_id = 24, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_3 = {.cb_id = 16, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
 
-// TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
-//     CoreRange cr({0, 0}, {0, 0});
-//     CoreRangeSet cr_set({cr});
+    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-//     CBConfig cb_config = {.cb_id=0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    }
+}
 
-//     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
+TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
 
-//     for (Device *device : devices_) {
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
-//     }
-// }
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
 
-// TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
-//     CoreRange cr({0, 0}, {0, 0});
-//     CoreRangeSet cr_set({cr});
+    uint32_t intermediate_cb = 24;
+    uint32_t out_cb = 16;
+    std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
+        {intermediate_cb, tt::DataFormat::Float16_b},
+        {out_cb, tt::DataFormat::Float16_b}
+    };
+    uint32_t num_bytes_for_df = 2;
+    uint32_t single_tile_size = num_bytes_for_df * 1024;
+    uint32_t num_tiles = 2;
+    uint32_t cb_size = num_tiles * single_tile_size;
 
-//     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    CoreCoord core_coord(0,0);
 
-//     for (Device *device : devices_) {
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
-//     }
-// }
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        Program program;
+        CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
+            .set_page_size(intermediate_cb, single_tile_size)
+            .set_page_size(out_cb, single_tile_size);
+        auto cb = CreateCircularBuffer(program, cr_set, cb_config);
 
-// TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-//     for (Device *device : devices_) {
-//         Program program;
+        local_test_functions::initialize_dummy_kernels(program, cr_set);
 
-//         CoreRange cr({0, 0}, {0, 0});
-//         CoreRangeSet cr_set({cr});
-//         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
-//         // added separately
-//         auto dummy_reader_kernel = CreateKernel(
-//             program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
-//             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        EnqueueProgram(device->command_queue(), program, false);
 
-//         EnqueueProgram(device->command_queue(), program, false);
-//         Finish(device->command_queue());
-//     }
-// }
+        Finish(device->command_queue());
 
-// TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
-//     for (Device *device : devices_) {
-//         Program program;
+        vector<uint32_t> cb_config_vector;
 
-//         CoreRange cr({0, 0}, {0, 0});
-//         CoreRangeSet cr_set({cr});
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+        uint32_t cb_addr = L1_UNRESERVED_BASE;
+        uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-//         auto compute_kernel_id = CreateKernel(
-//             program,
-//             "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
-//             cr_set,
-//             tt::tt_metal::ComputeConfig{});
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
+        bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
+        EXPECT_TRUE(pass_intermediate);
+
+        uint32_t out_index = out_cb * sizeof(uint32_t);
+        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
+        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
+        bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
+        EXPECT_TRUE(pass_out);
+    }
+}
 
 
-//         std::vector<uint32_t> initial_runtime_args = {101, 202};
-//         SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
+TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
 
-//         EnqueueProgram(device->command_queue(), program, false);
-//         Finish(device->command_queue());
+    CBConfig cb_config = {.cb_id=0, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
 
-//         std::vector<uint32_t> increments = {87, 216};
-//         std::vector<uint32_t> written_args;
-//         CoreCoord logical_core(0,0);
-//         tt::tt_metal::detail::ReadFromDeviceL1(
-//             device, logical_core, TRISC_L1_ARG_BASE, initial_runtime_args.size() * sizeof(uint32_t), written_args);
-//         for(int i=0; i<initial_runtime_args.size(); i++){
-//             bool got_expected_result = (written_args[i] == (initial_runtime_args[i] + increments[i]));
-//             EXPECT_TRUE(got_expected_result);
-//         }
-//     }
-// }
+    DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
-// TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
-//     CoreRange cr({0, 0}, {0, 0});
-//     CoreRangeSet cr_set({cr});
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+    }
+}
 
-//     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-//     for (Device *device : devices_) {
-//         local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config);
-//     }
-// }
+TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+
+    DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        Program program;
+
+        CoreRange cr({0, 0}, {0, 0});
+        CoreRangeSet cr_set({cr});
+        // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+        // added separately
+        auto dummy_reader_kernel = CreateKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+        EnqueueProgram(device->command_queue(), program, false);
+        Finish(device->command_queue());
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, ComputeRuntimeArgs) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        Program program;
+
+        CoreRange cr({0, 0}, {0, 0});
+        CoreRangeSet cr_set({cr});
+
+        auto compute_kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
+            cr_set,
+            tt::tt_metal::ComputeConfig{});
+
+
+        std::vector<uint32_t> initial_runtime_args = {101, 202};
+        SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
+
+        EnqueueProgram(device->command_queue(), program, false);
+        Finish(device->command_queue());
+
+        std::vector<uint32_t> increments = {87, 216};
+        std::vector<uint32_t> written_args;
+        CoreCoord logical_core(0,0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device, logical_core, TRISC_L1_ARG_BASE, initial_runtime_args.size() * sizeof(uint32_t), written_args);
+        for(int i=0; i<initial_runtime_args.size(); i++){
+            bool got_expected_result = (written_args[i] == (initial_runtime_args[i] + increments[i]));
+            EXPECT_TRUE(got_expected_result);
+        }
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config);
+    }
+}
 
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-// TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
-//     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
+    CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-//     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-//     for(int i=0; i<NUM_CIRCULAR_BUFFERS; i++)
-//         cb_config_vector[i].cb_id = i;
+    std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
+    for(int i=0; i<NUM_CIRCULAR_BUFFERS; i++)
+        cb_config_vector[i].cb_id = i;
 
-//     for (Device *device : devices_) {
-//         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-//         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//         CoreRangeSet cr_set({cr});
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
 
-//         DummyProgramMultiCBConfig config = {
-//             .cr_set = cr_set, .cb_config_vector = cb_config_vector};
+        DummyProgramMultiCBConfig config = {
+            .cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
-//     }
-// }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    }
+}
 
-// TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
-//     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+    CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-//     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-//     for(int i=0; i<NUM_CIRCULAR_BUFFERS; i++)
-//         cb_config_vector[i].cb_id = i;
+    std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
+    for(int i=0; i<NUM_CIRCULAR_BUFFERS; i++)
+        cb_config_vector[i].cb_id = i;
 
-//     for (Device *device : devices_) {
-//         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-//         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//         CoreRangeSet cr_set({cr});
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
 
-//         DummyProgramMultiCBConfig config = {
-//             .cr_set = cr_set, .cb_config_vector = cb_config_vector  };
+        DummyProgramMultiCBConfig config = {
+            .cr_set = cr_set, .cb_config_vector = cb_config_vector  };
 
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
-//     }
-// }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+    }
+}
 
 
-// TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
-//     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
-//     CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+    CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
+    CBConfig cb_config_3 = {.cb_id = 3, .num_pages = 4, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-//     std::vector <CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
+    std::vector <CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
-//     for (Device *device : devices_) {
-//         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-//         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//         CoreRangeSet cr_set({cr});
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
 
-//         DummyProgramMultiCBConfig config = {
-//             .cr_set = cr_set, .cb_config_vector = cb_config_vector  };
+        DummyProgramMultiCBConfig config = {
+            .cr_set = cr_set, .cb_config_vector = cb_config_vector  };
 
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
-//     }
-// }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(device, device->command_queue(), config));
+    }
+}
 
-// TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
-//     for (Device *device : devices_) {
-//         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-//         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//         CoreRangeSet cr_set({cr});
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
 
-//         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
-//     }
-// }
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
+    }
+}
 
-// TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
-//     for (Device *device : devices_) {
-//         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
+    for (Device *device : devices_) {
+        if (device->is_mmio_capable()) { continue; }
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-//         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-//         CoreRangeSet cr_set({cr});
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
 
-//         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-//         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config));
-//     }
-// }
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config));
+    }
+}
 
 }  // end namespace multicore_tests
 

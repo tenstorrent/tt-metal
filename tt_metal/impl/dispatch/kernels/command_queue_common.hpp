@@ -21,6 +21,8 @@ struct db_cb_config_t {
 };
 static constexpr uint32_t l1_db_cb_addr_offset = sizeof(db_cb_config_t);
 
+static constexpr uint32_t CQ_DISPATCHER_CB_CONFIG_BASE = CQ_CONSUMER_CB_BASE + l1_db_cb_addr_offset;
+
 template <uint32_t cmd_base_address, uint32_t data_buffer_size>
 FORCE_INLINE uint32_t get_command_slot_addr(bool db_buf_switch) {
     static constexpr uint32_t command0_start = cmd_base_address;
@@ -36,7 +38,7 @@ void db_acquire(volatile uint32_t* semaphore, uint64_t noc_encoding) {
 }
 
 // Local refers to the core that is calling this function
-tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr) {
     // TODO: remove multiply here
     // db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
     db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr);
@@ -44,7 +46,7 @@ tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr, bool db_buf
 }
 
 // Remote refers to any other core on the same chip
-tt_l1_ptr db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool db_buf_switch) {
+tt_l1_ptr db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr) {
     // TODO: remove multiply here
     db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr);
     return db_cb_config;

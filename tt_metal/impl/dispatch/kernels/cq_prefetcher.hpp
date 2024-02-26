@@ -281,11 +281,13 @@ class ProgramEventBuffer {
     uint32_t event_addr;
     uint32_t completion_queue_start_addr;
     uint32_t host_completion_queue_write_addr;
+    uint64_t push_noc_encoding;
 
-    ProgramEventBuffer(uint32_t event_addr, uint32_t completion_queue_start_addr, uint32_t host_completion_queue_write_addr) {
+    ProgramEventBuffer(uint32_t event_addr, uint32_t completion_queue_start_addr, uint32_t host_completion_queue_write_addr, uint64_t push_noc_encoding) {
         this->event_addr = event_addr;
         this->completion_queue_start_addr = completion_queue_start_addr;
         this->host_completion_queue_write_addr = host_completion_queue_write_addr;
+        this->push_noc_encoding = push_noc_encoding;
     }
 
     void push_event(uint32_t event) {
@@ -297,6 +299,7 @@ class ProgramEventBuffer {
         this->num_events++;
     }
 
+    template <bool write_to_completion_queue>
     void write_events() {
         uint32_t event_addr;
         if (this->num_events) {
@@ -304,11 +307,41 @@ class ProgramEventBuffer {
         }
         while (this->num_events) {
             uint32_t event = (this->buffer >> 32);
-            DPRINT << "EVENT SENT: " << event << ENDL();
-            completion_queue_reserve_back(32); // Need to clean up
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
-            write_event(event_addr);
-            completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
+            if constexpr (write_to_completion_queue) {
+                DPRINT << "Write " << event << " back to completion queue" << ENDL();
+                completion_queue_reserve_back(32); // Need to clean up
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
+                write_event(event_addr);
+                completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
+                DPRINT << "Done write " << event << " back to completion queue" << ENDL();
+            } else {
+                DPRINT << "Send " << event << " back to MMIO" << ENDL();
+                uint64_t my_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
+                // todo: get this passed in
+                constexpr uint32_t completion_cmd_eth_src_base = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
+
+                volatile tt_l1_ptr uint32_t* push_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)); // todo: pass this into program event bufer
+
+                volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(L1_UNRESERVED_BASE); // todo: pass in cmd start addresss
+                volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
+
+                uint32_t curr_event = header->event;
+                uint32_t curr_num_buffer_transfers = header->num_buffer_transfers;
+
+                // update command with the event and set num buffer transfers to 0 so completion path gets a program completion command
+                header->event = event;
+                header->num_buffer_transfers = 0;
+
+                // Relay command from REMOTE_PULL_AND_PUSH to SRC router on the completion path
+                wait_consumer_space_available(push_semaphore_addr);
+                relay_command<L1_UNRESERVED_BASE, completion_cmd_eth_src_base, 0>(false, push_noc_encoding); // SRC router has one cmd slot
+                update_producer_consumer_sync_semaphores(my_noc_encoding, this->push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
+
+                DPRINT << "Done sending " << event << " back to MMIO" << ENDL();
+                // reset changes to command
+                header->event = curr_event;
+                header->num_buffer_transfers = curr_num_buffer_transfers;
+            }
             this->buffer = this->buffer << 32;
             this->num_events--;
         }
@@ -345,7 +378,7 @@ struct PullAndRelayCfg {
     };
 };
 
-template <PullAndRelayType src_type, PullAndRelayType dst_type>
+template <PullAndRelayType src_type, PullAndRelayType dst_type, bool write_to_completion_queue>
 void pull_and_relay(
     PullAndRelayCfg& src_pr_cfg,
     PullAndRelayCfg& dst_pr_cfg,
@@ -359,7 +392,8 @@ void pull_and_relay(
     uint32_t num_pages_to_read = min(num_pages, src_pr_cfg.num_pages_to_read);
     uint32_t num_pages_to_write = min(num_pages, dst_pr_cfg.num_pages_to_write);
 
-    DPRINT << "NUM PAGES TO RELAY " << num_pages << ENDL();
+    DPRINT << "Num pages: " << num_pages << ENDL();
+
     // DPRINT << "READ PTR BEFORE RELAY: " << get_read_ptr(0) << ENDL();
     while (num_writes_completed != num_pages) {
         if (cb_producer_space_available(num_pages_to_read) and num_reads_issued < num_pages) {
@@ -373,6 +407,7 @@ void pull_and_relay(
                 DPRINT << " pull and relay " << HEX() << " addr " <<  (uint32_t)src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg << DEC() << " data " <<
                     src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->num_pages << " " << src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->rd_ptr_16B <<
                     " " << src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << " " << num_pages_to_read << ENDL();
+                DPRINT << "Waiting for " << num_pages_to_read << ENDL();
                 multicore_cb_wait_front(src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg, num_pages_to_read);
 
                 uint32_t src_addr = (src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->rd_ptr_16B << 4);
@@ -380,6 +415,8 @@ void pull_and_relay(
 
                 noc_async_read(src_noc_addr, get_write_ptr(0), (src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_read);
                 noc_async_read_barrier();
+
+                DPRINT << "Read " << num_pages_to_read  << " into " <<  get_write_ptr(0) << ENDL();
 
                 multicore_cb_pop_front(
                     src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
@@ -430,7 +467,7 @@ void pull_and_relay(
                 uint32_t dst_addr = dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << 4;
                 uint64_t dst_noc_addr = dst_pr_cfg.cb_buff_cfg.remote_noc_encoding | dst_addr;
 
-                DPRINT << "WRITING " << num_pages_to_write << " TO DISPATCH ADDR: " << dst_addr << ENDL();
+                DPRINT << "Writing " << num_pages_to_write << " to dispatch addr: " << dst_addr << ENDL();
                 noc_async_write(get_read_ptr(0), dst_noc_addr, (dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_write);
                 multicore_cb_push_back(
                     dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
@@ -447,7 +484,7 @@ void pull_and_relay(
                 */
                 DPRINT << "Wait consumer idle write to buffer" << ENDL();
                 wait_consumer_idle<2>(dst_pr_cfg.dispatch_synchronization_semaphore);
-                dst_pr_cfg.program_event_buffer.write_events();
+                dst_pr_cfg.program_event_buffer.write_events<write_to_completion_queue>();
                 // Drain the program event buffer
                 dst_pr_cfg.buff_cfg.buffer.noc_async_write_buffer(get_read_ptr(0), dst_pr_cfg.buff_cfg.page_id, num_pages_to_write);
                 dst_pr_cfg.buff_cfg.page_id += num_pages_to_write;

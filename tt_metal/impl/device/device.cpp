@@ -446,12 +446,12 @@ void Device::compile_command_queue_programs() {
                 tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_reader_location, num_tensix_command_slots); // semaphore between push&pull kernel and dispatch kernel
 
                 if (device_id == this->id()) {
-                    std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr, cmd_start_tensix, consumer_data_buffer_size_tensix};
+                    std::vector<uint32_t> consumer_compile_args = {cmd_start_tensix, consumer_data_buffer_size_tensix};
 
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
                         "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
-                        dispatch_location,   // this should be dispatch location on L chip
+                        dispatch_location,
                         tt::tt_metal::DataMovementConfig {
                             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                             .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -579,6 +579,7 @@ void Device::compile_command_queue_programs() {
         std::cout << "Remote pull and push core: " << remote_processor_physical_core.str() << std::endl;
         std::cout << "DST router (R): " << physical_eth_router_remote_dst.str() << std::endl;
         std::cout << "SRC router (R): " << physical_eth_router_remote_src.str() << std::endl;
+        std::cout << "Remote dispatcher: " << dispatch_physical_core.str() << std::endl;
 
         std::vector<uint32_t> remote_pull_and_push_compile_args = {
             0, // host_issue_queue_read_ptr_addr,
@@ -623,6 +624,25 @@ void Device::compile_command_queue_programs() {
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, 0);
         tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, remote_processor_location, num_tensix_command_slots); // semaphore between push&pull kernel and dispatch kernel
 
+        std::vector<uint32_t> dispatch_compile_args = {cmd_start_tensix, consumer_data_buffer_size_tensix};
+
+        std::map<string, string> remote_dispatch_defines = {
+            {"DISPATCH_KERNEL", "1"},
+            {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
+            {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
+        };
+
+        tt::tt_metal::CreateKernel(
+            *command_queue_program_ptr,
+            "tt_metal/impl/dispatch/kernels/cq_dispatcher.cpp",
+            dispatch_location,
+            tt::tt_metal::DataMovementConfig {
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = dispatch_compile_args,
+                .defines = remote_dispatch_defines});
+
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_location, 0);
     }
     detail::CompileProgram(this, *command_queue_program_ptr);
     this->command_queue_programs.push_back(std::move(command_queue_program_ptr));

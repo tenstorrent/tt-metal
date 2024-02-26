@@ -11,7 +11,7 @@
 
 using namespace tt::tt_metal;
 
-TEST_F(CommandQueueSingleCardFixture, TestEventsWrittenToCompletionQueueInOrder) {
+TEST_F(CommandQueueFixture, TestEventsWrittenToCompletionQueueInOrder) {
     size_t num_buffers = 100;
     uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));

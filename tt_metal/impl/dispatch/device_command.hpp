@@ -21,11 +21,11 @@ struct CommandHeader {
     uint32_t is_program_buffer = 0;
     uint32_t stall = 0;
     uint32_t page_size = 0;
-    uint32_t producer_cb_size = 0;
+    uint32_t pull_and_push_cb_size = 0;
     uint32_t event;
-    uint32_t consumer_cb_size = 0;
-    uint32_t producer_cb_num_pages = 0;
-    uint32_t consumer_cb_num_pages = 0;
+    uint32_t router_cb_size = 0;
+    uint32_t pull_and_push_cb_num_pages = 0;
+    uint32_t router_cb_num_pages = 0;
     uint32_t num_pages = 0;
     uint32_t num_runtime_arg_pages = 0;
     uint32_t num_cb_config_pages = 0;
@@ -35,7 +35,8 @@ struct CommandHeader {
     uint32_t num_go_signal_unicast_pages = 0;
     uint32_t issue_data_size = 0;
     uint32_t completion_data_size = 0;
-    uint32_t producer_consumer_transfer_num_pages = 0;
+    uint32_t program_transfer_num_pages = 0;
+    uint32_t router_transfer_num_pages = 0;
     uint32_t buffer_type = 0;
     uint32_t sharded_buffer_num_cores = 0;
     uint32_t new_issue_queue_size = 0;
@@ -104,13 +105,13 @@ class DeviceCommand {
 
     void set_page_size(const uint32_t page_size);
 
-    void set_producer_cb_size(const uint32_t cb_size);
+    void set_pull_and_push_cb_size(const uint32_t cb_size);
 
-    void set_consumer_cb_size(const uint32_t cb_size);
+    void set_router_cb_size(const uint32_t cb_size);
 
-    void set_producer_cb_num_pages(const uint32_t cb_num_pages);
+    void set_pull_and_push_cb_num_pages(const uint32_t cb_num_pages);
 
-    void set_consumer_cb_num_pages(const uint32_t cb_num_pages);
+    void set_router_cb_num_pages(const uint32_t cb_num_pages);
 
     void set_num_pages(const uint32_t num_pages);
 
@@ -130,7 +131,9 @@ class DeviceCommand {
 
     void set_completion_data_size(const uint32_t data_size);
 
-    void set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages);
+    void set_program_transfer_num_pages(const uint32_t program_transfer_num_pages);
+
+    void set_router_transfer_num_pages(const uint32_t router_transfer_num_pages);
 
     void set_is_event_sync(const uint16_t is_event_sync);
     void set_event_sync_core_x(const uint8_t event_sync_core_x);

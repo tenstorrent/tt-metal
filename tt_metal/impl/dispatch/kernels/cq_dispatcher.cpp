@@ -8,9 +8,8 @@
 void kernel_main() {
     bool db_buf_switch = false;
 
-    constexpr uint32_t host_finish_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t cmd_base_address = get_compile_time_arg_val(1);
-    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(2);
+    constexpr uint32_t cmd_base_address = get_compile_time_arg_val(0);
+    constexpr uint32_t consumer_data_buffer_size = get_compile_time_arg_val(1);
 
     volatile uint32_t* db_semaphore_addr = reinterpret_cast<volatile uint32_t*>(SEMAPHORE_BASE);
 
@@ -26,23 +25,26 @@ void kernel_main() {
         db_acquire(db_semaphore_addr, consumer_noc_encoding);
         uint32_t num_workers = header->num_workers;
         uint32_t num_pages = header->num_pages;
-        uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+        uint32_t program_transfer_num_pages = header->program_transfer_num_pages;
 
-        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
-        const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
+        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE);
+        const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_DISPATCHER_CB_CONFIG_BASE);
         uint32_t completion_data_size = header->completion_data_size;
         reset_dispatch_message_addr();
+        DPRINT << "Dispatcher got program" << ENDL();
         write_and_launch_program(
             db_cb_config,
             remote_db_cb_config,
             (CommandHeader*)command_ptr,
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(program_transfer_start_addr),
             producer_noc_encoding,
-            producer_consumer_transfer_num_pages);
+            program_transfer_num_pages);
+        DPRINT << "Dispatcher launched program" << ENDL();
         wait_for_program_completion(num_workers);
+        DPRINT << "Dispatcher done program" << ENDL();
 
         // notify producer that it has completed a command
-        noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
+        noc_semaphore_inc(producer_noc_encoding | get_semaphore(2), 1);
         noc_async_write_barrier(); // Barrier for now
 
         db_buf_switch = not db_buf_switch;

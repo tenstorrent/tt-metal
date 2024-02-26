@@ -18,10 +18,10 @@ void kernel_main() {
 
     const uint8_t buffer_id = sender_is_issue_path? (uint8_t)CQTunnelPath::ISSUE : (uint8_t)CQTunnelPath::COMPLETION;
     const uint8_t other_buffer_id = sender_is_issue_path? (uint8_t)CQTunnelPath::COMPLETION : (uint8_t)CQTunnelPath::ISSUE;
-    db_cb_config_t *eth_src_db_cb_config = sender_is_issue_path ? get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE, false) :
-                                                                  get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE, false);
-    db_cb_config_t *eth_dst_db_cb_config = sender_is_issue_path ? get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE, false) :
-                                                                  get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE, false);
+    db_cb_config_t *eth_src_db_cb_config = sender_is_issue_path ? get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE) :
+                                                                  get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
+    db_cb_config_t *eth_dst_db_cb_config = sender_is_issue_path ? get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE) :
+                                                                  get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
 
     int i = 0;
    // while(true) {

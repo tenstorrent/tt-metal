@@ -8,6 +8,7 @@
 //#include "../dataflow_api.h"
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
+#include "erisc.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_prefetcher.hpp"
@@ -37,7 +38,6 @@ struct erisc_info_t {
 
 erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 routing_info_t *routing_info = (routing_info_t *)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
-volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 
 // Context Switch Config
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
@@ -45,8 +45,6 @@ tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::a
 extern uint32_t __erisc_jump_table;
 volatile uint32_t *RtosTable =
     (volatile uint32_t *)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
-
-void (*rtos_context_switch_ptr)();
 
 // FD configs
 // Sempahore(0) syncing on src e.g. remote issue q reader, remote signaller
@@ -56,12 +54,6 @@ static constexpr uint32_t data_buffer_size = eth_l1_mem::address_map::ERISC_L1_T
                                              (DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t));
 
 namespace internal_ {
-FORCE_INLINE
-void __attribute__((section("code_l1"))) risc_context_switch() {
-    ncrisc_noc_full_sync();
-    rtos_context_switch_ptr();
-    ncrisc_noc_counters_init();
-}
 
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
@@ -106,9 +98,6 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     }
     noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
 }
-
-FORCE_INLINE
-void disable_erisc_app() { flag_disable[0] = 0; }
 
 FORCE_INLINE
 void send_fd_packets(uint8_t buffer_id) {
@@ -186,43 +175,6 @@ void eth_db_acquire(volatile uint32_t *semaphore, uint64_t noc_encoding) {
     }
 }
 
-template <uint32_t producer_cmd_base_addr, uint32_t producer_data_buffer_size, uint32_t consumer_cmd_base_addr, uint32_t consumer_data_buffer_size>
-FORCE_INLINE
-void eth_program_consumer_cb(
-    db_cb_config_t* db_cb_config,
-    const db_cb_config_t* remote_db_cb_config,
-    bool db_buf_switch,
-    uint64_t consumer_noc_encoding,
-    uint32_t num_pages,
-    uint32_t page_size,
-    uint32_t cb_size) {
-    // This sets up multi-core CB where the writer is an eth core and consumer is tensix core
-    // The data is at different L1 addresses in the producer and consumer
-    //  but both producer and consumer use the read pointer to determine location of data in their local L1
-    // Producer uses the read pointer when sending to consumer and uses the write pointer to determine L1 address of data in consumer
-    // Consumer uses the read pointer to read in data
-    // To account for differences in data location, the consumer is sent cb config with the "correct" rd pointer from its POV
-    //  and after sending, producer sets it back to its local L1 address
-
-    uint32_t cb_start_producer_addr = 0;//get_db_buf_addr<producer_cmd_base_addr, producer_data_buffer_size>(db_buf_switch);
-    uint32_t cb_start_consumer_addr = 0;//get_db_buf_addr<consumer_cmd_base_addr, consumer_data_buffer_size>(db_buf_switch);
-
-    db_cb_config->ack = 0;
-    db_cb_config->recv = 0;
-    db_cb_config->num_pages = num_pages;
-    db_cb_config->page_size_16B = page_size >> 4;
-    db_cb_config->total_size_16B = cb_size >> 4;
-    db_cb_config->rd_ptr_16B = cb_start_consumer_addr >> 4;    // first set the rd_ptr to value that conumer needs to see
-    db_cb_config->wr_ptr_16B = cb_start_consumer_addr >> 4;
-
-    noc_async_write(
-        (uint32_t)(db_cb_config), consumer_noc_encoding | (uint32_t)(remote_db_cb_config), sizeof(db_cb_config_t));
-    noc_async_write_barrier();  // barrier for now
-    // db cb config has been sent to consumer, now read address can be set to expected value for eth producer
-    db_cb_config->rd_ptr_16B = cb_start_producer_addr >> 4;
-    noc_async_write_barrier();  // barrier for now
-}
-
 // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
 template<uint8_t buffer_id, uint8_t other_buffer_id, bool sender_is_issue_path>
 FORCE_INLINE
@@ -235,7 +187,7 @@ void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
      uint32_t eth_router_noc_encoding = uint32_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
 
     bool db_buf_switch = false;
-    const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, false);
+    const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE);
 
 
             noc_semaphore_inc(
@@ -247,7 +199,7 @@ void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
                 reinterpret_cast<volatile tt_l1_ptr uint32_t *>(command_start_addr);
             volatile tt_l1_ptr CommandHeader *header = (CommandHeader *)command_ptr;
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
-            uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
+            uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
             bool is_program = header->is_program_buffer;
             bool fwd_path = header->fwd_path;
             command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
@@ -275,7 +227,7 @@ void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
                     continue;
                 }
 
-                uint32_t num_to_write = min(num_pages, producer_consumer_transfer_num_pages);
+                uint32_t num_to_write = min(num_pages, router_transfer_num_pages);
 
                 uint32_t num_pages_tunneled = 0;
                 while (num_pages_tunneled != num_pages) {
@@ -288,7 +240,7 @@ void eth_tunnel_src_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
                     multicore_eth_cb_pop_front(
                         eth_db_cb_config, remote_db_cb_config, ((uint64_t)relay_noc_encoding << 32), num_to_write);
                     num_pages_tunneled += num_to_write;
-                    num_to_write = min(num_pages - num_pages_tunneled, producer_consumer_transfer_num_pages);
+                    num_to_write = min(num_pages - num_pages_tunneled, router_transfer_num_pages);
                 }
                 command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
             }
@@ -316,7 +268,7 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
         reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(1));
 
     bool db_buf_switch = false;
-    const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE,false);
+    const db_cb_config_t *remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE);
     uint32_t eth_router_noc_encoding = uint32_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
     constexpr uint32_t command_start_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + buffer_id * eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
 
@@ -335,9 +287,7 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
                 reinterpret_cast<volatile tt_l1_ptr uint32_t *>(command_start_addr);
             volatile tt_l1_ptr CommandHeader *header = (CommandHeader *)command_ptr;
             uint32_t num_buffer_transfers = header->num_buffer_transfers;
-            uint32_t producer_consumer_transfer_num_pages = header->producer_consumer_transfer_num_pages;
-            uint32_t consumer_cb_num_pages = header->consumer_cb_num_pages;
-            uint32_t consumer_cb_size = header->consumer_cb_size;
+            uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
             uint32_t page_size = header->page_size;
             bool is_program = header->is_program_buffer;
             bool fwd_path = header->fwd_path;
@@ -357,8 +307,6 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
             // Ack because pull and push kernel signalled that it got the command
             internal_::ack_fd_packet(buffer_id);
 
-           // uint32_t l1_consumer_fifo_limit_16B = (get_cb_start_address<true>() + consumer_cb_size) >> 4;
-
             for (uint32_t i = 0; i < num_buffer_transfers; i++) {
                 const uint32_t num_pages = command_ptr[2];
                 const uint32_t src_buf_type = command_ptr[4];
@@ -372,8 +320,8 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
                     continue;
                 }
 
-                // producer_consumer_transfer_num_pages is the total num of data pages that could fit in a FD packet
-                uint32_t num_pages_to_signal = min(num_pages, producer_consumer_transfer_num_pages);
+                // router_transfer_num_pages is the total num of data pages that could fit in a FD packet
+                uint32_t num_pages_to_signal = min(num_pages, router_transfer_num_pages);
                 uint32_t num_pages_transferred = 0;
 
                 while (num_pages_transferred != num_pages) {
@@ -402,7 +350,7 @@ void eth_tunnel_dst_forward_one_cmd(db_cb_config_t *eth_db_cb_config, uint32_t r
                     internal_::ack_fd_packet(buffer_id); // signal to SRC router that more data can be sent
 
                     num_pages_transferred += num_pages_to_signal;
-                    num_pages_to_signal = min(num_pages - num_pages_transferred, producer_consumer_transfer_num_pages);
+                    num_pages_to_signal = min(num_pages - num_pages_transferred, router_transfer_num_pages);
                 }
                 command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;  // jump to buffer transfer region
             }
