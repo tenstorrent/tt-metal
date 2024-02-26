@@ -330,7 +330,7 @@ def node_to_statement(string_io, graph, node, variable, input_variables, prefix)
             arguments_string.append(", ".join(function_kwargs))
         arguments_string = ", ".join(arguments_string)
 
-        if torchtrail_name is "":
+        if torchtrail_name == "":
             string_io.write(f"    {variable} = {module_name}(config, {arguments_string}, parameters=parameters)")
         else:
             string_io.write(

@@ -267,8 +267,10 @@ def register_ttl_operation_as_ttnn_operation(name, function):
         output = function(*function_args, **function_kwargs)
         if isinstance(output, (list, tuple)):
             return type(output)([ttnn.Tensor(element) for element in output])
-        else:
+        elif isinstance(output, ttnn.experimental.tensor.Tensor):
             return ttnn.Tensor(output)
+        else:
+            raise TypeError(f"Expected Tensor, got {type(output)}")
 
     wrapper = register_operation(
         name=name,

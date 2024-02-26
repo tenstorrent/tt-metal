@@ -93,20 +93,26 @@ def test_transformer_concatenate_heads(
 @pytest.mark.parametrize("sequence_size", [1024])
 @pytest.mark.parametrize("num_heads", [4, 16])
 @pytest.mark.parametrize("head_size", [64, 128])
+@pytest.mark.parametrize("num_kv_heads", [None])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 def test_transformer_split_query_key_value_and_split_heads(
-    batch_size, num_heads, sequence_size, head_size, input_dtype, input_memory_config, *, device
+    batch_size, num_heads, sequence_size, head_size, num_kv_heads, input_dtype, input_memory_config, *, device
 ):
     torch.manual_seed(0)
 
-    input_shape = (batch_size, sequence_size, num_heads * head_size * 3)
+    if num_kv_heads is not None:
+        input_shape = (batch_size, sequence_size, (num_heads + num_kv_heads * 2) * head_size)
+    else:
+        input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(torch_input_tensor, num_heads=num_heads)
+    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+        torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
+    )
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -117,13 +123,106 @@ def test_transformer_split_query_key_value_and_split_heads(
     )
 
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor, num_heads=num_heads
+        input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
     )
-    query_tensor = ttnn.from_device(query_tensor)
     query_tensor = ttnn.to_torch(query_tensor)
-    key_tensor = ttnn.from_device(key_tensor)
     key_tensor = ttnn.to_torch(key_tensor)
-    value_tensor = ttnn.from_device(value_tensor)
+    value_tensor = ttnn.to_torch(value_tensor)
+
+    assert_with_pcc(torch_query_tensor, query_tensor, 0.999)
+    assert_with_pcc(torch_key_tensor, key_tensor, 0.999)
+    assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
+
+
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("sequence_size", [1024])
+@pytest.mark.parametrize("num_heads", [4, 16])
+@pytest.mark.parametrize("head_size", [64, 128])
+@pytest.mark.parametrize("num_kv_heads", [None])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
+    batch_size, num_heads, sequence_size, head_size, num_kv_heads, input_dtype, input_memory_config, *, device
+):
+    torch.manual_seed(0)
+
+    input_shape = (batch_size, sequence_size, num_heads * head_size)
+    kv_input_shape = (batch_size, sequence_size, num_heads * 2 * head_size)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_kv_input_tensor = torch_random(kv_input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    (
+        torch_query_tensor,
+        torch_key_tensor,
+        torch_value_tensor,
+    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+        torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    kv_input_tensor = ttnn.from_torch(
+        torch_kv_input_tensor,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
+        input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
+    )
+    query_tensor = ttnn.to_torch(query_tensor)
+    key_tensor = ttnn.to_torch(key_tensor)
+    value_tensor = ttnn.to_torch(value_tensor)
+
+    assert_with_pcc(torch_query_tensor, query_tensor, 0.999)
+    assert_with_pcc(torch_key_tensor, key_tensor, 0.999)
+    assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
+
+
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("sequence_size", [384])
+@pytest.mark.parametrize("num_heads", [71])
+@pytest.mark.parametrize("head_size", [64])
+@pytest.mark.parametrize("num_kv_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_falcon_split_query_key_value_and_split_heads(
+    batch_size, num_heads, sequence_size, head_size, num_kv_heads, input_dtype, input_memory_config, *, device
+):
+    torch.manual_seed(0)
+
+    if num_kv_heads is not None:
+        input_shape = (batch_size, sequence_size, (num_heads + num_kv_heads * 2) * head_size)
+    else:
+        input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    (
+        torch_query_tensor,
+        torch_key_tensor,
+        torch_value_tensor,
+    ) = ttnn.transformer._torch_split_query_key_value_and_split_heads(
+        torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=input_dtype,
+        memory_config=input_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
+        input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
+    )
+    query_tensor = ttnn.to_torch(query_tensor)
+    key_tensor = ttnn.to_torch(key_tensor)
     value_tensor = ttnn.to_torch(value_tensor)
 
     assert_with_pcc(torch_query_tensor, query_tensor, 0.999)

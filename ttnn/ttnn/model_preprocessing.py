@@ -18,21 +18,21 @@ import ttnn
 from ttnn.tracer import trace, visualize
 
 
-def preprocess_linear_weight(weight, *, dtype):
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
     weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout)
     return weight
 
 
-def preprocess_linear_bias(bias, *, dtype):
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT):
     bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout)
     return bias
 
 
-def preprocess_layernorm_parameter(parameter, *, dtype):
+def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT):
     parameter = parameter.reshape((1, -1))
-    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=layout)
     return parameter
 
 
@@ -161,8 +161,10 @@ def repr_parameters(file, parameters, indentation=""):
             file.write(",\n" if index < len(parameters) - 1 else "\n")
         file.write(indentation)
         file.write("]")
-    elif isinstance(parameters, (ttnn.Tensor, torch.Tensor)):
-        file.write(repr(parameters.shape))
+    elif isinstance(parameters, ttnn.Tensor):
+        file.write(f"ttnn.Tensor(shape={parameters.shape}, layout={parameters.layout}, dtype={parameters.dtype})")
+    elif isinstance(parameters, torch.Tensor):
+        file.write(f"torch.Tensor(shape={parameters.shape}, dtype={parameters.dtype})")
     elif isinstance(parameters, ModuleArgs):
         if not parameters:
             file.write("{}")
