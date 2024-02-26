@@ -126,9 +126,21 @@ std::vector<Shape> NlpCreateHeads::compute_output_shapes(const std::vector<Tenso
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
-    const Shape q_output_shape = {input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
-    const Shape v_output_shape = {input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
-    const Shape k_output_shape = this->transpose_k_heads ? (Shape) {input_shape[0], this->num_kv_heads, this->head_dim, input_shape[2]} : v_output_shape;
+
+    auto sequence_length = input_shape[2];
+    auto head_dim = this->head_dim;
+    if (sequence_length % TILE_HEIGHT != 0) {
+        sequence_length = (sequence_length / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    }
+    if (head_dim % TILE_WIDTH != 0) {
+        head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
+    }
+
+    const Shape q_output_shape = {input_shape[0], this->num_q_heads, sequence_length, head_dim};
+    const Shape v_output_shape = {input_shape[0], this->num_kv_heads, sequence_length, head_dim};
+    const Shape k_output_shape = this->transpose_k_heads
+                                     ? (Shape){input_shape[0], this->num_kv_heads, head_dim, sequence_length}
+                                     : v_output_shape;
     output_shape_vec = {q_output_shape, k_output_shape, v_output_shape};
 
     return output_shape_vec;
@@ -209,7 +221,14 @@ std::vector<Shape> NlpConcatHeads::compute_output_shapes(const std::vector<Tenso
     const auto input_shape = input_tensor.get_legacy_shape();
     output_shape_vec = {(Shape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
 
-    return output_shape_vec;
+    auto num_heads = input_shape[1];
+    auto sequence_length = input_shape[2];
+    auto head_dim = input_shape[3];
+
+    auto hidden_dim = num_heads * head_dim;
+
+    const Shape output_shape = {input_shape[0], 1, sequence_length, hidden_dim};
+    return {output_shape};
 }
 
 std::vector<Tensor> NlpConcatHeads::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

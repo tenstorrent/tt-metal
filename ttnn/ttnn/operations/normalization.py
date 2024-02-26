@@ -269,9 +269,13 @@ def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_groups):
 def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
     import torch
 
+    print("start copy from dev to host")
     input_tensor = ttnn.from_device(input_tensor)
+    print("done")
     input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    print("done untilize")
     input_tensor = ttnn.to_torch(input_tensor)
+    print("done to torch")
 
     if weight is not None:
         weight = ttnn.from_device(weight)

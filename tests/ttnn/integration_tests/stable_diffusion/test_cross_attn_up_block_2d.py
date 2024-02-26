@@ -12,11 +12,19 @@ from torch import nn
 from models.utility_functions import tt_to_torch_tensor, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attn_upblock import (
-    cross_attention_upblock2d,
+    cross_attention_upblock2d as ttnn_cross_attention_upblock2d,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
+    cross_attention_upblock2d as tt2_ttnn_cross_attention_upblock2d,
+)
+
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 
 from ttnn.model_preprocessing import preprocess_model_parameters
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input_new,
+    post_process_output,
+)
 
 
 def ttnn_to_torch(input):
@@ -127,7 +135,7 @@ def test_cross_attn_up_block_2d_256x256(
     add_upsample = True
     if index == 3:
         add_upsample = False
-    op = cross_attention_upblock2d(
+    op = ttnn_cross_attention_upblock2d(
         hidden_state,
         res_hidden_states_tuple,
         parameters,
@@ -223,6 +231,7 @@ def test_cross_attn_up_block_2d_512x512(
     cross_attention_kwargs = None
     upsample_size = None
     attention_mask = None
+    reader_patterns_cache = {}
 
     # execute pytorch
     torch_output = unet_upblock(
@@ -234,6 +243,9 @@ def test_cross_attn_up_block_2d_512x512(
         cross_attention_kwargs=cross_attention_kwargs,
         upsample_size=upsample_size,
     )
+
+    N, _, H, W = input_shape
+    model = tt2_ttnn_cross_attention_upblock2d(device, parameters, reader_patterns_cache, N, H, W)
 
     timestep = (None,)
     class_labels = (None,)
@@ -259,6 +271,18 @@ def test_cross_attn_up_block_2d_512x512(
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
     hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    res0 = ttnn.from_torch(res0, ttnn.bfloat16)
+    res0 = ttnn.to_layout(res0, ttnn.TILE_LAYOUT)
+    res0 = ttnn.to_device(res0, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res1 = ttnn.from_torch(res1, ttnn.bfloat16)
+    res1 = ttnn.to_layout(res1, ttnn.TILE_LAYOUT)
+    res1 = ttnn.to_device(res1, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res2 = ttnn.from_torch(res2, ttnn.bfloat16)
+    res2 = ttnn.to_layout(res2, ttnn.TILE_LAYOUT)
+    res2 = ttnn.to_device(res2, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -270,11 +294,15 @@ def test_cross_attn_up_block_2d_512x512(
     add_upsample = True
     if index == 3:
         add_upsample = False
-    reader_patterns_cache = {}
-    op = cross_attention_upblock2d(
+    hidden_state = pre_process_input_new(device, hidden_state)
+    res_hidden_states_tuple = (
+        pre_process_input_new(device, res0),
+        pre_process_input_new(device, res1),
+        pre_process_input_new(device, res2),
+    )
+    op = model(
         hidden_state,
         res_hidden_states_tuple,
-        parameters,
         in_channels,
         prev_output_channel,
         out_channels,
@@ -287,7 +315,6 @@ def test_cross_attn_up_block_2d_512x512(
         resnet_pre_norm=True,
         output_scale_factor=1.0,
         add_upsample=add_upsample,
-        device=device,
         temb=temb,
         upsample_size=upsample_size,
         config=config,
@@ -306,7 +333,6 @@ def test_cross_attn_up_block_2d_512x512(
         attn_num_head_channels=attn_num_head_channels,
         attention_mask=attention_mask,
         cross_attention_dim=cross_attention_dim,
-        reader_patterns_cache=reader_patterns_cache,
     )
 
     op = ttnn_to_torch(op)
