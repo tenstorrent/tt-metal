@@ -678,6 +678,23 @@ std::vector<Tensor> squared_difference_bw(const Tensor& grad, const Tensor& inpu
 }
 
 
+// torch reference 
+// - name: ldexp(Tensor self, Tensor other) -> Tensor
+//   self: 2^other
+//   other: self * ln(2) * (2^other)
+// # M_LN2 = ln(2)= 0.693147180s559945309417
+std::vector<Tensor> _ldexp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor tpow_o = mul_unary(exp(other, output_mem_config), M_LN2, output_mem_config);
+    grad_tensor.emplace_back(tpow_o);
+    Tensor result = mul(input, mul_unary(tpow_o, M_LN2, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> ldexp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _ldexp_bw)(grad, input, other, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
