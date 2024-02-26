@@ -261,27 +261,24 @@ class TtMistralAttention(nn.Module):
             keys = ttnn.to_memory_config(keys, memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"])
 
             attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                q_heads.value,
-                keys.value,
+                q_heads,
+                keys,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
                 # output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), #self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 # output_dtype=ttnn.bfloat16,  # Must be BFLOAT16
             )  # seqlen, n_heads, batch, cache_len + seqlen
 
-            attn = ttnn.transformer.attention_softmax_(
-                ttnn.Tensor(attn), head_size=self.head_dim, attention_mask=attn_mask
-            )
+            attn = ttnn.transformer.attention_softmax_(attn, head_size=self.head_dim, attention_mask=attn_mask)
 
             print("GQA2:", attn.shape, values.shape)
 
             attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                attn.value,
-                values.value,
+                attn,
+                values,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
                 # output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )  # seqlen, n_heads, batch, dhead
-            attn_output = ttnn.Tensor(attn_output)
 
             ttnn.deallocate(attn)
             ttnn.deallocate(keys)
