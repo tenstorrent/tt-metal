@@ -535,7 +535,6 @@ def eltwise_add(
     x,
     y,
     *args,
-    scalar,
     device,
     dtype,
     layout,
@@ -546,7 +545,7 @@ def eltwise_add(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.add(t0, t1, alpha=scalar)
+    t2 = ttnn.add(t0, t1)
     return ttnn_tensor_to_torch(t2, output_mem_config)
 
 
@@ -1144,5 +1143,119 @@ def eltwise_polygamma(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.polygamma(t0, k, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_recip(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.reciprocal(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_sqrt(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.sqrt(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_square(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.square(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def tril(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.tril(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def triu(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.triu(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_tanhshrink(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.tanhshrink(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_threshold(
+    x,
+    *args,
+    threshold,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.threshold(t0, threshold, value, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1, output_mem_config)
