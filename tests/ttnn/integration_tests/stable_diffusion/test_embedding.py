@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
 
 
 def test_embeddings(
@@ -24,6 +24,7 @@ def test_embeddings(
     time_embedding = model.time_embedding
 
     parameters = preprocess_model_parameters(initialize_model=lambda: time_embedding, device=device)
+    model = TtTimestepEmbedding(parameters=parameters)
 
     input = torch.randn([1, 1, 2, 320])
     torch_output = time_embedding(input.squeeze(0).squeeze(0))
@@ -32,7 +33,7 @@ def test_embeddings(
     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    ttnn_output = TtTimestepEmbedding(input, parameters=parameters)
+    ttnn_output = model(input)
     ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)

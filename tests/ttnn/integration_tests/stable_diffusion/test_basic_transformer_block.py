@@ -10,8 +10,15 @@ import ttnn
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block as ttnn_basic_transformer_block,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_transformer_block import (
+    basic_transformer_block as tt2_ttnn_basic_transformer_block,
+)
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input_new,
+    post_process_output,
+)
 
 
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
@@ -161,22 +168,22 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     torch_output = basic_transformer(hidden_states.squeeze(0), encoder_hidden_states.squeeze(0))
 
     parameters = preprocess_model_parameters(initialize_model=lambda: basic_transformer, device=device)
+    model = tt2_ttnn_basic_transformer_block(device, parameters)
 
-    hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16)
-    hidden_states = ttnn.to_device(hidden_states, device)
-    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, dtype=ttnn.bfloat16)
-    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device)
+    hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    hidden_states = ttnn.to_device(hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
+    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    ttnn_output = ttnn_basic_transformer_block(
+    ttnn_output = model(
         hidden_states=hidden_states,
         encoder_hidden_states=encoder_hidden_states,
         timestep=timestep,
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs,
         class_labels=class_labels,
-        parameters=parameters,
         config=config,
-        device=device,
         attention_head_dim=attention_head_dim,
     )
 

@@ -16,6 +16,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     post_process_output,
     permute_conv_parameters,
 )
+import time
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -189,7 +190,7 @@ class resnetBlock2D:
             padding=(1, 1),
             dtype=ttnn.bfloat8_b,
             device=device,
-            use_1d_systolic_array=False,
+            use_1d_systolic_array=False,  # must be block sharded. height sharding will break code to determine GN shard config below
             batch_size=batch_size,
             input_height=conv2_input_height,
             input_width=conv2_input_width,
@@ -297,6 +298,7 @@ class resnetBlock2D:
         down=False,
         use_in_shortcut: Optional[bool] = None,
         dtype: Optional[ttnn.DataType] = None,
+        dump_to_file=False,
     ):
         assert groups == self.groups
         if non_linearity == "mish":
@@ -305,11 +307,6 @@ class resnetBlock2D:
             nonlinearity = ttnn.silu
         out_channels = in_channels if out_channels is None else out_channels
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))  # permute from NCHW to NHWC
-        input_tensor = ttnn.reshape(
-            input_tensor, (1, 1, self.batch_size * self.input_height * self.input_width, in_channels)
-        )
         hidden_states = input_tensor
         # convert input tensor to tile layout for eltwise add in the end
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
@@ -496,10 +493,4 @@ class resnetBlock2D:
 
         ttnn.deallocate(input_tensor)
         ttnn.deallocate(hidden_states)
-        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(
-            output_tensor, (self.batch_size, self.input_height, self.input_width, out_channels)
-        )
-        output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))  # permute from NHWC to NCHW
-        output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
         return output_tensor

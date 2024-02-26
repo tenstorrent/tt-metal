@@ -77,6 +77,7 @@ class downblock2d:
                 up=False,
                 down=False,
                 dtype=dtype,
+                dump_to_file=i == 0,
             )
 
             output_states += (hidden_states,)

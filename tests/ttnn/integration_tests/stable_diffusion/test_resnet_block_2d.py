@@ -13,6 +13,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    pre_process_input,
+    post_process_output,
+)
+
 
 def ttnn_to_torch(input):
     input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
@@ -176,13 +181,11 @@ def test_resnet_block_2d_512x512(
         device, parameters, reader_patterns_cache, batch_size, input_height, input_width, group_norm_on_device=True
     )
 
-    # input = torch.permute(input, (0, 2, 3, 1))
+    input = torch.permute(input, (0, 2, 3, 1))
     input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
-    # input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
+    input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     # input = ttnn.to_memory_config(input, resnet_block.conv1s[0].conv.input_sharded_memory_config)
 
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
@@ -208,17 +211,17 @@ def test_resnet_block_2d_512x512(
         #     "grid_size": resnet_block.conv1s[0].conv.grid_size,
         # },
     )
-    # ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.L1_MEMORY_CONFIG)
+    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.L1_MEMORY_CONFIG)
     ttnn_output = ttnn_to_torch(ttnn_output)
-    # ttnn_output = torch.reshape(
-    #     ttnn_output,
-    #     (
-    #         batch_size,
-    #         input_height,
-    #         input_width,
-    #         out_channels if out_channels is not None else in_channels,
-    #     ),
-    # )
-    # ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+    ttnn_output = torch.reshape(
+        ttnn_output,
+        (
+            batch_size,
+            input_height,
+            input_width,
+            out_channels if out_channels is not None else in_channels,
+        ),
+    )
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
 
     assert_with_pcc(torch_output, ttnn_output, pcc=0.98)

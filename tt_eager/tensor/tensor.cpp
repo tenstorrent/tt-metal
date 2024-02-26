@@ -411,7 +411,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
         TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
     } else if (layout == Layout::ROW_MAJOR) {
         // Require alignment for now
-        TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % ADDRESS_ALIGNMENT == 0);
+        TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % 16 == 0);
     }
 
     auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
