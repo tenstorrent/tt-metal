@@ -17,8 +17,11 @@ void Fold::validate(const std::vector<Tensor> &input_tensors) const {
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Folding of sharded tensors is not supported.");
 
-    TT_FATAL(input_tensor.get_legacy_shape()[1] % stride_h == 0);
-    TT_FATAL(input_tensor.get_legacy_shape()[2] % stride_w == 0);
+    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "Reshape input tensor to [1 , 1, NHW, C].");
+    TT_FATAL(input_tensor.get_legacy_shape()[1] == 1, "Reshape input tensor to [1 , 1, NHW, C].");
+    TT_FATAL(input_tensor.get_legacy_shape()[2] % width == 0);
+    TT_FATAL(input_tensor.get_legacy_shape()[2] % (stride_h * stride_w) == 0);
+    TT_FATAL((input_tensor.get_legacy_shape()[-1] * input_tensor.element_size()) % 16 == 0, "Expect input tensor's pages to be multiples of 16 bytes.");
 }
 
 std::vector<Shape> Fold::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -26,9 +29,9 @@ std::vector<Shape> Fold::compute_output_shapes(const std::vector<Tensor> &input_
 
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
     return {{
-        input_shape[0],
-        input_shape[1] / stride_h,
-        input_shape[2] / stride_w,
+        1,
+        1,
+        input_shape[2] / (stride_h * stride_w) + pad_rows,
         input_shape[3] * stride_h * stride_w,
     }};
 }
@@ -46,11 +49,13 @@ operation::ProgramWithCallbacks Fold::create_program(
     const Tensor &input_tensor = input_tensors.at(0);
     Tensor &output_tensor = output_tensors.at(0);
 
-    return fold_single_core(input_tensor, output_tensor, stride_h, stride_w);
+    return fold_single_core(input_tensor, output_tensor, width, stride_h, stride_w, pad_rows);
 }
 
-Tensor fold(const Tensor &input_tensor_a, uint8_t stride_h, uint8_t stride_w) {
-    return operation::run(Fold{.stride_h = stride_h, .stride_w = stride_w}, {input_tensor_a}).at(0);
+Tensor fold(const Tensor &input_tensor_a, uint32_t width, uint8_t stride_h, uint8_t stride_w, uint32_t pad_rows) {
+    return operation::run(
+               Fold{.width = width, .stride_h = stride_h, .stride_w = stride_w, .pad_rows = pad_rows}, {input_tensor_a})
+        .at(0);
 }
 
 }  // namespace tt::tt_metal

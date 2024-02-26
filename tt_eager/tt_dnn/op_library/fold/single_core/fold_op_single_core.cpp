@@ -5,13 +5,9 @@
 #include "tt_dnn/op_library/fold/fold_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
-namespace {
-uint32_t single_row_all_channels_size(const Tensor &x) { return x.get_legacy_shape()[2] * x.get_legacy_shape()[3] * x.element_size(); }
-}  // namespace
-
 namespace tt::tt_metal {
 operation::ProgramWithCallbacks fold_single_core(
-    const Tensor &input, const Tensor &output, uint8_t stride_h, uint8_t stride_w) {
+    const Tensor &input, const Tensor &output, uint32_t width, uint8_t stride_h, uint8_t stride_w, uint32_t pad_rows) {
     Program program = CreateProgram();
 
     CoreRange cores({0, 0}, {0, 0});
@@ -23,11 +19,12 @@ operation::ProgramWithCallbacks fold_single_core(
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
     uint32_t chunk_size = stride_w * pixel_size;
-    uint32_t row_size = input.get_legacy_shape()[-2] * pixel_size;
+    uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
     uint32_t dst_row_size = stride_h * row_size;
-    uint32_t num_dst_rows = input.get_legacy_shape()[0] * input.get_legacy_shape()[1] / stride_h;
-    uint32_t cb_pages_per_dst_row = stride_h * input.get_legacy_shape()[-2];
+    uint32_t num_dst_rows = input.get_legacy_shape()[2] / (width * stride_h);
+    uint32_t cb_pages_per_dst_row = stride_h * width;
+
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = output.device();
@@ -40,7 +37,7 @@ operation::ProgramWithCallbacks fold_single_core(
     // Setup CB.
     uint32_t cb_src0_index = CB::c_in0;
     uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
-    tt_metal::CircularBufferConfig cb_src0_config(
+    tt_metal::CircularBufferConfig cb_src0_config(2 *
         cb_pages_per_dst_row * aligned_pixel_size, {{cb_src0_index, cb_data_format}});
     cb_src0_config.set_page_size(cb_src0_index, aligned_pixel_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, cores, cb_src0_config);
@@ -68,9 +65,8 @@ operation::ProgramWithCallbacks fold_single_core(
         src_log2_unit_size,
     };
 
-    uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(pixel_size * stride_h * stride_w);
-    uint32_t dst_log2_unit_size =
-        src_unit_size_is_power_of_two ? (std::uint32_t)log2(pixel_size * stride_h * stride_w) : 0;
+    uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_dst_pixel_size);
+    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)log2(aligned_dst_pixel_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_dst0_index,
@@ -101,12 +97,14 @@ operation::ProgramWithCallbacks fold_single_core(
         pixel_size,
         aligned_pixel_size,
         stride_w * aligned_pixel_size,
-        input.get_legacy_shape()[-2] * aligned_pixel_size,
+        width * aligned_pixel_size,
         stride_h,
         stride_w,
         num_dst_rows,
-        input.get_legacy_shape()[-2] / stride_w,
+        width / stride_w,
         cb_pages_per_dst_row,
+        pad_rows,
+        aligned_dst_pixel_size / 32,
     };
 
     SetRuntimeArgs(program, writer_kernel_id, cores, writer_kernel_args);
