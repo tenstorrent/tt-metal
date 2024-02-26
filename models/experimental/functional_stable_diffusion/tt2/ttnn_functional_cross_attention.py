@@ -4,57 +4,96 @@
 
 import math
 import ttnn
+import torch
+import tt_lib as ttl
+from ttnn.operations.core import squeeze, unsqueeze_to_4D
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import is_tile_dim_alligned
+
+
+def ttnn_to_torch(input):
+    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+    input = ttnn.from_device(input)
+    input = ttnn.to_torch(input)
+    return input
+
+
+def concatenate_qkv(q, k, v):
+    dim = -1
+    device = k.device
+    memory_config = ttnn.get_memory_config(k)
+
+    if q is not None:
+        q = ttnn_to_torch(q)
+        assert is_tile_dim_alligned(q.shape[dim])
+
+    k = ttnn_to_torch(k)
+    v = ttnn_to_torch(v)
+
+    assert is_tile_dim_alligned(k.shape[dim])
+    assert is_tile_dim_alligned(v.shape[dim])
+
+    if q is not None:
+        qkv = torch.cat([q, k, v], dim=dim)
+    else:
+        qkv = torch.cat([k, v], dim=dim)
+    qkv = ttnn.from_torch(qkv, ttnn.bfloat16)
+    qkv = ttnn.to_layout(qkv, layout=ttnn.TILE_LAYOUT)
+    qkv = ttnn.to_device(qkv, device, memory_config=memory_config)
+    return qkv
 
 
 class cross_attention:
     def __init__(self, device, parameters):
+        self.fused_qkv = parameters.to_q.weight.shape[0] == parameters.to_k.weight.shape[0]
+        if self.fused_qkv:
+            parameters["qkv"] = ttnn.model_preprocessing.ParameterDict()
+            parameters.qkv["weight"] = concatenate_qkv(
+                parameters.to_q.weight, parameters.to_k.weight, parameters.to_v.weight
+            )
+
+            for key in ["to_q", "to_k", "to_v"]:
+                assert "bias" not in parameters[key]
+                # del parameters[key]
+        else:
+            parameters["kv"] = ttnn.model_preprocessing.ParameterDict()
+            parameters.kv["weight"] = concatenate_qkv(None, parameters.to_k.weight, parameters.to_v.weight)
+
         self.device = device
         self.parameters = parameters
 
-    def prepare_attention_mask(self, attention_mask, target_length, heads=8):
-        head_size = heads
-        if attention_mask is None:
-            return attention_mask
+        scale = torch.ones((1, 1)) * 40**-0.5
+        self.scale_40 = ttnn.from_torch(scale, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-        if attention_mask.shape[-1] != target_length:
-            assert False, "Attention Mask has always been None, This is not implemented!"
+        scale = torch.ones((1, 1)) * 80**-0.5
+        self.scale_80 = ttnn.from_torch(scale, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-        return attention_mask
+        scale = torch.ones((1, 1)) * 160**-0.5
+        self.scale_160 = ttnn.from_torch(scale, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-    def concatenate_heads(self, tensor):
-        batch_size, heads, seq_len, dim = tensor.shape
-        # TILE_LAYOUT is not compatible with tensor shape, hence we used ROW_MAJOR_LAYOUT.
-        tensor = ttnn.to_layout(tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tensor = ttnn.permute(tensor, (0, 2, 1, 3))
-        tensor = ttnn.reshape(tensor, (batch_size, seq_len, dim * heads))
-        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
-        return tensor
+        self.scales = {40: self.scale_40, 80: self.scale_80, 160: self.scale_160}
 
-    def split_heads(self, tensor, heads=8):
-        tensor = ttnn.unsqueeze_to_4D(
-            tensor
-        )  # TODO: This is not needed in general but too of SD code needs to be modified
-        *batch_sizes, seq_len, dim = tensor.shape  # TODO: this should be 3D with batch_size as first dim
-        batch_size = math.prod(batch_sizes)  # TODO:
-        # TILE_LAYOUT is not compatible with tensor shape, hence we used ROW_MAJOR_LAYOUT.
-        tensor = ttnn.to_layout(tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tensor = ttnn.reshape(tensor, (batch_size, seq_len, heads, dim // heads))
-        tensor = ttnn.permute(tensor, (0, 2, 1, 3))
-        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
-        return tensor
+        attention_mask = torch.ones((1, 1, 1, 256)) * -1e9
+        attention_mask[:, :, :, :77] = 0
 
-    def get_attention_scores(self, query, key, attention_mask=None, scale=None, device=None):
-        t_key = ttnn.permute(key, (0, 1, 3, 2))
-        temp = ttnn.matmul(query, t_key)
+        # if key.shape[-1] == 512:
+        #     attention_mask[:, :, :, 256 : 256 + 77] = 0
 
-        attention_scores = ttnn.mul(temp, scale)
+        self.attention_mask = ttnn.from_torch(
+            attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+
+    def get_attention_scores(self, query, t_key, attention_mask=None, scale=None, device=None):
+        # t_key = ttnn.permute(key, (0, 1, 3, 2))
+        attention_scores = ttnn.matmul(query, t_key)
+
+        attention_scores = ttnn.mul(attention_scores, scale)
 
         if attention_mask is not None:
             attention_scores = ttnn.add(attention_scores, attention_mask)
 
-        attention_probs = ttnn.softmax(attention_scores, dim=-1)
+        attention_scores = ttnn.softmax(attention_scores, dim=-1)
 
-        return attention_probs
+        return attention_scores
 
     def __call__(
         self,
@@ -69,39 +108,58 @@ class cross_attention:
         upcast_softmax: bool = False,
         cross_attention_kwargs={},
     ):
-        _, _, sequence_length, _ = hidden_states.shape
-        attention_mask = self.prepare_attention_mask(attention_mask, sequence_length)
-        query_weight = self.parameters.to_q.weight
+        assert dim_head in self.scales
+        if len(hidden_states.shape) == 4:
+            hidden_states = squeeze(hidden_states, 0)
+        if encoder_hidden_states and len(encoder_hidden_states.shape) == 4:
+            encoder_hidden_states = squeeze(encoder_hidden_states, 0)
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        query = ttnn.matmul(hidden_states, query_weight)
+        if self.fused_qkv:
+            qkv_out = ttnn.matmul(
+                hidden_states,
+                self.parameters.qkv.weight,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+            )
+            query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv_out,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_heads=heads,
+            )
+            del qkv_out
+        else:
+            q_proj = ttnn.linear(hidden_states, self.parameters.to_q.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+            kv_proj = ttnn.linear(encoder_hidden_states, self.parameters.kv.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+            query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(q_proj, kv_proj, num_heads=heads)
+            del kv_proj
+            del q_proj
 
-        query = self.split_heads(query)
-        encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
+            assert self.attention_mask.shape[-1] == key.shape[-1]
+            attention_mask = self.attention_mask
 
-        key_weight = self.parameters.to_k.weight
-        encoder_hidden_states = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
-        key = ttnn.matmul(encoder_hidden_states, key_weight)
+        attention_probs = self.get_attention_scores(
+            query, key, attention_mask, scale=self.scales[dim_head], device=self.device
+        )
 
-        value_weight = self.parameters.to_v.weight
-        value = ttnn.matmul(encoder_hidden_states, value_weight)
-
-        key = self.split_heads(key, heads=heads)
-
-        value = self.split_heads(value, heads=heads)
-
-        scale = dim_head**-0.5
-        attention_probs = self.get_attention_scores(query, key, attention_mask, scale=scale, device=self.device)
+        padding_needed = attention_probs.shape[-1] - value.shape[-2]
+        if padding_needed > 0:
+            value = ttnn.pad(value, ((0, padding_needed), (0, 0)), 0)
 
         hidden_states = ttnn.matmul(attention_probs, value)
 
-        hidden_states = self.concatenate_heads(hidden_states)
+        hidden_states = ttnn.transformer.concatenate_heads(
+            hidden_states, memory_config=ttnn.get_memory_config(hidden_states)
+        )
 
-        out_weight = self.parameters.to_out[0].weight
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.parameters.to_out[0].weight,
+            bias=self.parameters.to_out[0].bias,
+            memory_config=ttnn.get_memory_config(hidden_states),
+        )
 
-        hidden_states = ttnn.matmul(hidden_states, out_weight)
-        if self.parameters.to_out[0].bias is not None:
-            out_bias = self.parameters.to_out[0].bias
-            hidden_states = ttnn.add(hidden_states, out_bias)
+        if len(hidden_states.shape) == 3:
+            hidden_states = unsqueeze_to_4D(hidden_states)
 
         return ttnn.unsqueeze_to_4D(hidden_states)  # TODO: This wouldn't be needed if the input was 3D ...

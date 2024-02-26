@@ -200,6 +200,21 @@ def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float =
     return output_tensor
 
 
+def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_groups):
+    import torch
+
+    def find_ceil_divisible_by_32(n):
+        return ((n + 31) // 32) * 32
+
+    values_per_chunk = num_channels // num_groups
+    zeros_to_insert = find_ceil_divisible_by_32(values_per_chunk) - values_per_chunk
+    input_tensor = input_tensor.view(-1, values_per_chunk)
+    input_tensor = torch.nn.functional.pad(input_tensor, (0, zeros_to_insert))
+    input_tensor = input_tensor.flatten()
+    input_tensor = input_tensor[: num_channels + zeros_to_insert * (num_channels // values_per_chunk)]
+    return input_tensor.reshape(1, 1, -1, 32)
+
+
 def _torch_group_norm(input_tensor: ttnn.Tensor, *, num_groups, epsilon=1e-05, weight=None, bias=None, **_):
     import torch
 

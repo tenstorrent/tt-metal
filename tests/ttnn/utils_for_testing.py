@@ -13,10 +13,10 @@ from models.utility_functions import comp_pcc
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)
-    messages.append("Expected")
-    messages.append(str(expected_pytorch_result))
-    messages.append("Actual")
-    messages.append(str(actual_pytorch_result))
+    # messages.append("Expected")
+    # messages.append(str(expected_pytorch_result))
+    # messages.append("Actual")
+    # messages.append(str(actual_pytorch_result))
     return "\n".join(messages)
 
 
