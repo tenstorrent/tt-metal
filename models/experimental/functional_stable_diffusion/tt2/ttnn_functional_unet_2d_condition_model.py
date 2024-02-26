@@ -30,6 +30,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
     pre_process_input_new,
+    post_process_output,
 )
 
 
@@ -308,6 +309,14 @@ class UNet2DConditionModel:
 
         # 3.down
         sample_copied_to_dram = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
+        sample_copied_to_dram = post_process_output(
+            self.device,
+            sample_copied_to_dram,
+            self.conv_in.batch_size,
+            self.conv_in.output_height,
+            self.conv_in.output_width,
+            self.conv_in.out_channels,
+        )
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
