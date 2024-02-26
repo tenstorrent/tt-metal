@@ -92,7 +92,7 @@ void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>&
         op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
     }
 
-    op_profiler::append_math_fidelities(program);
+    op_profiler::append_kernel_info(program);
     op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
 }
 
@@ -252,12 +252,6 @@ std::vector<Tensor> run_device_operation(
             auto device = detail::get_device(input_tensors, optional_input_tensors);
             using T = std::decay_t<decltype(program)>;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>> ) {
-                if (!operation::skip_profile) {
-                    auto do_profile = op_profiler::get_profiler_flag();
-                    if (do_profile) {
-                        detail::setup_profiler(operation, input_tensors, program);
-                    }
-                }
                 if (USE_FAST_DISPATCH) {
                     TT_ASSERT(queue.has_value(), "CommandQueue is required for fast dispatch mode");
                     CommandQueue& cq = queue.value().get();
@@ -289,6 +283,12 @@ std::vector<Tensor> run_device_operation(
                     }
                 } else {
                     ::detail::LaunchProgram(device, program);
+                }
+                if (!operation::skip_profile) {
+                    auto do_profile = op_profiler::get_profiler_flag();
+                    if (do_profile) {
+                        detail::setup_profiler(operation, input_tensors, program);
+                    }
                 }
             }
         },
