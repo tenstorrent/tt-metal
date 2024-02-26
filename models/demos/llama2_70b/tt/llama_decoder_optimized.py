@@ -10,6 +10,7 @@ from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tens
 from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_common import tt_all_gather
+import time
 
 
 class TtLlamaDecoder_optimized:
@@ -98,7 +99,16 @@ class TtLlamaDecoder_optimized:
         xs, rot_mats, attn_masks = [], [], []
         for i in range(self.num_devices):
             device = self.devices[i]
-            xs.append(torch2tt_tensor(x_fractured[i], device))
+            # TODO: put input onto device sharded
+            xs.append(
+                torch2tt_tensor(
+                    x_fractured[i],
+                    device,
+                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
+                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                )
+            )
             rot_mats.append(
                 torch2tt_tensor(rot_mat.clone(), device, tt_memory_config=self.model_config["ROT_MAT_MEMCFG"])
             )
@@ -132,71 +142,109 @@ class TtLlamaDecoder_optimized:
         attn_masks: list,
     ) -> tt_lib.tensor.Tensor:
         ### xs (residual stream) is fractured on all chips
-
+        xs_replicated = []
+        # Put xs back on DRAM and do allgather
+        for i in range(self.num_devices):
+            xs_replicated.append(
+                tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            )
         ### Duplicate inputs for layernorm
-        xs_replicated = tt_all_gather(xs, dim=-1)
+        # xs_replicated = tt_all_gather(xs, dim=-1)
+        xs_replicated = tt_lib.tensor.all_gather(
+            xs_replicated,
+            dim=3,
+            num_links=1,
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
 
+        for i in range(self.num_devices):
+            # RMSNorm must execute on sharded input
+            xs_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
+                xs_replicated[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+            )
         attn_norm_replicated = []
         for i in range(self.num_devices):
-            x = xs_replicated[i]
-            # RMSNorm must execute on sharded input
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
-            x_attn_norm = tt_lib.operations.primary.rmsnorm(
-                x,
-                self.norm_eps,
-                self.attn_norm_list[i],
-                output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
-                program_config=self.model_config["LN_ATTN_PROGCFG"],
-            )
-            # Spill input and output back to DRAM
-            x = tt_lib.tensor.sharded_to_interleaved(x, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
-            x_attn_norm = tt_lib.tensor.sharded_to_interleaved(
-                x_attn_norm, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            )
-            attn_norm_replicated.append(x_attn_norm)
-
+            attn_norm_replicated.append(
+                tt_lib.operations.primary.rmsnorm(
+                    xs_replicated[i],
+                    self.norm_eps,
+                    self.attn_norm_list[i],
+                    output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                    program_config=self.model_config["LN_ATTN_PROGCFG"],
+                )
+            )  # attn_norm_replicated is sharded
+            xs_replicated[i].deallocate(True)
         # attn_outs is fractured
         attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks)
 
         ### Fractured residual add
-        attn_resid_fractures = []
+        # Add attn output to residiual first in place to save memory
+        # Note that this is only correct in inference when dropout is disabled
+        output = []
+        residual = xs
         for i in range(self.num_devices):
-            attn_resid = tt_lib.tensor.add(attn_outs[i], xs[i])
-            attn_resid_fractures.append(attn_resid)
+            output.append(
+                tt_lib.tensor.add_without_autoformat(
+                    residual[i],
+                    attn_outs[i],
+                    output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
+                    in_place=True,
+                )
+            )
+            attn_outs[i].deallocate(True)
+
+        attn_resid_replicated = []
+        for i in range(self.num_devices):
+            # Put attn_resid back on DRAM
+            attn_resid_replicated.append(
+                tt_lib.tensor.sharded_to_interleaved(output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            )
 
         ### Duplicate attention residual on all chips
-        attn_resid_replicated = tt_all_gather(attn_resid_fractures, dim=-1)
+        # attn_resid_replicated = tt_all_gather(attn_resid_fractures, dim=-1)
+        attn_resid_replicated = tt_lib.tensor.all_gather(
+            attn_resid_replicated,
+            dim=3,
+            num_links=1,
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
 
         ### Duplicate layernorm
         ffn_norm_replicated = []
         for i in range(self.num_devices):
-            x = attn_resid_replicated[i]
             # RMSNorm must execute on sharded input
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+            attn_resid_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
+                attn_resid_replicated[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
             )
+        for i in range(self.num_devices):
             x_ffn_norm = tt_lib.operations.primary.rmsnorm(
-                x,
+                attn_resid_replicated[i],
                 self.norm_eps,
                 self.ffn_norm_list[i],
                 output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
                 program_config=self.model_config["LN_MLP_PROGCFG"],
-            )
-            # Spill input and output back to DRAM
-            x = tt_lib.tensor.sharded_to_interleaved(x, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
-            x_ffn_norm = tt_lib.tensor.sharded_to_interleaved(
-                x_ffn_norm, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
             ffn_norm_replicated.append(x_ffn_norm)
 
         ffn_out = self.mlp(ffn_norm_replicated)
 
         ### Duplicate residual
-        ffn_resid_fractured = []
         for i in range(self.num_devices):
-            ffn_resid = tt_lib.tensor.add(ffn_out[i], attn_resid_fractures[i])
-            ffn_resid_fractured.append(ffn_resid)
-
-        return ffn_resid_fractured
+            output[i] = tt_lib.tensor.add_without_autoformat(
+                output[i],
+                ffn_out[i],
+                output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
+                in_place=True,
+            )
+            ffn_out[i].deallocate(True)
+        # TODO: Test if this works
+        # for device in self.devices:
+        #     tt_lib.device.Synchronize(device)
+        # FOR BRINGUP! Outputs are sharded. Interleave them
+        for i in range(self.num_devices):
+            # breakpoint()
+            # time.sleep(1)
+            output[i] = tt_lib.tensor.sharded_to_interleaved(
+                output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+            )
+        return output
