@@ -28,7 +28,6 @@ inline void llk_math_eltwise_unary_sfpu_init(
         case SfpuType::sigmoid:
              sfpu::_init_sigmoid_<APPROXIMATE>();
              break;
-        case SfpuType::expm1:
         case SfpuType::exp2:
             sfpu::_init_exponential_<APPROXIMATE>();
             break;

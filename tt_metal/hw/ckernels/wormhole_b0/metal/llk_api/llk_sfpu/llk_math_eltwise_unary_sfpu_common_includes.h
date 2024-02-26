@@ -88,8 +88,6 @@ inline void llk_math_calculate_sfpu(
         calculate_exp2<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::heaviside) {
         calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(param0);
-    } else if constexpr (operation == SfpuType::expm1) {
-        calculate_expm1<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::asin) {
         calculate_asin<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::acos) {

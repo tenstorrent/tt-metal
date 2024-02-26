@@ -515,19 +515,6 @@ inline void calculate_min()
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_expm1()
-{
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat v = dst_reg[0];
-        v = calculate_exponential_body_improved<APPROXIMATION_MODE, true>(v);
-        dst_reg[0] = v - 1.0f;
-        dst_reg++;
-    }
-}
-
 
 #define POLYVAL6(coef5, coef4, coef3, coef2, coef1, coef0, t4)  (t4 * (t4 * (t4 * (t4 * (coef5 * t4 + coef4) + coef3) + coef2) + coef1) + coef0)
 
