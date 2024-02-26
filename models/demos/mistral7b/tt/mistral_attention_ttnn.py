@@ -179,7 +179,7 @@ class TtMistralAttention(nn.Module):
                 # output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
 
-            xqkv_fused.deallocate()
+            ttnn.deallocate(xqkv_fused)
 
             print("HEADS DONE")
 
@@ -205,8 +205,8 @@ class TtMistralAttention(nn.Module):
             ttnn.experimental.tensor.update_cache(keys, k_heads, current_pos)  # self.current)
             ttnn.experimental.tensor.update_cache(values, v_heads, current_pos)  # self.current)
 
-            k_heads.deallocate()
-            v_heads.deallocate()
+            ttnn.deallocate(k_heads)
+            ttnn.deallocate(v_heads)
 
             keys = ttnn.experimental.tensor.unpad(
                 layer_past[0],
@@ -239,7 +239,11 @@ class TtMistralAttention(nn.Module):
             keys = ttnn.permute(keys, (0, 1, 3, 2))  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
 
             self.model_config["QHEADS_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (32, 128), (7, 3), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, False
+                (32, 128),
+                ttnn.CoreGrid(8, 4),
+                ttnn.ShardStrategy.HEIGHT,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
             q_heads = ttnn.to_memory_config(q_heads, memory_config=self.model_config["QHEADS_MEMCFG"])
@@ -247,38 +251,42 @@ class TtMistralAttention(nn.Module):
             # dynamic sharding
             self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (8 * 1 * 128, padded_layer_past_len),
-                (7, 3),
+                ttnn.CoreGrid(8, 4),
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 False,
+                use_height_and_width_as_shard_shape=True,
             )
 
             keys = ttnn.to_memory_config(keys, memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"])
 
             attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                q_heads,
-                keys,
+                q_heads.value,
+                keys.value,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                # output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                # output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), #self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                # output_dtype=ttnn.bfloat16,  # Must be BFLOAT16
             )  # seqlen, n_heads, batch, cache_len + seqlen
 
-            attn = ttnn.transformer.attention_softmax_(attn, self.head_dim, attn_mask)
+            attn = ttnn.transformer.attention_softmax_(
+                ttnn.Tensor(attn), head_size=self.head_dim, attention_mask=attn_mask
+            )
 
             print("GQA2:", attn.shape, values.shape)
 
             attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                attn,
-                values,
+                attn.value,
+                values.value,
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
                 # output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )  # seqlen, n_heads, batch, dhead
+            attn_output = ttnn.Tensor(attn_output)
 
-            attn.deallocate()
-            keys.deallocate()
-            values.deallocate()
-            q_heads.deallocate()
+            ttnn.deallocate(attn)
+            ttnn.deallocate(keys)
+            ttnn.deallocate(values)
+            ttnn.deallocate(q_heads)
 
             attn_output = ttnn.transformer.concatenate_heads(
                 attn_output,
@@ -286,9 +294,10 @@ class TtMistralAttention(nn.Module):
             )  # seqlen, 1, batch, hidden_size
 
             print("DENSE SHAPES", attn_output.shape, wo.shape)
-            dense_out = ttnn.experimental.operations.primary.matmul_1d(
+            dense_out = ttnn.linear(
                 attn_output,
                 wo,
+                core_grid=ttnn.CoreGrid(8, 8)
                 # compute_with_storage_grid_size=device.compute_with_storage_grid_size()
             )  # seqlen, 1, batch, hidden_size
 

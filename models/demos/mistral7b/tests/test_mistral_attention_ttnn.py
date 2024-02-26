@@ -107,7 +107,7 @@ def test_mistral_attention_inference(
         )
         assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
         tt_out = tt_out[0]
-        tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        tt_output_torch = ttnn.to_torch(tt_out).permute(1, 0, 2)  # [ batch, seq, hidden_dim]
 
         # empty_tensor = torch.zeros((start_pos+1, 64))
         # cos, sin = precompute_freqs(model_args.head_dim, 1)

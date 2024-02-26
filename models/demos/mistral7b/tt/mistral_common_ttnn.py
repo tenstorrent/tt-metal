@@ -119,14 +119,14 @@ def prepare_inputs_ttnn(x, start_pos, hidden_size, n_local_heads, sliding_window
     else:
         attn_mask[:, :, :, :current] = torch.finfo(attn_mask.dtype).min
         attn_mask[:, :, :, sliding_window - current :] = torch.finfo(attn_mask.dtype).min
-    attn_mask = attn_mask.expand(-1, n_local_heads, -1, -1)
+    # attn_mask = attn_mask.expand(-1, n_local_heads, -1, -1)
 
     # expected shapes:
     # x: (seq_len, 1, batch, hidden_dim)
     # start_pos: int
     # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
     assert x.size() == (seq_len, 1, batch, hidden_size)
-    assert attn_mask.size() == (seq_len, n_local_heads, batch, padded_layer_past_len)
+    # assert attn_mask.size() == (seq_len, n_local_heads, batch, padded_layer_past_len)
 
     xs, attn_masks = [], []
     for i in range(num_devices):
