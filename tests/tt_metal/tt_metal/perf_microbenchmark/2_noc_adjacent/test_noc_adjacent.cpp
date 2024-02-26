@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
 
         CoreCoord start_core = {0, 0};
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
-        CoreRange all_cores{.start = start_core, .end = end_core};
+        CoreRange all_cores(start_core, end_core);
 
         uint32_t cb_tiles = 32;
         uint32_t single_tile_size = 2 * 1024;

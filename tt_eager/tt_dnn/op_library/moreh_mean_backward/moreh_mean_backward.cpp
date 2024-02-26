@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
     ////////////////////////////////////////////////////////////////////////////
     CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
+    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
 
     const uint32_t in0_t = 2;        // input
     const uint32_t in1_t = 1;        // zero

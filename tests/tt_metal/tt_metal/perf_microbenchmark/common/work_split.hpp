@@ -114,32 +114,30 @@ inline std::set<CoreRange> num_cores_to_corerange_set(
     std::set<CoreRange> all_cores_set;
     if (row_wise) {
         if (target_num_cores > num_cores_x) {
-            CoreRange start_block = {.start = {0, 0}, .end = {num_cores_x - 1, target_num_cores / num_cores_x - 1}};
+            CoreRange start_block({0, 0}, {num_cores_x - 1, target_num_cores / num_cores_x - 1});
             all_cores_set.insert(start_block);
             auto leftover_stick_size = target_num_cores % num_cores_x;
             if (leftover_stick_size > 0) {
                 auto leftover_start_y = target_num_cores / num_cores_x;
-                CoreRange leftover_block = {
-                    .start = {0, leftover_start_y}, .end = {leftover_stick_size - 1, leftover_start_y}};
+                CoreRange leftover_block({0, leftover_start_y}, {leftover_stick_size - 1, leftover_start_y});
                 all_cores_set.insert(leftover_block);
             }
         } else {
-            CoreRange start_block = {.start = {0, 0}, .end = {target_num_cores - 1, 0}};
+            CoreRange start_block({0, 0}, {target_num_cores - 1, 0});
             all_cores_set.insert(start_block);
         }
     } else {
         if (target_num_cores > num_cores_y) {
-            CoreRange start_block = {.start = {0, 0}, .end = {target_num_cores / num_cores_y - 1, num_cores_y - 1}};
+            CoreRange start_block({0, 0}, {target_num_cores / num_cores_y - 1, num_cores_y - 1});
             all_cores_set.insert(start_block);
             auto leftover_stick_size = target_num_cores % num_cores_y;
             if (leftover_stick_size > 0) {
                 auto leftover_start_x = target_num_cores / num_cores_y;
-                CoreRange leftover_block = {
-                    .start = {leftover_start_x, 0}, .end = {leftover_start_x, leftover_stick_size - 1}};
+                CoreRange leftover_block({leftover_start_x, 0}, {leftover_start_x, leftover_stick_size - 1});
                 all_cores_set.insert(leftover_block);
             }
         } else {
-            CoreRange start_block = {.start = {0, 0}, .end = {0, target_num_cores - 1}};
+            CoreRange start_block({0, 0}, {0, target_num_cores - 1});
             all_cores_set.insert(start_block);
         }
     }
@@ -177,19 +175,19 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
         // Case where only the last column is divided between core group 1 and 2
         if (last_block_group_2.end.x == last_block_all_cores.end.x &&
             last_block_group_2.end.y != last_block_all_cores.end.y) {
-            CoreRange leftover_block = {
-                .start = {last_block_group_2.end.x, last_block_group_2.end.y + 1}, .end = last_block_all_cores.end};
+            CoreRange leftover_block(
+                {last_block_group_2.end.x, last_block_group_2.end.y + 1}, last_block_all_cores.end);
             core_group_1_set.insert(leftover_block);
         } else {
             // Case where a middle column is divided between core group 1 and 2
             if (last_block_group_2.end.y != num_cores_y - 1) {
-                CoreRange leftover_stick = {
-                    .start = {last_block_group_2.end.x, last_block_group_2.end.y + 1},
-                    .end = {last_block_group_2.end.x, num_cores_y - 1}};
+                CoreRange leftover_stick(
+                    {last_block_group_2.end.x, last_block_group_2.end.y + 1},
+                    {last_block_group_2.end.x, num_cores_y - 1});
                 core_group_1_set.insert(leftover_stick);
             }
             // Remaining columns of cores that does less work
-            CoreRange leftover_block = {.start = {last_block_group_2.end.x + 1, 0}, .end = last_block_all_cores.end};
+            CoreRange leftover_block({last_block_group_2.end.x + 1, 0}, last_block_all_cores.end);
             core_group_1_set.insert(leftover_block);
         }
         units_per_core_group_2 = units_per_core_group_1 + 1;

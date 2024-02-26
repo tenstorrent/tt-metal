@@ -59,7 +59,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     if (has_eth_cores) {
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores()) {
-            eth_core_ranges.insert(CoreRange{.start=core, .end=core});
+            eth_core_ranges.insert(CoreRange(core, core));
             auto erisc_kid = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
