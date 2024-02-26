@@ -117,6 +117,8 @@ std::vector<Tensor> lerp_bw(const Tensor& grad, const Tensor& input, const Tenso
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight, weight is tensor
 std::vector<Tensor> lerp_bw(const Tensor& grad, const Tensor& input, const Tensor& end, const Tensor& weight, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> ldexp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
