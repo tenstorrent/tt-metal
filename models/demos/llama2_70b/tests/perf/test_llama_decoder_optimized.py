@@ -70,7 +70,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
 
 
 def run_test_LlamaDecoder_inference(
-    device,
+    devices,
     model_version,
     llm_mode,
     batch,
@@ -78,24 +78,28 @@ def run_test_LlamaDecoder_inference(
     kv_cache_len,
     pcc,
     model_config,
-    n_devices
+    n_devices,
+    emulated=False,
     # tt_cache_path,
     # model_location_generator,
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
+    if emulated:
+        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        device = devices[0]
+        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    else:
+        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/home/llama-data/tokenizer.model"
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
-    tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
-        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
+        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=True
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
-
-    # Prepare configs
-    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
 
     torch.manual_seed(0)
     layer_num = 0
@@ -222,13 +226,18 @@ def test_LlamaDecoder_inference(
     model_config_str,
     n_devices,
     # model_location_generator,
-    device,
+    pcie_devices,
+    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
-    # tt_cache_path = get_tt_cache_path(model_version)
+    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if len(pcie_devices) < n_devices:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaDecoder_inference(
-        device,
+        pcie_devices[:n_devices],
         model_version,
         llm_mode,
         batch,

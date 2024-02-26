@@ -124,7 +124,8 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
         "NUM_DEVICES": 4,
-        "MAX_GRID_SIZE": (8, 8),
+        "MAX_GRID_SIZE": (8, 4),
+        "ALL_GATHER_NUM_LINKS": 2,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/llama70b/datasets/"),
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
@@ -367,7 +368,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             ),
         )
     elif num_devices == 8:
-        # Unpadded version
         model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
@@ -388,27 +388,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 False,
             ),
         )
-        # Padded version
-        # model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        #     ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        #     ttl.tensor.BufferType.L1,
-        #     ttl.tensor.ShardSpec(
-        #         ttl.tensor.CoreRangeSet(
-        #             {
-        #                 ttl.tensor.CoreRange(
-        #                     ttl.tensor.CoreCoord(0, 0),
-        #                     ttl.tensor.CoreCoord(7, 7),
-        #                 ),
-        #             }
-        #         ),
-        #         [
-        #             32,
-        #             128,
-        #         ],
-        #         ttl.tensor.ShardOrientation.ROW_MAJOR,
-        #         False,
-        #     ),
-        # )
     model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 1:
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -435,7 +414,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             mcast_in0=True,
         )
     elif num_devices == 8:
-        # Unpadded version
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=32,
@@ -447,18 +425,6 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=None,
             mcast_in0=True,
         )
-        # Padded version
-        # model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        #     compute_with_storage_grid_size=(8, 8),
-        #     in0_block_w=4,
-        #     out_subblock_h=1,
-        #     out_subblock_w=1,
-        #     per_core_M=1,
-        #     per_core_N=1,
-        #     fuse_batch=True,
-        #     fused_activation=None,
-        #     mcast_in0=True,
-        # )
 
     # Split QKV Matmul Config
     model_config["WQ_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -704,58 +670,36 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
     model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["CONCAT_HEADS_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-    if num_devices == 4:
-        model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 7),
-                        ),
-                    }
-                ),
-                [
-                    32,
-                    128,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
+    model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.ShardSpec(
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(7, 3),
+                    ),
+                }
             ),
-        )
-    elif num_devices == 8:
-        model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
-                [
-                    32,
-                    256,
-                ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
+            [
+                32,
+                256,
+            ],
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
     model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 4:
         # (32 x 8k) x (8k x 2k) = (32 x 2k)
         model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
             out_subblock_h=1,
-            out_subblock_w=1,
+            out_subblock_w=2,
             per_core_M=1,
-            per_core_N=1,
+            per_core_N=2,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -994,13 +938,13 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 {
                     ttl.tensor.CoreRange(
                         ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 7),
+                        ttl.tensor.CoreCoord(7, 3),
                     ),
                 }
             ),
             [
                 32,
-                128,
+                256,
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
             False,
@@ -1008,23 +952,23 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     )
     if num_devices == 4:
         model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 8192 for num_device=8
+            per_core_N=8,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 8192 for num_device=8
             fuse_batch=True,
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+            per_core_N=8,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -1037,25 +981,25 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     {
                         ttl.tensor.CoreRange(
                             ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 7),
+                            ttl.tensor.CoreCoord(7, 3),
                         ),
                     }
                 ),
                 [
                     32,
-                    512,
+                    1024,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
         model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=16,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,
-            out_subblock_w=1,
+            out_subblock_w=2,
             per_core_M=1,
-            per_core_N=1,
+            per_core_N=2,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -1063,23 +1007,23 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
 
     elif num_devices == 8:
         model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
             fuse_batch=True,
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 8
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+            per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
