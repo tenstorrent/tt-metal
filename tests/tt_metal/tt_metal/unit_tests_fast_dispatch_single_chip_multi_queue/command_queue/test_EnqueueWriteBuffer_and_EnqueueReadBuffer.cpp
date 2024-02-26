@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
+#include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -12,36 +13,8 @@
 
 using namespace tt::tt_metal;
 
-struct TestBufferConfig {
-    uint32_t num_pages;
-    uint32_t page_size;
-    BufferType buftype;
-};
-
-struct BufferStressTestConfig {
-    // Used for normal write/read tests
-    uint32_t seed;
-    uint32_t num_pages_total;
-
-    uint32_t page_size;
-    uint32_t max_num_pages_per_buffer;
-
-    // Used for wrap test
-    uint32_t num_iterations;
-    uint32_t num_unique_vectors;
-};
 
 namespace local_test_functions {
-
-vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
-    TT_FATAL(size_bytes % sizeof(uint32_t) == 0);
-    vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
-
-    for (uint32_t i = 0; i < src.size(); i++) {
-        src.at(i) = i;
-    }
-    return src;
-}
 
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(Device* device, vector<std::reference_wrapper<CommandQueue>>& cqs, const TestBufferConfig& config) {
     bool pass = true;

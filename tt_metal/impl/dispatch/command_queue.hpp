@@ -29,7 +29,7 @@ using std::tuple;
 using std::unique_ptr;
 
 // Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, FLUSH, ENQUEUE_RECORD_EVENT, INVALID };
+enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, FLUSH, ENQUEUE_RECORD_EVENT, ENQUEUE_WAIT_FOR_EVENT, INVALID };
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
@@ -314,6 +314,26 @@ class EnqueueRecordEventCommand : public Command {
     constexpr bool has_side_effects() { return false; }
 };
 
+class EnqueueWaitForEventCommand : public Command {
+   private:
+    uint32_t command_queue_id;
+    Device* device;
+    SystemMemoryManager& manager;
+    uint32_t event;
+    const Event& sync_event;
+
+   public:
+    EnqueueWaitForEventCommand(uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event, const Event& sync_event);
+
+    const DeviceCommand assemble_device_command(uint32_t);
+
+    void process();
+
+    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT; }
+
+    constexpr bool has_side_effects() { return false; }
+};
+
 
 class Trace {
 
@@ -453,6 +473,7 @@ class HWCommandQueue {
     void enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
     void enqueue_record_event(std::reference_wrapper<Event> event);
     void populate_record_event(std::reference_wrapper<Event> event);
+    void enqueue_wait_for_event(std::reference_wrapper<Event> event);
     void finish();
     void issue_wrap();
     void completion_wrap(uint32_t event);
@@ -464,6 +485,7 @@ class HWCommandQueue {
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
     friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
     friend void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
+    friend void EnqueueWaitForEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
     friend void FinishImpl(CommandQueue & cq);
     friend void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
     friend class Trace;

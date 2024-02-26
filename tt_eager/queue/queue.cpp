@@ -22,8 +22,6 @@ void EnqueueDeviceToHostTransfer(
 
 void QueueSynchronize(CommandQueue& q) { Finish(q); }
 
-void QueueWaitForEvent(CommandQueue& q, Event& e) {}
-
 std::vector<Tensor> EnqueueOperation(
     CommandQueue& queue,
     operation::DeviceOperation& devop,

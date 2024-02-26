@@ -58,6 +58,7 @@ ETH
 EltwiseUnary
 EnqueueProgram
 EnqueueQueueRecordEvent
+EnqueueQueueWaitForEvent
 EnqueueReadBuffer
 EnqueueWriteBuffer
 Enum

@@ -27,7 +27,7 @@ void EnqueueDeviceToHostTransfer(
     size_t src_offset = 0);
 
 void EnqueueQueueRecordEvent(CommandQueue&, Event&);
-void QueueWaitForEvent(CommandQueue&, Event&);
+void EnqueueQueueWaitForEvent(CommandQueue&, Event&);
 void EventSynchronize(Event&);
 void QueueSynchronize(CommandQueue&);
 

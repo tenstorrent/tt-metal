@@ -409,6 +409,17 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
 void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
 
 /**
+ * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * |              | and waits for the event to complete.                                   |                               |                                    |          |
+ * | event        | The event object that this CQ will wait on for completion.             | Event &                       |                                    | Yes      |
+ */
+void EnqueueQueueWaitForEvent(CommandQueue& cq, Event &event);
+
+/**
  * Blocking function for host to synchronize (wait) on an event completion on device.
  * Return value: void
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
