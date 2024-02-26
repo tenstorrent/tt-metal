@@ -126,7 +126,14 @@ class TtLlamaMLP_optimized(nn.Module):
             hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
                 hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
-        hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
+        breakpoint()
+        hidden_states = tt_lib.tensor.all_gather(
+            hidden_states,
+            dim=3,
+            num_links=1,
+            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+        )
+        # hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
         # Put AllGather results in L1
         for i in range(len(hidden_states)):
             hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
