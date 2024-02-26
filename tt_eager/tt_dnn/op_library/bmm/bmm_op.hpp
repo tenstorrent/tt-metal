@@ -51,10 +51,14 @@ struct Matmul {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
     MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("bcast_batch", "output_mem_config", "output_dtype");
+    static constexpr auto attribute_names =
+        std::make_tuple("bcast_batch", "output_mem_config", "output_dtype", "compute_kernel_config");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->bcast_batch), std::cref(this->output_mem_config), std::cref(this->output_dtype));
+            std::cref(this->bcast_batch),
+            std::cref(this->output_mem_config),
+            std::cref(this->output_dtype),
+            std::cref(this->compute_kernel_config));
     }
 };
 
@@ -285,12 +289,13 @@ struct Matmul {
     MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("program_config", "output_mem_config", "output_dtype");
+        std::make_tuple("program_config", "output_mem_config", "output_dtype", "compute_kernel_config");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->program_config),
             std::cref(this->output_mem_config),
-            std::cref(this->output_dtype));
+            std::cref(this->output_dtype),
+            std::cref(this->compute_kernel_config));
     }
 };
 
