@@ -85,7 +85,7 @@ class downsample_2d:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override=conv_config_override,
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
+            # enable_auto_formatting=True,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -104,22 +104,23 @@ class downsample_2d:
         stride = 2
         assert padding == 1
 
-        assert hidden_states.shape[1] == in_channels
+        assert hidden_states.shape[-1] == in_channels
 
         if use_conv and padding == 0:
             pad = (0, 1, 0, 1)
             hidden_states = ttnn.pad(hidden_states, pad, value=0)
 
-        assert hidden_states.shape[1] == in_channels
-
-        hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            self.device,
-            self.conv,
-            hidden_states,
-            self.conv.batch_size,
-            self.conv.output_height,
-            self.conv.output_width,
-            self.conv.out_channels,
-        )
+        if ttnn.get_memory_config(hidden_states) != self.conv.conv.input_sharded_memory_config:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
+        hidden_states = self.conv(hidden_states)
+        # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+        #     self.device,
+        #     self.conv,
+        #     hidden_states,
+        #     self.conv.batch_size,
+        #     self.conv.output_height,
+        #     self.conv.output_width,
+        #     self.conv.out_channels,
+        # )
 
         return hidden_states

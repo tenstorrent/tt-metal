@@ -14,7 +14,7 @@ class cross_attention_down_block_2d:
         self.parameters = parameters
         self.resnets = [
             resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
-            for resnet in parameters.resnets
+            for i, resnet in enumerate(parameters.resnets)
         ]
         self.attentions = [
             transformer_2d_model(device, attention, reader_patterns_cache, batch_size, input_height, input_width)
@@ -60,6 +60,7 @@ class cross_attention_down_block_2d:
         output_states = ()
 
         for index, (resnet, attn) in enumerate(zip(self.resnets, self.attentions)):
+            print(f"    resnet: {index}")
             in_channels = in_channels if index == 0 else out_channels
             use_in_shortcut = True if "conv_shortcut" in resnet.parameters else False
             hidden_states = resnet(
@@ -77,6 +78,7 @@ class cross_attention_down_block_2d:
                 pre_norm=resnet_pre_norm,
             )
             if not dual_cross_attention:
+                print(f"    attn: {index}")
                 hidden_states = attn(
                     hidden_states,
                     config,

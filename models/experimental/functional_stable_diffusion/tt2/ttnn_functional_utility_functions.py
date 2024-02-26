@@ -47,7 +47,7 @@ def pre_process_input_new(device, tensor):
     )
     tensor = ttnn.Tensor(tensor)
     tensor = ttnn.to_device(tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, output_memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True)
     return tensor
 
 
@@ -118,12 +118,16 @@ def pre_process_input(device, tensor):
         output_on_device=False,
     )
     tensor = ttnn.to_device(tensor, device)
+    print("Done to device")
     tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+    print("Done tilize")
     return tensor
 
 
 def post_process_output(device, tensor, batch_size, output_height, output_width, output_channels):
-    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+    tensor = ttnn.to_layout(
+        tensor, ttnn.ROW_MAJOR_LAYOUT, use_multicore=ttnn.get_memory_config(tensor).shard_spec is not None
+    )
     tensor = ttnn.from_device(tensor)
     assert output_channels == tensor.shape[3]
     tensor = fallback_ops.reshape(

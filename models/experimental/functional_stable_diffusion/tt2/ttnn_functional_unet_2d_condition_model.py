@@ -6,6 +6,7 @@ import tt_lib
 import torch.nn as nn
 import math
 import ttnn
+import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import os
@@ -31,8 +32,12 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblo
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    pre_process_input_new,
+    post_process_output,
+    permute_conv_parameters,
     pad_group_norm_weight,
     pre_process_input,
+    update_gn_expected_input_sharded_memory_config_and_grid_size,
 )
 
 fp32_accum = True
@@ -139,6 +144,7 @@ class UNet2DConditionModel:
             use_shallow_conv_variant=False,
             compute_kernel_config=conv_compute_kernel_config,
         )
+        # breakpoint()
         self.down_blocks = []
         input_height = self.conv_in.output_height
         input_width = self.conv_in.output_height
@@ -147,7 +153,12 @@ class UNet2DConditionModel:
         for i, down_block_type in enumerate(down_block_types):
             if down_block_type == "CrossAttnDownBlock2D":
                 down_block = cross_attention_down_block_2d(
-                    device, parameters.down_blocks[i], reader_patterns_cache, batch_size, input_height, input_width
+                    device,
+                    parameters.down_blocks[i],
+                    reader_patterns_cache,
+                    batch_size,
+                    input_height,
+                    input_width,
                 )
             elif down_block_type == "DownBlock2D":
                 down_block = downblock2d(
@@ -347,13 +358,10 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
+        # sample in l1 interelaved and tiled and nhwc
         sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         sample = self.conv_in(sample)
-        # sample = ttnn.reallocate(sample)  # TODO: Test remove
-        sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
-        sample = ttnn.reshape(sample, (self.batch_size, self.input_height, self.input_width, self.conv_in.out_channels))
-        sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
+        sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
 
@@ -364,11 +372,11 @@ class UNet2DConditionModel:
             attention_head_dim = (attention_head_dim,) * len(self.down_block_types)
 
         # 3.down
-        # sample_copied_to_dram = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
-        down_block_res_samples = (sample,)
+        sample_copied_to_dram = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
+        down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
-            # print(f"Down block {i}")
+            print(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
@@ -422,7 +430,7 @@ class UNet2DConditionModel:
             down_block_res_samples += res_samples
 
         # 4.mid
-        # print("Mid block")
+        print("Mid block")
         sample = self.mid_block(
             hidden_states=sample,
             temb=emb,
@@ -452,7 +460,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
-            # print(f"Up block {i}")
+            print(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
             prev_output_channel = output_channel
@@ -475,6 +483,10 @@ class UNet2DConditionModel:
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
             if up_block_type == "CrossAttnUpBlock2D":
+                # breakpoint()
+                ttnn.dump_device_memory_state(self.device, prefix="before_uplock_sample_reallocate_")
+                # sample = ttnn.reallocate(sample)
+                ttnn.dump_device_memory_state(self.device, prefix="before_uplock_")
                 sample = up_block(
                     hidden_states=sample,
                     temb=emb,
@@ -525,16 +537,6 @@ class UNet2DConditionModel:
 
         # 6.post-process
 
-        sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from NCHW to NHWC
-        sample = ttnn.reshape(
-            sample,
-            (
-                1,
-                1,
-                self.conv_out.batch_size * self.conv_out.input_height * self.conv_out.input_width,
-                self.conv_out.in_channels,
-            ),
-        )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
@@ -562,6 +564,9 @@ class UNet2DConditionModel:
 
         else:
             sample = ttnn.to_memory_config(sample, self.gn_expected_input_sharded_memory_config)
+            print(f"Starting final group norm")
+            print("GN input shape - ", sample.shape)
+            print(f"Final GN: memory_config={ttnn.get_memory_config(sample)}")
             sample = ttnn.reshape(
                 sample,
                 (
@@ -580,6 +585,7 @@ class UNet2DConditionModel:
                 memory_config=self.gn_expected_input_sharded_memory_config,
                 core_grid=self.group_norm_core_grid,
             )
+        print("Done GN")
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.reshape(
             sample,
@@ -595,18 +601,8 @@ class UNet2DConditionModel:
         if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
             sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
         sample = self.conv_out(sample)
+        print("Done conv")
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
-        sample = ttnn.reshape(
-            sample,
-            (
-                self.conv_out.batch_size,
-                self.conv_out.input_height,
-                self.conv_out.input_width,
-                self.conv_out.out_channels,
-            ),
-        )
-        sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW
         # con_in completes
 
         return sample

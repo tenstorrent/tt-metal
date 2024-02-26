@@ -15,8 +15,10 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     pre_process_input,
     post_process_output,
     pre_process_input_new,
+    pad_encoder_hidden_states,
     pad_group_norm_weight,
     permute_conv_parameters,
+    update_gn_expected_input_sharded_memory_config_and_grid_size,
 )
 
 
@@ -145,6 +147,7 @@ class transformer_2d_model:
         norm_type="layer_norm",
         eps=1e-5,
         norm_elementwise_affine: bool = True,
+        output_bfloat16: bool = False,
     ):
         inner_dim = num_attention_heads * attention_head_dim
         assert norm_num_groups == 32
@@ -170,16 +173,24 @@ class transformer_2d_model:
             )
             norm_type = "ada_norm"
 
-        # 1. Input
-        if is_input_continuous:
-            batch, _, height, width = hidden_states.shape
-            residual = hidden_states
+        nhw = hidden_states.shape[2]
+        if hidden_states.shape[0] == 1:
+            assert nhw == self.batch_size * self.input_height * self.input_width
+        batch = self.batch_size
+        height = self.input_height
+        width = self.input_width
 
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.permute(hidden_states, (0, 2, 3, 1))  # permute from nchw to nhwc
-            hidden_states = ttnn.reshape(
-                hidden_states, (1, 1, self.batch_size * self.input_height * self.input_width, self.proj_in.in_channels)
-            )
+        if ttnn.get_memory_config(hidden_states) != self.proj_in.conv.input_sharded_memory_config:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
+        residual = hidden_states
+
+        hidden_states = ttnn.to_layout(
+            hidden_states,
+            ttnn.ROW_MAJOR_LAYOUT,
+            output_memory_config=self.proj_in.conv.input_sharded_memory_config,
+            use_multicore=True,
+        )
+
         if self.fallback_on_groupnorm:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
@@ -196,12 +207,15 @@ class transformer_2d_model:
             )
 
             hidden_states = pre_process_input(self.device, hidden_states)
+
         else:
+            hidden_states = ttnn.reshape(
+                hidden_states, (self.batch_size, 1, self.input_height * self.input_width, in_channels)
+            )
             if ttnn.get_memory_config(hidden_states) != self.gn_expected_input_sharded_memory_config:
                 hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
-            hidden_states = ttnn.reshape(
-                hidden_states, (self.batch_size, 1, self.input_height * self.input_width, self.proj_in.in_channels)
-            )
+            print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
+            print(f"Hidden states shape: {hidden_states.shape}")
             hidden_states = ttnn.group_norm(
                 input_tensor=hidden_states,
                 num_groups=norm_num_groups,
@@ -211,25 +225,35 @@ class transformer_2d_model:
                 memory_config=ttnn.get_memory_config(hidden_states),
                 core_grid=self.group_norm_core_grid,
             )
-
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.to_memory_config(
+            hidden_states, ttnn.L1_MEMORY_CONFIG
+        )  # sharded to interleaved since we can't tilize block sharded
         hidden_states = ttnn.reshape(
             hidden_states, (1, 1, self.batch_size * self.input_height * self.input_width, in_channels)
         )
+        hidden_states = ttnn.to_layout(
+            hidden_states,
+            ttnn.TILE_LAYOUT,
+            output_memory_config=self.proj_in.conv.input_sharded_memory_config,
+            use_multicore=True,
+        )  # tilize
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # tilize
-        hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
         hidden_states = self.proj_in(hidden_states)
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+
         inner_dim = hidden_states.shape[-1]
-
-        # hidden_states = ttnn.permute(hidden_states, (0, 2, 3, 1))
-
-        hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
         hidden_states = ttnn.reshape(hidden_states, (1, batch, height * width, inner_dim))
 
+        # hidden_states = ttnn.to_memory_config(
+        #     hidden_states, ttnn.L1_MEMORY_CONFIG
+        # )  # sharded to interleaved since we can't tilize block sharded
+        # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT, use_multicore=True)
+        # hidden_states = ttnn.to_memory_config(
+        #     hidden_states, self.proj_in.conv.input_sharded_memory_config
+        # )  # interleaved to sharded
+
         # 2. Blocks
-        hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
+        # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
         for block in self.blocks:
             hidden_states = block(
                 hidden_states=hidden_states,
@@ -251,15 +275,24 @@ class transformer_2d_model:
             if not use_linear_projection:
                 hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 hidden_states = self.proj_out(hidden_states)
-                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-                hidden_states = post_process_output(
-                    self.device,
-                    hidden_states,
-                    self.proj_out.batch_size,
-                    self.proj_out.input_height,
-                    self.proj_out.input_width,
-                    self.proj_out.out_channels,
-                )
+                hidden_states = ttnn.reshape(hidden_states, (1, 1, batch * height * width, inner_dim))
+                # hidden_states = ttnn.to_memory_config(
+                #     hidden_states, ttnn.L1_MEMORY_CONFIG
+                # )  # sharded to interleaved since we can't tilize block sharded
+                # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT, use_multicore=True)
+                # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+                if output_bfloat16:
+                    hidden_states = ttnn.add(
+                        hidden_states,
+                        residual,
+                        dtype=ttnn.bfloat16,
+                    )
+                else:
+                    hidden_states = ttnn.add(
+                        hidden_states,
+                        residual,
+                    )
             else:
                 hidden_states = ttnn.to_device(hidden_states, self.device)
                 hidden_states = ttnn.matmul(hidden_states, self.parameters.proj_out.weight)
@@ -270,11 +303,11 @@ class transformer_2d_model:
 
                 hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
 
-            output = ttnn.add(
-                hidden_states,
-                residual,
-            )
+                hidden_states = ttnn.add(
+                    hidden_states,
+                    residual,
+                )
 
         if not return_dict:
-            return (output,)
-        return output
+            return (hidden_states,)
+        return hidden_states
