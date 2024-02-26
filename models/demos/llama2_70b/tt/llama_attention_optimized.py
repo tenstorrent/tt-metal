@@ -214,6 +214,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    # compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"], #TODO: Need to pad & change PROCFG
                 )
             )
             xs[i].deallocate(True)

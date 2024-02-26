@@ -101,8 +101,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
                 output_mem_config=self.model_config["FF1_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["FF1_MM_OUTPUT_DTYPE"],
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
+                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 
             w3_out = tt_lib.operations.primary.matmul_1d(
@@ -111,8 +110,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
                 output_mem_config=self.model_config["FF3_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["FF3_MM_OUTPUT_DTYPE"],
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
+                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
             x[i].deallocate(True)
             hidden_states.append(
@@ -147,8 +145,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
                 output_mem_config=self.model_config["FF2_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["FF2_MM_OUTPUT_DTYPE"],
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
+                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 
         # FOR BRINGUP! Outputs are sharded. Interleave them
