@@ -602,21 +602,16 @@ operation::ProgramWithCallbacks reshard_multi_core(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = {dst_cb_index}});
+        tt_metal::ReaderDataMovementConfig({dst_cb_index}));
 
     std::vector<uint32_t> writer_compile_time_args = {dst_cb_index};
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
-
-
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto cores = corerange_to_cores(all_cores);
-
-
-
 
     uint32_t page_size, unit_size, units_per_page;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());

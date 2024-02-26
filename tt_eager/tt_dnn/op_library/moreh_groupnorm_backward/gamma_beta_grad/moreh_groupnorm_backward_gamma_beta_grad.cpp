@@ -78,7 +78,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
+    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
 
     const auto
         [num_cores_to_be_used,

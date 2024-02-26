@@ -625,9 +625,8 @@ tt_metal::Program create_program(
         1                        // batch
     };
 
-    CoreRange all_cores{
-        .start = {(std::size_t)0, (std::size_t)0},
-        .end = {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1}};
+    CoreRange all_cores(
+        {(std::size_t)0, (std::size_t)0}, {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1});
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
