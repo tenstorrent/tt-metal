@@ -6,7 +6,6 @@ LLRT_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 LLRT_SRCS_RELATIVE = \
 	llrt/tt_cluster.cpp \
 	llrt/llrt.cpp \
-	llrt/watcher.cpp \
 	llrt/rtoptions.cpp \
 	llrt/tt_memory.cpp \
 	llrt/tt_hexfile.cpp

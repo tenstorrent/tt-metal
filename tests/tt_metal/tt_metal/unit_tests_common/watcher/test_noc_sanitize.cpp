@@ -97,7 +97,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         fixture->RunProgram(device, program);
     } catch (std::runtime_error& e) {
         string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
-        expected += tt::llrt::watcher_get_log_file_name();
+        expected += tt::watcher_get_log_file_name();
         const string error = string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
@@ -137,7 +137,7 @@ static void RunTestEth(WatcherFixture* fixture, Device* device) {
     RunTestOnCore(fixture, device, core, true);
 }
 
-// Run tests for host-side sanitization (uses functions that are from watcher.hpp).
+// Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(Device *device) {
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {16, 16};
