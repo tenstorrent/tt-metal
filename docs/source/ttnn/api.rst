@@ -252,6 +252,7 @@ Transformer
    ttnn/transformer/concatenate_heads
    ttnn/transformer/attention_softmax
    ttnn/transformer/attention_softmax_
+   ttnn/transformer/rotary_embedding
 
 Embedding
 =========
@@ -277,6 +278,15 @@ Vision
    :maxdepth: 1
 
    ttnn/upsample
+
+KV Cache
+========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/kv_cache/fill_cache_for_user_
+   ttnn/kv_cache/update_cache_for_token_
 
 
 Model Conversion

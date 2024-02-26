@@ -117,6 +117,7 @@ models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
+models/demos @eyonland @arakhmati @cfjchu @xanderchin
 
 # docs
 docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin

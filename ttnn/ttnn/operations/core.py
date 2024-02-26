@@ -528,14 +528,15 @@ def _deallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 
 
 @ttnn.register_operation(name="ttnn.deallocate", validate_input_tensors=_deallocate_validate_input_tensors)
-def deallocate(tensor: ttnn.Tensor) -> None:
+def deallocate(tensor: ttnn.Tensor, *, force=True) -> None:
     """
-    deallocate(tensor: ttnn.Tensor) -> None
+    deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
 
     Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
     Args:
         * :attr:`tensor`: the ttnn.Tensor
+        * :attr:`force`: the optional boolean to force deallocation even if buffer may have multiple references. Defaults to True.
 
     Example::
         >>> device_id = 0
@@ -546,7 +547,7 @@ def deallocate(tensor: ttnn.Tensor) -> None:
     """
 
     def impl(tensor):
-        tensor.value.deallocate(force=True)
+        tensor.value.deallocate(force=force)
 
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
 

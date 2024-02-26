@@ -61,7 +61,7 @@ from ttnn.types import (
     Tensor,
 )
 
-from ttnn.device import Device, open_device, close_device, manage_device, dump_device_memory_state
+from ttnn.device import Device, open_device, close_device, manage_device, synchronize_device, dump_device_memory_state
 
 from ttnn.core import (
     has_storage_type_of,
@@ -86,6 +86,7 @@ import ttnn.experimental
 
 from ttnn.program_cache import (
     enable_program_cache,
+    disable_and_clear_program_cache,
 )
 
 from ttnn.operations.core import (
@@ -287,6 +288,7 @@ from ttnn.operations.normalization import (
 )
 
 from ttnn.operations import transformer
+from ttnn.operations import kv_cache
 from ttnn.operations.conv2d import Conv2d
 from ttnn.operations.maxpool2d import (
     MaxPool2d,

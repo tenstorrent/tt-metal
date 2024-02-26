@@ -38,6 +38,15 @@ def close_device(device):
     ttnn._ttnn.device.close_device(device)
 
 
+def synchronize_device(device):
+    """
+    synchronize_device(device: ttnn.Device) -> None:
+
+    Synchronize the device with host by waiting for all operations to complete.
+    """
+    ttl.device.Synchronize(device)
+
+
 @contextlib.contextmanager
 def manage_device(*, device_id: int):
     """
