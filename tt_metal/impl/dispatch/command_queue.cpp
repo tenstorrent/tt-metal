@@ -672,6 +672,47 @@ void EnqueueRecordEventCommand::process() {
     this->manager.issue_queue_push_back(cmd_size, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
 }
 
+EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
+    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event, const Event& sync_event):
+    command_queue_id(command_queue_id), device(device), manager(manager), event(event), sync_event(sync_event) {
+        // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
+        TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
+            "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
+            event, command_queue_id);
+}
+
+const DeviceCommand EnqueueWaitForEventCommand::assemble_device_command(uint32_t) {
+    DeviceCommand command;
+    command.set_issue_data_size(0); // No extra data just CMD.
+    command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
+    command.set_event(this->event);
+
+    // #5529 - Cross chip sync needs to be implemented. Currently, we only support sync on the same chip.
+    TT_ASSERT(this->sync_event.device == this->device,
+            "EnqueueWaitForEvent() cross-chip sync not yet supported. Sync event device: {} this device: {}",
+            this->sync_event.device->id(), this->device->id());
+
+    auto &event_sync_hw_cq = this->sync_event.device->command_queue(this->sync_event.cq_id).hw_command_queue();
+    auto event_sync_core = this->sync_event.device->worker_core_from_logical_core(event_sync_hw_cq.completion_queue_writer_core);
+
+    // Let dispatcher know this is sync event, and what core/event_id to sync on.
+    command.set_is_event_sync(true);
+    command.set_event_sync_core_x(event_sync_core.x);
+    command.set_event_sync_core_y(event_sync_core.y);
+    command.set_event_sync_event_id(this->sync_event.event_id);
+
+    return command;
+}
+
+void EnqueueWaitForEventCommand::process() {
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    const DeviceCommand cmd = this->assemble_device_command(0);
+    uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.issue_queue_push_back(cmd_size, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
+}
+
 // HWCommandQueue section
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) : manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
@@ -951,6 +992,19 @@ void HWCommandQueue::enqueue_record_event(std::reference_wrapper<Event> event) {
     this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 }
 
+void HWCommandQueue::enqueue_wait_for_event(std::reference_wrapper<Event> event) {
+    ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
+
+    uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    if ((this->manager.get_issue_queue_write_ptr(this->id)) + command_size >= this->manager.get_issue_queue_limit(this->id)) {
+        this->issue_wrap();
+    }
+
+    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, this->manager.get_next_event(this->id), event.get());
+    this->enqueue_command(command, false);
+    this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
+}
+
 
 void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
     const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_host_page_id] =
@@ -1212,6 +1266,27 @@ void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> even
     cq.hw_command_queue().enqueue_record_event(event);
 }
 
+
+void EnqueueQueueWaitForEvent(CommandQueue& cq, Event &event) {
+    TT_ASSERT(event.device != nullptr, "EnqueueQueueRecordEvent expected to be given Event with initialized device ptr");
+    TT_ASSERT(event.event_id != -1, "EnqueueQueueWaitForEvent expected to be given Event with initialized event_id");
+    TT_ASSERT(event.cq_id != -1, "EnqueueQueueWaitForEvent expected to be given Event with initialized cq_id");
+    log_trace(tt::LogMetal, "EnqueueQueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
+        event.device->id(), event.cq_id, event.event_id, cq.device()->id(), cq.id());
+
+    detail::DispatchStateCheck(true);
+    cq.run_command(CommandInterface{
+        .type = EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT,
+        .blocking = false,
+        .event = event,
+    });
+}
+
+void EnqueueWaitForEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event) {
+    cq.hw_command_queue().enqueue_wait_for_event(event);
+}
+
+
 void EventSynchronize(Event& event) {
     detail::DispatchStateCheck(true);
     log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event.device->id(), event.cq_id, event.event_id);
@@ -1379,6 +1454,10 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         case EnqueueCommandType::ENQUEUE_RECORD_EVENT:
             TT_ASSERT(command.event.has_value(), "Must provide an event!");
             EnqueueRecordEventImpl(*this, *command.event);
+            break;
+        case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT:
+            TT_ASSERT(command.event.has_value(), "Must provide an event!");
+            EnqueueWaitForEventImpl(*this, *command.event);
             break;
         case EnqueueCommandType::FINISH:
             FinishImpl(*this);

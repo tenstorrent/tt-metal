@@ -502,8 +502,10 @@ void Device::configure_command_queue_programs() {
                     uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
                     uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                     vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+                    vector<uint32_t> completion_queue_last_event = {0x0}; // Reset state in case L1 Clear is disabled.
                     detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
                     detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+                    detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event);
                 }
             }
         }
