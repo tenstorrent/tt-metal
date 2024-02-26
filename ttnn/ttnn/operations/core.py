@@ -655,7 +655,13 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 
 
 @ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
-def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
+def to_layout(
+    tensor,
+    layout: ttnn.Layout,
+    dtype: ttnn.DataType = None,
+    output_memory_config: ttnn.MemoryConfig = None,
+    use_multicore: bool = False,
+):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 
@@ -716,10 +722,22 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         ttl_tensor = tensor.value
         if is_on_device:
             if layout == ttnn.ROW_MAJOR_LAYOUT:
-                return ttnn.Tensor(ttl.tensor.untilize(ttl_tensor))
+                if output_memory_config is not None:
+                    return ttnn.Tensor(
+                        ttl.tensor.untilize(
+                            ttl_tensor, output_mem_config=output_memory_config, use_multicore=use_multicore
+                        )
+                    )
+                else:
+                    return ttnn.Tensor(ttl.tensor.untilize(ttl_tensor, use_multicore=use_multicore))
             elif layout == ttnn.TILE_LAYOUT:
                 return ttnn.Tensor(
-                    ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config(), output_dtype=dtype)
+                    ttl.tensor.tilize(
+                        ttl_tensor,
+                        output_mem_config=ttl_tensor.memory_config(),
+                        output_dtype=dtype,
+                        use_multicore=use_multicore,
+                    )
                 )
             else:
                 raise RuntimeError(f"Unsupported layout: {layout}")
@@ -874,7 +892,7 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     def impl(input_tensor):
         ttl_input_tensor = input_tensor.value
-        ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
+        ttl_output_tensor = ttl.tensor.move_sharded(ttl_input_tensor)
         return ttnn.Tensor(ttl_output_tensor)
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.reallocate")(input_tensor)

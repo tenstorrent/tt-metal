@@ -56,6 +56,7 @@ class cross_attention_down_block_2d:
         only_cross_attention=False,
         upcast_attention=False,
         resnet_time_scale_shift: str = "default",
+        group_norm_sharded_config=None,
     ):
         output_states = ()
 
@@ -75,6 +76,7 @@ class cross_attention_down_block_2d:
                 non_linearity=resnet_act_fn,
                 output_scale_factor=output_scale_factor,
                 pre_norm=resnet_pre_norm,
+                group_norm_sharded_config=group_norm_sharded_config if index == 0 else None,
             )
             if not dual_cross_attention:
                 hidden_states = attn(

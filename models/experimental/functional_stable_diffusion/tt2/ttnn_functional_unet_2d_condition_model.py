@@ -29,6 +29,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblo
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    pre_process_input_new,
 )
 
 
@@ -111,7 +112,6 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
         )
         self.down_blocks = []
         input_height = self.conv_in.output_height
@@ -292,15 +292,11 @@ class UNet2DConditionModel:
             class_emb = class_embedding(class_labels)
             emb = emb + class_emb
 
-        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            self.device,
-            self.conv_in,
-            sample,
-            self.conv_in.batch_size,
-            self.conv_in.output_height,
-            self.conv_in.output_width,
-            self.conv_in.out_channels,
-        )
+        sample = pre_process_input_new(self.device, sample)
+        # sample in l1 interelaved and tiled and nhwc
+        sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
+        sample = self.conv_in(sample)
+        sample = ttnn.reallocate(sample)
 
         # con_in completes
 
@@ -311,7 +307,8 @@ class UNet2DConditionModel:
             attention_head_dim = (attention_head_dim,) * len(self.down_block_types)
 
         # 3.down
-        down_block_res_samples = (sample,)
+        sample_copied_to_dram = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
+        down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
             input_channel = output_channel
@@ -341,6 +338,13 @@ class UNet2DConditionModel:
                     only_cross_attention=only_cross_attention[i],
                     upcast_attention=upcast_attention,
                     resnet_time_scale_shift=resnet_time_scale_shift,
+                    group_norm_sharded_config={
+                        "shard_strategy": self.conv_in.conv.input_shard_scheme,
+                        "shard_orientation": self.conv_in.conv.input_shard_orientation,
+                        "grid_size": self.conv_in.conv.grid_size,
+                    }
+                    if i == 0
+                    else None,
                 )
             elif down_block_type == "DownBlock2D":
                 sample, res_samples = down_block(
