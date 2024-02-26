@@ -206,18 +206,18 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         padded_layer_past_len = nearest_32(start_pos + 1)
 
         # TODO: Move sharding inputs to model
-        for i, device in enumerate(self.devices):
-            xs[i] = xs[i].to(device, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
+        # for i, device in enumerate(self.devices):
+        #     xs[i] = xs[i].to(device, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
         # Reshard
-        # if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
-        #     for i in range(len(xs)):
-        #         xs[i] = tt_lib.tensor.sharded_to_interleaved(
-        #             xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-        #         )
-        #     for i in range(len(xs)):
-        #         xs[i] = tt_lib.tensor.interleaved_to_sharded(
-        #             xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
-        #         )
+        if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
+            for i in range(len(xs)):
+                xs[i] = tt_lib.tensor.sharded_to_interleaved(
+                    xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                )
+            for i in range(len(xs)):
+                xs[i] = tt_lib.tensor.interleaved_to_sharded(
+                    xs[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
+                )
 
         # Fused QKV
         fused_query_key_value = []
@@ -418,42 +418,35 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output[i],
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )  # seqlen, 1, batch, hidden_size
-
+        for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
                 attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
         # All gather input to dense
         # dense_output_replicated = tt_all_gather_torch(attn_output, dim=-1)
-        breakpoint()
-        dense_output_replicated = tt_lib.tensor.all_gather(
+        attn_output = tt_lib.tensor.all_gather(
             attn_output,
             dim=3,
             num_links=1,
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        breakpoint()
-
-        for i in range(len(dense_output_replicated)):
-            dense_output_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
-                dense_output_replicated[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
+        for i in range(len(attn_output)):
+            attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
+                attn_output[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
             )
-        dense_outs = []
-        breakpoint()
-        for i in range(len(dense_output_replicated)):
-            dense_out = tt_lib.operations.primary.matmul_1d(
-                dense_output_replicated[i],
+        for i in range(len(attn_output)):
+            attn_output[i] = tt_lib.operations.primary.matmul_1d(
+                attn_output[i],
                 self.wo_list[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],
                 output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )  # seqlen, 1, batch, hidden_size
-            dense_output_replicated[i].deallocate(True)
-            dense_outs.append(dense_out)
-        breakpoint()
+        # breakpoint()
         # FOR BRINGUP! Outputs are sharded. Interleave them
-        dense_outs = [
-            tt_lib.tensor.sharded_to_interleaved(t, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
-            for t in dense_outs
-        ]
-
-        return dense_outs
+        # for i in range(len(attn_output)):
+        #     attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+        #         attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+        #     )
+        return attn_output

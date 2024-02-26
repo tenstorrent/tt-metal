@@ -228,47 +228,90 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
         )
 
     model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE
-
-    model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
-                    ),
-                }
+    if num_devices == 4:
+        model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    64,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
             ),
-            [
-                32,
-                64,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-    model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
-                    ),
-                }
+        )
+    elif num_devices == 8:
+        model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    32,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
             ),
-            [
-                32,
-                64,
-            ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+        )
+    if num_devices == 4:
+        model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    64,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+    elif num_devices == 8:
+        model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0),
+                            ttl.tensor.CoreCoord(7, 3),
+                        ),
+                    }
+                ),
+                [
+                    32,
+                    32,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
     # Decoder
     model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
@@ -414,6 +457,17 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             in0_block_w=16,
             out_subblock_h=1,
             out_subblock_w=5,
+            per_core_M=1,
+            per_core_N=5,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        model_config["FP32_FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 2),
+            in0_block_w=16,
+            out_subblock_h=1,
+            out_subblock_w=1,
             per_core_M=1,
             per_core_N=5,
             fuse_batch=True,
