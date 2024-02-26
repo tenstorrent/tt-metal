@@ -620,7 +620,13 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 
 
 @ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
-def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
+def to_layout(
+    tensor,
+    layout: ttnn.Layout,
+    dtype: ttnn.DataType = None,
+    output_memory_config: ttnn.MemoryConfig = None,
+    use_multicore: bool = False,
+):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 

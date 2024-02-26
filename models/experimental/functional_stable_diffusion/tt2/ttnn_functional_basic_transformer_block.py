@@ -7,7 +7,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_a
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import feedforward
 
 
-class basic_transformer_block():
+class basic_transformer_block:
     def __init__(self, device, parameters):
         self.device = device
         self.parameters = parameters
@@ -43,8 +43,15 @@ class basic_transformer_block():
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        hidden_states = ttnn.to_memory_config(
+            hidden_states, ttnn.L1_MEMORY_CONFIG
+        )  # layernorm doesn't support block_sharding
         norm_hidden_states = ttnn.layer_norm(
-            hidden_states, epsilon=1e-05, weight=self.parameters.norm1.weight, bias=self.parameters.norm1.bias
+            hidden_states,
+            epsilon=1e-05,
+            weight=self.parameters.norm1.weight,
+            bias=self.parameters.norm1.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # 1. Self-Attention
@@ -63,7 +70,7 @@ class basic_transformer_block():
 
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
-            
+
         hidden_states = ttnn.add(attn_output, hidden_states)
         if cross_attention_dim is not None:
             norm_hidden_states = ttnn.layer_norm(

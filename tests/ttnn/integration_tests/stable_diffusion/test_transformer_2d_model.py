@@ -11,6 +11,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import (
+    transformer_2d_model as transformer_2d_model_tt2,
+)
 
 
 @pytest.mark.parametrize(
@@ -177,25 +180,34 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.randn(encoder_hidden_states)
 
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
-    config = unet.config
-    transformer = pipe.unet.mid_block.attentions[0]
+    load_from_disk = True
+    if not load_from_disk:
+        pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
+        unet = pipe.unet
+        unet.eval()
+        config = unet.config
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
-    )
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        )
 
-    if block == "up":
-        parameters = parameters.up_blocks[index1].attentions[index2]
-        transformer = pipe.unet.up_blocks[index1].attentions[index2]
-    elif block == "down":
-        parameters = parameters.down_blocks[index1].attentions[index2]
-        transformer = pipe.unet.down_blocks[index1].attentions[index2]
-    elif block == "mid":
-        parameters = parameters.mid_block.attentions[0]
-        transformer = pipe.unet.mid_block.attentions[0]
+        if block == "up":
+            parameters = parameters.up_blocks[index1].attentions[index2]
+            transformer = pipe.unet.up_blocks[index1].attentions[index2]
+        elif block == "down":
+            parameters = parameters.down_blocks[index1].attentions[index2]
+            transformer = pipe.unet.down_blocks[index1].attentions[index2]
+        elif block == "mid":
+            parameters = parameters.mid_block.attentions[0]
+            transformer = pipe.unet.mid_block.attentions[0]
+        torch.save(transformer, "transformer.pt")
+        torch.save(config, "config.pt")
+    else:
+        transformer = torch.load("transformer.pt")
+        config = torch.load("config.pt")
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: transformer, custom_preprocessor=custom_preprocessor, device=device
+        )
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 
@@ -204,28 +216,49 @@ def test_transformer_2d_model_512x512(
     ttnn_encoder_hidden_states = ttnn.from_torch(
         encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    reader_patterns_cache = {}
-    ttnn_transformer = transformer_2d_model(
-        hidden_states=ttnn_hidden_state,
-        parameters=parameters,
-        config=config,
-        encoder_hidden_states=ttnn_encoder_hidden_states,
-        timestep=timestep,
-        class_labels=class_labels,
-        cross_attention_kwargs=cross_attention_kwargs,
-        return_dict=return_dict,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        in_channels=in_channels,
-        out_channels=in_channels,
-        num_layers=num_layers,
-        norm_num_groups=norm_num_groups,
-        norm_type=norm_type,
-        device=device,
-        cross_attention_dim=cross_attention_dim,
-        upcast_attention=upcast_attention,
-        reader_patterns_cache=reader_patterns_cache,
-    )
+
+    tt1 = False
+    if tt1:
+        ttnn_transformer = transformer_2d_model(
+            hidden_states=ttnn_hidden_state,
+            parameters=parameters,
+            config=config,
+            encoder_hidden_states=ttnn_encoder_hidden_states,
+            timestep=timestep,
+            class_labels=class_labels,
+            cross_attention_kwargs=cross_attention_kwargs,
+            return_dict=return_dict,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            in_channels=in_channels,
+            out_channels=in_channels,
+            num_layers=num_layers,
+            norm_num_groups=norm_num_groups,
+            norm_type=norm_type,
+            device=device,
+            cross_attention_dim=cross_attention_dim,
+            upcast_attention=upcast_attention,
+        )
+    else:
+        model = transformer_2d_model_tt2(device, parameters, {}, input_shape[0], input_shape[2], input_shape[3])
+        ttnn_transformer = model(
+            hidden_states=ttnn_hidden_state,
+            config=config,
+            encoder_hidden_states=ttnn_encoder_hidden_states,
+            timestep=timestep,
+            class_labels=class_labels,
+            cross_attention_kwargs=cross_attention_kwargs,
+            return_dict=return_dict,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            in_channels=in_channels,
+            out_channels=in_channels,
+            num_layers=num_layers,
+            norm_num_groups=norm_num_groups,
+            norm_type=norm_type,
+            cross_attention_dim=cross_attention_dim,
+            upcast_attention=upcast_attention,
+        )
 
     ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(ttnn_transformer), layout=ttnn.ROW_MAJOR_LAYOUT))
 
