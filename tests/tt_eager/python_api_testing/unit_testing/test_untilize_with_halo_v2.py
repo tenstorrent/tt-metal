@@ -7,7 +7,6 @@ import torch
 import numpy
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
-    construct_input_padded_tensor,
     validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
     construct_utwh_output_shards,
@@ -325,16 +324,17 @@ def test_generate_all_configs_and_references(
     input_padded_height = input_h + 2 * pad_h
     # Generate following configs by tracing conv -
     logger.info("Trace conv and generate follwing configs - pad_metadata and data_top_left_indices.")
-    pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-        conv_params, input_nchw_shape
+    (
+        pad_metadata,
+        data_top_left_indices,
+        input_padded_tensor,
+    ) = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
+        conv_params, input_nchw_shape, input_pyt_tensor.reshape(-1).tolist()
     )
     # # print("Data top left indices - ", data_top_left_indices)
     # # print("Pad meta data -", pad_metadata)
 
     # run trace conv reference to validate pad_metadata and data_top_left_indices
-    logger.info("Construct input padded tensor")
-    input_padded_tensor = construct_input_padded_tensor(input_pyt_tensor, pad_metadata)
-    # print (f'input_padded_tensor: {input_padded_tensor}')
 
     # Generate more configs -
     logger.info(
@@ -349,6 +349,7 @@ def test_generate_all_configs_and_references(
         num_cores_nhw,
         filter_h,
         filter_w,
+        # input_c,
     )
     # print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
     # print("tensor_metadata-", tensor_metadata)
