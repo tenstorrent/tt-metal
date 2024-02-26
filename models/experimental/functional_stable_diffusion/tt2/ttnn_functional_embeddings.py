@@ -5,14 +5,17 @@
 import ttnn
 
 
-class TtTimestepEmbedding():
+class TtTimestepEmbedding:
     def __init__(self, parameters):
         self.parameters = parameters
 
     def __call__(self, sample, act_fn: str = "silu"):
-
-        sample = ttnn.matmul(sample, self.parameters.linear_1.weight)
-        sample = ttnn.add(sample, self.parameters.linear_1.bias)
+        sample = ttnn.linear(
+            sample,
+            self.parameters.linear_1.weight,
+            bias=self.parameters.linear_1.bias,
+            core_grid=sample.device().core_grid,
+        )
 
         act = None
         if act_fn == "silu":
@@ -23,7 +26,11 @@ class TtTimestepEmbedding():
         if act is not None:
             sample = act(sample)
 
-        sample = ttnn.matmul(sample, self.parameters.linear_2.weight)
-        sample = ttnn.add(sample, self.parameters.linear_2.bias)
+        sample = ttnn.linear(
+            sample,
+            self.parameters.linear_2.weight,
+            bias=self.parameters.linear_2.bias,
+            core_grid=sample.device().core_grid,
+        )
 
         return sample

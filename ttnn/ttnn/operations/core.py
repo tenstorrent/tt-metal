@@ -622,7 +622,13 @@ def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwa
 
 
 @ttnn.register_operation(name="ttnn.to_layout", validate_input_tensors=_to_layout_validate_input_tensors)
-def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
+def to_layout(
+    tensor,
+    layout: ttnn.Layout,
+    dtype: ttnn.DataType = None,
+    output_memory_config: ttnn.MemoryConfig = None,
+    use_multicore: bool = False,
+):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> ttnn.Tensor
 
@@ -689,7 +695,12 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
                         tensor, use_multicore=True, output_mem_config=ttnn.get_memory_config(tensor)
                     )
                 else:
-                    return ttl.tensor.untilize(tensor)
+                    return ttl.tensor.untilize(
+                        tensor,
+                        output_mem_config=ttnn.get_memory_config(tensor)
+                        if output_memory_config is None
+                        else output_memory_config,
+                    )
             elif layout == ttnn.TILE_LAYOUT:
                 ## since the default of tilize is to use single core, set use_multicore if the input is sharded
                 use_multicore = False
@@ -859,7 +870,10 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
     name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, torch_function=_torch_identity
 )
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-    return ttl.tensor.move(input_tensor)
+    if ttnn.is_sharded(input_tensor):
+        return ttl.tensor.move_sharded(input_tensor)
+    else:
+        return ttl.tensor.move(input_tensor)
 
 
 def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwargs):
