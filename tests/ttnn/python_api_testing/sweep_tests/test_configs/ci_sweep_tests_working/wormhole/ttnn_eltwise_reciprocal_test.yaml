@@ -1,13 +1,13 @@
 ---
 test-list:
-  - ttnn-eltwise-add:
+  - ttnn-eltwise-recip:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-dims: [2, 3, 4]
-        num-shapes: 2
-        num-samples: 64
+        num-shapes: 1
+        num-samples: 128
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
@@ -21,6 +21,6 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_add_sweep.csv
+      output-file: eltwise_recip_sweep.csv

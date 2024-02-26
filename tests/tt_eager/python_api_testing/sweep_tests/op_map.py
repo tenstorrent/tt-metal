@@ -90,8 +90,16 @@ op_map = {
         "tt_lib_op": tt_lib_ops.tril,
         "pytorch_op": pytorch_ops.tril,
     },
+    "ttnn-tril": {
+        "tt_lib_op": ttnn_ops.tril,
+        "pytorch_op": pytorch_ops.tril,
+    },
     "eltwise-triu": {
         "tt_lib_op": tt_lib_ops.triu,
+        "pytorch_op": pytorch_ops.triu,
+    },
+    "ttnn-triu": {
+        "tt_lib_op": ttnn_ops.triu,
         "pytorch_op": pytorch_ops.triu,
     },
     "eltwise-zeros": {
@@ -274,6 +282,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,
     },
+    "ttnn-eltwise-square": {
+        "tt_lib_op": ttnn_ops.eltwise_square,
+        "pytorch_op": pytorch_ops.square,
+    },
     "eltwise-mish": {
         "tt_lib_op": tt_lib_ops.eltwise_mish,
         "pytorch_op": pytorch_ops.mish,
@@ -374,8 +386,16 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_recip,
         "pytorch_op": pytorch_ops.recip,
     },
+    "ttnn-eltwise-recip": {
+        "tt_lib_op": ttnn_ops.eltwise_recip,
+        "pytorch_op": pytorch_ops.recip,
+    },
     "eltwise-sqrt": {
         "tt_lib_op": tt_lib_ops.eltwise_sqrt,
+        "pytorch_op": pytorch_ops.sqrt,
+    },
+    "ttnn-eltwise-sqrt": {
+        "tt_lib_op": ttnn_ops.eltwise_sqrt,
         "pytorch_op": pytorch_ops.sqrt,
     },
     "eltwise-gelu": {
@@ -586,6 +606,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_tanhshrink,
         "pytorch_op": pytorch_ops.tanhshrink,
     },
+    "ttnn-eltwise-tanhshrink": {
+        "tt_lib_op": ttnn_ops.eltwise_tanhshrink,
+        "pytorch_op": pytorch_ops.tanhshrink,
+    },
     "eltwise-signbit": {
         "tt_lib_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
@@ -709,6 +733,10 @@ op_map = {
     },
     "eltwise-threshold": {
         "tt_lib_op": tt_lib_ops.eltwise_threshold,
+        "pytorch_op": pytorch_ops.threshold,
+    },
+    "ttnn-eltwise-threshold": {
+        "tt_lib_op": ttnn_ops.eltwise_threshold,
         "pytorch_op": pytorch_ops.threshold,
     },
     "eltwise-relu6": {
