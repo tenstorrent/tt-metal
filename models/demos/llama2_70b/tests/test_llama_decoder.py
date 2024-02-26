@@ -19,6 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
 
 
@@ -70,32 +71,34 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
 
 
 def run_test_LlamaDecoder_inference(
-    device,
-    model_version,
-    llm_mode,
+    devices,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config,
-    n_devices
+    optimized,
+    n_devices,
+    emulated=False,
     # tt_cache_path,
     # model_location_generator,
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
+    if emulated:
+        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        device = devices[0]
+        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    else:
+        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/home/llama-data/tokenizer.model"
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked/llama-2-70b/"
-    tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
-        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
+        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=True
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
-
-    # Prepare configs
-    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
 
     torch.manual_seed(0)
     layer_num = 0
@@ -109,7 +112,17 @@ def run_test_LlamaDecoder_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaDecoder_model = TtLlamaDecoder(devices, state_dict, base_url, layer_num, model_config, configuration, batch)
+    if optimized:
+        tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
+            devices, state_dict, base_url, layer_num, model_config, configuration, batch
+        )
+    else:
+        tt_LlamaDecoder_model = TtLlamaDecoder(
+            devices, state_dict, base_url, layer_num, model_config, configuration, batch
+        )
+
+    for device in devices:
+        tt_lib.device.Synchronize(device)
 
     generation_start_pos = 126
     generation_length = 3
@@ -144,6 +157,11 @@ def run_test_LlamaDecoder_inference(
 
         assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
+        # for i in range(n_devices):
+        #     # breakpoint()
+        #     tt_out[i] = tt_lib.tensor.sharded_to_interleaved(
+        #         tt_out[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+        #     )
         tt_outs = [tt2torch_tensor(o) for o in tt_out]
         tt_out = torch.cat(tt_outs, dim=-1)
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
@@ -198,43 +216,39 @@ def run_test_LlamaDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_devices",
+    "model_version, batch, seq_len, pcc, optimized, n_devices",
     (
-        # ("prefill", 1, 128, 0, 8),
-        ("decode", 32, 1, 128, 8),
+        ("llama-2-70B", 32, 1, 0.98, True, 4),
+        ("llama-2-70B", 32, 1, 0.98, True, 8),
     ),
-    ids=["decode_batch32"],
-)
-@pytest.mark.parametrize(
-    "model_version, pcc",
-    (("llama-2-70B", 0.98),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaDecoder_inference(
     model_version,
-    llm_mode,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config_str,
+    optimized,
     n_devices,
-    # model_location_generator,
-    device,
+    pcie_devices,
+    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
-    # tt_cache_path = get_tt_cache_path(model_version)
+    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if len(pcie_devices) < n_devices:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaDecoder_inference(
-        device,
-        model_version,
-        llm_mode,
+        pcie_devices[:n_devices],
         batch,
         seq_len,
-        kv_cache_len,
         pcc,
         model_config,
-        n_devices
+        optimized,
+        n_devices,
         # tt_cache_path,
         # model_location_generator,
     )

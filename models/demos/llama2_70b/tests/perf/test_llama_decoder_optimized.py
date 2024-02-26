@@ -20,6 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
+from models.demos.llama2_70b.tt.llama_decoder import TtLlamaDecoder
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -71,13 +72,11 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
 
 def run_test_LlamaDecoder_inference(
     devices,
-    model_version,
-    llm_mode,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config,
+    optimized,
     n_devices,
     emulated=False,
     # tt_cache_path,
@@ -113,9 +112,14 @@ def run_test_LlamaDecoder_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
-    tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
-        devices, state_dict, base_url, layer_num, model_config, configuration, batch
-    )
+    if optimized:
+        tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
+            devices, state_dict, base_url, layer_num, model_config, configuration, batch
+        )
+    else:
+        tt_LlamaDecoder_model = TtLlamaDecoder(
+            devices, state_dict, base_url, layer_num, model_config, configuration, batch
+        )
 
     generation_start_pos = 126
     generation_length = 3
@@ -204,28 +208,21 @@ def run_test_LlamaDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_devices",
+    "model_version, batch, seq_len, pcc, optimized, n_devices",
     (
-        # ("prefill", 1, 128, 0, 8),
-        ("decode", 32, 1, 128, 8),
+        ("llama-2-70B", 32, 1, 0.98, True, 4),
+        ("llama-2-70B", 32, 1, 0.98, True, 8),
     ),
-    ids=["decode_batch32"],
-)
-@pytest.mark.parametrize(
-    "model_version, pcc",
-    (("llama-2-70B", 0.98),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaDecoder_inference(
     model_version,
-    llm_mode,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config_str,
+    optimized,
     n_devices,
-    # model_location_generator,
     pcie_devices,
     use_program_cache,
 ):
@@ -238,14 +235,12 @@ def test_LlamaDecoder_inference(
 
     run_test_LlamaDecoder_inference(
         pcie_devices[:n_devices],
-        model_version,
-        llm_mode,
         batch,
         seq_len,
-        kv_cache_len,
         pcc,
         model_config,
-        n_devices
+        optimized,
+        n_devices,
         # tt_cache_path,
         # model_location_generator,
     )
