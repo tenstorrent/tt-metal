@@ -302,6 +302,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_swish,
         "pytorch_op": pytorch_ops.swish,
     },
+    "ttnn-eltwise-swish": {
+        "tt_lib_op": ttnn_ops.eltwise_swish,
+        "pytorch_op": pytorch_ops.swish,
+    },
     "eltwise-cos": {
         "tt_lib_op": tt_lib_ops.eltwise_cos,
         "pytorch_op": pytorch_ops.cos,
@@ -316,6 +320,10 @@ op_map = {
     },
     "eltwise-tan": {
         "tt_lib_op": tt_lib_ops.eltwise_tan,
+        "pytorch_op": pytorch_ops.tan,
+    },
+    "ttnn-eltwise-tan": {
+        "tt_lib_op": ttnn_ops.eltwise_tan,
         "pytorch_op": pytorch_ops.tan,
     },
     "eltwise-tan-bw": {
@@ -538,6 +546,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_polygamma,
         "pytorch_op": pytorch_ops.polygamma,
     },
+    "ttnn-eltwise-polygamma": {
+        "tt_lib_op": ttnn_ops.eltwise_polygamma,
+        "pytorch_op": pytorch_ops.polygamma,
+    },
     "eltwise-logical_xori": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_xori,
         "pytorch_op": pytorch_ops.logical_xori,
@@ -576,6 +588,10 @@ op_map = {
     },
     "eltwise-signbit": {
         "tt_lib_op": tt_lib_ops.eltwise_signbit,
+        "pytorch_op": pytorch_ops.signbit,
+    },
+    "ttnn-eltwise-signbit": {
+        "tt_lib_op": ttnn_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
     },
     "eltwise-rpow": {
@@ -673,6 +689,10 @@ op_map = {
     },
     "eltwise-rad2deg": {
         "tt_lib_op": tt_lib_ops.eltwise_rad2deg,
+        "pytorch_op": pytorch_ops.rad2deg,
+    },
+    "ttnn-eltwise-rad2deg": {
+        "tt_lib_op": ttnn_ops.eltwise_rad2deg,
         "pytorch_op": pytorch_ops.rad2deg,
     },
     "eltwise-cbrt": {

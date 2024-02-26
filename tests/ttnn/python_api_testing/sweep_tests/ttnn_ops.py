@@ -1049,3 +1049,100 @@ def eltwise_softsign(
     t1 = ttnn.softsign(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_tan(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.tan(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_tanh(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.tanh(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_swish(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.swish(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_signbit(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.signbit(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_rad2deg(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.rad2deg(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
+
+
+def eltwise_polygamma(
+    x,
+    *args,
+    k,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.polygamma(t0, k, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1, output_mem_config)
