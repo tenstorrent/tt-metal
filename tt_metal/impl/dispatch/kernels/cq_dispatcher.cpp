@@ -16,6 +16,8 @@ void kernel_main() {
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
     uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
 
+    db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE);
+    uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
     while (true) {
         // Wait for producer to supply a command
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, consumer_data_buffer_size>(db_buf_switch);
@@ -27,21 +29,24 @@ void kernel_main() {
         uint32_t num_pages = header->num_pages;
         uint32_t program_transfer_num_pages = header->program_transfer_num_pages;
 
-        db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE);
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_DISPATCHER_CB_CONFIG_BASE);
         uint32_t completion_data_size = header->completion_data_size;
         reset_dispatch_message_addr();
-        DPRINT << "Dispatcher got program" << ENDL();
+        // DPRINT << "Dispatcher got program" << ENDL();
+        DPRINT << "LAUNCH PROGRAM" << ENDL();
         write_and_launch_program(
             db_cb_config,
             remote_db_cb_config,
             (CommandHeader*)command_ptr,
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(program_transfer_start_addr),
             producer_noc_encoding,
-            program_transfer_num_pages);
-        DPRINT << "Dispatcher launched program" << ENDL();
+            program_transfer_num_pages,
+            l1_consumer_fifo_limit);
+        // DPRINT << "Dispatcher launched program" << ENDL();
+        DPRINT << "WAIT FOR PROGRAM" << ENDL();
         wait_for_program_completion(num_workers);
-        DPRINT << "Dispatcher done program" << ENDL();
+        DPRINT << "DONE WAIT" << ENDL();
+        // DPRINT << "Dispatcher done program" << ENDL();
 
         // notify producer that it has completed a command
         noc_semaphore_inc(producer_noc_encoding | get_semaphore(2), 1);

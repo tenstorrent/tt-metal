@@ -68,13 +68,14 @@ FORCE_INLINE uint32_t program_page_transfer(
     uint64_t producer_noc_encoding,
     uint32_t producer_consumer_transfer_num_pages,
     uint32_t num_pages_in_transfer,
-    uint32_t global_page_idx) {
-    uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
+    uint32_t l1_consumer_fifo_limit,
+    uint32_t global_page_idx
+    ) {
 
     for (uint32_t page_idx = 0; page_idx < num_pages_in_transfer;) {
-        uint32_t next_multiple_of_producer_consumer_transfer_num_pages = align(global_page_idx + 1, producer_consumer_transfer_num_pages);
         uint32_t num_pages_left_in_transfer = num_pages_in_transfer - page_idx;
-        uint32_t num_to_write = min(num_pages_left_in_transfer, next_multiple_of_producer_consumer_transfer_num_pages - global_page_idx);
+        uint32_t num_to_write = min(num_pages_left_in_transfer, producer_consumer_transfer_num_pages);
+        num_to_write = min(num_to_write, (l1_consumer_fifo_limit - (db_cb_config->rd_ptr_16B << 4) / DeviceCommand::PROGRAM_PAGE_SIZE));
 
         multicore_cb_wait_front(db_cb_config, num_to_write);
         uint32_t src_addr = (db_cb_config->rd_ptr_16B) << 4;
@@ -116,7 +117,8 @@ void write_and_launch_program(
     const CommandHeader* header,
     volatile tt_l1_ptr uint32_t* program_dispatch_cmd_ptr,
     uint64_t producer_noc_encoding,
-    uint32_t producer_consumer_transfer_num_pages) {
+    uint32_t producer_consumer_transfer_num_pages,
+    uint32_t l1_consumer_fifo_limit) {
 
     uint32_t global_page_idx = 0;
     for (uint32_t transfer_type_idx = 0; transfer_type_idx < (uint32_t) DeviceCommand::TransferType::NUM_TRANSFER_TYPES; transfer_type_idx++) {
@@ -131,6 +133,51 @@ void write_and_launch_program(
             case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
                 num_pages_in_transfer = header->num_cb_config_pages;
                 break;
+            default:
+                continue;
+        }
+
+        if (multicast) {
+            global_page_idx = program_page_transfer<true>(
+                db_cb_config,
+                remote_db_cb_config,
+                program_dispatch_cmd_ptr,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages,
+                num_pages_in_transfer,
+                l1_consumer_fifo_limit,
+                global_page_idx);
+        } else {
+            global_page_idx = program_page_transfer<false>(
+                db_cb_config,
+                remote_db_cb_config,
+                program_dispatch_cmd_ptr,
+                producer_noc_encoding,
+                producer_consumer_transfer_num_pages,
+                num_pages_in_transfer,
+                l1_consumer_fifo_limit,
+                global_page_idx);
+        }
+    }
+
+    // Snapping
+    uint32_t aligned_global_page_idx = align(global_page_idx, producer_consumer_transfer_num_pages);
+    if (global_page_idx != aligned_global_page_idx) {
+        multicore_cb_pop_front(
+            db_cb_config,
+            remote_db_cb_config,
+            producer_noc_encoding,
+            (l1_consumer_fifo_limit >> 4),
+            aligned_global_page_idx - global_page_idx,
+            (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
+    }
+
+    global_page_idx = 0;
+    for (uint32_t transfer_type_idx = 0; transfer_type_idx < (uint32_t) DeviceCommand::TransferType::NUM_TRANSFER_TYPES; transfer_type_idx++) {
+        uint32_t num_pages_in_transfer;
+        bool multicast = true;
+        switch (transfer_type_idx) {
+            DeviceCommand::TransferType transfer_type;
             case (uint32_t) DeviceCommand::TransferType::PROGRAM_MULTICAST_PAGES:
                 num_pages_in_transfer = header->num_program_multicast_pages;
                 break;
@@ -145,6 +192,8 @@ void write_and_launch_program(
                 multicast = false;
                 num_pages_in_transfer = header->num_go_signal_unicast_pages;
                 break;
+            default:
+                continue;
         }
 
         if (multicast) {
@@ -155,6 +204,7 @@ void write_and_launch_program(
                 producer_noc_encoding,
                 producer_consumer_transfer_num_pages,
                 num_pages_in_transfer,
+                l1_consumer_fifo_limit,
                 global_page_idx);
         } else {
             global_page_idx = program_page_transfer<false>(
@@ -164,8 +214,20 @@ void write_and_launch_program(
                 producer_noc_encoding,
                 producer_consumer_transfer_num_pages,
                 num_pages_in_transfer,
+                l1_consumer_fifo_limit,
                 global_page_idx);
         }
+    }
+
+    aligned_global_page_idx = align(global_page_idx, producer_consumer_transfer_num_pages);
+    if (global_page_idx != aligned_global_page_idx) {
+        multicore_cb_pop_front(
+            db_cb_config,
+            remote_db_cb_config,
+            producer_noc_encoding,
+            (l1_consumer_fifo_limit >> 4),
+            aligned_global_page_idx - global_page_idx,
+            (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
     }
 }
 

@@ -151,6 +151,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     } else {
         uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false);
         push_and_pull_cb_num_pages = pull_and_push_data_buffer_size / padded_page_size;
+        push_and_pull_cb_num_pages = push_and_pull_cb_num_pages / 2 * 2;
     }
 
     uint32_t push_and_pull_cb_size = push_and_pull_cb_num_pages * padded_page_size;
@@ -304,6 +305,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     else {
         uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false);
         push_and_pull_cb_num_pages = pull_and_push_data_buffer_size / padded_page_size;
+        push_and_pull_cb_num_pages = push_and_pull_cb_num_pages / 2 * 2;
     }
 
     uint32_t push_and_pull_cb_size = push_and_pull_cb_num_pages * padded_page_size;
@@ -502,9 +504,9 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 
         std::cout << "Enqueue Program - router cb num pages: " << router_cb_num_pages << " router cb size " << router_cb_size << " router tx num pages " << router_transfer_num_pages << std::endl;
 
-        push_and_pull_cb_num_pages = router_cb_num_pages * producer_consumer_multiple;
+        push_and_pull_cb_num_pages = router_cb_num_pages * producer_consumer_multiple / 2 * 2;
     } else {
-        uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false);
+        uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false) / 2 * 2;
         push_and_pull_cb_num_pages = pull_and_push_data_buffer_size / DeviceCommand::PROGRAM_PAGE_SIZE;
     }
 

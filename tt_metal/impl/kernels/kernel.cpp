@@ -187,7 +187,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     auto validate_runtime_args_size = [&]() {
         uint32_t runtime_args_size = runtime_args.size() * sizeof(uint32_t);
         auto[l1_arg_base, result_base] = this->get_runtime_args_range();
-        if (l1_arg_base + runtime_args_size >= result_base) {
+        if (l1_arg_base + runtime_args_size > result_base) {
             TT_THROW(std::to_string(runtime_args_size / 1024) + "KB runtime args targeting kernel " + this->name() + " on " + logical_core.str() + " are too large.\
                 Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
         }
