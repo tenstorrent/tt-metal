@@ -29,8 +29,8 @@ def run_move_op(shape, device):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     if (compute_grid_size.x * compute_grid_size.y) < 98:
-        core_count = 58
-        shape[2] = 25056
+        core_count = 50
+        shape[2] = 25050
     else:
         core_count = 98
 
@@ -42,11 +42,11 @@ def run_move_op(shape, device):
             {
                 ttl.tensor.CoreRange(
                     ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(7, 6),
+                    ttl.tensor.CoreCoord(7, 5),
                 ),
                 ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 7),
-                    ttl.tensor.CoreCoord(1, 7),
+                    ttl.tensor.CoreCoord(0, 6),
+                    ttl.tensor.CoreCoord(1, 6),
                 ),
             }
         )
