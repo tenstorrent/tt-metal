@@ -10,7 +10,6 @@
 
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
-#include "llrt/watcher.hpp"
 #include "logger.hpp"
 #include "noc/noc_parameters.h"
 #include "tt_metal/detail/program.hpp"
@@ -18,6 +17,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
@@ -989,11 +989,11 @@ void HWCommandQueue::finish() {
             if (DPrintServerHangDetected()) {
                 this->exit_condition = true;
                 TT_THROW("Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-            } else if (tt::llrt::watcher_server_killed_due_to_error()) {
+            } else if (tt::watcher_server_killed_due_to_error()) {
                 this->exit_condition = true;
                 TT_THROW(
                     "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-                    tt::llrt::watcher_get_log_file_name()
+                    tt::watcher_get_log_file_name()
                 );
             }
         }

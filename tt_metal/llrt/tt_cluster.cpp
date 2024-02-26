@@ -16,7 +16,7 @@
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
-#include "watcher.hpp"
+#include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 
 #ifdef ARCH_GRAYSKULL
 static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
@@ -438,7 +438,7 @@ void Cluster::write_core(
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::llrt::watcher_sanitize_host_noc_write(
+        tt::watcher_sanitize_host_noc_write(
             soc_desc, {core.x, core.y}, addr, sz_in_bytes);
     }
     tt_cxy_pair virtual_core = soc_desc.convert_to_umd_coordinates(core);
@@ -455,7 +455,7 @@ void Cluster::read_core(
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::llrt::watcher_sanitize_host_noc_read(
+        tt::watcher_sanitize_host_noc_read(
             soc_desc, {core.x, core.y}, addr, size_in_bytes);
     }
 
@@ -475,7 +475,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::llrt::watcher_sanitize_host_noc_write(soc_desc, {target.x, target.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_write(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
     this->get_driver(chip_id).write_to_device(mem_ptr, size_in_bytes, virtual_target, addr, "REG_TLB");
@@ -491,7 +491,7 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::llrt::watcher_sanitize_host_noc_read(soc_desc, {target.x, target.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_read(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
     this->get_driver(chip_id).read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
