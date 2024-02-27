@@ -15,7 +15,13 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks rotary_embedding_multi_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx) {
+    const Tensor &input,
+    const Tensor &cos,
+    const Tensor &sin,
+    Tensor &output,
+    std::optional<uint32_t> token_idx,
+    DeviceComputeKernelConfig compute_kernel_config
+) {
     Program program{};
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -42,6 +48,25 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
+
+    MathFidelity math_fidelity;
+    bool fp32_dest_acc_en;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            fp32_dest_acc_en = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -308,7 +333,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             program,
             "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_kernel_defines});
+            tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_kernel_defines});
     }
     uint32_t cos_sin_offset = 0;
     uint32_t cos_sin_start_id = 0;
