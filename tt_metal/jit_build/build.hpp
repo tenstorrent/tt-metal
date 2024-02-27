@@ -5,7 +5,6 @@
 #pragma once
 #include <thread>
 #include <string>
-#include <utility>
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
@@ -15,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "llrt/rtoptions.hpp"
+
 
 namespace tt::tt_metal {
 
