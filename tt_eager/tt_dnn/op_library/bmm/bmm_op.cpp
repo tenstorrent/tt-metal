@@ -692,14 +692,17 @@ Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &i
 Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<UnaryWithParam> fused_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto seq_len = input_tensor_a.shape()[2];
     if (seq_len > 1024) {
-        TT_FATAL(not fused_activation.has_value());
         // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
         TT_FATAL(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
         TT_FATAL(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
         TT_FATAL((input_tensor_a.shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
         TT_FATAL((input_tensor_b.shape() == Shape({1, 1, 4544, 18176})), "Unsupported input shape");
-        TT_FATAL(!fused_activation.has_value());
-        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+        Tensor mm = operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+        if (fused_activation.has_value()) {
+            TT_FATAL(fused_activation.value().op_type == UnaryOpType::GELU);
+            return gelu(mm);
+        }
+        return mm;
     } else {
         auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation, true, mem_config.is_sharded());
         return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);

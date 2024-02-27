@@ -97,6 +97,12 @@ def run_test_FalconMLP_inference(
         (
             "tiiuae/falcon-7b-instruct",
             1,
+            2048,
+            0.98,
+        ),
+        (
+            "tiiuae/falcon-7b-instruct",
+            1,
             128,
             0.98,
         ),
