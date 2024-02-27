@@ -806,6 +806,37 @@ std::vector<Tensor> hardsigmoid_bw(const Tensor& grad, const Tensor& input, cons
 {
     return operation::decorate_as_composite(__func__, _hardsigmoid_bw)(grad, input, output_mem_config);
 }
+
+float factorial(int n) {
+    if (n == 0 || n == 1) {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
+std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+
+    Tensor result=zeros_like(input);
+    Tensor term=zeros_like(input);
+    Tensor final_res=zeros_like(input);
+
+    float fact;
+    for (int i=0; i<100; i++){
+        fact=factorial(i);
+        term = mul_unary(power(div_unary(input, 2.0, output_mem_config), 2*i-1, output_mem_config), i / (fact*fact), output_mem_config);
+        result = add(result,term);
+    }
+    final_res= mul(result, grad, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(final_res);
+    return grad_tensor;
+}
+std::vector<Tensor> i0_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _i0_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
