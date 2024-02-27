@@ -43,9 +43,10 @@ void dump_kernel_defines_and_args(const string &out_kernel_root_path) {
     tt::utils::create_file(out_kernel_root_path);
 
     string kernel_args_csv = out_kernel_root_path + "kernel_args.csv";
+
+    std::lock_guard<std::mutex> lock(mutex_kernel_defines_and_args_);
     ofstream file(kernel_args_csv, ios::trunc);
     if (file.is_open()) {
-        std::lock_guard<std::mutex> lock(mutex_kernel_defines_and_args_);
         for (auto const& [full_kernel_name, defines_and_args_str] : kernel_defines_and_args_) {
             file << full_kernel_name << defines_and_args_str << "\n";
         }
