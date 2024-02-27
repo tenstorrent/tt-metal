@@ -873,27 +873,51 @@ def repeat(x, *args, repeat, **kwargs):
 
 
 def lte(x, y, *args, **kwargs):
-    return x <= y
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return x <= scalar
+    else:
+        return x <= y
 
 
 def lt(x, y, *args, **kwargs):
-    return x < y
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return x < scalar
+    else:
+        return x < y
 
 
 def gte(x, y, *args, **kwargs):
-    return x >= y
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return x >= scalar
+    else:
+        return x >= y
 
 
 def gt(x, y, *args, **kwargs):
-    return x > y
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return x > scalar
+    else:
+        return x > y
 
 
 def eq(x, y, *args, **kwargs):
-    return x == y
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return x == scalar
+    else:
+        return x == y
 
 
 def ne(x, y, *args, **kwargs):
-    return x != y
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        return x != scalar
+    else:
+        return x != y
 
 
 def max(x, y, *args, **kwargs):
