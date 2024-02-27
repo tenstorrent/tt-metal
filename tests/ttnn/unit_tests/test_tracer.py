@@ -13,8 +13,8 @@ from ttnn.tracer import trace, visualize, get_graph, to_networkx
 
 from models.utility_functions import skip_for_wormhole_b0
 
-from models.experimental.functional_bert.tt import ttnn_functional_bert
-from models.experimental.functional_bert.tt import ttnn_optimized_functional_bert
+from models.demos.bert.tt import ttnn_bert
+from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 
@@ -80,41 +80,39 @@ def test_bloom(show_modules):
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
-@pytest.mark.parametrize("functional_bert", [ttnn_functional_bert, ttnn_optimized_functional_bert])
-def test_ttnn_functional_bert(device, use_program_cache, model_name, batch_size, sequence_size, functional_bert):
+@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+def test_ttnn_bert(device, use_program_cache, model_name, batch_size, sequence_size, bert):
     config = transformers.BertConfig.from_pretrained(model_name)
 
-    if functional_bert == ttnn_functional_bert:
+    if bert == ttnn_bert:
         tt_model_name = f"ttnn_{model_name}"
-    elif functional_bert == ttnn_optimized_functional_bert:
+    elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
-        raise ValueError(f"Unknown functional_bert: {functional_bert}")
+        raise ValueError(f"Unknown bert: {bert}")
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
-        custom_preprocessor=functional_bert.custom_preprocessor,
+        custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )
 
     with trace():
         input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
         torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
-        torch_attention_mask = (
-            torch.zeros(1, sequence_size) if functional_bert == ttnn_optimized_functional_bert else None
-        )
+        torch_attention_mask = torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None
 
-        ttnn_bert_inputs = functional_bert.preprocess_inputs(
+        ttnn_bert_inputs = bert.preprocess_inputs(
             input_ids,
             torch_token_type_ids,
             torch_attention_mask,
             device=device,
         )
 
-        output = functional_bert.bert_for_question_answering(
+        output = bert.bert_for_question_answering(
             config,
             *ttnn_bert_inputs,
             parameters=parameters,

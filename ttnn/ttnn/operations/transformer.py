@@ -320,7 +320,11 @@ def attention_softmax(
 
     if attention_mask is not None:
         output_tensor = ttl.tensor.scale_mask_softmax(
-            input_tensor.value, scaler, attention_mask.value, output_mem_config=memory_config
+            input_tensor.value,
+            scaler,
+            attention_mask.value,
+            output_mem_config=memory_config,
+            program_config=program_config,
         )
         return ttnn.Tensor(output_tensor)
     else:
@@ -340,9 +344,12 @@ def attention_softmax_(
     *,
     head_size: Optional[int],
     attention_mask: Optional[ttnn.Tensor],
+    program_config: Optional[
+        ttl.operations.primary.transformers.SoftmaxProgramConfig
+    ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
 ) -> ttnn.Tensor:
     """
-    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
+    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
 
     In-Place divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
@@ -350,6 +357,8 @@ def attention_softmax_(
         * :attr:`input_tensor`: Input Tensor
         * :attr:`head_size`: Number of heads
         * :attr:`attention_mask`: Attention Mask
+        * :attr:`program_config`: Program Config of the output tensor
+
 
     """
     if len(input_tensor.shape) != 4:
@@ -365,7 +374,7 @@ def attention_softmax_(
 
     if attention_mask is not None:
         ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            input_tensor.value, scaler, attention_mask.value
+            input_tensor.value, scaler, attention_mask.value, program_config=program_config
         )
         return input_tensor
     else:

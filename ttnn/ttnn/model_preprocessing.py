@@ -106,6 +106,9 @@ class ParameterList(list):
         repr_parameters(file, self)
         return file.getvalue()
 
+    def __contains__(self, index: int) -> bool:
+        return index < len(self)
+
 
 class ParameterDict(dict):
     __getattr__ = dict.__getitem__
@@ -313,6 +316,9 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
 
         if path.is_dir():
             parameters = _load_parameters(path)
+            if all(str(key).isdigit() for key in parameters):
+                parameters = {int(key): value for key, value in parameters.items()}
+                parameters = ParameterList([parameters[index] for index in sorted(parameters.keys())])
             output[name] = parameters
         elif extension == ".bin":
             output[name] = ttnn.load_tensor(path)

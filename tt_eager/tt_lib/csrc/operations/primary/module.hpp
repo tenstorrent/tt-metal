@@ -411,8 +411,9 @@ void py_module(py::module& m_primary) {
             py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
             py::arg("im_data_format").noconvert(),
             py::arg("out_data_format").noconvert(),
-            py::arg("inplace").noconvert()
-        );
+            py::arg("inplace").noconvert())
+        .def(
+            "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 
     m_primary.def(
         "layernorm",
