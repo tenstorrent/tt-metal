@@ -44,7 +44,6 @@ jobs:
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_tests.sh
 
-
   model-and-cpp:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -74,21 +73,21 @@ jobs:
       - name: Build tt-metal CPP tests
         run: make tests
       - name: Run API Sweep tests
-        timeout-minutes: 120
+        timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_sweep_tests.sh
       - name: Run API Model tests
-        timeout-minutes: 120
+        timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_model_tests.sh
       - name: Run tt-metal and tt-eager tests
-        timeout-minutes: 120
+        timeout-minutes: 30
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
@@ -96,14 +95,14 @@ jobs:
           env python tests/scripts/run_tt_metal.py --dispatch-mode fast
           env python tests/scripts/run_tt_eager.py --dispatch-mode fast
       - name: Run pre/post C++ regression tests
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./build/test/tt_metal/unit_tests_fast_dispatch
       - name: Build Docs
-        timeout-minutes: 20
+        timeout-minutes: 5
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME

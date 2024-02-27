@@ -12,7 +12,8 @@ Table of Contents
       * [Setting logger level](#setting-logger-level)
       * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
       * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
-   * [Running tests on tt-metal](#running-tests-on-tt-metal)
+   * [Tests in tt-metal](#running-tests-on-tt-metal)
+      * [Adding post-commit tests](#adding-post-commit-tests)
       * [Running pre/post-commit regressions](#running-prepost-commit-regressions)
       * [Running model performance tests](#running-model-performance-tests)
    * [Debugging tips](#debugging-tips)
@@ -151,12 +152,18 @@ the built Python dev environment stored at `build/python_env/`.
 To delete absolutely everything including the Python environment, use `make
 nuke`.
 
-## Running tests on tt-metal
+## Tests in tt-metal
 
 Ensure you're in a developer environment with necessary environment variables
 set as documentating in the [developing section](#developing-tt-metal).
 
 This includes the environment variables, Python dev environment etc.
+
+### Adding Post Commit Tests
+
+Make sure to add post-commit tests in the at the lowest two levels of the tests directory to make sure tests are executed on the workflows.
+
+New shell scripts added above the lowest two levels may not be executed on the post-commit workflows!
 
 ### Running pre/post-commit regressions
 
