@@ -5,6 +5,8 @@
 #pragma once
 
 #include <string>
+#include <thread>
+#include <mutex>
 #include "assert.hpp"
 
 using std::string;
@@ -38,5 +40,39 @@ namespace utils
         }
         return result;
     }
+
+    // A simple thread manager that joins all threads and rethrows the first caught exception
+    // instead of letting the program terminate.
+    class ThreadManager {
+        public:
+            template <typename Func, typename... Args>
+            void start(Func&& func, Args&&... args) {
+                threads.emplace_back(std::thread([=]() {
+                    try {
+                        func(args...);
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lock(exceptionMutex);
+                        exceptions.push_back(std::current_exception());
+                    }
+                }));
+            }
+
+            void join_and_rethrow() {
+                for (auto& thread : threads) {
+                    if (thread.joinable()) {
+                        thread.join();
+                    }
+                }
+
+                if (!exceptions.empty()) {
+                    std::rethrow_exception(exceptions.front());
+                }
+            }
+
+        private:
+            std::vector<std::thread> threads;
+            std::vector<std::exception_ptr> exceptions;
+            std::mutex exceptionMutex;
+        };
 }
 }
