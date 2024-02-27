@@ -175,21 +175,28 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
     uint32_t checksum = 0;
     uint32_t *data = (uint32_t *)((uint32_t)cmd + (uint32_t)sizeof(CQDispatchCmd));
-    for (uint32_t i = 0; i < cmd->debug.size / sizeof(uint32_t); i++) {
+    uint32_t size = cmd->debug.size;
+    DPRINT << "checksum: " << cmd->debug.size << ENDL();
+
+    // Dispatch checksum only handles running checksum on a single page
+    // Host code prevents larger from flowing through
+    // This way this code doesn't have to fetch multiple pages and then run
+    // a cmd within those pages (messing up the implementation of that command)
+    for (uint32_t i = 0; i < size / sizeof(uint32_t); i++) {
         checksum += *data++;
     }
 
     if (checksum != cmd->debug.checksum) {
-        DPRINT << "checksum" << ENDL();
+        DPRINT << "!checksum" << ENDL();
         DEBUG_STATUS('!', 'C', 'H', 'K');
         while(1);
     }
 
-    // XXXXX this only works here if stride < page_size - 2 * sizeof(dispatchcmd)
     return cmd_ptr + cmd->debug.stride;
 }
 
 void kernel_main() {
+    DPRINT << "dispatcher start" << ENDL();;
 
     for (uint32_t i = 0; i < dispatch_cb_blocks; i++) {
         uint32_t next_block = i + 1;
@@ -240,7 +247,7 @@ void kernel_main() {
             break;
 
         default:
-            DPRINT << "dispatcher invalid command:" << cmd_ptr << " " << cb_fence << " " << dispatch_cb_end << " " << rd_block_idx << " " << ENDL();
+            DPRINT << "dispatcher invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << ENDL();
             DEBUG_STATUS('!', 'C', 'M', 'D');
             while(1);
         }
@@ -254,6 +261,7 @@ void kernel_main() {
     }
 
     dispatch_cb_block_release_pages();
+    noc_async_write_barrier();
 
     DPRINT << "dispatch out" << ENDL();
 }
