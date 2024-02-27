@@ -629,7 +629,6 @@ def preprocess_model(
                         device=device,
                     )
                 elif isinstance(model.ttnn_module_args, MaxPool2dArgs):
-                    print(f"---------------- Using max pool args: {model.ttnn_module_args}")
                     return ttnn.MaxPool2d(
                         **model.ttnn_module_args,
                         reader_patterns_cache=reader_patterns_cache,
