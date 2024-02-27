@@ -41,7 +41,7 @@ def preprocess_embedding_weight(weight, *, dtype):
     return weight
 
 
-def preprocess_conv2d(weight, bias, ttnn_module_args):
+def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=False):
     if ttnn_module_args is None:
         raise RuntimeError(f"torch.nn.Conv2d modules need run_model to be provided to preprocess_model_parameters")
 
@@ -61,9 +61,10 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
     parameters["weight"] = ttnn.Tensor(conv.conv.weight)
     if bias is not None:
         parameters["bias"] = ttnn.Tensor(conv.conv.bias)
-    parameters["num_cores_nhw"] = conv.get_num_cores_nhw()
-    parameters["parallel_config"] = conv.get_parallel_config()
-    return parameters
+    if return_parallel_config:
+        return parameters, conv.get_parallel_config()
+    else:
+        return parameters
 
 
 def fold_batch_norm2d_into_conv2d(conv, bn):
@@ -629,7 +630,6 @@ def preprocess_model(
                         device=device,
                     )
                 elif isinstance(model.ttnn_module_args, MaxPool2dArgs):
-                    print(f"---------------- Using max pool args: {model.ttnn_module_args}")
                     return ttnn.MaxPool2d(
                         **model.ttnn_module_args,
                         reader_patterns_cache=reader_patterns_cache,
