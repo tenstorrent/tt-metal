@@ -14,6 +14,8 @@ uint32_t program_pull_and_push_config(
     uint32_t page_size,
     uint32_t num_pages_to_read,
     uint32_t num_pages_to_write,
+    bool sharded,
+    uint32_t sharded_buffer_num_cores,
     uint64_t pull_noc_encoding = 0,
     uint64_t push_noc_encoding = 0,
     volatile db_cb_config_t* local_src_multicore_cb_cfg = nullptr,
@@ -26,8 +28,8 @@ uint32_t program_pull_and_push_config(
     uint32_t src_bank_base_address = buffer_transfer_ptr[0];
     uint32_t dst_bank_base_address = buffer_transfer_ptr[1];
     uint32_t num_pages = buffer_transfer_ptr[2];
-    uint32_t src_buf_type = buffer_transfer_ptr[4];
-    uint32_t dst_buf_type = buffer_transfer_ptr[5];
+    BufferType src_buf_type = (BufferType)buffer_transfer_ptr[4];
+    BufferType dst_buf_type = (BufferType)buffer_transfer_ptr[5];
     uint32_t src_page_index = buffer_transfer_ptr[6];
     uint32_t dst_page_index = buffer_transfer_ptr[7];
 
@@ -35,7 +37,11 @@ uint32_t program_pull_and_push_config(
     static_assert(push_type == PullAndRelayType::CIRCULAR_BUFFER or push_type == PullAndRelayType::BUFFER);
 
     if constexpr (pull_type == PullAndRelayType::BUFFER) {
-        src_pr_cfg.buff_cfg.buffer.init((BufferType)src_buf_type, src_bank_base_address, page_size);
+        if (src_buf_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
+            src_pr_cfg.buff_cfg.buffer.init(src_buf_type, src_bank_base_address, page_size);
+        } else {
+            src_pr_cfg.buff_cfg.buffer.init_sharded(page_size, sharded_buffer_num_cores, src_bank_base_address, buffer_transfer_ptr + COMMAND_PTR_SHARD_IDX);
+        }
         src_pr_cfg.buff_cfg.page_id = src_page_index;
     } else {
         src_pr_cfg.cb_buff_cfg.remote_noc_encoding = pull_noc_encoding;
@@ -45,7 +51,11 @@ uint32_t program_pull_and_push_config(
     src_pr_cfg.num_pages_to_read = num_pages_to_read;
 
     if constexpr (push_type == PullAndRelayType::BUFFER) {
-        dst_pr_cfg.buff_cfg.buffer.init((BufferType)dst_buf_type, dst_bank_base_address, page_size);
+        if (dst_buf_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
+            dst_pr_cfg.buff_cfg.buffer.init(dst_buf_type, dst_bank_base_address, page_size);
+        } else {
+            dst_pr_cfg.buff_cfg.buffer.init_sharded(page_size, sharded_buffer_num_cores, dst_bank_base_address, buffer_transfer_ptr + COMMAND_PTR_SHARD_IDX);
+        }
         dst_pr_cfg.buff_cfg.page_id = dst_page_index;
     } else { // pushing data to circular buffer
         dst_pr_cfg.cb_buff_cfg.remote_noc_encoding = push_noc_encoding;
@@ -181,6 +191,8 @@ void kernel_main() {
         uint32_t program_transfer_num_pages = header->program_transfer_num_pages;
         uint32_t router_transfer_num_pages = header->router_transfer_num_pages;
         bool is_program = header->is_program_buffer;
+        bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
+        uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t completion_data_size = header->completion_data_size;
         DeviceCommand::WrapRegion wrap = (DeviceCommand::WrapRegion)header->wrap;
         uint32_t event = header->event;
@@ -241,6 +253,8 @@ void kernel_main() {
                         page_size,
                         num_pages_to_read,
                         num_pages_to_write,
+                        is_sharded,
+                        sharded_buffer_num_cores,
                         pull_noc_encoding,
                         dispatch_noc_encoding,
                         nullptr,
@@ -272,7 +286,9 @@ void kernel_main() {
                         dst_pr_cfg,
                         page_size,
                         num_pages_to_read, // for the l chip case this will be wrong
-                        num_pages_to_write // for the l chip case this will be wrong
+                        num_pages_to_write, // for the l chip case this will be wrong
+                        is_sharded,
+                        sharded_buffer_num_cores
                     );
                     pull_and_relay<PullAndRelayType::BUFFER, PullAndRelayType::BUFFER, write_to_completion_queue>(src_pr_cfg, dst_pr_cfg, num_pages_in_transfer);
                     buffer_transfer_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
@@ -329,6 +345,8 @@ void kernel_main() {
                         page_size,
                         (pull_and_push_cb_num_pages / 2),
                         router_transfer_num_pages,
+                        is_sharded,
+                        sharded_buffer_num_cores,
                         pull_noc_encoding,
                         push_noc_encoding,
                         nullptr,
@@ -363,6 +381,8 @@ void kernel_main() {
                         page_size,
                         (pull_and_push_cb_num_pages / 2),
                         router_transfer_num_pages,
+                        is_sharded,
+                        sharded_buffer_num_cores,
                         pull_noc_encoding,
                         push_noc_encoding,
                         nullptr,
@@ -425,6 +445,8 @@ void kernel_main() {
                             page_size,
                             router_transfer_num_pages,
                             program_transfer_num_pages,
+                            is_sharded,
+                            sharded_buffer_num_cores,
                             pull_noc_encoding,
                             dispatch_noc_encoding,
                             local_multicore_cb_cfg,
@@ -443,6 +465,8 @@ void kernel_main() {
                             page_size,
                             (pull_and_push_cb_num_pages / 2),
                             program_transfer_num_pages,
+                            is_sharded,
+                            sharded_buffer_num_cores,
                             pull_noc_encoding,
                             dispatch_noc_encoding,
                             nullptr,
@@ -489,6 +513,8 @@ void kernel_main() {
                         page_size,
                         router_transfer_num_pages,
                         router_transfer_num_pages,
+                        is_sharded,
+                        sharded_buffer_num_cores,
                         pull_noc_encoding,
                         push_noc_encoding,
                         local_multicore_cb_cfg,
@@ -527,6 +553,8 @@ void kernel_main() {
                         page_size,
                         (pull_and_push_cb_num_pages / 2),
                         router_transfer_num_pages,
+                        is_sharded,
+                        sharded_buffer_num_cores,
                         pull_noc_encoding,
                         push_noc_encoding,
                         nullptr,
@@ -588,6 +616,8 @@ void kernel_main() {
                     page_size,
                     router_transfer_num_pages,
                     router_transfer_num_pages,
+                    is_sharded,
+                    sharded_buffer_num_cores,
                     pull_noc_encoding,
                     push_noc_encoding,
                     local_multicore_cb_cfg,
