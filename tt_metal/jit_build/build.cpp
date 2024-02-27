@@ -444,6 +444,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
         });
     }
 
+    manager.join_and_rethrow();
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
