@@ -143,7 +143,8 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t operandB,
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
-    std::uint32_t block_ct_dim) {
+    std::uint32_t block_ct_dim,
+    std::uint32_t num_faces) {
 
     //Setup SrcA unpack
     std::uint32_t operandA_id = get_operand_id(operandA);
@@ -170,7 +171,8 @@ inline void llk_unpack_tilizeA_B(
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    for (std::uint32_t n = 0; n < 2; n++) {
+    const std::uint32_t num_loops = (num_faces>1) ? num_faces/2 : 1;
+    for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
         // Clear z/w start counters
@@ -206,8 +208,9 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
-    std::uint32_t tile_idx_b) {
+    std::uint32_t tile_idx_b,
+    std::uint32_t num_faces) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
+        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
 }

@@ -101,9 +101,9 @@ ALWI void reduce_tile(PoolType reduce_op, ReduceDim dim, uint32_t icb0, uint32_t
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1) ));
 }
 
-ALWI void reduce_tile_math(uint32_t idst)
+ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4)
 {
-    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst) ));
+    MATH(( llk_math_reduce<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(idst, num_faces) ));
 }
 #endif
 
