@@ -24,7 +24,7 @@ TT_LIB_DEPS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.d))
 tt_lib: $(TT_LIB_LIB)
 
 # Link obj files into shared lib
-$(TT_LIB_LIB): $(TT_LIB_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_LIB)
+$(TT_LIB_LIB): $(TT_LIB_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_LIB) $(QUEUE_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TT_LIB_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $(TT_LIB_OBJS) $(TT_LIB_LDFLAGS)
 
