@@ -164,7 +164,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         # expected shapes:
         # x: (seq_len, 1, batch, hidden_dim)
         # start_pos: int
-        # rot_mat: [1, bsz, head_dim, head_dim]
+        # rot_mat: [1, 1, head_dim, head_dim]
         # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
         assert x.size() == (seq_len, 1, batch, self.hidden_size)
         assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
@@ -172,9 +172,18 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         xs, rot_mats, attn_masks = [], [], []
         for i in range(self.num_devices):
             device = self.devices[i]
-            xs.append(torch2tt_tensor(x.clone(), device))
-            rot_mats.append(torch2tt_tensor(rot_mat.clone(), device))
-
+            xs.append(
+                torch2tt_tensor(
+                    x.clone(),
+                    device,
+                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                )
+            )
+            rot_mats.append(
+                torch2tt_tensor(rot_mat.clone(), device, tt_memory_config=self.model_config["ROT_MAT_MEMCFG"])
+            )
             # Put attn_mask on the device with the sharded config
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
             if attention_mask_memconfig.is_sharded():
@@ -205,7 +214,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
     ) -> tt_lib.tensor.Tensor:
         padded_layer_past_len = nearest_32(start_pos + 1)
 
-        # TODO: Move sharding inputs to model
+        # TODO: FOR BRINGUP! Move sharding inputs to model
         # for i, device in enumerate(self.devices):
         #     xs[i] = xs[i].to(device, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
         # Reshard
@@ -247,7 +256,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         key_layer = []
         value_layer = []
         for i in range(len(fused_query_key_value)):
-            rot_mat = rot_mats[i]
             (
                 q_heads,  # [seqlen, n_local_heads, bsz, head_dim]
                 k_heads,  # [seqlen, n_local_kv_heads, bsz, head_dim]
@@ -259,7 +267,31 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 transpose_k_heads=False,
                 output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
+            query_layer.append(q_heads)
+            key_layer.append(k_heads)
+            value_layer.append(v_heads)
+            fused_query_key_value[i].deallocate(True)
 
+        # ROTARY EMBEDDINGS
+        for i in range(len(query_layer)):
+            query_layer[i] = tt_lib.operations.primary.matmul_1d(
+                query_layer[i],
+                rot_mats[i],
+                program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
+                output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
+                # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
+            )
+            # TODO: matmul_1d is bugged for single core and causes hang.
+            key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+                key_layer[i], output_mem_config=self.model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"]
+            )
+            key_layer[i] = tt_lib.operations.primary.matmul(
+                key_layer[i],
+                rot_mats[i],
+                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
+            )
+            # rot_mats[i].deallocate(True) # If rot_mat on L1, deallocate here
+            # TODO: Use matmul_1d for k_heads on L1 sharded single core
             # rot_mat = tt_lib.tensor.interleaved_to_sharded(
             #     rot_mat, sharded_mem_config=self.model_config["ROT_MAT_K_OUTPUT_MEMCFG"]
             # )
@@ -270,33 +302,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             #     output_mem_config=self.model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"],
             #     # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             # )
-            # k_heads = tt_lib.tensor.sharded_to_interleaved(
-            #     k_heads, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            # )
-
-            # TODO: matmul_1d is bugged for single core and causes hang.
-            k_heads = tt_lib.tensor.sharded_to_interleaved(
-                k_heads, output_mem_config=self.model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"]
-            )
-            k_heads = tt_lib.operations.primary.matmul(
-                k_heads,
-                rot_mat,
-                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            )
-
-            # ROTARY EMBEDDINGS
-            q_heads = tt_lib.operations.primary.matmul_1d(
-                q_heads,
-                rot_mat,
-                program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
-                output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
-                # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            )
-
-            query_layer.append(q_heads)
-            key_layer.append(k_heads)
-            value_layer.append(v_heads)
-            fused_query_key_value[i].deallocate(True)
 
         # K Cache Update
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
@@ -305,11 +310,9 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             kv_cache_shard_shape[0] = self.layer_past_list[0][0].shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         for i in range(len(key_layer)):
-            k_heads = key_layer[i]
             keys = self.layer_past_list[i][0]
-            tt_lib.tensor.update_cache(keys, k_heads, start_pos)
+            tt_lib.tensor.update_cache(keys, key_layer[i], start_pos)
             key_layer[i].deallocate(True)
-
         # key and value layers will have kv_seq_len padded to nearest 32
         for i in range(len(key_layer)):
             keys = self.layer_past_list[i][0]
@@ -326,6 +329,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             )
         for i in range(len(key_layer)):
             key_layer[i] = tt_lib.tensor.interleaved_to_sharded(key_layer[i], sharded_mem_config=kv_cache_memcfg)
+
+        # PRE-SOFTMAX MM
         key_layer_transposed = []
         for i in range(len(key_layer)):
             key_layer_transposed.append(
@@ -337,13 +342,8 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
             )
             key_layer[i].deallocate(True)
-
         attn_weights = []
         for i in range(len(query_layer)):
-            # Put query head back to L1 height sharded, currently causes PCC issues with group attention matmul
-            # query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
-            #     query_layer[i], sharded_mem_config=self.model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"]
-            # )
             attn_weights.append(
                 tt_lib.operations.primary.transformers.group_attn_matmul(
                     query_layer[i],
@@ -355,32 +355,23 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             )
             query_layer[i].deallocate(True)
             key_layer_transposed[i].deallocate(True)
-        ##Softmax
+
+        # SOFTMAX
         softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
         softmax_progcfg.block_w = padded_layer_past_len // 32
-        # # TODO:Also move to prepare inputs
-        # attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-        # if attention_mask_memconfig.is_sharded():
-        #     attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-        #     attn_mask_shard_shape[-1] = padded_layer_past_len
-        #     attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
         for i in range(len(attn_weights)):
-            attn_mask = attn_masks[i]
-            # TODO: Put mask on L1 in prepare inputs
-            # attn_mask = tt_lib.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=attention_mask_memconfig)
             attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
                 attn_weights[i],
                 self.scale,
-                attn_mask,
+                attn_masks[i],
                 program_config=self.model_config["SOFTMAX_PROGCFG"],
                 is_causal_mask=True,
             )
-            attn_mask.deallocate(True)
+
         # V CACHE UPDATE
         for i in range(len(value_layer)):
-            v_heads = value_layer[i]
             values = self.layer_past_list[i][1]
-            tt_lib.tensor.update_cache(values, v_heads, start_pos)
+            tt_lib.tensor.update_cache(values, value_layer[i], start_pos)
             value_layer[i].deallocate(True)
         for i in range(len(value_layer)):
             values = self.layer_past_list[i][1]
@@ -413,6 +404,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_weights[i].deallocate(True)
             value_layer[i].deallocate(True)
 
+        # ATTENTION SELFOUT
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.nlp_concat_heads(
                 attn_output[i],
