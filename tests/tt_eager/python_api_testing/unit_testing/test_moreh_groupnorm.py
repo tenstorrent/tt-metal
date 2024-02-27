@@ -47,7 +47,7 @@ def torch_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05):
     x_view = input.view(N, num_groups, -1)
     mean = x_view.mean(dim=-1, keepdim=True)
     var = ((x_view - mean) ** 2).mean(dim=-1, keepdim=False)
-    rstd = (var + eps).sqrt()
+    rstd = (var + eps).rsqrt()
 
     return output, mean.view(N, num_groups), rstd.view(N, num_groups)
 
@@ -102,7 +102,7 @@ def tt_groupnorm_backward(input, output_grad, num_groups, gamma=None, eps=1e-05,
     x_view = input.view(N, num_groups, -1)
     mean = x_view.mean(dim=-1, keepdim=True)
     var = ((x_view - mean) ** 2).mean(dim=-1, keepdim=False)
-    rstd = (var + eps).sqrt()
+    rstd = (var + eps).rsqrt()
 
     npu_output_grad = to_npu(output_grad, device)
     npu_input = to_npu(input, device)

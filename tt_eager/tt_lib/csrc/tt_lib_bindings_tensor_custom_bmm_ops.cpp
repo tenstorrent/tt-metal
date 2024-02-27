@@ -5,6 +5,7 @@
 #include "tt_lib_bindings.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt::tt_metal::detail
 {
@@ -41,7 +42,7 @@ namespace tt::tt_metal::detail
         )doc");
         // *** matrix multiplication ***
         m_tensor.def("matmul", &matmul,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("kernel_config").noconvert() = std::nullopt, R"doc(
             Perform a non-batched matrix multiplication ``arg0 x arg1`` with two tensors.
 
             Both input tensors must have BFLOAT16 data type.
@@ -57,7 +58,7 @@ namespace tt::tt_metal::detail
         )doc");
 
         m_tensor.def("bmm", &bmm,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("kernel_config").noconvert() = std::nullopt, R"doc(
             Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
 
             Both input tensors must have BFLOAT16 data type.

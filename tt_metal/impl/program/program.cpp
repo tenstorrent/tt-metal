@@ -172,6 +172,8 @@ KernelGroup::KernelGroup(
 
     if (erisc_id) {
         this->launch_msg.enable_erisc = true;
+        // Ethernet cores use the brisc kernel id field
+        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(erisc_id.value())->get_watcher_kernel_id();
     } else {
         this->launch_msg.enable_erisc = false;
     }

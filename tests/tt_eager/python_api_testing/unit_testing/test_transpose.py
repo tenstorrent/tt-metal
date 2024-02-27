@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import numpy as np
 
 import tt_lib as ttl
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
+from models.utility_functions import skip_for_grayskull
 
 
 def transpose(
@@ -22,13 +24,14 @@ def transpose(
     output_shape = list(input_shape)
     output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
 
-    x = torch.randn(input_shape).bfloat16().float()
+    if input_dtype == ttl.tensor.DataType.UINT16:
+        x = torch.randint(0, 100, input_shape).to(torch.int16)
+    else:
+        x = torch.randn(input_shape).bfloat16().float()
 
     xt = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
+        x,
         input_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE)
 
     xt = xt.to(device, input_mem_config)
@@ -56,6 +59,16 @@ def test_transpose_hc(device):
     W = 32 * 3
     input_shape = (N, C, H, W)
     transpose(input_shape, device, dim0=1, dim1=-2)
+
+
+@skip_for_grayskull("Integer formats not supported on Grayskull")
+def test_transpose_wh_uint16(device):
+    N = 3
+    C = 32 * 2
+    H = 32 * 4
+    W = 32 * 3
+    input_shape = (N, C, H, W)
+    transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttl.tensor.DataType.UINT16)
 
 
 def test_transpose_hc_program_cache(device, use_program_cache):

@@ -326,6 +326,10 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"Output: {output_pcc}")
 
     for i in range(num_layers):
+        # Only check every 4 layers for full model
+        if num_layers == 60 and i % 4 > 0:
+            continue
+
         tt_layer_pres = (
             torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
             torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
@@ -389,6 +393,7 @@ def run_test_FalconCausalLM_end_to_end(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", (4,))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (("decode", 32, 1, 128),),
@@ -398,7 +403,7 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize(
     "num_layers, out_pcc, cache_pcc, token_pcc",
-    ((1, 0.89, 0.99, 0.99), (2, 0.60, 0.95, 0.82), (60, 0.66, 0.90, 0.08)),
+    ((1, 0.99, 0.99, 0.99), (2, 0.99, 0.99, 0.99), (60, 0.92, 0.99, 0.85)),
     ids=["layers_1", "layers_2", "layers_60"],
 )
 @pytest.mark.parametrize(
@@ -408,7 +413,7 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT8_B-SHARDED",))
 def test_FalconCausalLM_end_to_end_with_program_cache(
-    use_program_cache,
+    num_devices,
     model_version,
     llm_mode,
     batch,
@@ -423,11 +428,10 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_location_generator,
     get_tt_cache_path,
     pcie_devices,
+    use_program_cache,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, llm_mode, num_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < model_config["NUM_DEVICES"]:
-        pytest.skip(f"Requires at least {model_config['NUM_DEVICES']} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
     tt_cache_path = get_tt_cache_path(

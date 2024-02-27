@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks moreh_adam_(
 
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
+    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
 
     // auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     // uint32_t num_cores_x = compute_with_storage_grid_size.x;

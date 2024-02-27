@@ -300,4 +300,82 @@ def full(
     return output_tensor
 
 
+def _is_int(value):
+    return isinstance(value, (int))
+
+
+def _torch_arange(start: int, end: int, step: int, **_):
+    import torch
+
+    return torch.arange(start, end, step)
+
+
+def _arange_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
+    return True
+
+
+@ttnn.register_operation(
+    name="ttnn.arange",
+    validate_input_tensors=_arange_validate_input_tensors,
+    torch_function=_torch_arange,
+)
+def arange(
+    start: int,
+    end: int,
+    step: int,
+    device,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step.
+
+    Args:
+        * :attr:`start`
+        * :attr:`end`
+        * :attr:`step`
+    """
+    if not _is_int(start) or not _is_int(end) or not _is_int(step):
+        raise TypeError("Expected three arguments to be a int")
+
+    output_tensor = ttnn.experimental.tensor.arange(start, end, step, device, output_mem_config=memory_config)
+
+    return output_tensor
+
+
+def _torch_empty(input_shape: ttnn.Shape, **_):
+    import torch
+
+    input_shape = ttnn.from_device(input_shape)
+    input_shape = ttnn.to_layout(input_shape, ttnn.ROW_MAJOR_LAYOUT)
+    input_shape = ttnn.to_torch(input_shape)
+
+    return torch.empty(input_shape)
+
+
+def _empty_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
+    ...
+
+
+@ttnn.register_operation(
+    name="ttnn.empty",
+    validate_input_tensors=_empty_validate_input_tensors,
+    torch_function=_torch_empty,
+)
+def empty(
+    input_shape: ttnn.Shape,
+    device: ttnn.Device,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    Returns a new empty tensor by taking input shape as reference.
+
+    Args:
+        * :attr:`input_shape`: the input shape for reference
+    """
+
+    output_tensor = ttnn.experimental.tensor.empty(input_shape, device=device, output_mem_config=memory_config)
+
+    return output_tensor
+
+
 __all__ = []

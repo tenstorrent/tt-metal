@@ -259,6 +259,77 @@ def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool =
     return output_tensor
 
 
+## helper function for upsample. currently only supports HEIGHT sharding
+def _get_upsample_shard_grid_from_num_shards(ncores: int):
+    max_grid_size = (9, 12)  ## (y, x)
+    if ncores % max_grid_size[1] == 0:
+        core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
+        grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
+        return ttnn.experimental.tensor.CoreRangeSet(
+            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
+        )
+    else:
+        if ncores < max_grid_size[1]:
+            core_grid = ttnn.CoreGrid(y=1, x=ncores)
+            grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, 0)
+            return ttnn.experimental.tensor.CoreRangeSet(
+                {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
+            )
+        else:
+            core_grid_1 = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
+            core_grid_2 = ttnn.CoreGrid(y=ncores // max_grid_size[1] + 1, x=ncores % max_grid_size[1])
+            grid_coord_1 = ttnn.experimental.tensor.CoreCoord(core_grid_1.x - 1, core_grid_1.y - 1)
+            grid_coord_2 = ttnn.experimental.tensor.CoreCoord(core_grid_2.x - 1, core_grid_2.y - 1)
+            return ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord_1),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, grid_coord_2.y), grid_coord_2
+                    ),
+                }
+            )
+
+
+## helper function for upsample
+def _get_upsample_num_shards(batch_size: int, height: int, num_channels: int, shard_strategy: ttnn.ShardStrategy):
+    ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
+    max_grid_size = (9, 12)  ## (y, x)
+    if shard_strategy == ttnn.ShardStrategy.HEIGHT:
+        ## nsticks per shard should be divisible by in_w
+        max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
+        nshards = max_nshards
+        while nshards > 0:
+            if batch_size * height % nshards == 0:
+                break
+            nshards -= 1
+        if nshards == 0:
+            ## should fallback to single core (TODO)
+            raise ValueError("nshards is 0")
+
+    ## TODO: support BLOCK strategy?
+    # elif shard_strategy == ttnn.ShardStrategy.BLOCK:
+    #     max_nshards_h = min(batch_size * height, max_grid_size[0])  ## height along NHW
+    #     max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C
+    #     ## find nshards_h along NHW
+    #     nshards_h = max_nshards_h
+    #     while nshards_h > 0:
+    #         if batch_size * height % nshards_h == 0:
+    #             break
+    #         nshards_h -= 1
+    #     ## find nshards_w along C
+    #     nshards_w = max_nshards_w
+    #     while nshards_w > 0:
+    #         if num_channels % nshards_w == 0:
+    #             break
+    #         nshards_w -= 1
+    #     if nshards_w == 0 or nshards_h == 0:
+    #         ## should fallback to single core (TODO)
+    #         raise ValueError("nshards_h or nshards_w is 0")
+    #     return (nshards_h, nshards_w)
+
+    return nshards
+
+
 def _upsample_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
@@ -293,7 +364,7 @@ def upsample(
 ) -> ttnn.Tensor:
     r"""
     Upsamples a given multi-channel 2D (spatial) data.
-    The input data is assumed to be of the form N x C x H x W.
+    The input data is assumed to be of the form [N, H, W, C].
 
     The algorithms available for upsampling are 'nearest' for now.
 
@@ -320,8 +391,51 @@ def upsample(
         else:
             RuntimeError("Invalid scale factor")
 
-    ttl_input_tensor = input_tensor.value
-    output_tensor = ttl.tensor.upsample(ttl_input_tensor, int(scale_h), int(scale_w), output_mem_config=memory_config)
+    ## check if the incoming sharding spec is compatible with the upsample operation
+    ## if the sharding spec is not compatible, then the input tensor needs to be resharded
+    if ttnn.is_sharded(input_tensor):
+        if memory_config == ttnn.DRAM_MEMORY_CONFIG:
+            ## input is sharded, make the output config sharded too if not provided
+            memory_config = ttnn.get_memory_config(input_tensor)
+
+        ## check if shard height % input_w == 0
+        input_mem_config = ttnn.get_memory_config(input_tensor)
+        shard_shape = input_mem_config.shard_spec.shape
+        batch_size, input_h, input_w, num_channels = input_tensor.shape
+        if shard_shape[0] % input_w != 0:
+            ## perform a resharding operation:
+            ## calculate ideal shard_grid
+            nshards = _get_upsample_num_shards(batch_size, input_h, num_channels, ttnn.ShardStrategy.HEIGHT)
+            shard_grid = _get_upsample_shard_grid_from_num_shards(nshards)
+
+            print(f"Resharding input tensor to {nshards} shards with HEIGHT sharding")
+
+            ## sharded to interleaved
+            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+            ## construct new shard_spec
+            shard_width = num_channels
+            shard_height = batch_size * input_h * input_w // nshards
+            shard_spec = ttnn.experimental.tensor.ShardSpec(
+                shard_grid, (shard_height, shard_width), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+            sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+
+            ## interleaved to sharded
+            input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+            ## also update the output memory_config
+            shard_height = shard_height * scale_h * scale_w
+            shard_spec = ttnn.experimental.tensor.ShardSpec(
+                shard_grid, (shard_height, shard_width), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+            memory_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+
+    output_tensor = ttl.tensor.upsample(input_tensor.value, int(scale_h), int(scale_w), output_mem_config=memory_config)
     output_tensor = ttnn.Tensor(output_tensor)
 
     return output_tensor

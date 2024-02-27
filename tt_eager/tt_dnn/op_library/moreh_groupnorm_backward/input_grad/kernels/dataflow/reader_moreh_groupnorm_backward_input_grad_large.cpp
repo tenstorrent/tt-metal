@@ -37,7 +37,7 @@ void kernel_main() {
     const auto cb_id_mean = cb_id++;
     const auto cb_id_rstd = cb_id++;
     const auto cb_id_one = cb_id++;
-    const auto cb_id_inner_size = cb_id++;
+    const auto cb_id_n_recip_n = cb_id++;
     const auto cb_id_gamma = cb_id++;
     const auto cb_id_mask_h_w = cb_id++;
 
@@ -64,8 +64,11 @@ void kernel_main() {
     scalar.f = 1.0f;
     fill_cb_with_value(cb_id_one, scalar.u);
 
-    scalar.f = static_cast<float>((num_channels / num_groups) * origin_h * origin_w);
-    fill_cb_with_value(cb_id_inner_size, scalar.u);
+    const auto n = static_cast<float>((num_channels / num_groups) * origin_h * origin_w);
+    scalar.f = n;
+    fill_cb_with_value(cb_id_n_recip_n, scalar.u);
+    scalar.f = 1.0f / n;
+    fill_cb_with_value(cb_id_n_recip_n, scalar.u);
 
     if (do_mask_h || do_mask_w) {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w, get_tile_size(cb_id_mask_h_w));

@@ -22,6 +22,7 @@ void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
     #define transpose_hw_bool get_compile_time_arg_val(2) == 1
+    constexpr bool fp32_acc_en = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -58,7 +59,7 @@ void kernel_main() {
     uint32_t cb_intermed2_addr_initial = get_write_ptr(cb_id_intermed2);
     uint32_t cb_intermed1_addr;
     uint32_t cb_intermed2_addr;
-    constexpr uint32_t bfloat16_row_bytes = 64;
+    constexpr uint32_t bfloat16_row_bytes = fp32_acc_en ? 128 : 64;
     constexpr uint32_t num_rows_in_one_tile = 32;
 
     for (uint32_t b = 0; b < blocks; b++) {

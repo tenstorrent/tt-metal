@@ -27,6 +27,7 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/ops/test_tilize_op_channels_last \
 		 tests/tt_eager/ops/test_tilize_zero_padding_channels_last \
 		 tests/tt_eager/ops/test_sfpu \
+		 tests/tt_eager/ops/test_fold_op \
 		 tests/tt_eager/tensors/test_copy_and_move \
 		 tests/tt_eager/tensors/test_host_device_loopback \
 		 tests/tt_eager/tensors/test_raw_host_memory_pointer \

@@ -1,4 +1,4 @@
-name: Scheduled slow dispatch frequent build and run
+name: Nightly slow dispatch tests
 
 on:
   workflow_dispatch:

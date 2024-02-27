@@ -515,7 +515,8 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                 this->bcast_batch,
                 input_tensor_a.device()->compute_with_storage_grid_size(),
-                MathFidelity::HiFi4, false, true, false,
+                // MathFidelity::HiFi4, false, true, false,
+                this->compute_kernel_config,
                 2, 4, 2,
                 16, 16, false, false, std::nullopt
             );
@@ -525,7 +526,8 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                 this->bcast_batch,
                 input_tensor_a.device()->compute_with_storage_grid_size(),
-                MathFidelity::HiFi4, false, true, false,
+                // MathFidelity::HiFi4, false, true, false,
+                this->compute_kernel_config,
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
                 config.per_core_M, config.per_core_N, false, std::nullopt, true
             );
@@ -535,7 +537,8 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
                 input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                 this->bcast_batch,
                 input_tensor_a.device()->compute_with_storage_grid_size(),
-                MathFidelity::HiFi4, false, true, false,
+                // MathFidelity::HiFi4, false, true, false,
+                this->compute_kernel_config,
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
                 config.per_core_M, config.per_core_N, false, std::nullopt, false
             );
@@ -724,7 +727,9 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
  */
 Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, const MathFidelity math_fidelity) {
     auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true);
-    return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype, math_fidelity);
+    std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
+    auto compute_kernel_config = init_device_compute_kernel_config(input_a.device()->arch(), config, math_fidelity, true, false, false);
+    return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype, compute_kernel_config);
 }
 
 
@@ -1054,10 +1059,6 @@ operation::ProgramWithCallbacks Matmul::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     tt::tt_metal::DataType output_dtype = this->output_dtype;
-    MathFidelity math_fidelity = this->math_fidelity;
-    bool fp32_dest_acc_en = this->fp32_dest_acc_en;
-    bool math_approx_mode = this->math_approx_mode;
-    bool packer_l1_acc = this->packer_l1_acc;
 
     bool fuse_batch = true;
     // TODO: If input_tensor_a.shape()[0] * input_tensor_a.shape()[1] == 1, does matmuls work if we treat it as bmm
@@ -1079,7 +1080,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             input_tensor_a, input_tensor_b, bias, output_tensor,
                             broadcast_batch,
                             input_tensor_a.device()->compute_with_storage_grid_size(),
-                            math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
+                            this->compute_kernel_config,
                             2, 4, 2,
                             16, 16, false, false, std::nullopt
                         );
@@ -1088,7 +1089,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
                             input_tensor_a.device()->compute_with_storage_grid_size(),
-                            math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
+                            this->compute_kernel_config,
                             2, 4, 2,
                             16, 16, false, std::nullopt, true
                         );
@@ -1097,7 +1098,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
                             input_tensor_a.device()->compute_with_storage_grid_size(),
-                            math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
+                            this->compute_kernel_config,
                             2, 4, 2,
                             16, 16, false, std::nullopt, false
                         );
@@ -1114,7 +1115,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     input_tensor_a, input_tensor_b, output_tensor,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
+                    output_dtype,
+                    this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch
                 );
@@ -1124,7 +1126,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     input_tensor_a, input_tensor_b, bias, output_tensor,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
+                    this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation
                 );
@@ -1134,7 +1136,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     input_tensor_a, input_tensor_b, bias, output_tensor,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc,
+                    this->compute_kernel_config,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fused_activation,
                     program_config.mcast_in0
@@ -1178,11 +1180,12 @@ MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::ve
     );
 }
 
-Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, const MathFidelity math_fidelity, const bool fp32_dest_acc_en, const bool math_approx_mode, const bool packer_l1_acc) {
+Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     if (!program_config.has_value()) {
         program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
     }
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, math_fidelity, fp32_dest_acc_en, math_approx_mode, packer_l1_acc);
+    auto kernel_config_val = init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, kernel_config_val);
 }
 
 }  // namespace primary

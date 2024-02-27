@@ -413,4 +413,79 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
         return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
 
 
+def _torch_repeat(tensor, shape, **_):
+    import torch
+
+    return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
+
+
+def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.repeat",
+    validate_input_tensors=_repeat_validate_input_tensors,
+    torch_function=_torch_repeat,
+)
+def repeat(
+    input_tensor: ttnn.Tensor,
+    shape: ttnn.Shape,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    repeat(input_tensor: ttnn.Tensor, shape : ttnn.Shape) -> ttnn.Tensor
+
+    Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+
+    Args:
+        * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
+        * :attr:`shape`: The number of repetitions for each element.
+
+    Example::
+
+        >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2,)), device)
+        >>> print(tensor)
+        tensor([[1, 2],
+        [1, 2],
+        [3, 4],
+        [3, 4]])
+
+    """
+
+    if not isinstance(shape, ttnn.Shape):
+        raise RuntimeError("ttnn: Expected shape to be a ttnn.Shape")
+
+    dtype = input_tensor.dtype
+    device = input_tensor.device
+    layout = input_tensor.layout
+    rank = len(input_tensor.shape)
+    if dtype == ttnn.bfloat16 and rank == 4:
+        ttl_input_tensor = input_tensor.value
+        output_tensor = ttnn.Tensor(ttl.tensor.repeat(ttl_input_tensor, shape))
+        *batch, _, _ = output_tensor.shape
+        *_, h, w = input_tensor.shape
+        *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
+
+        output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
+        return output_tensor
+    else:
+
+        def torch_repeat(tensor, shape):
+            return _torch_repeat(tensor, shape)
+
+        output_tensor = ttl.tensor.decorate_external_operation(torch_repeat, function_name="torch_repeat")(
+            input_tensor, shape
+        )
+        return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
+
+
 __all__ = []

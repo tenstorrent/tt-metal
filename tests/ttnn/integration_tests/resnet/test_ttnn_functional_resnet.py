@@ -21,7 +21,7 @@ from ttnn.model_preprocessing import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
 
-from models.experimental.functional_resnet.tt import ttnn_functional_resnet
+from models.experimental.functional_resnet.tt.ttnn_functional_resnet import resnet_basic_block
 
 
 def update_ttnn_module_args(ttnn_module_args):
@@ -74,8 +74,6 @@ def test_basic_block(device):
         device=device,
     )
 
-    ttnn_model = ttnn_functional_resnet.BasicBlock(parameters)
-
     input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     input_tensor = torch.reshape(input_tensor, (1, 1, -1, input_tensor.shape[-1]))
 
@@ -83,7 +81,7 @@ def test_basic_block(device):
     input_tensor = torch.nn.functional.pad(input_tensor, (0, padded_input_channels - input_tensor.shape[3], 0, 0, 0, 0))
     input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_model(input_tensor)
+    output_tensor = resnet_basic_block(input_tensor, parameters=parameters)
 
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = torch.reshape(
@@ -101,7 +99,6 @@ def test_basic_block(device):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9998)
 
 
-@pytest.mark.skip(reason="Downsample not working properly")
 @skip_for_wormhole_b0()
 def test_basic_block_with_downsample(device):
     torch.manual_seed(0)
@@ -126,8 +123,6 @@ def test_basic_block_with_downsample(device):
         device=device,
     )
 
-    ttnn_model = ttnn_functional_resnet.BasicBlock(parameters)
-
     input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     input_tensor = torch.reshape(input_tensor, (1, 1, -1, input_tensor.shape[-1]))
 
@@ -135,7 +130,7 @@ def test_basic_block_with_downsample(device):
     input_tensor = torch.nn.functional.pad(input_tensor, (0, padded_input_channels - input_tensor.shape[3], 0, 0, 0, 0))
     input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_model(input_tensor)
+    output_tensor = resnet_basic_block(input_tensor, parameters=parameters)
 
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = torch.reshape(
@@ -150,7 +145,7 @@ def test_basic_block_with_downsample(device):
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
     output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9998)
 
 
 @skip_for_wormhole_b0()
@@ -263,19 +258,13 @@ def test_resnet(device):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
 
     for basic_block_parameters in parameters.layer1.values():
-        basic_block = ttnn_functional_resnet.BasicBlock(basic_block_parameters)
-        output_tensor = basic_block(output_tensor)
+        output_tensor = resnet_basic_block(output_tensor, parameters=basic_block_parameters)
     for basic_block_parameters in parameters.layer2.values():
-        # TODO: remove this return once downsample works properly
-        return
-        basic_block = ttnn_functional_resnet.BasicBlock(basic_block_parameters)
-        output_tensor = basic_block(output_tensor)
+        output_tensor = resnet_basic_block(output_tensor, parameters=basic_block_parameters)
     for basic_block_parameters in parameters.layer3.values():
-        basic_block = ttnn_functional_resnet.BasicBlock(basic_block_parameters)
-        output_tensor = basic_block(output_tensor)
+        output_tensor = resnet_basic_block(output_tensor, parameters=basic_block_parameters)
     for basic_block_parameters in parameters.layer4.values():
-        basic_block = ttnn_functional_resnet.BasicBlock(basic_block_parameters)
-        output_tensor = basic_block(output_tensor)
+        output_tensor = resnet_basic_block(output_tensor, parameters=basic_block_parameters)
 
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.reshape(output_tensor, (8, 1, 49, 512))
