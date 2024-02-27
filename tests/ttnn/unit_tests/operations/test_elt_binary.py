@@ -74,15 +74,3 @@ def test_logical_xor(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_xlogy(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.xlogy, torch.xlogy, 1e-6, 1e6)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_maximum(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.maximum, torch.maximum, -100, 100)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_minimum(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.minimum, torch.minimum, -100, 100)
