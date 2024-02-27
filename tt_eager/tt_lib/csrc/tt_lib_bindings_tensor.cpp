@@ -269,15 +269,10 @@ void TensorModule(py::module &m_tensor) {
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet",  R"doc(
         Class defining a set of CoreRanges required for sharding)doc"
     );
-    pyCoreRangeSet
-        .def(
-            py::init<>(
-                [](const std::set<CoreRange> &core_ranges ) {
-                    return CoreRangeSet(core_ranges);
-                }
-            )
-        );
-
+    pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+        .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
+            return fmt::format("{}", core_range_set);
+        });
 
     auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
@@ -401,12 +396,16 @@ void TensorModule(py::module &m_tensor) {
             py::arg("grid_size"),
             py::arg("num_cores_nhw"),
             py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_weight_matrix_width_ntiles").noconvert()
-        )
+            py::arg("per_core_weight_matrix_width_ntiles").noconvert())
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
-        .def_property_readonly("num_core_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
-        .def_property_readonly("per_core_out_matrix_height_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_weight_matrix_width_ntiles; });
+        .def_property_readonly(
+            "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
+        .def_property_readonly(
+            "per_core_out_matrix_height_ntiles",
+            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
+        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
+            return c.per_core_weight_matrix_width_ntiles;
+        });
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
