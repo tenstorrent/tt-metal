@@ -16,9 +16,7 @@ import models.experimental.bloom.tt.bloom_block as bloom_block
 
 
 def run_bloom_block_test(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     do_all_blocks_pass = True
@@ -31,9 +29,7 @@ def run_bloom_block_test(device):
         hidden_size = config.hidden_size
         n_head = config.n_head
 
-        tt_bloom_block = bloom_block.TtBloomBlock(
-            config, state_dict, base_address, device
-        )
+        tt_bloom_block = bloom_block.TtBloomBlock(config, state_dict, base_address, device)
         pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
 
         torch.manual_seed(0)
@@ -41,7 +37,7 @@ def run_bloom_block_test(device):
 
         hidden_states = ((torch.rand(1, seq_len, hidden_size) * 2) - 1) / hidden_size
         alibi = ((torch.rand(n_head, seq_len, seq_len) * 2) - 1) / (seq_len * seq_len)
-        attention_mask = torch.randint(0, 2, (1, 1, seq_len, seq_len))
+        attention_mask = torch.randint(0, 2, (1, 1, seq_len, seq_len)).type(torch.bool)
 
         pt_out = pt_bloom_block.forward(hidden_states, alibi, attention_mask)[0]
 
