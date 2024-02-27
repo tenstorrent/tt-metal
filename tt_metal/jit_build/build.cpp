@@ -426,11 +426,9 @@ void JitBuildState::compile_one(const string& log_file,
 
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
 
-#ifdef DEBUG
-    if (settings) {
+    if (tt::llrt::OptionsG.get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(env_.get_out_kernel_root_path(), settings->get_full_kernel_name(), defines_, defines);
     }
-#endif
 
     if (!tt::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
@@ -446,7 +444,9 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
         });
     }
 
-    manager.join_and_rethrow();
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
+    }
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir) const
