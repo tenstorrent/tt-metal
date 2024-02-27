@@ -570,6 +570,71 @@ std::vector<Tensor> exp2_bw(const Tensor& grad, const Tensor& input, const Memor
 }
 
 
+std::vector<Tensor> _gelu_bw(const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+
+    if (approximate == "tanh"){
+        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
+        float kKappa = 0.044715;
+        Tensor x_sq = mul(input , input, std::nullopt, output_mem_config);
+        Tensor x_cube = mul(x_sq , input, std::nullopt, output_mem_config);
+        Tensor inner = mul_unary(kBeta , add(input , mul_unary(kKappa , x_cube, output_mem_config)), output_mem_config);
+        Tensor tanh_inner = tanh(inner, output_mem_config);
+
+        Tensor left = mul_unary(0.5 , input, output_mem_config);
+        Tensor right = add_unary(1 , tanh_inner, output_mem_config);
+
+        Tensor left_derivative = mul_unary(0.5 , right, output_mem_config);
+
+        Tensor tanh_derivative = neg(sub_unary(mul(tanh_inner , tanh_inner, std::nullopt, output_mem_config),1, output_mem_config), output_mem_config);
+        Tensor inner_derivative = mul_unary(kBeta , (add_unary(1 , mul_unary(3 , mul_unary(kKappa , x_sq, output_mem_config), output_mem_config), output_mem_config)));
+        Tensor right_derivative = mul(mul(left , tanh_derivative, std::nullopt, output_mem_config) , inner_derivative, std::nullopt, output_mem_config);
+
+        Tensor grad_a = mul(grad , (add(left_derivative , right_derivative)), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_a);
+    }
+    else{
+        float kAlpha = M_SQRT1_2;
+        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
+        Tensor cdf = mul_unary(0.5 , (add_unary(1 , erf(mul_unary(input , kAlpha, output_mem_config)), output_mem_config)));
+        Tensor pdf = mul_unary(kBeta , exp(mul_unary(mul(input , input) , -0.5), output_mem_config), output_mem_config);
+        Tensor grad_a = mul(grad , (add(cdf , mul(input , pdf))));
+        grad_tensor.emplace_back(grad_a);
+    }
+
+    return grad_tensor;
+}
+std::vector<Tensor> gelu_bw(const Tensor& grad, const Tensor& input, string approximate, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _gelu_bw)(grad, input, approximate, output_mem_config);
+}
+
+std::vector<Tensor> _bias_gelu_bw(const Tensor& grad, const Tensor& input_a, const Tensor& input_b, string approximate, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor input = add(input_a, input_b);
+
+    grad_tensor = gelu_bw(grad, input, approximate=approximate);
+
+    return grad_tensor;
+}
+std::vector<Tensor> bias_gelu_bw(const Tensor& grad, const Tensor& input_a, const Tensor& input_b, string approximate, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _bias_gelu_bw)(grad, input_a, input_b, approximate, output_mem_config);
+}
+
+std::vector<Tensor> _bias_gelu_unary_bw(const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor input = add_unary(input_tensor, bias);
+
+    grad_tensor = gelu_bw(grad, input, approximate=approximate);
+
+    return grad_tensor;
+}
+std::vector<Tensor> bias_gelu_unary_bw(const Tensor& grad, const Tensor& input, float bias, string approximate, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _bias_gelu_unary_bw)(grad, input, bias, approximate, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
