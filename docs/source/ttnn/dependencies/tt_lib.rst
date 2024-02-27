@@ -906,6 +906,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.squared_difference_bw
 
+.. autofunction:: tt_lib.tensor.lerp_bw
+
 Loss Functions
 ==============
 
