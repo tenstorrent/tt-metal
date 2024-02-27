@@ -335,10 +335,9 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &              |                                    | Yes      |
  * | program      | The program that will be executed on the device that cq is bound to    | Program &                     |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
- * | trace        | The trace object which represents the history of previously issued     | optional<reference_wrapper<Trace>>                       |                                    | Yes      |
  * |              | commands                                                               |                               |                                    |          |
  */
-void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace = {});
+void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
 
 /**
  * Blocks until all previously dispatched commands on the device have completed
@@ -352,37 +351,47 @@ void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Progra
 void Finish(CommandQueue& cq);
 
 /**
- * Creates a trace object which can be used to record commands that have been run. This
- * trace can later be replayed without the further need to create more commands.
- * Return value: trace
+ * Begins capture on a trace, when the trace is in capture mode all programs push into the trace queue will not be executed.
+ * The capture must be later ended via EndTrace, and can be instantiated via InstantiateTrace on a device command queue.
+ * Return value: CommandQueue&
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | trace        | Trace in which to initiate the capture                                 | Trace &                       |                                    | Yes      |
 */
-Trace BeginTrace(CommandQueue& cq);
+CommandQueue& BeginTrace(Trace &trace);
 
 /**
- * This completes a trace and allows it to be replayed. WARNING: Once a trace has been
- * completed for a given command queue, the command queue can no longer be used in eager
- * mode (the default, non tracing mode). This would be undefined behaviour.
+ * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
+ * This trace can later be instantiated via InstantiateTrace on a device command queue, and executed via EnqueueTrace on the same device command queue.
  * Return value: void
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | The trace object which represents the history of previously issued     | Trace &                       |                                    | Yes      |
- * |              | commands                                                               |                               |                                    |          |
+ * | trace        | Trace in which to end the capture                                      | Trace &                       |                                    | Yes      |
+ */
+void EndTrace(Trace &trace);
+
+/**
+* Instantiates a trace on a device command queue, triggering the staging of traced commands and data to the device.
+* Staging is a blocking operation and must be completed before the trace can be enqueued. A unique trace instance id is returned
+* Return value: uint32_t
+* | Argument     | Description                                                             | Type                          | Valid Range                        | Required |
+* |--------------|-------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+* | trace        | The trace object to instantiate                                         | Trace &                       |                                    | Yes      |
+* | cq           | The device command queue on which to instantiate the trace              | CommandQueue &                |                                    | Yes      |
 */
-void EndTrace(Trace& trace);
+uint32_t InstantiateTrace(Trace &trace, CommandQueue &cq);
 
 /**
  * Enqueues a trace of previously generated commands and data.
  * Return value: void
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | The trace object which represents the history of previously issued     | CommandQueue &                |                                    | Yes      |
- * |              | commands                                                               |                               |                                    |          |
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | trace_id     | A unique id representing an existing on-device trace, which has been   | uint32_t                      |                                    | Yes      |
+ * |              | instantiated via InstantiateTrace where the trace_id is returned       |                               |                                    |          |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueTrace(Trace& trace, bool blocking);
+void EnqueueTrace(CommandQueue &cq, uint32_t trace_id, bool blocking);
 
 /**
  * Read device side profiler data and dump results into device side CSV log

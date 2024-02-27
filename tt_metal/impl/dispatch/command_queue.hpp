@@ -29,7 +29,11 @@ using std::tuple;
 using std::unique_ptr;
 
 // Only contains the types of commands which are enqueued onto the device
+<<<<<<< HEAD
 enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, FLUSH, ENQUEUE_RECORD_EVENT, ENQUEUE_WAIT_FOR_EVENT, INVALID };
+=======
+enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_TRACE, FLUSH, INVALID };
+>>>>>>> #5449: Implemented Host API based on 3-stage Metal Trace proposal. Stub functionality brought up with test_EnqueueTrace unit test
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
@@ -41,6 +45,9 @@ uint32_t get_noc_unicast_encoding(CoreCoord coord);
 
 class Trace;
 class CommandQueue;
+class CommandInterface;
+
+using WorkerQueue = LockFreeQueue<CommandInterface>;
 
 class Command {
     EnqueueCommandType type_ = EnqueueCommandType::INVALID;
@@ -336,28 +343,33 @@ class EnqueueWaitForEventCommand : public Command {
 
 
 class Trace {
+   // TODO: delete the extra bloat not needed once implementation is complete
+   private:
+    struct TraceNode {
+        DeviceCommand command;
+        const vector<uint32_t> data;
+        EnqueueCommandType command_type;
+        uint32_t num_data_bytes;
+    };
+    bool trace_complete;
+    vector<TraceNode> history;
+    uint32_t num_data_bytes;
+    std::set<uint32_t> trace_instances;
+    std::unique_ptr<CommandQueue> cq;
+    static uint32_t next_trace_id();
+    void record(const TraceNode& trace_node);
+    void validate();
 
-    private:
-      struct TraceNode {
-          DeviceCommand command;
-          const vector<uint32_t> data;
-          EnqueueCommandType command_type;
-          uint32_t num_data_bytes;
-      };
-      bool trace_complete;
-      HWCommandQueue& command_queue;
-      vector<TraceNode> history;
-      uint32_t num_data_bytes;
-      void create_replay();
-
+    friend class CommandQueue;
     friend class EnqueueProgramCommand;
-    friend Trace BeginTrace(HWCommandQueue& cq);
+    friend CommandQueue& BeginTrace(Trace& trace);
     friend void EndTrace(Trace& trace);
-    friend void EnqueueTrace(Trace& trace, bool blocking);
+    friend void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
 
-    public:
-      Trace(HWCommandQueue& command_queue);
-      void record(const TraceNode& trace_node);
+   public:
+    Trace();
+    CommandQueue& trace_queue() const { return *cq; };
+    uint32_t instantiate(CommandQueue& cq);  // return a unique trace id
 };
 
 namespace detail {
@@ -474,14 +486,15 @@ class HWCommandQueue {
     void enqueue_record_event(std::reference_wrapper<Event> event);
     void populate_record_event(std::reference_wrapper<Event> event);
     void enqueue_wait_for_event(std::reference_wrapper<Event> event);
+    void enqueue_trace();
     void finish();
     void issue_wrap();
     void completion_wrap(uint32_t event);
     void launch(launch_msg_t& msg);
-    friend void EnqueueTrace(Trace& trace, bool blocking);
-    friend void EndTrace(Trace& trace);
-    friend Trace BeginTrace(CommandQueue& cq);
-    friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace);
+    friend void EnqueueTraceImpl(CommandQueue& cq);
+    // friend void EndTrace(Trace& trace);
+    // friend Trace BeginTrace(CommandQueue& cq);
+    friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
     friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
     friend void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
@@ -500,7 +513,6 @@ struct CommandInterface {
     std::optional<std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>>> program;
     std::optional<const void*> src;
     std::optional<void*> dst;
-    std::optional<std::reference_wrapper<Trace>> trace;
     std::optional<std::reference_wrapper<Event>> event;
 };
 
@@ -509,12 +521,20 @@ class CommandQueue {
     enum class CommandQueueMode {
         PASSTHROUGH = 0,
         ASYNC = 1,
+        TRACE = 2,
     };
     CommandQueue() = delete;
-    CommandQueue(Device* device, uint32_t id);
     ~CommandQueue();
 
+    // Command queue constructor
+    CommandQueue(Device* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
+
+    // Trace queue constructor
+    CommandQueue(Trace* trace);
+
+    // Getters for private members
     Device* device() const { return this->device_ptr; }
+    Trace* trace() const { return this->trace_ptr; }
     uint32_t id() const { return this->cq_id; }
 
     // Blocking method to wait for all commands to drain from the queue
@@ -525,12 +545,15 @@ class CommandQueue {
     // Blocking if in passthrough mode. Non-blocking if in async mode
     void run_command(const CommandInterface& command);
 
-    // API for setting the mode of the command queue
-    // The environment env counterpart is `TT_METAL_ASYNC_QUEUES`
+    // API for setting/getting the mode of the command queue
     void set_mode(const CommandQueueMode& mode);
+    CommandQueueMode get_mode() const { return this->mode; }
 
     // Reference to the underlying hardware command queue, non-const because side-effects are allowed
     HWCommandQueue& hw_command_queue();
+
+    // The empty state of the worker queue
+    bool empty() const { return this->worker_queue.empty(); }
 
    private:
     enum class CommandQueueState {
@@ -538,12 +561,18 @@ class CommandQueue {
         RUNNING = 1,
         TERMINATE = 2,
     };
-    CommandQueueMode mode = CommandQueue::get_mode();
-    CommandQueueState worker_state = CommandQueueState::IDLE;
+    constexpr static uint32_t TRACE_QUEUE_CQ_ID = 401;
+    friend class Trace;
+    friend void EnqueueTraceImpl(CommandQueue& cq);
+    friend uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq);
+
+    CommandQueueMode mode;
+    CommandQueueState worker_state;
     std::unique_ptr<std::thread> worker_thread;
-    LockFreeQueue<CommandInterface> worker_queue;
+    WorkerQueue worker_queue;
     uint32_t cq_id;
     Device* device_ptr;
+    Trace* trace_ptr;
 
     void start_worker();
     void stop_worker();
@@ -551,9 +580,10 @@ class CommandQueue {
     void run_command_impl(const CommandInterface& command);
 
     bool async_mode() { return this->mode == CommandQueueMode::ASYNC; }
+    bool trace_mode() { return this->mode == CommandQueueMode::TRACE; }
     bool passthrough_mode() { return this->mode == CommandQueueMode::PASSTHROUGH; }
 
-    static CommandQueueMode get_mode() {
+    static CommandQueueMode default_mode() {
         // Envvar is used for bringup and debug only. Will be removed in the future and should not be relied on in production.
         int value = parse_env<int>("TT_METAL_CQ_ASYNC_MODE", static_cast<int>(CommandQueueMode::PASSTHROUGH));
         return static_cast<CommandQueue::CommandQueueMode>(value);
@@ -563,3 +593,4 @@ class CommandQueue {
 } // namespace tt::tt_metal
 
 std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type);
+std::ostream& operator<<(std::ostream& os, CommandQueue::CommandQueueMode const& type);
