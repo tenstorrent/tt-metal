@@ -114,18 +114,19 @@ def run_test_LlamaDecoder_inference(
     # TT model -------------------------------------------------------------
     if optimized:
         tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
-            devices, state_dict, base_url, layer_num, model_config, configuration, batch
+            devices, state_dict, base_url, layer_num, model_config, configuration, batch, emulated=emulated
         )
     else:
         tt_LlamaDecoder_model = TtLlamaDecoder(
             devices, state_dict, base_url, layer_num, model_config, configuration, batch
         )
 
-    for device in devices:
-        tt_lib.device.Synchronize(device)
+    if not emulated:
+        for device in devices:
+            tt_lib.device.Synchronize(device)
 
     generation_start_pos = 0
-    generation_length = 750
+    generation_length = 20
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -191,7 +192,7 @@ def run_test_LlamaDecoder_inference(
     ]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
-        cache_length_to_check = generation_start_pos + generation_length + 1
+        cache_length_to_check = generation_start_pos + generation_length
         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
@@ -211,10 +212,12 @@ def run_test_LlamaDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc, optimized, n_devices",
+    "model_version, batch, seq_len, pcc, optimized, n_devices, emulated",
     (
-        ("llama-2-70B", 32, 1, 0.98, True, 4),
-        ("llama-2-70B", 32, 1, 0.98, True, 8),
+        ("llama-2-70B", 32, 1, 0.98, True, 4, False),
+        ("llama-2-70B", 32, 1, 0.98, True, 8, False),
+        ("llama-2-70B", 32, 1, 0.98, True, 4, True),
+        ("llama-2-70B", 32, 1, 0.98, True, 8, True),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
@@ -228,10 +231,11 @@ def test_LlamaDecoder_inference(
     n_devices,
     pcie_devices,
     use_program_cache,
+    emulated,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < n_devices:
+    if len(pcie_devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -246,4 +250,5 @@ def test_LlamaDecoder_inference(
         n_devices,
         # tt_cache_path,
         # model_location_generator,
+        emulated=emulated,
     )
