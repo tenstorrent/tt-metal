@@ -31,7 +31,6 @@ void kernel_main() {
     uint32_t bfloat16_Nt_bytes            = get_arg_val<uint32_t>(i++);
     uint32_t bfloat16_last_row_bytes_read = get_arg_val<uint32_t>(i++);
 
-
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
@@ -102,6 +101,7 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             #endif
+
             cb_push_back(cb_id_in0, in0_block_w);
 
             cb_reserve_back(cb_id_intermed1, out_num_tiles);

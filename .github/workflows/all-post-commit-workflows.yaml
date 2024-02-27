@@ -1,4 +1,4 @@
-name: "[post-commit] Run all post-commit workflows"
+name: "All post-commit tests"
 
 on:
   workflow_dispatch:

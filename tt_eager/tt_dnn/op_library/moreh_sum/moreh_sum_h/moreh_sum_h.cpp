@@ -202,7 +202,7 @@ operation::ProgramWithCallbacks moreh_sum_h(const Tensor &a, const Tensor &outpu
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto dst_buffer = input_tensors.at(1).buffer();
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

@@ -78,6 +78,56 @@ ShardedOpParallelizationStrategy Sharded::get_parallelization_strategy(const std
     return ShardedOpParallelizationStrategy::MULTI_CORE;
 }
 
+
+void Reshard::validate(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
+    TT_FATAL(this->output_mem_config.is_sharded(), "output must be sharded");
+    if(input_tensor.layout() == Layout::ROW_MAJOR) {
+        bool same_row_size = input_tensor.memory_config().shard_spec.value().shape[1] == this->output_mem_config.shard_spec.value().shape[1];
+        TT_FATAL(same_row_size, "row major must have shard_spec[1] be the same on both input and output");
+    }
+}
+
+std::vector<Shape> Reshard::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.shape()};
+}
+
+operation::ProgramWithCallbacks Reshard::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+
+    const auto& input_tensor = input_tensors.at(0);
+    auto& output_tensor = output_tensors.at(0);
+    //each tensor has its respective shard_spec within its memory_config
+    return reshard_multi_core(input_tensor, output_tensor);
+
+
+}
+
+std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto mem_config = this->output_mem_config;
+
+
+
+
+    return {create_sharded_device_tensor(
+        this->compute_output_shapes(input_tensors).at(0),
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        input_tensor.device(),
+        mem_config
+        )};
+}
+
+
+ShardedOpParallelizationStrategy Reshard::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
+    return ShardedOpParallelizationStrategy::MULTI_CORE;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

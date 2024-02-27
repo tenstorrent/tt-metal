@@ -259,7 +259,10 @@ def register_ttl_operation_as_ttnn_operation(name, function):
         function_args = preprocess_arg(function_args)
         function_kwargs = preprocess_arg(function_kwargs)
         output = function(*function_args, **function_kwargs)
-        return ttnn.Tensor(output)
+        if isinstance(output, (list, tuple)):
+            return type(output)([ttnn.Tensor(element) for element in output])
+        else:
+            return ttnn.Tensor(output)
 
     wrapper = register_operation(
         name=name,

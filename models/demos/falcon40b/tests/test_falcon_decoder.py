@@ -100,7 +100,6 @@ def run_test_FalconDecoder_inference(
 
         decoder_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
         attention_mask_bool = torch.zeros(batch, 1, q_len, kv_len, dtype=bool)
-        attention_mask_bool[:, :, :, -1] = True
         k_cache = torch.rand(batch, configuration.num_kv_heads, kv_cache_len, head_dim)
         v_cache = torch.rand(batch, configuration.num_kv_heads, kv_cache_len, head_dim)
         layer_past = (
@@ -274,6 +273,7 @@ def run_test_FalconDecoder_inference(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", (4,))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (("decode", 32, 1, 128),),
@@ -285,9 +285,10 @@ def run_test_FalconDecoder_inference(
 )
 @pytest.mark.parametrize(
     "model_config_str, out_pcc, cache_pcc, token_pcc",
-    [("BFLOAT8_B-SHARDED", 0.96, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.97, 0.99, 0.99)],
+    [("BFLOAT8_B-SHARDED", 0.99, 0.99, 0.99), ("BFLOAT16-SHARDED", 0.99, 0.99, 0.99)],
 )
 def test_FalconDecoder_inference(
+    num_devices,
     model_version,
     llm_mode,
     batch,
@@ -303,10 +304,8 @@ def test_FalconDecoder_inference(
     pcie_devices,
     use_program_cache,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, llm_mode, num_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < model_config["NUM_DEVICES"]:
-        pytest.skip(f"Requires at least {model_config['NUM_DEVICES']} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
     tt_cache_path = get_tt_cache_path(

@@ -139,6 +139,8 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
             TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+        } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            // TODO ...
         } else if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
             // Minor host code changes required to remove this restriction
@@ -179,8 +181,13 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vect
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         uint32_t fused_height = tt_metal::compute_volume(output_shape) / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
-        std::array<uint32_t, 2> shard_shape = {fused_height, output_shape[-1] / num_cores};
+        std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
+        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            shard_shape = {div_up(fused_height, num_cores), output_shape[-1]};
+        } else {
+            shard_shape = {fused_height, output_shape[-1] / num_cores};
+        }
         shard_spec.shape = shard_shape;
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
@@ -195,10 +202,10 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std:
     auto& output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UntilizeWithUnpaddingOpParallelizationStrategy::MULTI_CORE:
-            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize);
             break;
         case UntilizeWithUnpaddingOpParallelizationStrategy::SINGLE_CORE:
-        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end, use_pack_untilize);
     }
 }
 
@@ -210,7 +217,7 @@ UntilizeWithUnpaddingOpParallelizationStrategy UntilizeWithUnpadding::get_parall
     }
 }
 
-Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config) {
+Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config, bool use_pack_untilize) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     const Shape output_tensor_shape = {
@@ -227,7 +234,7 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output
             TT_FATAL(false, "Cannot untilize and unpad input which is not tilized");
         }
     }
-    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

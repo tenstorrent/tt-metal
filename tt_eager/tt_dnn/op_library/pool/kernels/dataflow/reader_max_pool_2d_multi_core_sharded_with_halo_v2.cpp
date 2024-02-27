@@ -65,6 +65,12 @@ void kernel_main() {
     const int32_t in_w = get_arg_val<int32_t>(6);
     const uint32_t in_cb_nsticks = get_arg_val<uint32_t>(7);
 
+    const uint32_t in_c = get_arg_val<uint32_t>(8);
+    const uint32_t nblocks = get_arg_val<uint32_t>(9);
+
+    constexpr uint32_t TILE_WIDTH = 32;
+    const bool is_partial_tile = in_c < TILE_WIDTH;
+
     // compile time args
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
@@ -87,7 +93,7 @@ void kernel_main() {
     uint16_t minus_inf = 0xf7ff;
     // fill one row of in_cb_id rows with -inf
     uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-    fill_with_val(in_l1_write_addr, in_nbytes_c >> 1, minus_inf);
+    fill_with_val(in_l1_write_addr, in_c, minus_inf);
     // now replicate the row to fill the entire in_cb_id
     fill_with_val_async(in_l1_write_addr, in_l1_write_addr + in_nbytes_c, in_cb_nsticks - 1, in_nbytes_c);
     noc_async_read_barrier();
@@ -102,23 +108,38 @@ void kernel_main() {
 
     uint32_t in_w_padded = in_w + 2 * pad_w;
 
+    uint32_t npages_to_reserve = is_partial_tile ? 1 : nblocks;
     uint32_t counter = 0;
     while (counter < reader_nindices) {
-        cb_reserve_back(in_cb_id, 1);
+        cb_reserve_back(in_cb_id, npages_to_reserve);
 
         uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
         uint32_t out_l1_write_addr = out_l1_write_addr_base;
-        uint16_t top_left_local_index = reader_indices_ptr[counter];
-        uint32_t h_multiples = 0;
-        for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
-            uint32_t stick_offset = top_left_local_index + h_multiples;
-            uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-            // noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-            out_l1_write_addr += in_nbytes_c * window_w;
+        for (uint32_t i = 0; i < nblocks; ++ i) {
+            uint16_t top_left_local_index = reader_indices_ptr[counter ++];
+            if (is_partial_tile) {
+                out_l1_write_addr = out_l1_write_addr_base + i * in_nbytes_c;
+                for (uint32_t h = 0; h < window_h; ++ h) {
+                    for (uint32_t w = 0; w < window_w; ++ w) {
+                        uint32_t stick_offset = top_left_local_index + h * in_w_padded + w;
+                        uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
+                        // noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
+                        noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
+                        out_l1_write_addr += in_nbytes_c * nblocks;
+                    }
+                }
+            } else {
+                uint32_t h_multiples = 0;
+                for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
+                    uint32_t stick_offset = top_left_local_index + h_multiples;
+                    uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+                    // noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+                    out_l1_write_addr += in_nbytes_c * window_w;
+                }
+            }
         }
         noc_async_read_barrier();
-        cb_push_back(in_cb_id, 1);
-        ++ counter;
+        cb_push_back(in_cb_id, npages_to_reserve);
     }
 } // kernel_main()

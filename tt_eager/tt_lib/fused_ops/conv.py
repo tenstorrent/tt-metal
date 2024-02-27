@@ -6,6 +6,12 @@ from typing import List, Union
 from .. import tensor, operations
 from ..utils import _nearest_32, _nearest_y
 import torch
+from loguru import logger
+
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_equal,
+    comp_pcc,
+)
 
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
@@ -82,7 +88,7 @@ def resnet50_1x1_conv_as_matmul(
     output_mem_config=None,
     weights_dtype=None,
     output_dtype=None,
-    math_fidelity=None,
+    compute_kernel_config=None,
 ):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
@@ -136,7 +142,7 @@ def resnet50_1x1_conv_as_matmul(
             program_config=matmul_program_config,
             output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
             output_dtype=output_dtype,
-            math_fidelity=math_fidelity,
+            compute_kernel_config=compute_kernel_config,
         )
 
         return output
@@ -398,7 +404,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
     out_sharded_mem_config,
     weights_dtype,
     output_dtype,
-    math_fidelity,
+    compute_kernel_config,
 ):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
@@ -451,7 +457,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
             program_config=matmul_program_config,
             output_mem_config=out_sharded_mem_config,
             output_dtype=output_dtype,
-            math_fidelity=math_fidelity,
+            compute_kernel_config=compute_kernel_config,
         )
 
         return output

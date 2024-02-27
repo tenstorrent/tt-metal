@@ -417,6 +417,7 @@ def run_test_FalconCausalLM_end_to_end(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("num_devices", (4,))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, inference_iterations",
     (
@@ -446,7 +447,7 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT8_B-SHARDED",))
 def test_perf_bare_metal(
-    use_program_cache,
+    num_devices,
     model_version,
     llm_mode,
     batch,
@@ -461,11 +462,10 @@ def test_perf_bare_metal(
     model_location_generator,
     get_tt_cache_path,
     pcie_devices,
+    use_program_cache,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(model_config_str, llm_mode, num_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < model_config["NUM_DEVICES"]:
-        pytest.skip(f"Requires at least {model_config['NUM_DEVICES']} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 

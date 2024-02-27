@@ -44,9 +44,16 @@ class TtFalconModelShared:
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size)
-        self.embeddings.weight = torch.nn.Parameter(
-            torch.load(str(tt_cache_path / "embedding.pt"), map_location=torch.device("cpu"))
-        )
+        word_embeddings_path = tt_cache_path / "embedding.pt"
+        if (word_embeddings_path).exists():
+            self.embeddings.weight = torch.nn.Parameter(
+                torch.load(word_embeddings_path, map_location=torch.device("cpu"))
+            )
+        else:
+            embed_weights = state_dict["transformer.word_embeddings.weight"]
+            torch.save(embed_weights, word_embeddings_path)
+            self.embeddings.weight = torch.nn.Parameter(embed_weights)
+
         if use_global_cos_sin_cache:
             global_cos_sin_cache = generate_cos_sin_cache(
                 devices,
@@ -58,6 +65,7 @@ class TtFalconModelShared:
             )
         else:
             global_cos_sin_cache = None
+
         # stack all decoders
         self.layers = [
             TtFalconDecoderLayer(
@@ -170,7 +178,6 @@ class TtFalconModelShared:
             ]
 
             attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
-            attention_mask_bool[:, :, :, -1] = True
 
             num_max_tokens = nearest_32(
                 kv_cache_len + 1

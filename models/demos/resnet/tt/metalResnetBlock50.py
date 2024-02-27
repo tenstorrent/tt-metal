@@ -13,6 +13,7 @@ from models.demos.resnet.utils import fold_bn_to_conv_weights_bias
 from models.utility_functions import tt2torch_tensor
 from tt_lib.utils import pad_weight
 
+from models.utility_functions import is_wormhole_b0, is_grayskull
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
@@ -107,6 +108,19 @@ def ResnetLinear(
         matmul_config = hardcoded_matmul_config_linear[batch_size]
 
     def linear_(act):
+        if is_grayskull():
+            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         ## this uses the systolic 1d matmul with bias fused
         if matmul_config is None:
             output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
@@ -118,7 +132,7 @@ def ResnetLinear(
                 program_config=matmul_config,
                 output_mem_config=output_mem_config,
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
-                math_fidelity=model_config["MATH_FIDELITY"],
+                compute_kernel_config=compute_kernel_config,
             )
         return output
 
@@ -1089,6 +1103,19 @@ class Bottleneck:
         assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv[batch_size]
         matmul_config = hardcoded_matmul_config_conv[batch_size][(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
+        if is_grayskull():
+            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         self.conv1 = resnet50_1x1_conv_as_matmul(
             conv1_weight.reshape(-1).tolist(),
             self.conv1_params,
@@ -1099,7 +1126,7 @@ class Bottleneck:
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
             output_dtype=model_config["ACTIVATIONS_DTYPE"],
-            math_fidelity=model_config["MATH_FIDELITY"],
+            compute_kernel_config=compute_kernel_config,
         )
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
@@ -1228,6 +1255,19 @@ class Bottleneck:
         matmul_config = hardcoded_matmul_config_conv[batch_size][
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
         ]
+        if is_grayskull():
+            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         self.conv3 = resnet50_1x1_conv_as_matmul(
             conv3_weight.reshape(-1).tolist(),
@@ -1238,7 +1278,7 @@ class Bottleneck:
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
             output_dtype=model_config["ACTIVATIONS_DTYPE"],
-            math_fidelity=model_config["MATH_FIDELITY"],
+            compute_kernel_config=compute_kernel_config,
         )
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
@@ -1502,6 +1542,7 @@ class ResNet(nn.Module):
                 math_fidelity=model_config["MATH_FIDELITY"],
                 use_shallow_conv_variant=True,
                 deallocate_activation=True,
+                padded_input_channels=16,
             )
             self.first_conv_op_params = sliding_window_op_params
         else:
@@ -1781,6 +1822,19 @@ class ResNet(nn.Module):
                 matmul_config = hardcoded_matmul_config_conv[batch_size][
                     (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
+                if is_grayskull():
+                    compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                    )
+                else:
+                    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=False,
+                        packer_l1_acc=False,
+                    )
+
                 self.downsample_conv_on_tt = resnet50_1x1_conv_as_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
@@ -1790,7 +1844,7 @@ class ResNet(nn.Module):
                     output_mem_config=self.ds_conv_output_memory_config,
                     weights_dtype=model_config["WEIGHTS_DTYPE"],
                     output_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    math_fidelity=model_config["MATH_FIDELITY"],
+                    compute_kernel_config=compute_kernel_config,
                 )
             elif use_downsample_op_and_mm_for_conv1x1_s2:
                 assert (
@@ -1804,6 +1858,19 @@ class ResNet(nn.Module):
                 assert stride == 2
                 downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
                 # logger.info("Calling ds op and matmul op, input shape - ", layer_input_shape)
+                if is_grayskull():
+                    compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                    )
+                else:
+                    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=False,
+                        packer_l1_acc=False,
+                    )
+
                 self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
@@ -1814,7 +1881,7 @@ class ResNet(nn.Module):
                     self.ds_conv_output_memory_config,
                     weights_dtype=model_config["WEIGHTS_DTYPE"],
                     output_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    math_fidelity=model_config["MATH_FIDELITY"],
+                    compute_kernel_config=compute_kernel_config,
                 )
             else:
                 assert (

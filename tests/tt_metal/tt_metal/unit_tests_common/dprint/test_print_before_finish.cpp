@@ -20,12 +20,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_with_wait.cpp",
-        CoreRange{
-            .start = xy_start,
-            .end = xy_end
-        },
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        CoreRange(xy_start, xy_end),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
     uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());

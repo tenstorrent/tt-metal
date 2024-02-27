@@ -20,7 +20,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, int scale_factor_h, int scale_factor_w) {
+operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w) {
     Program program{};
     CoreRange core({0, 0}, {0, 0});
 

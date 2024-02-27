@@ -1,4 +1,4 @@
-personal_ws-1.1 en 516
+personal_ws-1.1 en 521
 ABI
 ADDI
 API
@@ -166,12 +166,15 @@ abovementioned
 acc
 acos
 acosh
+addcdiv
+addcmul
 addexp
 addr
 agrebenisan
 andi
 api
 apis
+arange
 arg
 args
 asin
@@ -347,6 +350,7 @@ ncrisc
 nd
 ne
 networkx
+nextafter
 nez
 noc
 noconvert
@@ -373,6 +377,7 @@ phiyodr
 phyiscally
 png
 polygamma
+polyval
 pragma
 pre
 prelu

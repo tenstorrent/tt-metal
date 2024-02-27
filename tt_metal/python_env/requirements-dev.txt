@@ -20,7 +20,9 @@ pytest==7.2.2
 pytest-timeout==2.2.0
 jsbeautifier==1.14.7
 datasets==2.9.0
-torchvision==0.14.1+cpu
+torch==2.2.1.0+cpu
+networkx==3.1
+torchvision==0.17.1+cpu
 transformers==4.37.2
 xlsxwriter==3.0.8
 tiktoken==0.3.3

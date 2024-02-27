@@ -187,8 +187,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
             log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
             llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
         }
-        llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
     }
+    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
 }
 
 void Device::initialize_and_launch_firmware() {
@@ -550,7 +550,9 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     DprintServerAttach(this);
     llrt::watcher_init(this->id(),
                        [&, this]() { return this->logical_grid_size(); },
-                       [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
+                       [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
+                       [&, this]() -> const std::unordered_set<CoreCoord> { return this->get_active_ethernet_cores(); },
+                       [&, this](CoreCoord core) { return this->ethernet_core_from_logical_core(core); }
                        );
 
     this->initialize_and_launch_firmware();
@@ -559,6 +561,8 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                          [&, this]() { return this->logical_grid_size(); },
                          [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
+                         [&, this]() -> const std::unordered_set<CoreCoord> { return this->get_active_ethernet_cores(); },
+                         [&, this](CoreCoord core) { return this->ethernet_core_from_logical_core(core); },
                          build_env_.get_out_root_path()
                          );
 
