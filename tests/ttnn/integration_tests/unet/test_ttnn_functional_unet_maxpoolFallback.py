@@ -33,6 +33,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c1["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c1["use_shallow_conv_variant"] = True
         ttnn_module_args.c1_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c1_2["use_shallow_conv_variant"] = True
         ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1_2["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1["weights_dtype"] = ttnn.bfloat8_b
@@ -58,7 +59,9 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c2_2["conv_blocking_and_parallelization_config_override"] = None
 
         ttnn_module_args.c3["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c3["use_shallow_conv_variant"] = True
         ttnn_module_args.c3_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c3_2["use_shallow_conv_variant"] = True
         ttnn_module_args.c3["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c3_2["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c3["weights_dtype"] = ttnn.bfloat8_b
@@ -71,7 +74,9 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c3_2["conv_blocking_and_parallelization_config_override"] = None
 
         ttnn_module_args.c4["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c4["use_shallow_conv_variant"] = False
         ttnn_module_args.c4_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c4_2["use_shallow_conv_variant"] = False
         ttnn_module_args.c4["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c4_2["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c4["weights_dtype"] = ttnn.bfloat8_b
@@ -116,7 +121,9 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c5_3["conv_blocking_and_parallelization_config_override"] = None
 
         ttnn_module_args.c6["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c6["use_shallow_conv_variant"] = True
         ttnn_module_args.c6_2["math_fidelity"] = ttnn.MathFidelity.LoFi
+        ttnn_module_args.c6_2["use_shallow_conv_variant"] = True
         ttnn_module_args.c6_3["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c6["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c6_2["dtype"] = ttnn.bfloat8_b
