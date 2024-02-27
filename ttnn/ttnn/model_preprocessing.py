@@ -13,7 +13,6 @@ from ttnn.dot_access import make_dot_access_dict
 
 from loguru import logger
 import torch
-import torchtrail
 
 import ttnn
 from ttnn.tracer import trace, visualize
@@ -417,7 +416,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
         for node in graph:
             attributes = graph.nodes[node]
             operation = attributes["operation"]
-            if isinstance(operation, torchtrail.tracer.TorchModule):
+            if isinstance(operation, ttnn.tracer.TorchModule):
                 *_, module_name = operation.module.torchtrail_name.split(".")
                 (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
                 input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
