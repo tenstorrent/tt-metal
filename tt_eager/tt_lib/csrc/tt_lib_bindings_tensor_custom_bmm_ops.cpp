@@ -12,7 +12,13 @@ namespace tt::tt_metal::detail
     void TensorModuleCustomAndBMMOPs( py::module & m_tensor)
     {
         // matrix multiplication
-        m_tensor.def("bmm_tilize_untilize", &bmm_tilize_untilize, R"doc(
+        m_tensor.def("bmm_tilize_untilize", &bmm_tilize_untilize,
+            py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("bias").noconvert(), py::arg("out_dt").noconvert(),
+            py::arg("a_height_nblocks").noconvert(), py::arg("a_width_nblocks").noconvert(), py::arg("b_width_nblocks").noconvert(),
+            py::arg("a_block_height_ntiles").noconvert(), py::arg("a_block_width_ntiles").noconvert(), py::arg("b_block_width_ntiles").noconvert(),
+            py::arg("out_subblock_height_ntiles").noconvert(), py::arg("out_subblock_width_ntiles").noconvert(),
+            py::arg("tilize_in0").noconvert(), py::arg("untilize_out").noconvert(), py::arg("has_bias").noconvert(),
+            py::arg("kernel_config").noconvert() = std::nullopt, R"doc(
             Perform a batched matmul ``A x B`` with two tensors, where batch and channel dims match.
             This op also supports tiling tensor A and untiling the output.
 
