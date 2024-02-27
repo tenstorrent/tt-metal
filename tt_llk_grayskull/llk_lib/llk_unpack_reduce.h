@@ -13,7 +13,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_mop_config_() {
+inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces = 4) {
 #if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
@@ -27,16 +27,10 @@ inline void _llk_unpack_reduce_mop_config_() {
     static constexpr uint unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        true,  // src B
-        true,  // halo - just used for 4 unpacks
-        unpack_zerosrca,
-        unpack_srca,
-        TT_OP_NOP,
-        TT_OP_NOP,
-        0,
-        unpack_srcb,
-        0);
+    const uint32_t outerloop = num_faces;
+    constexpr uint32_t innerloop = 1;
+    ckernel_template tmp(outerloop, innerloop, unpack_zerosrca, unpack_srca);
+    tmp.set_start_op(unpack_srcb);
     tmp.program(instrn_buffer);
 }
 
@@ -54,8 +48,8 @@ inline void _llk_unpack_reduce_hw_configure_(
 
 template <PoolType type, ReduceDim dim>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
-inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0) {
-    _llk_unpack_reduce_mop_config_<type, dim>();
+inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t num_faces = 4) {
+    _llk_unpack_reduce_mop_config_<type, dim>(num_faces);
 }
 
 template <PoolType type, ReduceDim dim>
@@ -84,7 +78,7 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
     }
 
     // Run MOP
-    mop_run(0, 4);
+    ckernel::ckernel_template::run(instrn_buffer);
 
     // Restore face height
     TTI_SETADCXX(p_setadc::UNP1, FACE_HEIGHT*16-1, 0x0);

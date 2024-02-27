@@ -19,7 +19,7 @@ template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
 template <PoolType type, ReduceDim dim, int MATH_FIDELITY_DESC = 0, bool is_fp32_dest_acc_en = false /* unused */, bool is_int_fpu_en = false /* unused */>
-inline void _llk_math_reduce_(uint dst_index) {
+inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
@@ -131,7 +131,8 @@ inline void _llk_math_reduce_(uint dst_index) {
         // Increment dest by 32 for next accumulation
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
     } else if constexpr (dim == ReduceDim::REDUCE_COL) {
-        for (int row_tile = 0; row_tile < 2; row_tile++) {
+        const uint num_row_tiles = (num_faces > 1) ? num_faces/2 : 1;
+        for (uint row_tile = 0; row_tile < num_row_tiles; row_tile++) {
             // Transpose and pool
             TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
