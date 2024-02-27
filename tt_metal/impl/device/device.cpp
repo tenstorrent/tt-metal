@@ -549,23 +549,11 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     }
 
     DprintServerAttach(this);
-    watcher_init(this->id(),
-                       [&, this]() { return this->logical_grid_size(); },
-                       [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
-                       [&, this]() -> const std::unordered_set<CoreCoord> { return this->get_active_ethernet_cores(); },
-                       [&, this](CoreCoord core) { return this->ethernet_core_from_logical_core(core); }
-                       );
+    watcher_init(this);
 
     this->initialize_and_launch_firmware();
 
-    watcher_attach(this, this->id(),
-                         [&, this]() { return this->logical_grid_size(); },
-                         [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
-                         [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
-                         [&, this]() -> const std::unordered_set<CoreCoord> { return this->get_active_ethernet_cores(); },
-                         [&, this](CoreCoord core) { return this->ethernet_core_from_logical_core(core); },
-                         build_env_.get_out_root_path()
-                         );
+    watcher_attach(this, build_env_.get_out_root_path());
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->initialized_ = true;
