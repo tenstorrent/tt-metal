@@ -399,7 +399,7 @@ const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
 inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise=false) {
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
-    TT_ASSERT(num_cores <= grid_size_x * grid_size_y);
+    TT_ASSERT(num_cores <= grid_size_x * grid_size_y, "Number of cores {} exceeds grid size {}x{}", num_cores, grid_size_x, grid_size_y);
     if (row_wise) {
         for(uint32_t i = 0; i < num_cores; ++i) {
             cores.push_back({i % grid_size_x, i / grid_size_x});

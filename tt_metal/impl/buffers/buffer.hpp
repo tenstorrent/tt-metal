@@ -182,9 +182,7 @@ class Buffer {
 
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
-    uint64_t page_address(uint32_t page_index) const;
-
-    uint64_t core_address(uint32_t core_id) const;
+    uint64_t sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
     ShardSpecBuffer shard_spec() const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
@@ -194,6 +192,10 @@ class Buffer {
 
     std::vector<uint32_t> get_dev_page_to_host_page_mapping() const {
         return dev_page_to_host_page_mapping_;
+    }
+
+    std::vector<uint32_t> get_host_page_to_dev_page_mapping() const {
+        return host_page_to_dev_page_mapping_;
     }
 
     CoreCoord get_core_from_dev_page_id(uint32_t dev_page_id) const {
@@ -206,12 +208,6 @@ class Buffer {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         TT_ASSERT(input_id < dev_page_to_core_mapping_.size());
         return dev_page_to_host_page_mapping_[input_id];
-    }
-
-    uint32_t get_bank_id_from_page_id (uint32_t page_id) const{
-        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto core_id = dev_page_to_core_mapping_[page_id];
-        return core_bank_indices_[core_id];
     }
 
     std::vector<CoreCoord> all_cores() const{
@@ -255,13 +251,13 @@ class Buffer {
     std::vector<uint32_t> dev_pages_in_shard(const uint32_t & core_id) const
     {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
-        auto host_pages= core_host_page_indices_[core_id];
-        std::vector<uint32_t> dev_pages;
-        dev_pages.reserve(host_pages.size());
-        for(auto host_page: host_pages){
-            dev_pages.push_back(dev_page_to_host_page_mapping_[host_page]);
+        std::vector<uint32_t> ret_vec;
+        for(uint32_t i=0; i<this->dev_page_to_core_mapping_.size() ; i++) {
+           if(this->dev_page_to_core_mapping_[i] == core_id) {
+             ret_vec.push_back(i);
+           }
         }
-        return dev_pages;
+        return ret_vec;
     }
 
     std::vector<uint32_t> dev_pages_in_shard(const CoreCoord & core) const
@@ -271,10 +267,12 @@ class Buffer {
         return dev_pages_in_shard(core_id);
     }
 
-    std::string get_shard_info() const;
-    void print_shard_info() const;
+    std::vector<uint32_t> get_host_page_to_local_shard_page_mapping() const
+    {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        return host_page_to_local_shard_page_mapping_;
+    }
 
-    void log_shard_info() const;
 
    private:
     void allocate();
@@ -294,7 +292,9 @@ class Buffer {
     std::vector< std::vector<uint32_t> > core_host_page_indices_;
     std::vector<uint32_t> dev_page_to_core_mapping_;
     std::vector<uint32_t> dev_page_to_host_page_mapping_;
+    std::vector<uint32_t> host_page_to_dev_page_mapping_;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
+    std::vector< uint32_t> host_page_to_local_shard_page_mapping_;
 };
 
 }  // namespace tt_metal

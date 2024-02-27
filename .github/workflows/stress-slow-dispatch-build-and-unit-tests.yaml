@@ -1,4 +1,4 @@
-name: "[stress] all - Stress test Slow Dispatch post-commit main build and unit tests"
+name: "Stress slow dispatch tests"
 
 on:
   workflow_dispatch:

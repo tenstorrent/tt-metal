@@ -107,9 +107,6 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto Ht = H / TILE_HEIGHT;
     const auto Wt = W / TILE_WIDTH;
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
-
     // This could be inefficient.
     // If Wt is 65, the block_size will be 5. Then, the number of iteration is 13.
     // It can be 8 * 8 + 1, so the number of iterations is 9. It's more efficient.
@@ -126,42 +123,6 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
 
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
-
-    uint32_t in0_t = Wt;                                          // input
-    const uint32_t in1_t = 1;                                     // scaler
-    const uint32_t in2_t = 1;                                     // epsilon
-    const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
-    const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
-    const uint32_t in5_t = do_mask_h ? 1 : 0;                     // mask_h
-    const uint32_t in6_t = do_mask_w ? 1 : 0;                     // mask_w
-
-    const uint32_t out0_t = 2 * block_size;          // output
-    const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
-    const uint32_t out2_t = rstd_has_value ? 1 : 0;  // rstd
-
-    const uint32_t im0_t = 1;                                                         // E[x]
-    uint32_t im1_t = Wt;                                                              // x - E[x]
-    uint32_t im2_t = 1;                                                               // (x - E[x])^2
-    const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
-    const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
-    const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
-    const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
-    const uint32_t im7_t = 2;                                                         // Sum[x]
-
-    const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t +
-                               im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
-                              single_tile_size;
-    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
-    const bool use_large_algorithm = cb_usage >= available_L1;
-
-    if (use_large_algorithm) {
-        log_info(LogTest, "Large moreh_layernorm algorithm is selected.");
-        in0_t = 2 * block_size;
-        im1_t = 2 * block_size;
-        im2_t = 2 * block_size;
-    } else {
-        log_info(LogTest, "Small moreh_layernorm algorithm is selected.");
-    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -185,6 +146,45 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
+    uint32_t in0_t = Wt;                                          // input
+    const uint32_t in1_t = 1;                                     // scaler
+    const uint32_t in2_t = 1;                                     // epsilon
+    const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
+    const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
+    const uint32_t in5_t = do_mask_h ? 1 : 0;                     // mask_h
+    const uint32_t in6_t = do_mask_w ? 1 : 0;                     // mask_w
+
+    const uint32_t out0_t = 2 * block_size;          // output
+    const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
+    const uint32_t out2_t = rstd_has_value ? 1 : 0;  // rstd
+
+    const uint32_t im0_t = 1;                                                         // E[x]
+    uint32_t im1_t = Wt;                                                              // x - E[x]
+    uint32_t im2_t = 1;                                                               // (x - E[x])^2
+    const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
+    const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
+    const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
+    const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
+    const uint32_t im7_t = 2;                                                         // Sum[x]
+
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+
+    const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t +
+                               im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
+                              single_tile_size;
+    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    const bool use_large_algorithm = cb_usage >= available_L1;
+
+    if (use_large_algorithm) {
+        log_info(LogTest, "Large moreh_layernorm algorithm is selected.");
+        in0_t = 2 * block_size;
+        im1_t = 2 * block_size;
+        im2_t = 2 * block_size;
+    } else {
+        log_info(LogTest, "Small moreh_layernorm algorithm is selected.");
+    }
+
     CreateCircularBuffer(
         program,
         all_cores,

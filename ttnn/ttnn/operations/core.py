@@ -7,6 +7,7 @@ import pathlib
 from typing import Union, Tuple, Optional, Any
 
 from loguru import logger
+import torch
 
 import tt_lib as ttl
 
@@ -368,6 +369,16 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
     )
 
 
+class TorchTensor(torch.Tensor):
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        # this tells torch to treat TorchTensor just like torch.Tensor's.
+        # Otherwise, torch will complain that it doesn't know how to handle it.
+        types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
+        func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
+        return super().__torch_function__(func, types, args, kwargs)
+
+
 @ttnn.register_operation(name="ttnn.to_torch", validate_input_tensors=_to_torch_validate_input_tensors)
 def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch.Tensor":
     """
@@ -413,30 +424,7 @@ def to_torch(tensor: ttnn.Tensor, *, torch_rank: Optional[int] = None) -> "torch
     tensor = ttnn.Tensor(ttl_tensor.reshape(tensor.shape.with_tile_padding().value))
     tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor.value)
 
-    import torch
-
-    class TorchTensor(torch.Tensor):
-        @staticmethod
-        def __new__(
-            cls: Any,
-            tensor: Any,
-            *function_args: Any,
-            **function_kwargs: Any,
-        ) -> Any:
-            return super().__new__(cls, tensor, *function_args, **function_kwargs)  # type: ignore[call-arg]
-
-        @classmethod
-        def __torch_function__(
-            cls: Any,
-            function,
-            types: Any,
-            function_args: Any = (),
-            function_kwargs: Any = None,
-        ) -> Any:
-            function = ttl.tensor.decorate_external_operation(function, function_name=f"(torch) {function.__name__}")
-            return super().__torch_function__(function, types, function_args, function_kwargs)
-
-    return tensor
+    return TorchTensor(tensor)
 
 
 def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
@@ -599,11 +587,19 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
         if ttl_tensor.is_sharded():
             # reshard
             def impl(ttl_tensor, sharded_memory_config):
-                ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
-                return ttl.tensor.interleaved_to_sharded(
-                    ttl_tensor,
-                    sharded_memory_config,
-                )
+                input_memory_config = ttnn.get_memory_config(tensor)
+                input_shard_spec = input_memory_config.shard_spec
+                output_shard_spec = sharded_memory_config.shard_spec
+                if tensor.layout == ttnn.TILE_LAYOUT or input_shard_spec.shape[1] == output_shard_spec.shape[1]:
+                    return ttl.tensor.reshard(ttl_tensor, sharded_memory_config)
+
+                else:
+                    # for row-major tensors where shard-spec[1] is different for input shard and output shard
+                    ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
+                    return ttl.tensor.interleaved_to_sharded(
+                        ttl_tensor,
+                        sharded_memory_config,
+                    )
 
             ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
                 ttl_tensor, memory_config
@@ -713,18 +709,42 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
         raise RuntimeError(f"Unsupported datatype conversion to {dtype}")
 
     if not requires_padding_change(layout, tensor.shape):
-        ttl_tensor = tensor.value
         if is_on_device:
             if layout == ttnn.ROW_MAJOR_LAYOUT:
-                return ttnn.Tensor(ttl.tensor.untilize(ttl_tensor))
+                ## since the default of untilize is to use single core, set use_multicore if the input is sharded
+                ## additionally, default output is INTERLEAVED, so provide sharded memory config to untilize
+                if ttnn.is_sharded(tensor):
+                    return ttnn.Tensor(
+                        ttl.tensor.untilize(
+                            tensor.value, use_multicore=True, output_mem_config=ttnn.get_memory_config(tensor)
+                        )
+                    )
+                else:
+                    return ttnn.Tensor(ttl.tensor.untilize(tensor.value))
             elif layout == ttnn.TILE_LAYOUT:
+                ## since the default of tilize is to use single core, set use_multicore if the input is sharded
+                use_multicore = False
+                if ttnn.is_sharded(tensor):
+                    use_multicore = True
+                    ## check if the shard shape is already tile sized, or needs padding
+                    shard_shape = ttnn.get_memory_config(tensor).shard_spec.shape
+                    if shard_shape[0] % ttnn.TILE_SIZE != 0 or shard_shape[1] % ttnn.TILE_SIZE != 0:
+                        ## use single core tilize after a sharded to interleaved
+                        ## TODO: can we pad each shard to keep it multicore?
+                        use_multicore = False
+                        tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
                 return ttnn.Tensor(
-                    ttl.tensor.tilize(ttl_tensor, output_mem_config=ttl_tensor.memory_config(), output_dtype=dtype)
+                    ttl.tensor.tilize(
+                        tensor.value,
+                        output_mem_config=ttnn.get_memory_config(tensor),
+                        use_multicore=use_multicore,
+                        output_dtype=dtype,
+                    )
                 )
             else:
                 raise RuntimeError(f"Unsupported layout: {layout}")
         else:
-            return ttnn.Tensor(ttl_tensor.to(layout))
+            return ttnn.Tensor(tensor.value.to(layout))
 
     # def unpad_with_pytorch(ttnn_tensor):
     #     desired_shape = list(ttnn_tensor.shape)
@@ -746,13 +766,28 @@ def to_layout(tensor, layout: ttnn.Layout, dtype: ttnn.DataType = None):
                 input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
                 intended_4D_shape = tuple(x - 1 for x in input_tensor.shape)
                 ttl_input_tensor = input_tensor.value
-                output_tensor = ttnn.Tensor(
-                    ttl.tensor.untilize_with_unpadding(
-                        ttl_input_tensor,
-                        (0, 0, 0, 0),
-                        intended_4D_shape,
+
+                if input_tensor.value.is_sharded():
+                    memory_layout_config = input_tensor.value.memory_config()
+                    output_mem_config = ttl.tensor.MemoryConfig(
+                        memory_layout_config.memory_layout, ttl.tensor.BufferType.L1
                     )
-                )
+                    output_tensor = ttnn.Tensor(
+                        ttl.tensor.untilize_with_unpadding(
+                            ttl_input_tensor,
+                            (0, 0, 0, 0),
+                            intended_4D_shape,
+                            output_mem_config,
+                        )
+                    )
+                else:
+                    output_tensor = ttnn.Tensor(
+                        ttl.tensor.untilize_with_unpadding(
+                            ttl_input_tensor,
+                            (0, 0, 0, 0),
+                            intended_4D_shape,
+                        )
+                    )
             else:
                 input_tensor = ttnn.from_device(input_tensor)
                 input_tensor = ttnn.unsqueeze_to_4D(input_tensor)

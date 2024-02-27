@@ -43,10 +43,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRange all_cores = CoreRange(
-        CoreCoord{.x = 0, .y = 0},
-        CoreCoord{.x = compute_grid_size.x - 1, .y = compute_grid_size.y -1}
-    );
+    CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
     CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
@@ -63,11 +60,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
 }
 }  // namespace unit_tests_common::basic::test_device_init
 
-INSTANTIATE_TEST_CASE_P(
-    DeviceInit,
-    DeviceParamFixture,
-    ::testing::Values(1, tt::tt_metal::GetNumAvailableDevices())
-);
+INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, tt::tt_metal::GetNumAvailableDevices()));
 
 TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     unsigned int num_devices = GetParam();

@@ -172,6 +172,14 @@ def test_matmul_1d_fp32_acc_l1(
         fused_activation=None,
         mcast_in0=True,
     )
+
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     output_t = ttl.operations.primary.matmul_1d(
         in0_t,
         in1_t,
@@ -179,8 +187,7 @@ def test_matmul_1d_fp32_acc_l1(
         program_config=program_config,
         output_mem_config=output_mem_config,
         output_dtype=activations_dtype,
-        fp32_dest_acc_en=fp32_acc_mode,
-        packer_l1_acc=packer_l1_acc,
+        compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -269,14 +276,20 @@ def test_matmul_no_mcast_fp32_acc_l1(
         per_core_N=N // 32,
     )
 
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     output_t = ttl.operations.primary.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
         output_mem_config=output_mem_config,
         output_dtype=activations_dtype,
-        fp32_dest_acc_en=fp32_acc_mode,
-        packer_l1_acc=packer_l1_acc,
+        compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -372,6 +385,14 @@ def test_matmul_1d_fp32_input_output(
         fused_activation=None,
         mcast_in0=True,
     )
+
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     output_t = ttl.operations.primary.matmul_1d(
         in0_t,
         in1_t,
@@ -379,8 +400,7 @@ def test_matmul_1d_fp32_input_output(
         program_config=program_config,
         output_mem_config=output_mem_config,
         output_dtype=activations_dtype,
-        fp32_dest_acc_en=fp32_acc_mode,
-        packer_l1_acc=packer_l1_acc,
+        compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -475,14 +495,20 @@ def test_matmul_no_mcast_fp32_input_output(
         per_core_N=N // 32,
     )
 
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+
     output_t = ttl.operations.primary.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
         output_mem_config=output_mem_config,
         output_dtype=activations_dtype,
-        fp32_dest_acc_en=fp32_acc_mode,
-        packer_l1_acc=packer_l1_acc,
+        compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)

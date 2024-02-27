@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
                 (std::size_t)num_cores_c - 1,
                 (core_group_idx == num_core_groups - 1) ? (std::size_t)num_cores_r - 1
                                                         : (num_cores_r / num_core_groups) * (core_group_idx + 1) - 1};
-            CoreRange group_of_cores{.start = start_core, .end = end_core};
+            CoreRange group_of_cores(start_core, end_core);
 
             log_info(
                 LogTest,

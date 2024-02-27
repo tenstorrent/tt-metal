@@ -992,8 +992,9 @@ void HWCommandQueue::finish() {
             } else if (tt::llrt::watcher_server_killed_due_to_error()) {
                 this->exit_condition = true;
                 TT_THROW(
-                    "Command Queue could not finish: device hang due to illegal NoC transaction. See build/watcher.log "
-                    "for details.");
+                    "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
+                    tt::llrt::watcher_get_log_file_name()
+                );
             }
         }
     } else {

@@ -11,19 +11,22 @@ test-list:
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand
+        function: gen_checkerboard
         dtype: bfloat16
         args:
-          low: -100
+          low: 0
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_allclose
+        args:
+          rtol: 0
+          atol: 0.1
       args-gen: gen_dtype_layout_device
       output-file: reduce_sum_h_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
   - reduce-sum-h:
       shape:
@@ -36,17 +39,20 @@ test-list:
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand
+        function: gen_checkerboard
         dtype: bfloat16
         args:
-          low: -100
+          low: 0
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_allclose
+        args:
+          rtol: 0
+          atol: 0.1
       args-gen: gen_dtype_layout_device
       output-file: reduce_sum_h_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]

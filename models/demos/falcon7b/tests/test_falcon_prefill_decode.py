@@ -68,7 +68,7 @@ def run_test_FalconCausalLM_inference(
     torch.manual_seed(0)
     base_url = ""
     max_position_embeddings = max_seq_len
-    head_dim = configuration.hidden_size // configuration.n_head
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True
     kv_cache_len = seq_len  # This will increment by one after each decode
 

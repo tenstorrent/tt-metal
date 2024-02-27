@@ -229,7 +229,7 @@ class TtFalconDecoderLayer:
         output = []
 
         # Add attn output to residiual first in place to save memory
-        # Note that this is only correct in inference when dropout is disableds
+        # Note that this is only correct in inference when dropout is disabled
         for i in range(len(residual)):
             output.append(
                 tt_lib.tensor.add_without_autoformat(

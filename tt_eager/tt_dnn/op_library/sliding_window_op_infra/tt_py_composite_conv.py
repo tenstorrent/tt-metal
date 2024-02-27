@@ -18,6 +18,8 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     get_hash_from_sliding_window_op_params,
 )
 from tt_lib.utils import _nearest_32, _nearest_y
+from models.utility_functions import is_wormhole_b0, is_grayskull
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 import tt_lib as ttl
 import torch
@@ -206,6 +208,7 @@ def determine_per_core_block_config(
     input_channels,
     sliding_window_op_params,
     use_shallow_conv_variant,
+    padded_input_channels,
     config_override={},
 ):
     act_block_h_override = 0
@@ -216,8 +219,6 @@ def determine_per_core_block_config(
     act_block_h_ntiles = (
         act_block_h_ntiles_override if act_block_h_ntiles_override > 0 else per_core_out_matrix_height_ntiles
     )
-    # TODO: for shallow conv variant, pad only till 8 for bfp16
-    padded_input_channels = _nearest_y(input_channels, 16) if use_shallow_conv_variant else _nearest_32(input_channels)
     act_block_w_ntiles = (int)(
         (
             _nearest_32(padded_input_channels * sliding_window_op_params.window_w)
@@ -239,7 +240,7 @@ def determine_per_core_block_config(
     out_subblock_h_ntiles, out_subblock_w_ntiles = determine_largest_subblock_size(
         act_block_h_ntiles, weight_block_w_ntiles
     )
-    if padded_input_channels == 16 and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
+    if use_shallow_conv_variant and (act_block_h_ntiles // out_subblock_h_ntiles % 2 != 0):
         assert is_1d_systolic
         # TODO: fix this temporary hack for shallow conv
         assert act_block_h_ntiles % 2 == 0
@@ -382,7 +383,12 @@ class TTPyCompositeConv(TTPyOp):
         use_shallow_conv_variant=False,
         enable_auto_formatting=False,
         deallocate_activation=True,
+        padded_input_channels=None,
     ):
+        if padded_input_channels is None:
+            self.padded_input_channels = _nearest_32(input_channels)
+        else:
+            self.padded_input_channels = padded_input_channels
         self.enable_auto_formatting = enable_auto_formatting
         self.deallocate_activation = deallocate_activation
         self.use_shallow_conv_variant = use_shallow_conv_variant
@@ -435,6 +441,7 @@ class TTPyCompositeConv(TTPyOp):
             input_channels,
             sliding_window_op_params,
             use_shallow_conv_variant,
+            self.padded_input_channels,
             config_override=conv_blocking_and_parallelization_config_override,
         )
 
@@ -459,7 +466,6 @@ class TTPyCompositeConv(TTPyOp):
             filter_height == filter_width
             and filter_height == 1
             and stride_h == stride_w
-            and stride_h == 1
             and pad_h == pad_w
             and pad_h == 0
         ):
@@ -487,6 +493,8 @@ class TTPyCompositeConv(TTPyOp):
         self.sliding_window_op_params = sliding_window_op_params
         self.move_utwh_output = move_utwh_output
         self.deallocate_input = deallocate_activation
+        self.kernel_size = [filter_height, filter_width]
+        self.strides = [stride_h, stride_w]
 
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(sliding_window_op_params)
 
@@ -535,6 +543,7 @@ class TTPyCompositeConv(TTPyOp):
             weights_dtype=weights_dtype,
             using_parameters_cache=using_parameters_cache,
             use_shallow_conv_variant=use_shallow_conv_variant,
+            padded_input_channels=self.padded_input_channels,
             move_weights_to_device=move_weights_to_device,
         )
 
@@ -668,18 +677,19 @@ class TTPyCompositeConv(TTPyOp):
         bias,
         using_parameters_cache,
         use_shallow_conv_variant,
+        padded_input_channels,
         move_weights_to_device=False,
     ):
         assert len(conv_params) == 10
         K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
 
         assert dilation == 1 and groups == 1
-
+        assert padded_input_channels >= C
         if not using_parameters_cache:
             weights_shape = [K, C, R, S]
             weights_channels_padded_shape = [
                 _nearest_32(K),
-                _nearest_y(C, 16) if use_shallow_conv_variant else _nearest_32(C),
+                padded_input_channels,
                 R,
                 S,
             ]
@@ -726,6 +736,17 @@ class TTPyCompositeConv(TTPyOp):
         else:
             self.weight = weight
             self.bias = bias
+            weight_on_device = weight
+            bias_on_device = bias
+
+        def downsample_if_needed(activation):
+            use_downsample = False
+            for kernel_size, stride in zip(self.kernel_size, self.strides):
+                if kernel_size == 1 and stride > 1:
+                    use_downsample = True
+            if use_downsample:
+                activation = ttl.tensor.downsample(activation, [*self.input_tensor_shape[:-1], *self.strides])
+            return activation
 
         def conv_(activation):
             return ttl.tensor.optimized_conv(
@@ -745,6 +766,7 @@ class TTPyCompositeConv(TTPyOp):
                 output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
                 output_dtype=output_dtype,
                 input_tensor_shape=self.input_tensor_shape,
+                use_shallow_conv_variant=self.use_shallow_conv_variant,
             )
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
@@ -774,7 +796,21 @@ class TTPyCompositeConv(TTPyOp):
             utwh_output.deallocate()
             return conv_(move_output)
 
+        if is_grayskull():
+            compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=math_fidelity,
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+                math_fidelity=math_fidelity,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         def conv1x1_as_matmul(activation):
+            activation = downsample_if_needed(activation)
             # conv1x1 stride 1 padding 0, use matmul op
             output = ttl.operations.primary.matmul(
                 activation,
@@ -783,7 +819,7 @@ class TTPyCompositeConv(TTPyOp):
                 program_config=self.matmul_config,
                 output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
                 output_dtype=output_dtype,
-                math_fidelity=math_fidelity,
+                compute_kernel_config=compute_kernel_config,
             )
             return output
 
@@ -897,6 +933,7 @@ class TTPyCompositeConv(TTPyOp):
         input_channels = self.input_tensor_shape[3]
         padded_input_channels = conv_input_on_device.shape()[3]
         assert padded_input_channels >= input_channels
+        assert padded_input_channels == self.padded_input_channels
         act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
         grid_size = (num_cores_w, num_cores_h)
 
@@ -947,9 +984,7 @@ class TTPyCompositeConv(TTPyOp):
         )
 
         if conv_input.storage_type() != ttl.tensor.StorageType.DEVICE:
-            # Pad for 16 byte alignnment
-            # TODO: for bfp16, pad to 8 only
-            padded_input_channels = _nearest_y(conv_input.shape()[3], 16)
+            padded_input_channels = self.padded_input_channels
             channels_padded_shape = [
                 conv_input.shape()[0],
                 conv_input.shape()[1],
@@ -963,7 +998,7 @@ class TTPyCompositeConv(TTPyOp):
         assert conv_input_on_device.shape()[3] % 16 == 0
         if not self.use_shallow_conv_variant:
             input_padded_shape = ttl.tensor.pad_to_tile_shape(conv_input_on_device.shape(), False, False, True, True)
-            padded_input_channels = input_padded_shape[3]
+            assert self.padded_input_channels == input_padded_shape[3]
             if conv_input.shape() != input_padded_shape:
                 conv_input_on_device = ttl.tensor.format_input_tensor(
                     conv_input_on_device,

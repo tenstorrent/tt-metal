@@ -35,7 +35,7 @@
 
 #include "dprint_buffer.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "ethernet/dataflow_api.h"
+#include "erisc.h"
 #endif
 
 #define DPRINT DebugPrinter()

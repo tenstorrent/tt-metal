@@ -36,35 +36,39 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t output_nsticks = output.volume() / output.shape()[-1];
     uint32_t input_nsticks = input.volume() / input.shape()[-1];
 
-    auto output_shape = output.shape();
+    uint32_t in_w = input.shape()[2];
+    uint32_t out_w = output.shape()[2];
 
-    // sharding
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
     uint32_t ncores_x = device->compute_with_storage_grid_size().x;
     uint32_t ncores_nhw = ncores;
 
-    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+    auto out_shard_spec = output.shard_spec().value();
+    TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
+
+    uint32_t in_nsticks_per_core = shard_spec.shape[0];
+    uint32_t out_nsticks_per_core = in_nsticks_per_core * scale_factor_h * scale_factor_w;
+
+    // extra limitation to avoid post upsample step of resharding
+    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_FATAL(in_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this restriction", in_nsticks_per_core, in_w);
+    } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end.x + 1;
         ncores_nhw = all_cores.ranges().begin()->end.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
+    } else {
+        TT_FATAL(false, "Unsupported sharding layout");
     }
+
+    uint32_t input_nsticks_per_core = div_up(input_nsticks, ncores_nhw);
+    uint32_t output_nsticks_per_core = div_up(output_nsticks, ncores_nhw);
 
     // TODO: Support non-multiple case
-    TT_FATAL(input_nsticks % ncores_nhw == 0, "Input sticks should be divisible by number of cores");
-    TT_FATAL(output_nsticks % ncores_nhw == 0, "Output sticks should be divisible by number of cores");
-    uint32_t input_nsticks_per_core = input_nsticks / ncores_nhw;
-    uint32_t output_nsticks_per_core = output_nsticks / ncores_nhw;
-
-    uint32_t in_w = input.shape()[2];
-    uint32_t out_w = output.shape()[2];
-
-    // extra limitation to avoid post upsample step of resharding
-    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(input_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core should be divisible by input width. TODO to remove this restriction");
-    }
+    TT_FATAL(in_nsticks_per_core == input_nsticks_per_core, "Input sticks per shard {} should be same as input sticks per core {}", in_nsticks_per_core, input_nsticks_per_core);
+    TT_FATAL(out_nsticks_per_core == output_nsticks_per_core, "Output sticks per shard {} should be same as output sticks per core {}", out_nsticks_per_core, output_nsticks_per_core);
 
     // CBs
 

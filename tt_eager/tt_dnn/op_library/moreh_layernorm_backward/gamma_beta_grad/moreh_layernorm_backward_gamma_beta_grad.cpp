@@ -92,24 +92,6 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const bool beta_grad_has_value = beta_grad.has_value();
     TT_ASSERT(gamma_grad_has_value || beta_grad_has_value);
 
-    const uint32_t in0_t = 1;                  // output_grad(==dy)
-    const uint32_t in1_t = 1;                  // input(==x)
-    const uint32_t in2_t = 1;                  // mean
-    const uint32_t in3_t = 1;                  // rstd
-    const uint32_t in4_t = 1;                  // scaler
-    const uint32_t in5_t = do_mask_h ? 1 : 0;  // mask_h
-
-    const uint32_t out0_t = 1;  // gamma_grad(==dgamma)
-    const uint32_t out1_t = 1;  // beta_grad(==dbeta)
-
-    const uint32_t im0_t = 1;  // output(==y)
-    const uint32_t im1_t = 1;  // y * dy
-    const uint32_t im2_t = 1;  // Add[dy]
-    const uint32_t im3_t = 1;  // Add[y * dy]
-    const uint32_t im4_t = 1;  // x - mean
-    const uint32_t im5_t = 1;  // 1.0 / rstd
-    const uint32_t im6_t = 1;  // dycopy
-
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -128,7 +110,25 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
+    const uint32_t in0_t = 1;                  // output_grad(==dy)
+    const uint32_t in1_t = 1;                  // input(==x)
+    const uint32_t in2_t = 1;                  // mean
+    const uint32_t in3_t = 1;                  // rstd
+    const uint32_t in4_t = 1;                  // scaler
+    const uint32_t in5_t = do_mask_h ? 1 : 0;  // mask_h
+
+    const uint32_t out0_t = 1;  // gamma_grad(==dgamma)
+    const uint32_t out1_t = 1;  // beta_grad(==dbeta)
+
+    const uint32_t im0_t = 1;  // output(==y)
+    const uint32_t im1_t = 1;  // y * dy
+    const uint32_t im2_t = 1;  // Add[dy]
+    const uint32_t im3_t = 1;  // Add[y * dy]
+    const uint32_t im4_t = 1;  // x - mean
+    const uint32_t im5_t = 1;  // dycopy
+
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+
     CreateCircularBuffer(
         program,
         all_cores,
@@ -147,8 +147,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             {CB::c_intermed2, im2_t},  // Add[dy]
             {CB::c_intermed3, im3_t},  // Add[y * dy]
             {CB::c_intermed4, im4_t},  // x - mean
-            {CB::c_intermed5, im5_t},  // 1.0 / rstd
-            {CB::c_intermed6, im6_t},  // dycopy
+            {CB::c_intermed5, im5_t},  // dycopy
         });
 
     ////////////////////////////////////////////////////////////////////////////

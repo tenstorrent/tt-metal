@@ -20,13 +20,13 @@ namespace ckernel {
  */
 ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
 {
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
-    MATH(( llk_math_pack_sync_init<SyncHalf>() ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
+    MATH(( llk_math_pack_sync_init<SyncHalf, DST_ACCUM_MODE>() ));
 
-    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
+    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>() ));
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_untilize_hw_configure_disaggregated(icb) ));
@@ -38,7 +38,7 @@ ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
  */
 ALWI void untilize_init_short(uint32_t icb)
 {
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     UNPACK(( llk_unpack_untilize_init(icb) ));
 }
 
@@ -55,20 +55,20 @@ ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 
         // Datacopy
         for (int reg_id = 0; reg_id < N; reg_id++) {
-            MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(reg_id) ));
+            MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf, DST_ACCUM_MODE>(reg_id) ));
         }
 
-        MATH(( llk_math_dest_section_done<SYNC>() ));
+        MATH(( llk_math_dest_section_done<SYNC, DST_ACCUM_MODE>() ));
 
         PACK(( llk_packer_wait_for_math_done() ));
 
         // Datacopy
         for (int reg_id = 0; reg_id < N; reg_id++) {
-            PACK(( llk_pack<false, SYNC, false >(reg_id, ocb)  ));
+            PACK(( llk_pack<false, SYNC, false, DST_ACCUM_MODE >(reg_id, ocb)  ));
         }
 
         // Release dest
-        PACK(( llk_pack_dest_section_done<SYNC>() ));
+        PACK(( llk_pack_dest_section_done<SYNC, DST_ACCUM_MODE>() ));
     }
 }
 

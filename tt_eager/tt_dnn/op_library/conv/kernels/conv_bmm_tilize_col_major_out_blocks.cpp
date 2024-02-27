@@ -173,7 +173,7 @@ void MAIN {
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
     #endif
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id,  out_subblock_w, out_subblock_h, in0_block_w);
+    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
     #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
     #endif
@@ -189,7 +189,7 @@ void MAIN {
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
             row_major_to_col_major_init();
 
-            mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, out_subblock_w, out_subblock_h, in0_block_w);
+            mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
             #endif
 
             bool enable_reload = false;
@@ -222,7 +222,7 @@ void MAIN {
                     #endif
                     row_major_to_col_major_init();
 
-                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id,  out_subblock_w, out_subblock_h, in0_block_w);
+                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
@@ -250,7 +250,7 @@ void MAIN {
 
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, matmul_partials_cb, out_subblock_w, out_subblock_h, in0_block_w);
+                            mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, matmul_partials_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             // just acquire
                             tile_regs_acquire();
@@ -353,7 +353,7 @@ void MAIN {
             }
             if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
                 if constexpr (!tilize_in0) {
-                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id,  out_subblock_w, out_subblock_h, in0_block_w);
+                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
                 unpack_reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
             }
@@ -378,7 +378,7 @@ void MAIN {
                 }
                 if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
                     if constexpr (!tilize_in) {
-                        mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id,  out_subblock_w, out_subblock_h, in0_block_w);
+                        mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                     unpack_reconfig_data_format(matmul_partials_cb, in1_cb_id, untilize_mode_reblock_cb, mm_in0_cb_id);
                 }

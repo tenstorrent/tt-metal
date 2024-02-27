@@ -48,6 +48,8 @@ Tensor Creation
 .. toctree::
    :maxdepth: 1
 
+   ttnn/arange
+   ttnn/empty
    ttnn/zeros
    ttnn/zeros_like
    ttnn/ones
@@ -182,6 +184,19 @@ Pointwise Binary
    ttnn/eq
    ttnn/ne
    ttnn/isclose
+   ttnn/polyval
+   ttnn/nextafter
+
+Pointwise Ternary
+=================
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/addcdiv
+   ttnn/addcmul
+   ttnn/mac
+   ttnn/where
 
 Losses
 ======
@@ -213,6 +228,7 @@ Data Movement
    ttnn/permute
    ttnn/reshape
    ttnn/split
+   ttnn/repeat
    ttnn/repeat_interleave
 
 Normalization

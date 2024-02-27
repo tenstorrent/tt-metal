@@ -16,7 +16,7 @@ import torch
 import torchtrail
 
 import ttnn
-from ttnn.tracer import trace
+from ttnn.tracer import trace, visualize
 
 
 def preprocess_linear_weight(weight, *, dtype):
@@ -410,6 +410,8 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
+    visualize(output, file_name=ttnn.TMP_DIR / "model_graph.svg")
+
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
         for node in graph:
@@ -459,7 +461,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
 
         return make_dot_access_dict(ttnn_module_args, ignore_types=(ModuleArgs,))
 
-    ttnn_module_args = _infer_ttnn_module_args(torchtrail.get_graph(output))
+    ttnn_module_args = _infer_ttnn_module_args(ttnn.tracer.get_graph(output))
     return ttnn_module_args[""]
 
 
