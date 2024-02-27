@@ -184,10 +184,8 @@ Pointwise Binary
    ttnn/eq
    ttnn/ne
    ttnn/isclose
-   ttnn/maximum
-   ttnn/minimum
-   ttnn/nextafter
    ttnn/polyval
+   ttnn/nextafter
 
 Pointwise Ternary
 =================
@@ -215,11 +213,8 @@ Reduction
 .. toctree::
    :maxdepth: 1
 
-   ttnn/max
    ttnn/mean
-   ttnn/min
    ttnn/std
-   ttnn/sum
    ttnn/var
 
 Data Movement
