@@ -186,10 +186,14 @@ def bias_gelu_unary(x, *args, bias, **kwargs):
 
 
 def hardtanh(x, *args, **kwargs):
-    low = kwargs.pop("low")
-    high = kwargs.pop("high")
+    if "low" in kwargs and "high" in kwargs:
+        low = kwargs.pop("low")
+        high = kwargs.pop("high")
+        result = torch.nn.functional.hardtanh(x, min_val=low, max_val=high)
 
-    result = torch.nn.functional.hardtanh(x, min_val=low, max_val=high)
+    else:
+        result = torch.nn.functional.hardtanh(x)
+
     return result
 
 
