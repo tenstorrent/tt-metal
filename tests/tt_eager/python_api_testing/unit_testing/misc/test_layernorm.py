@@ -45,15 +45,20 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
         gamma_t = pad_by_zero(gamma, device, in0_mem_config, gamma_dtype)[0]
         beta_t = pad_by_zero(beta, device, in0_mem_config, gamma_dtype)[0]
 
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True if in_dtype == ttl.tensor.DataType.FLOAT32 else False,
-        )
+        if not is_grayskull():
+            compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+                math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True if in_dtype == ttl.tensor.DataType.FLOAT32 else False,
+            )
 
         if test_id == 0:
             ttz = ttl.tensor.add_layernorm(
-                in0_t, in1_t, epsf, output_mem_config=out_mem_config, compute_kernel_config=compute_kernel_config
+                in0_t,
+                in1_t,
+                epsf,
+                output_mem_config=out_mem_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 1:
             ttz = ttl.tensor.add_layernorm(
@@ -62,7 +67,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 epsf,
                 gamma_t,
                 output_mem_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 2:
             ttz = ttl.tensor.add_layernorm(
@@ -72,11 +77,15 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 gamma_t,
                 beta_t,
                 output_mem_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 3:
             ttz = ttl.tensor.add_rmsnorm(
-                in0_t, in1_t, epsf, output_mem_config=out_mem_config, compute_kernel_config=compute_kernel_config
+                in0_t,
+                in1_t,
+                epsf,
+                output_mem_config=out_mem_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 4:
             ttz = ttl.tensor.add_rmsnorm(
@@ -85,7 +94,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 epsf,
                 gamma_t,
                 output_mem_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 5:
             ttz = ttl.tensor.add_rmsnorm(
@@ -95,15 +104,22 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 gamma_t,
                 beta_t,
                 output_mem_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 6:
             ttz = ttl.tensor.layernorm(
-                in0_t, epsf, output_mem_config=out_mem_config, compute_kernel_config=compute_kernel_config
+                in0_t,
+                epsf,
+                output_mem_config=out_mem_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 7:
             ttz = ttl.tensor.layernorm(
-                in0_t, epsf, gamma_t, output_mem_config=out_mem_config, compute_kernel_config=compute_kernel_config
+                in0_t,
+                epsf,
+                gamma_t,
+                output_mem_config=out_mem_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 8:
             ttz = ttl.tensor.layernorm(
@@ -112,15 +128,22 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 gamma_t,
                 beta_t,
                 output_mem_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 9:
             ttz = ttl.tensor.rmsnorm(
-                in0_t, epsf, output_mem_config=out_mem_config, compute_kernel_config=compute_kernel_config
+                in0_t,
+                epsf,
+                output_mem_config=out_mem_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 10:
             ttz = ttl.tensor.rmsnorm(
-                in0_t, epsf, gamma_t, output_mem_config=out_mem_config, compute_kernel_config=compute_kernel_config
+                in0_t,
+                epsf,
+                gamma_t,
+                output_mem_config=out_mem_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
         if test_id == 11:
             ttz = ttl.tensor.rmsnorm(
@@ -129,7 +152,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 gamma_t,
                 beta_t,
                 output_mem_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
             )
 
         tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
