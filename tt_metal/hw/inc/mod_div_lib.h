@@ -6,15 +6,20 @@
 
 inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
 {
-  unsigned int r = 0;
-  while (a)
-    {
-      if (a & 1)
-        r += b;
-      a >>= 1;
-      b <<= 1;
+    unsigned int r = 0;
+
+    #ifdef ARCH_GRAYSKULL
+    while (a) {
+        if (a & 1) { r += b; }
+        a >>= 1;
+        b <<= 1;
     }
-  return r;
+    #else
+        //Wormhole b0 has native multipliers
+        r = a * b;
+    #endif
+
+    return r;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n)
