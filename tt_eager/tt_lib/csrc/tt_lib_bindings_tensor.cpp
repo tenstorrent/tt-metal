@@ -522,7 +522,7 @@ void TensorModule(py::module &m_tensor) {
         "Performs a rotate half operation used by RotaryEmbedding.
     )doc");
     m_tensor.def("rotary_embedding", &rotary_embedding,
-        py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("token_idx") = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("token_idx") = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
         "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
         If token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
     )doc");

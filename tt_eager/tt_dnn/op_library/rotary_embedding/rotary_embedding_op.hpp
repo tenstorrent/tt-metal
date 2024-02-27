@@ -10,6 +10,7 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 
@@ -18,14 +19,15 @@ namespace tt_metal {
 enum class RotaryEmbeddingOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
 
 operation::ProgramWithCallbacks rotary_embedding_single_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx);
+    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx, DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks rotary_embedding_multi_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx);
+    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx, DeviceComputeKernelConfig compute_kernel_config);
 
 struct RotaryEmbedding {
     const uint32_t seq_len;
     std::optional<uint32_t> token_idx;
     const MemoryConfig output_mem_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
 
     RotaryEmbeddingOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor> &input_tensors) const;
@@ -46,7 +48,8 @@ inline Tensor rotary_embedding(
     const Tensor &cos,
     const Tensor &sin,
     std::optional<uint32_t> token_idx = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
     uint32_t B = input_tensor.get_legacy_shape()[0];
@@ -61,6 +64,9 @@ inline Tensor rotary_embedding(
         TT_FATAL(cos.get_legacy_shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
 
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+
     Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
     Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.get_legacy_shape());
@@ -68,7 +74,7 @@ inline Tensor rotary_embedding(
     Shape sin_pad_shape = AutoFormat::pad_to_tile_shape(sin.get_legacy_shape());
     FormatParams sin_format_params = {.pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
     return operation::run_with_autoformat(
-               RotaryEmbedding{seq_len, token_idx, output_mem_config},
+               RotaryEmbedding{seq_len, token_idx, output_mem_config, kernel_config_val},
                {input_tensor, cos, sin},
                {input_format_params, cos_format_params, sin_format_params},
                {Layout::TILE})
