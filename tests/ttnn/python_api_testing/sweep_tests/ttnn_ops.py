@@ -900,9 +900,9 @@ def full_like(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.full_like(t0, fill_value=scalar, memory_config=output_mem_config)
+    t1 = ttnn.full_like(t0, fill_value=scalar, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_relu6(
@@ -916,9 +916,9 @@ def eltwise_relu6(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.relu6(t0, memory_config=output_mem_config)
+    t1 = ttnn.relu6(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_rsqrt(
@@ -932,9 +932,9 @@ def eltwise_rsqrt(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
+    t1 = ttnn.rsqrt(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_sigmoid(
@@ -948,9 +948,9 @@ def eltwise_sigmoid(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.sigmoid(t0, memory_config=output_mem_config)
+    t1 = ttnn.sigmoid(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_sign(
@@ -964,9 +964,9 @@ def eltwise_sign(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.sign(t0, memory_config=output_mem_config)
+    t1 = ttnn.sign(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_silu(
@@ -980,9 +980,9 @@ def eltwise_silu(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.silu(t0, memory_config=output_mem_config)
+    t1 = ttnn.silu(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_sin(
@@ -996,9 +996,9 @@ def eltwise_sin(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.sin(t0, memory_config=output_mem_config)
+    t1 = ttnn.sin(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_sinh(
@@ -1012,9 +1012,9 @@ def eltwise_sinh(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.sinh(t0, memory_config=output_mem_config)
+    t1 = ttnn.sinh(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_softshrink(
@@ -1029,9 +1029,9 @@ def eltwise_softshrink(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softshrink(t0, _lambda, memory_config=output_mem_config)
+    t1 = ttnn.softshrink(t0, _lambda, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_softsign(
@@ -1045,9 +1045,9 @@ def eltwise_softsign(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softsign(t0, memory_config=output_mem_config)
+    t1 = ttnn.softsign(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_tan(
@@ -1061,9 +1061,9 @@ def eltwise_tan(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.tan(t0, memory_config=output_mem_config)
+    t1 = ttnn.tan(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_tanh(
@@ -1077,9 +1077,9 @@ def eltwise_tanh(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.tanh(t0, memory_config=output_mem_config)
+    t1 = ttnn.tanh(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_swish(
@@ -1093,9 +1093,9 @@ def eltwise_swish(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.swish(t0, memory_config=output_mem_config)
+    t1 = ttnn.swish(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_signbit(
@@ -1109,9 +1109,9 @@ def eltwise_signbit(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.signbit(t0, memory_config=output_mem_config)
+    t1 = ttnn.signbit(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_rad2deg(
@@ -1125,9 +1125,9 @@ def eltwise_rad2deg(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rad2deg(t0, memory_config=output_mem_config)
+    t1 = ttnn.rad2deg(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_polygamma(
@@ -1142,9 +1142,9 @@ def eltwise_polygamma(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.polygamma(t0, k, memory_config=output_mem_config)
+    t1 = ttnn.polygamma(t0, k, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_recip(
@@ -1158,9 +1158,9 @@ def eltwise_recip(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.reciprocal(t0, memory_config=output_mem_config)
+    t1 = ttnn.reciprocal(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_sqrt(
@@ -1174,9 +1174,9 @@ def eltwise_sqrt(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.sqrt(t0, memory_config=output_mem_config)
+    t1 = ttnn.sqrt(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_square(
@@ -1190,9 +1190,9 @@ def eltwise_square(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.square(t0, memory_config=output_mem_config)
+    t1 = ttnn.square(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def tril(
@@ -1206,9 +1206,9 @@ def tril(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.tril(t0, memory_config=output_mem_config)
+    t1 = ttnn.tril(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def triu(
@@ -1222,9 +1222,9 @@ def triu(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.triu(t0, memory_config=output_mem_config)
+    t1 = ttnn.triu(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_tanhshrink(
@@ -1238,9 +1238,9 @@ def eltwise_tanhshrink(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.tanhshrink(t0, memory_config=output_mem_config)
+    t1 = ttnn.tanhshrink(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_threshold(
@@ -1256,6 +1256,164 @@ def eltwise_threshold(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.threshold(t0, threshold, value, memory_config=output_mem_config)
+    t1 = ttnn.threshold(t0, threshold, value, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_eqz(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.eqz(t0, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_gt(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.gt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_gte(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.gt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_lt(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.lt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_lte(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.lte(t0, t1memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_eq(
+    x,
+    y,
+    *args,
+    scalar=0,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    if scalar == 0:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    else:
+        t1 = scalar
+
+    t2 = ttnn.eq(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_ne(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    if scalar == 0:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    else:
+        t1 = scalar
+
+    t2 = ttnn.ne(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_isclose(
+    x,
+    y,
+    *args,
+    rtol,
+    atol,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.isclose(t0, t1, rtol, atol, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)

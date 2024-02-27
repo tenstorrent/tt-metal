@@ -222,6 +222,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_eqz,
         "pytorch_op": pytorch_ops.eqz,
     },
+    "ttnn-eltwise-eqz": {
+        "tt_lib_op": ttnn_ops.eltwise_eqz,
+        "pytorch_op": pytorch_ops.eqz,
+    },
     "eltwise-nez": {
         "tt_lib_op": tt_lib_ops.eltwise_nez,
         "pytorch_op": pytorch_ops.nez,
@@ -639,6 +643,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_ne,
         "pytorch_op": pytorch_ops.ne,
     },
+    "ttnn-eltwise-ne": {
+        "tt_lib_op": ttnn_ops.eltwise_ne,
+        "pytorch_op": pytorch_ops.ne,
+    },
     "eltwise-bias_gelu": {
         "tt_lib_op": tt_lib_ops.eltwise_bias_gelu,
         "pytorch_op": pytorch_ops.bias_gelu,
@@ -647,20 +655,40 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_eq,
         "pytorch_op": pytorch_ops.eq,
     },
+    "ttnn-eltwise-eq": {
+        "tt_lib_op": ttnn_ops.eltwise_eq,
+        "pytorch_op": pytorch_ops.eq,
+    },
     "eltwise-lt": {
         "tt_lib_op": tt_lib_ops.eltwise_lt,
+        "pytorch_op": pytorch_ops.lt,
+    },
+    "ttnn-eltwise-lt": {
+        "tt_lib_op": ttnn_ops.eltwise_lt,
         "pytorch_op": pytorch_ops.lt,
     },
     "eltwise-gt": {
         "tt_lib_op": tt_lib_ops.eltwise_gt,
         "pytorch_op": pytorch_ops.gt,
     },
+    "ttnn-eltwise-gt": {
+        "tt_lib_op": ttnn_ops.eltwise_gt,
+        "pytorch_op": pytorch_ops.gt,
+    },
     "eltwise-gte": {
         "tt_lib_op": tt_lib_ops.eltwise_gte,
         "pytorch_op": pytorch_ops.gte,
     },
+    "ttnn-eltwise-gte": {
+        "tt_lib_op": ttnn_ops.eltwise_gte,
+        "pytorch_op": pytorch_ops.gte,
+    },
     "eltwise-lte": {
         "tt_lib_op": tt_lib_ops.eltwise_lte,
+        "pytorch_op": pytorch_ops.lte,
+    },
+    "ttnn-eltwise-lte": {
+        "tt_lib_op": ttnn_ops.eltwise_lte,
         "pytorch_op": pytorch_ops.lte,
     },
     "eltwise-add": {
@@ -777,6 +805,10 @@ op_map = {
     },
     "eltwise-isclose": {
         "tt_lib_op": tt_lib_ops.eltwise_isclose,
+        "pytorch_op": pytorch_ops.isclose,
+    },
+    "ttnn-eltwise-isclose": {
+        "tt_lib_op": ttnn_ops.eltwise_isclose,
         "pytorch_op": pytorch_ops.isclose,
     },
     # Eltwise ternary
