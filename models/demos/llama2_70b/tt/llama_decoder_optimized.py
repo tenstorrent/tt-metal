@@ -10,7 +10,7 @@ from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tens
 from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_common import tt_all_gather
-import time
+from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
 
 
 class TtLlamaDecoder_optimized:
@@ -64,6 +64,7 @@ class TtLlamaDecoder_optimized:
             self.hidden_size,
             model_config,
         )
+        self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
     def prepare_inputs(self, x, start_pos):
         # Only called by decoder tests
@@ -76,10 +77,7 @@ class TtLlamaDecoder_optimized:
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
         position_ids = torch.ones(seq_len, batch, dtype=torch.long) * start_pos
-        from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
-
-        rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-        rot_mat = gather_rotary_emb(rot_emb, position_ids)[:, :1]
+        rot_mat = gather_rotary_emb(self.rot_emb, position_ids)[:, :1]
 
         padded_layer_past_len = nearest_32(start_pos + 1)
         attn_mask = torch.zeros(seq_len, 1, batch, padded_layer_past_len)
@@ -149,7 +147,7 @@ class TtLlamaDecoder_optimized:
                 tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
             )
         ### Duplicate inputs for layernorm
-        # xs_replicated = tt_all_gather(xs, dim=-1)
+        # xs_replicated = tt_all_gather(xs_replicated, dim=-1)
         xs_replicated = tt_lib.tensor.all_gather(
             xs_replicated,
             dim=3,
@@ -169,11 +167,11 @@ class TtLlamaDecoder_optimized:
                     xs_replicated[i],
                     self.norm_eps,
                     self.attn_norm_list[i],
-                    output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
                     program_config=self.model_config["LN_ATTN_PROGCFG"],
+                    output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
                 )
             )  # attn_norm_replicated is sharded
-            xs_replicated[i].deallocate(True)
+            # xs_replicated[i].deallocate(True) # Fine to deallocate here, because this is replicated from the sharded
         # attn_outs is fractured
         attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks)
 
@@ -209,26 +207,28 @@ class TtLlamaDecoder_optimized:
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
-        ### Duplicate layernorm
-        ffn_norm_replicated = []
         for i in range(self.num_devices):
             # RMSNorm must execute on sharded input
             attn_resid_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
                 attn_resid_replicated[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
             )
+        ### Duplicate FFN layernorm
+        ffn_norm_replicated = []
         for i in range(self.num_devices):
-            x_ffn_norm = tt_lib.operations.primary.rmsnorm(
-                attn_resid_replicated[i],
-                self.norm_eps,
-                self.ffn_norm_list[i],
-                output_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
-                program_config=self.model_config["LN_MLP_PROGCFG"],
-            )
-            ffn_norm_replicated.append(x_ffn_norm)
+            ffn_norm_replicated.append(
+                tt_lib.operations.primary.rmsnorm(
+                    attn_resid_replicated[i],
+                    self.norm_eps,
+                    self.ffn_norm_list[i],
+                    program_config=self.model_config["LN_MLP_PROGCFG"],
+                    output_mem_config=self.model_config["PADDED_LN_MLP_OUTPUT_MEMCFG"],
+                )
+            )  # ffn_norm_replicated is sharded
+        # attn_resid_replicated[i].deallocate(True) # !!! Cant deallocate here, will drop PCC
 
         ffn_out = self.mlp(ffn_norm_replicated)
 
-        ### Duplicate residual
+        ### Dropout_add residual in place
         for i in range(self.num_devices):
             output[i] = tt_lib.tensor.add_without_autoformat(
                 output[i],
@@ -237,14 +237,10 @@ class TtLlamaDecoder_optimized:
                 in_place=True,
             )
             ffn_out[i].deallocate(True)
-        # TODO: Test if this works
-        # for device in self.devices:
-        #     tt_lib.device.Synchronize(device)
+
         # FOR BRINGUP! Outputs are sharded. Interleave them
-        for i in range(self.num_devices):
-            # breakpoint()
-            # time.sleep(1)
-            output[i] = tt_lib.tensor.sharded_to_interleaved(
-                output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-            )
+        # for i in range(self.num_devices):
+        #     output[i] = tt_lib.tensor.sharded_to_interleaved(
+        #         output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+        #     )
         return output
