@@ -125,6 +125,9 @@ from ttnn.operations.creation import (
 from ttnn.operations.reduction import (
     std,
     var,
+    max,
+    min,
+    sum,
 )
 
 from ttnn.operations.losses import (
@@ -179,6 +182,8 @@ from ttnn.operations.binary import (
     logaddexp,
     logaddexp2,
     xlogy,
+    maximum,
+    minimum,
     add_and_apply_activation,
     add_and_apply_activation_,
     nextafter,
