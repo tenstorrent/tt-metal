@@ -40,6 +40,27 @@ def permute_conv_weights(weight, bias):
     return weight, bias
 
 
+def round_up_to_tile_dim(n):
+    return ((n + 31) // 32) * 32
+
+
+def pad_group_norm_weight(weight, groups, channels):
+    device = weight.device
+    memory_config = ttnn.get_memory_config(weight)
+    weight = ttnn_to_torch(weight)
+    elems_per_group = channels // groups
+    padding_needed = round_up_to_tile_dim(elems_per_group) - elems_per_group
+    weight = weight.view(-1, elems_per_group)
+    weight = torch.nn.functional.pad(weight, (0, padding_needed))
+    weight = weight.flatten()
+    weight = weight[: channels + padding_needed * (channels // elems_per_group)]
+    weight = weight.reshape(1, 1, -1, 32)
+    weight = ttnn.from_torch(weight, ttnn.bfloat16)
+    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
+    weight = ttnn.to_device(weight, device, memory_config=memory_config)
+    return weight
+
+
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
     (640, 640, 32, 32): {"act_block_h": 64},
@@ -234,6 +255,9 @@ class resnetBlock2D:
         hidden_states = input_tensor
 
         if group_norm_sharded_config is not None:
+            self.parameters.norm1.weight = pad_group_norm_weight(self.parameters.norm1.weight, groups, in_channels)
+            self.parameters.norm1.bias = pad_group_norm_weight(self.parameters.norm1.bias, groups, in_channels)
+
             hidden_states = ttnn.to_layout(
                 hidden_states,
                 ttnn.ROW_MAJOR_LAYOUT,
