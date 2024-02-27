@@ -65,16 +65,16 @@ inline void reduce_h_fused(
     tile_regs_acquire();
     for (uint32_t out_elem_i = 0; out_elem_i < effective_nblocks; ++ out_elem_i) {
         cb_wait_front(in_cb_id, 1);
-        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
+        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, 2 /* unpack half tile (faces 0&1) */);
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
-            reduce_tile_math(in_ntiles_c * out_elem_i + c_i);
+            reduce_tile_math(in_ntiles_c * out_elem_i + c_i, 2 /* reduce half tile (faces 0&1) */);
         }
         cb_pop_front(in_cb_id, 1);
     }
 
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(out_cb_id);
+    pack_untilize_dst<num_output_tiles>(out_cb_id, 1, 2); /* pack 1x32 row (2 1x16 faces) */
     tile_regs_release();
 
     cb_push_back(out_cb_id, out_ntiles_c * effective_nblocks);
@@ -105,7 +105,7 @@ void MAIN {
     const bool is_partial_tile = in_c < 32;
 
     tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
-    pack_untilize_dst_init_short<num_output_tiles>();
+    pack_untilize_dst_init_short<num_output_tiles>(1, 2); /* pack 1x32 row (2 1x16 faces) */
 
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {

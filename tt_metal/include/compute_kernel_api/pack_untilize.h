@@ -62,15 +62,15 @@ ALWI void pack_untilize_uninit(uint32_t ocb = 16) {
 }
 
 template <uint32_t block_ct_dim = 8>
-ALWI void pack_untilize_dst_init_short()
+ALWI void pack_untilize_dst_init_short(uint32_t face_r_dim = 16, uint32_t num_faces = 4)
 {
-    PACK(( llk_pack_untilize_init<block_ct_dim>() ));
+    PACK(( llk_pack_untilize_init<block_ct_dim>(face_r_dim, num_faces) ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf, true>() ));
 }
 
 template <uint32_t block_ct_dim = 8>
-ALWI void pack_untilize_dst(uint32_t ocb) {
-    PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb) ));
+ALWI void pack_untilize_dst(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
+    PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb, face_r_dim, num_faces) ));
 }
 
 }
