@@ -29,5 +29,5 @@ def test_deallocate(device, h, w):
 
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
-        print(output_tensor_reference)
-    assert "Buffer must be allocated on device!" in str(exception.value)
+        output_tensor_reference + output_tensor_reference
+    assert "ttnn.add: Tensor must be allocated" in str(exception.value)

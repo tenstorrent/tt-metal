@@ -172,5 +172,4 @@ def test_falcon7b_instruct():
             logger.info(f"generating token {i}")
             ids, kv_cache = generator(input_ids=ids)
 
-    logger.info("Visualizing")
-    visualize(ids)
+    ttnn.tracer.codegen(ids)
