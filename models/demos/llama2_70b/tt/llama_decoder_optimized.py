@@ -150,7 +150,7 @@ class TtLlamaDecoder_optimized:
             )
         ### Duplicate inputs for layernorm
         if self.emulated:
-            xs_replicated = tt_all_gather(xs_replicated, dim=-1)
+            xs_replicated = tt_all_gather_torch(xs_replicated, dim=-1)
         else:
             xs_replicated = tt_lib.tensor.all_gather(
                 xs_replicated,
@@ -204,7 +204,7 @@ class TtLlamaDecoder_optimized:
 
         ### Duplicate attention residual on all chips
         if self.emulated:
-            attn_resid_replicated = tt_all_gather(attn_resid_replicated, dim=-1)
+            attn_resid_replicated = tt_all_gather_torch(attn_resid_replicated, dim=-1)
         else:
             attn_resid_replicated = tt_lib.tensor.all_gather(
                 attn_resid_replicated,
