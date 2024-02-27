@@ -109,8 +109,8 @@ class Device {
         return tt::Cluster::instance().get_ethernet_connected_device_ids(this->id_);
     }
 
-    std::unordered_set<CoreCoord> get_active_ethernet_cores() const {
-        return tt::Cluster::instance().get_active_ethernet_cores(this->id_);
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const {
+        return tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);
     }
 
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const {

@@ -109,7 +109,7 @@ std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_recei
         const auto& first_device = device_ring[0];
         const auto& second_device = device_ring[1];
         uint32_t i = 0;
-        for (const auto& first_eth_core : first_device->get_active_ethernet_cores()) {
+        for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
                 Device *sender_device, *receiver_device;
@@ -139,7 +139,7 @@ std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_recei
         for (uint32_t i = 0; i < device_ring.size() - 1; ++i) {
             const auto& sender_device = device_ring[i];
             const auto& receiver_device = device_ring[i + 1];
-            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() == device_id) {
                     sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});
@@ -451,7 +451,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 }
 }  // namespace fd_unit_tests::erisc::kernels
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsDirectRingGatherAllChips) {
+TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectRingGatherAllChips) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
     const size_t sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
@@ -463,7 +463,7 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsDirectRingGatherAllChips) {
         device_ring, WORD_SIZE, src_eth_l1_byte_address, dst_eth_l1_byte_address, sem_l1_byte_address));
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsInterleavedRingGatherAllChips) {
+TEST_F(CommandQueueMultiDeviceFixture, EthKernelsInterleavedRingGatherAllChips) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
     const size_t sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;

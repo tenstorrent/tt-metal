@@ -192,7 +192,7 @@ TEST_F(N300DeviceFixture, EthKernelsNocReadNoSend) {
 
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    for (const auto& eth_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(
             unit_tests::erisc::kernels::reader_kernel_no_send(device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -201,7 +201,7 @@ TEST_F(N300DeviceFixture, EthKernelsNocReadNoSend) {
             device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 
-    for (const auto& eth_core : device_1->get_active_ethernet_cores()) {
+    for (const auto& eth_core : device_1->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(
             unit_tests::erisc::kernels::reader_kernel_no_send(device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -218,7 +218,7 @@ TEST_F(N300DeviceFixture, EthKernelsNocWriteNoReceive) {
 
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    for (const auto& eth_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
             device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
@@ -227,7 +227,7 @@ TEST_F(N300DeviceFixture, EthKernelsNocWriteNoReceive) {
             device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
     }
 
-    for (const auto& eth_core : device_1->get_active_ethernet_cores()) {
+    for (const auto& eth_core : device_1->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
             device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
@@ -361,7 +361,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         auto [device_id, receiver_core] = device_0->get_connected_ethernet_core(sender_core);
         if (device_1->id() != device_id) {
             continue;
@@ -409,7 +409,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
         auto [device_id, receiver_core] = device_1->get_connected_ethernet_core(sender_core);
         if (device_0->id() != device_id) {
             continue;
@@ -457,7 +457,7 @@ TEST_F(DeviceFixture, EthKernelsDirectSendAllConnectedChips) {
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores()) {
+            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -506,7 +506,7 @@ TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
             device_0,
@@ -525,7 +525,7 @@ TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
             receiver_core,
             sender_core));
     }
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
             device_0,
@@ -544,7 +544,7 @@ TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
             receiver_core,
             sender_core));
     }
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
             device_0,
@@ -563,7 +563,7 @@ TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
             receiver_core,
             sender_core));
     }
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
             device_0,
@@ -591,7 +591,7 @@ TEST_F(N300DeviceFixture, EthKernelsRepeatedDirectSends) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         for (int i = 0; i < 10; i++) {
             ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
@@ -622,11 +622,11 @@ TEST_F(N300DeviceFixture, EthKernelsRandomDirectSendTests) {
     const auto& device_1 = devices_.at(1);
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
-    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
         const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
         connectivity.insert({{1, sender_core}, receiver_core});
     }
@@ -665,11 +665,11 @@ TEST_F(N300DeviceFixture, EthKernelsRandomEthPacketSizeDirectSendTests) {
     const auto& device_1 = devices_.at(1);
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
-    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
         const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
         connectivity.insert({{1, sender_core}, receiver_core});
     }

@@ -53,12 +53,12 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         ComputeConfig{});
 
     // Also run on ethernet cores if they're present
-    bool has_eth_cores = !device->get_active_ethernet_cores().empty();
+    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
     // TODO: Change back to a single erisc_kid once the bug with CoreRange fast dispatch is fixed.
     vector<KernelHandle> erisc_kids;
     if (has_eth_cores) {
         std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_active_ethernet_cores()) {
+        for (const auto& core : device->get_active_ethernet_cores(true)) {
             eth_core_ranges.insert(CoreRange(core, core));
             auto erisc_kid = CreateKernel(
                 program,
@@ -109,7 +109,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         }
     }
     int idx = 0;
-    for (const auto& core : device->get_active_ethernet_cores()) {
+    for (const auto& core : device->get_active_ethernet_cores(true)) {
         SetRuntimeArgs(
             program,
             erisc_kids[idx++],
@@ -143,7 +143,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             check_core(phys_core, false);
         }
     }
-    for (const auto& core : device->get_active_ethernet_cores()) {
+    for (const auto& core : device->get_active_ethernet_cores(true)) {
         CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
         check_core(phys_core, true);
     }

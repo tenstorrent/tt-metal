@@ -129,11 +129,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 
 static void RunTestEth(WatcherFixture* fixture, Device* device) {
     // Run on the first ethernet core (if there are any).
-    if (device->get_active_ethernet_cores().empty()) {
+    if (device->get_active_ethernet_cores(true).empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
-    CoreCoord core = *(device->get_active_ethernet_cores().begin());
+    CoreCoord core = *(device->get_active_ethernet_cores(true).begin());
     RunTestOnCore(fixture, device, core, true);
 }
 

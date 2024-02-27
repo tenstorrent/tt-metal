@@ -591,6 +591,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
     for (Device *device : devices_) {
+        if (not device->is_mmio_capable()) continue;
         EXPECT_TRUE(
             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<false>(device, device->command_queue(), config));
     }

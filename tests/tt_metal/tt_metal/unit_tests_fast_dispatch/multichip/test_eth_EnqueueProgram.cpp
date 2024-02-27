@@ -546,19 +546,19 @@ bool chip_to_chip_interleaved_buffer_transfer(
 }
 }  // namespace fd_unit_tests::erisc::kernels
 
-TEST_F(CommandQueuePCIDevicesFixture, EnqueueDummyProgramOnEthCore) {
+TEST_F(CommandQueueSingleCardFixture, EnqueueDummyProgramOnEthCore) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_active_ethernet_cores()) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core));
         }
     }
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsNocReadNoSend) {
+TEST_F(CommandQueueSingleCardFixture, EthKernelsNocReadNoSend) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_active_ethernet_cores()) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::reader_kernel_no_send(
                 device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -569,11 +569,11 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsNocReadNoSend) {
     }
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsNocWriteNoReceive) {
+TEST_F(CommandQueueSingleCardFixture, EthKernelsNocWriteNoReceive) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_active_ethernet_cores()) {
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::writer_kernel_no_receive(
                 device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::writer_kernel_no_receive(
@@ -584,7 +584,7 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsNocWriteNoReceive) {
     }
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsDirectSendAllConnectedChips) {
+TEST_F(CommandQueueSingleCardFixture, EthKernelsDirectSendAllConnectedChips) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
@@ -592,7 +592,7 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsDirectSendAllConnectedChips) {
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores()) {
+            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -634,20 +634,20 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsDirectSendAllConnectedChips) {
     }
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsRandomDirectSendTests) {
+TEST_F(CommandQueueMultiDeviceFixture, EthKernelsRandomDirectSendTests) {
     srand(0);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
-    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
         const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
         if (std::get<0>(receiver_core) != device_1->id()) {
             continue;
         }
         connectivity.insert({{device_0->id(), sender_core}, receiver_core});
     }
-    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+    for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
         const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
         if (std::get<0>(receiver_core) != device_0->id()) {
             continue;
@@ -684,13 +684,13 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsRandomDirectSendTests) {
     }
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsSendDramBufferAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
-            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
@@ -716,13 +716,13 @@ TEST_F(CommandQueuePCIDevicesFixture, EthKernelsSendDramBufferAllConnectedChips)
     }
 }
 
-TEST_F(CommandQueuePCIDevicesFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
-            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;

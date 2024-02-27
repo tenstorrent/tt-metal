@@ -33,7 +33,7 @@ HEX/OCT/DEC:
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Try printing on all ethernet cores on this device
     int count = 0;
-    for (const auto& core : device->get_active_ethernet_cores()) {
+    for (const auto& core : device->get_active_ethernet_cores(true)) {
         // Set up program and command queue
         Program program = Program();
 
@@ -89,7 +89,7 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
     }
     for (Device* device : this->devices_) {
         // Skip if no ethernet cores on this device
-        if (device->get_active_ethernet_cores().size() == 0) {
+        if (device->get_active_ethernet_cores(true).size() == 0) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }

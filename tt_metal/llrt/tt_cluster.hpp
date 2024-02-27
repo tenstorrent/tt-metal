@@ -111,7 +111,9 @@ class Cluster {
     std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(chip_id_t chip_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id) const;
+    // If skip_reserved_tunnel_cores is true, will return cores that dispatch is not using,
+    // intended for users to grab available eth cores for testing
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_tunnel_cores=false) const;
 
     // Returns set of logical inactive ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
@@ -135,10 +137,6 @@ class Cluster {
     // Returns logical eth core that communicates with specified dispatch core
     tt_cxy_pair get_eth_core_for_dispatch_core(
         tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
-
-    // Writes router config to corresponding eth core
-//    void configure_eth_core_for_dispatch_core(
-  //      tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:

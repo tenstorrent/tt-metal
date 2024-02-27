@@ -20,7 +20,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="D
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsDirectRingGatherAllChips"
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests --gtest_filter="DeviceFixture.EthKernelsInterleavedRingGatherAllChips"
 
-./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueuePCIDevicesFixture.*"
+./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueMultiDeviceFixture.*"
 pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-0.99-0.99-0.99-tiiuae/falcon-40b-instruct-0-prefill_seq32-4]
 pytest models/demos/falcon40b/tests/test_falcon_decoder.py::test_FalconDecoder_inference[BFLOAT8_B-SHARDED-0.99-0.99-0.99-tiiuae/falcon-40b-instruct-0-decode_batch32-4]

@@ -38,13 +38,13 @@ void kernel_main() {
           // Service completion path first
           // Acquired src for completion
         if (eth_src_db_semaphore_addr[0] != 0) {
-        erisc_info->unused_arg0 = 21300001 + 10 * i;
+        erisc_info->unused_arg0 = 21300001;
           eth_tunnel_src_forward_one_cmd<buffer_id, other_buffer_id, sender_is_issue_path>(eth_src_db_cb_config, producer_noc_encoding);
         erisc_info->unused_arg0 = 21300002;
         }
         // Cmd valid in issue DST
         if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
-          erisc_info->unused_arg0 = 21300003 + 10 * i;
+          erisc_info->unused_arg0 = 21300003;
           eth_tunnel_dst_forward_one_cmd<other_buffer_id, buffer_id, sender_is_issue_path>(eth_dst_db_cb_config, consumer_noc_encoding);
         erisc_info->unused_arg0 = 21300004;
         }
@@ -52,14 +52,14 @@ void kernel_main() {
         // Service completion path first
         // Cmd valid in completion DST
         if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
-        erisc_info->unused_arg0 = 21400003 + 10 * i;
+        erisc_info->unused_arg0 = 21400003;
           eth_tunnel_dst_forward_one_cmd<other_buffer_id, buffer_id, sender_is_issue_path>(eth_dst_db_cb_config, consumer_noc_encoding);
         erisc_info->unused_arg0 = 21400004;
         }
 
         // Acquired src for issue
         if (eth_src_db_semaphore_addr[0] != 0) {
-        erisc_info->unused_arg0 = 21400001 + 10 * i;
+        erisc_info->unused_arg0 = 21400001;
           eth_tunnel_src_forward_one_cmd<buffer_id, other_buffer_id, sender_is_issue_path>(eth_src_db_cb_config, producer_noc_encoding);
         erisc_info->unused_arg0 = 21400002;
         }

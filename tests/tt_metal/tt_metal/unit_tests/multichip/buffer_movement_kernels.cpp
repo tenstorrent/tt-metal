@@ -284,7 +284,7 @@ TEST_F(N300DeviceFixture, EthKernelsSendDramBufferChip0ToChip1) {
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
-    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
@@ -302,7 +302,7 @@ TEST_F(N300DeviceFixture, EthKernelsSendDramBufferChip1ToChip0) {
     const auto& sender_device = devices_.at(1);
     const auto& receiver_device = devices_.at(0);
 
-    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
@@ -321,7 +321,7 @@ TEST_F(N300DeviceFixture, EthKernelsSendInterleavedBufferChip0ToChip1) {
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
-    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         log_info(
@@ -374,7 +374,7 @@ TEST_F(DeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
-            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
+            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
