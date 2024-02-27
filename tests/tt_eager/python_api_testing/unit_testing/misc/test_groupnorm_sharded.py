@@ -66,6 +66,7 @@ def ref_groupnorm(x, group_size, eps, **kwargs):
 @pytest.mark.parametrize(
     "C, H, W, num_groups, grid_size, shard_orientation, shard_layout",
     [
+        # (320, 64, 64, 32, (12, 6), ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
         (320, 32, 32, 32, (1, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
         (320, 16, 16, 32, (1, 8), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED),
         (640, 16, 16, 32, (8, 2), ttl.tensor.ShardOrientation.COL_MAJOR, ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED),
@@ -119,6 +120,7 @@ def test_groupnorm_sharded_narrow_channel_per_group(
             shard_shape = [int(num_batches * W * H / grid_size[1]), int(C / grid_size[0])]
     elif shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
         shard_shape = [int(num_batches * W * H / (grid_size[1] * grid_size[0])), int(C)]
+        # shard_shape = [128, 320]
 
     logger.info("shard_shape " + str(shard_shape))
 
@@ -163,6 +165,8 @@ def test_groupnorm_sharded_narrow_channel_per_group(
         in0, device, tt_memory_config=in0_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16, tt_layout=layout
     )
     in0_t_sharded = ttl.tensor.interleaved_to_sharded(in0_t, grid_size, shard_shape, shard_layout, shard_orientation)
+
+    logger.info("start GN")
 
     program_config = ttl.operations.primary.GroupNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
