@@ -35,8 +35,8 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     if (this->receiver_device_id == this->sender_device_id) {
         TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender and receiver device");
-        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender and receiver device");
+        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->receiver_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(input_tensors[0].device()->get_ethernet_sockets(this->sender_device_id).size() >= this->num_links, "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
     }
 }
 

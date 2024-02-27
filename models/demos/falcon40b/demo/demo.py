@@ -24,6 +24,7 @@ from models.utility_functions import (
     profiler,
     torch2tt_tensor,
     tt2torch_tensor,
+    get_devices_for_t3000,
 )
 
 END_OF_TEXT = 11
@@ -540,9 +541,11 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    pcie_devices,
+    all_devices,
     use_program_cache,
 ):
+    num_devices = 8
+    devices = get_devices_for_t3000(all_devices, num_devices)
     disable_persistent_kernel_cache()
     disable_compilation_reports()
     tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon40b")
@@ -550,7 +553,6 @@ def test_demo(
     # TODO: Prefill and decode will likely require different configs for sharding
     # Currently, prefill is on host so only generate for decode
     llm_mode = "decode"
-    num_devices = 4
     model_config = get_model_config("BFLOAT8_B-SHARDED", llm_mode, num_devices)
     model_version = model_config_entries["_name_or_path"]
     tt_cache_path = get_tt_cache_path(
@@ -566,5 +568,5 @@ def test_demo(
         model_config=model_config,
         model_location_generator=model_location_generator,
         tt_cache_path=tt_cache_path,
-        devices=pcie_devices[: model_config["NUM_DEVICES"]],
+        devices=devices,
     )

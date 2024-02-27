@@ -959,6 +959,24 @@ def skip_for_grayskull(reason_str="not working for Grayskull"):
     return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
+def get_devices_for_t3000(all_devices, num_devices):
+    """
+    all_devices comes from fixture which devices in order from 0 to 7.
+    First 4 devices are PCIE devices so we can just extract and return.
+    For 8 devices, return in a ring pattern.
+    """
+    assert num_devices <= len(all_devices), "Not enough devices detected!"
+
+    if num_devices <= 4:
+        return all_devices[:num_devices]
+    elif num_devices == 8:
+        # TODO: Generalize this for different arch
+        hamiltonian_ring_indices = [0, 7, 6, 1, 2, 5, 4, 3]
+        return [all_devices[i] for i in hamiltonian_ring_indices]
+    else:
+        raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
+
+
 def ttl_complex_2_torch_complex(tt_tensor):
     torch_tensor = tt2torch_tensor(tt_tensor)
 
