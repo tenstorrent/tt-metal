@@ -40,7 +40,7 @@ Following TDD, the first step is to write a test for the model:
     import transformers
 
     import ttnn
-    import torch_functional_bert
+    import torch_bert
 
     from models.utility_functions import torch_random
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -62,7 +62,7 @@ Following TDD, the first step is to write a test for the model:
             convert_to_ttnn=lambda *_: False, # Keep the weights as torch tensors
         )
 
-        output = torch_functional_bert.bert_intermediate(
+        output = torch_bert.bert_intermediate(
             torch_hidden_states,
             parameters=parameters,
         )
@@ -73,7 +73,7 @@ And finally, the model can be rewritten using functional torch APIs to make the 
 
 .. code-block:: python
 
-    # torch_functional_bert.py
+    # torch_bert.py
 
     def bert_intermediate(hidden_states, *, parameters):
         hidden_states = hidden_states @ parameters.dense.weight
@@ -102,7 +102,7 @@ Starting off with the test:
     import transformers
 
     import ttnn
-    import ttnn_functional_bert
+    import ttnn_bert
 
     from models.utility_functions import torch_random
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -125,7 +125,7 @@ Starting off with the test:
         )
 
         hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        output = ttnn_functional_bert.bert_intermediate(
+        output = ttnn_bert.bert_intermediate(
             hidden_states,
             parameters=parameters,
         )
@@ -137,7 +137,7 @@ Then implementing the function using ttnn operations:
 
 .. code-block:: python
 
-    # ttnn_functional_bert.py
+    # ttnn_bert.py
 
     import ttnn
 
@@ -163,7 +163,7 @@ Starting off with the test:
     import transformers
 
     import ttnn
-    import ttnn_functional_bert
+    import ttnn_bert
 
     from models.utility_functions import torch_random
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -183,11 +183,11 @@ Starting off with the test:
         parameters = preprocess_model_parameters(
             initialize_model=lambda: model,
             device=device, # Device to put the parameters on
-            custom_preprocessor=ttnn_functional_bert.custom_preprocessor, # Use custom_preprocessor to set ttnn.bfloat8_b data type for the weights and biases
+            custom_preprocessor=ttnn_bert.custom_preprocessor, # Use custom_preprocessor to set ttnn.bfloat8_b data type for the weights and biases
         )
 
         hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        output = ttnn_functional_bert.bert_intermediate(
+        output = ttnn_bert.bert_intermediate(
             hidden_states,
             parameters=parameters,
         )
@@ -199,7 +199,7 @@ And the optimized model can be something like this:
 
 .. code-block:: python
 
-    # ttnn_optimized_functional_bert.py
+    # ttnn_optimized_bert.py
 
     import ttnn
     import transformers

@@ -214,15 +214,10 @@ def visualize(*function_args, file_name=None, **function_kwargs):
 
 
 get_graph = torchtrail.get_graph
-
-
-get_graph = torchtrail.get_graph
+to_networkx = torchtrail.multidigraph.to_networkx
 
 
 ENABLE_TRACER = False
-
-get_graph = torchtrail.get_graph
-to_networkx = torchtrail.multidigraph.to_networkx
 
 
 @contextmanager

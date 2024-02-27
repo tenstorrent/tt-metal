@@ -48,6 +48,8 @@ void py_module(py::module& m_transformers) {
             torch.matmul(A.transpose(0, 2), B).transpose(0, 2). Similar concept for post-softmax matmul.
     )doc");
 
+    py::class_<SoftmaxProgramConfig>(m_transformers, "SoftmaxProgramConfig").def(py::init<>());
+
     py::class_<SoftmaxDefaultProgramConfig>(m_transformers, "SoftmaxDefaultProgramConfig")
         .def(py::init<>());
 
@@ -68,9 +70,9 @@ void py_module(py::module& m_transformers) {
             py::arg("block_h").noconvert(),
             py::arg("block_w").noconvert(),
             py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-            py::arg("im_data_format").noconvert()
-        )
-        .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
+            py::arg("im_data_format").noconvert())
+        .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w)
+        .def("__repr__", [](const SoftmaxShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 
     m_transformers.def(
         "scale_mask_softmax_in_place",

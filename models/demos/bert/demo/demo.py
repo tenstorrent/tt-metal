@@ -15,8 +15,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.experimental.functional_bert.tt import ttnn_functional_bert
-from models.experimental.functional_bert.tt import ttnn_optimized_functional_bert
+from models.demos.bert.tt import ttnn_bert
+from models.demos.bert.tt import ttnn_optimized_bert
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from ttnn.model_preprocessing import (
@@ -49,7 +49,7 @@ def run_bert_question_and_answering_inference(
     model_name,
     batch_size,
     sequence_size,
-    functional_bert,
+    bert,
     model_location_generator,
     input_path,
 ):
@@ -65,12 +65,12 @@ def run_bert_question_and_answering_inference(
     config = hugging_face_reference_model.config
     nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
 
-    if functional_bert == ttnn_functional_bert:
+    if bert == ttnn_bert:
         tt_model_name = f"ttnn_{model_name}"
-    elif functional_bert == ttnn_optimized_functional_bert:
+    elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
-        raise ValueError(f"Unknown functional_bert: {functional_bert}")
+        raise ValueError(f"Unknown bert: {bert}")
 
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
@@ -78,7 +78,7 @@ def run_bert_question_and_answering_inference(
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
-        custom_preprocessor=functional_bert.custom_preprocessor,
+        custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )
     profiler.end(f"preprocessing_parameter")
@@ -107,16 +107,16 @@ def run_bert_question_and_answering_inference(
         return_tensors="pt",
     )
     profiler.start(f"preprocessing_input")
-    ttnn_bert_inputs = functional_bert.preprocess_inputs(
+    ttnn_bert_inputs = bert.preprocess_inputs(
         bert_input["input_ids"],
         bert_input["token_type_ids"],
-        torch.zeros(1, sequence_size) if functional_bert == ttnn_optimized_functional_bert else None,
+        torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
         device=device,
     )
     profiler.end(f"preprocessing_input")
 
     profiler.start(f"inference_time")
-    tt_output = functional_bert.bert_for_question_answering(
+    tt_output = bert.bert_for_question_answering(
         config,
         *ttnn_bert_inputs,
         parameters=parameters,
@@ -165,7 +165,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     model_name,
     batch_size,
     sequence_size,
-    functional_bert,
+    bert,
     model_location_generator,
     n_iterations,
 ):
@@ -180,19 +180,19 @@ def run_bert_question_and_answering_inference_squad_v2(
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
     config = hugging_face_reference_model.config
 
-    if functional_bert == ttnn_functional_bert:
+    if bert == ttnn_bert:
         tt_model_name = f"ttnn_{model_name}"
-    elif functional_bert == ttnn_optimized_functional_bert:
+    elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
-        raise ValueError(f"Unknown functional_bert: {functional_bert}")
+        raise ValueError(f"Unknown bert: {bert}")
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
-        custom_preprocessor=functional_bert.custom_preprocessor,
+        custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )
 
@@ -212,14 +212,14 @@ def run_bert_question_and_answering_inference_squad_v2(
             if i < n_iterations:
                 batch_data = batch[0]
                 curr_batch_size = batch_data["input_ids"].shape[0]
-                ttnn_bert_inputs = functional_bert.preprocess_inputs(
+                ttnn_bert_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
-                    torch.zeros(1, sequence_size) if functional_bert == ttnn_optimized_functional_bert else None,
+                    torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
                     device=device,
                 )
 
-                tt_output = functional_bert.bert_for_question_answering(
+                tt_output = bert.bert_for_question_answering(
                     config,
                     *ttnn_bert_inputs,
                     parameters=parameters,
@@ -258,11 +258,11 @@ def run_bert_question_and_answering_inference_squad_v2(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("functional_bert", [ttnn_functional_bert, ttnn_optimized_functional_bert])
+@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
 def test_demo(
     input_path,
     model_name,
-    functional_bert,
+    bert,
     model_location_generator,
     device,
     use_program_cache,
@@ -270,28 +270,28 @@ def test_demo(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/functional_bert")
+    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/bert")
     return run_bert_question_and_answering_inference(
         device=device,
         use_program_cache=use_program_cache,
         model_name=model_name,
         batch_size=8,
         sequence_size=384,
-        functional_bert=functional_bert,
+        bert=bert,
         model_location_generator=model_location_generator,
         input_path=input_path,
     )
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("functional_bert", [ttnn_functional_bert, ttnn_optimized_functional_bert])
+@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
 @pytest.mark.parametrize(
     "n_iterations",
     ((3),),
 )
 def test_demo_squadv2(
     model_name,
-    functional_bert,
+    bert,
     n_iterations,
     model_location_generator,
     device,
@@ -306,7 +306,7 @@ def test_demo_squadv2(
         model_name=model_name,
         batch_size=8,
         sequence_size=384,
-        functional_bert=functional_bert,
+        bert=bert,
         model_location_generator=model_location_generator,
         n_iterations=n_iterations,
     )
