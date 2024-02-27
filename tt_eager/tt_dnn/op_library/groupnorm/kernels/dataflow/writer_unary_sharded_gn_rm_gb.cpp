@@ -167,11 +167,11 @@ void kernel_main() {
         generate_zero_mask(cb_zero_mask, num_cols_per_group);
     }
 
-    #define stick_size_is_pow2 get_compile_time_arg_val(6) == 1
+    #define stick_size_is_pow2 get_compile_time_arg_val(18) == 1
     #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(19);
     #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t page_size = get_compile_time_arg_val(19);
     #endif
 
     if constexpr(fuse_gamma) {
