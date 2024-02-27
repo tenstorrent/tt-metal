@@ -44,6 +44,7 @@ struct CQPrefetchRelayDramPagedCmd {
 struct CQPrefetchRelayInlineCmd {
     uint16_t pad;
     uint32_t length;
+    uint32_t stride;
 } __attribute__((packed));;
 
 struct CQPrefetchCmd {

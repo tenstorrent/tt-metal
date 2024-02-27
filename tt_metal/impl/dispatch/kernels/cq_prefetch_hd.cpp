@@ -37,6 +37,8 @@ constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t dispatch_data_ptr = dispatch_cb_base;
 
+static uint32_t host_q_log_minsize = 4;
+
 FORCE_INLINE
 void dispatch_cb_acquire_pages(uint32_t n) {
 
@@ -54,22 +56,37 @@ void dispatch_cb_release_pages(uint32_t n) {
 }
 
 FORCE_INLINE
-void read_from_pcie(volatile tt_l1_ptr uint32_t *& host_q_rd_ptr, uint32_t& pending_read_size, uint32_t fence, uint32_t size) {
+void read_from_pcie(volatile tt_l1_ptr uint16_t *& host_q_rd_ptr,
+                    uint32_t& pending_read_size,
+                    uint32_t& fence,
+                    uint32_t cmd_ptr,
+                    uint32_t size) {
+
+    // Wrap cmddat_q
+    if (fence + size > cmddat_q_base + cmddat_q_size) {
+        // only wrap if there are no commands ready, otherwise we'll leave some on the floor
+        if (cmd_ptr != fence) {
+            return;
+        }
+        fence = cmddat_q_base;
+    }
 
     uint64_t host_src_addr = get_noc_addr_helper(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y), pcie_read_ptr);
-    DPRINT << "read: " << HEX() << host_src_addr << ENDL();
     noc_async_read(host_src_addr, fence, size);
     pending_read_size = size;
     pcie_read_ptr += size;
 
     *host_q_rd_ptr = 0;
 
-    // XXXXX WRONG: racy, can't free this up until we've finished processing
-    // Wrap
-    if ((uint32_t)++host_q_rd_ptr == host_q_end) host_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)host_q_base;
-
     // Tell host we read
     *(volatile tt_l1_ptr uint32_t *) host_q_rd_ptr_addr = (uint32_t)host_q_rd_ptr;
+
+    host_q_rd_ptr++;
+
+    // Wrap host_q
+    if ((uint32_t)host_q_rd_ptr == host_q_end) {
+        host_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)host_q_base;
+    }
 }
 
 
@@ -93,40 +110,58 @@ void read_from_pcie(volatile tt_l1_ptr uint32_t *& host_q_rd_ptr, uint32_t& pend
 //  -  cmd_ready, !host_q_ready,  read_pending: exit (no barrier yet)
 //  -  cmd_ready,  host_q_ready, !read_pending: issue and tag read
 //  -  cmd_ready,  host_q_ready,  read_pending: issue and tag read
-static void get_cmds(uint32_t& fence, bool cmd_ready) {
+static void get_cmds(uint32_t& fence, uint32_t& cmd_ptr) {
 
     static uint32_t pending_read_size = 0;
-    static volatile tt_l1_ptr uint32_t* host_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)host_q_base;
+    static volatile tt_l1_ptr uint16_t* host_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)host_q_base;
 
-    uint32_t fetch_size = *host_q_rd_ptr;
+    if (fence < cmd_ptr) {
+        DPRINT << "wrap cmd ptr1\n";
+        cmd_ptr = fence;
+    }
+
+    bool cmd_ready = (cmd_ptr != fence);
+    uint32_t fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
     DPRINT << (uint32_t)host_q_rd_ptr_addr << ENDL();
     DPRINT << (uint32_t)host_q_rd_ptr << ENDL();
 
     if (fetch_size != 0 && pending_read_size == 0) {
-        DPRINT << "read1" << ENDL();
-        read_from_pcie(host_q_rd_ptr, pending_read_size, fence, fetch_size);
+        DPRINT << "read1: " << (uint32_t)host_q_rd_ptr << " " << " " << fence << " " << fetch_size << ENDL();
+        read_from_pcie(host_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
     }
     if (!cmd_ready) {
         if (pending_read_size != 0) {
             DPRINT << "barrier" << ENDL();
             noc_async_read_barrier();
+
+            // wrap the cmddat_q
+            if (fence < cmd_ptr) {
+                cmd_ptr = fence;
+            }
+            // XXXXX hack for now: prefetching the next command if this is a wrap command
+            // will cause the next command to be mis-located. there are multiple ways to fix this
+            // hacking here for now, revisit later
+            volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)fence;
             fence += pending_read_size;
             pending_read_size = 0;
-
-            // After the stall, re-check the host
-            fetch_size = *host_q_rd_ptr;
-            if (fetch_size != 0) {
-                DPRINT << "read2" << ENDL();
-                read_from_pcie(host_q_rd_ptr, pending_read_size, fence, fetch_size);
+            if (cmd->base.cmd_id != CQ_PREFETCH_CMD_WRAP) {
+                // After the stall, re-check the host
+                fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
+                if (fetch_size != 0) {
+                    DPRINT << "read2: " << (uint32_t)host_q_rd_ptr << " " << fetch_size << ENDL();
+                    read_from_pcie(host_q_rd_ptr, pending_read_size, fence, cmd_ptr, fetch_size);
+                }
+            } else {
+                DPRINT << "prefetcher wrap" << ENDL();
             }
         } else {
             // By here, host_q_ready must be false
             // Nothing to fetch, nothing pending, nothing available, stall on host
             DEBUG_STATUS('H', 'Q', 'W');
-            DPRINT << "stall" << ENDL();
+            DPRINT << "prefetcher stall" << ENDL();
             while ((fetch_size = *host_q_rd_ptr) == 0);
             DPRINT << "recurse" << ENDL();
-            get_cmds(fence, cmd_ready);
+            get_cmds(fence, cmd_ptr);
             DEBUG_STATUS('H', 'Q', 'D');
         }
     }
@@ -137,12 +172,13 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
     uint32_t checksum = 0;
     uint32_t *data = (uint32_t *)((uint32_t)cmd + (uint32_t)sizeof(CQPrefetchCmd));
-    for (uint32_t i = 0; i < cmd->debug.size / sizeof(uint32_t); i++) {
+    uint32_t size = cmd->debug.size;
+    for (uint32_t i = 0; i < size / sizeof(uint32_t); i++) {
         checksum += *data++;
     }
 
     if (checksum != cmd->debug.checksum) {
-        DPRINT << "checksum" << ENDL();
+        DPRINT << "checksum" << checksum << " " << cmd->debug.checksum << ENDL();
         DEBUG_STATUS('!', 'C', 'H', 'K');
         while(1);
     }
@@ -155,21 +191,34 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
     uint32_t length = cmd->relay_inline.length;
 
-    cmd_ptr += sizeof(CQPrefetchCmd);
+    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t npages = (length + dispatch_cb_page_size - 1) >> dispatch_cb_log_page_size;
 
-    // XXXX make this a subroutine sharable w/ dram writes?
+    // Assume the dispatch buffer is big relative to cmddat command size that we can
+    // grab what we need in one chunk
     dispatch_cb_acquire_pages(npages);
-    noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), length);
-    dispatch_data_ptr += dispatch_cb_page_size;
-    if (dispatch_data_ptr == dispatch_cb_end) {
-        dispatch_data_ptr = dispatch_cb_base;
+    uint32_t dispatch_pages_left = (dispatch_cb_end - dispatch_data_ptr) / dispatch_cb_page_size;
+    if (dispatch_pages_left >= npages) {
+        noc_async_write(data_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), length);
+        dispatch_data_ptr += npages * dispatch_cb_page_size;
+    } else {
+        uint32_t tail_pages = npages - dispatch_pages_left;
+        uint32_t available = dispatch_pages_left * dispatch_cb_page_size;
+        if (available > 0) {
+            noc_async_write(data_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), available);
+            data_ptr += available;
+            length -= available;
+        }
+
+        noc_async_write(data_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_cb_base), length);
+        dispatch_data_ptr = dispatch_cb_base + tail_pages * dispatch_cb_page_size;
     }
-    // XXXXX - painful syncing right now?
-    noc_async_write_barrier();
+
+    // XXXXX - painful syncing right now?  move this into get_cmds
+    noc_async_writes_flushed();
     dispatch_cb_release_pages(npages);
 
-    return cmd_ptr + cmd->relay_inline.length;
+    return cmd_ptr + cmd->relay_inline.stride;
 }
 
 void kernel_main() {
@@ -182,13 +231,14 @@ void kernel_main() {
     bool done = false;
     while (!done) {
         DPRINT << "top: " << fence << " " << cmd_ptr << ENDL();
-        get_cmds(fence, cmd_ptr != fence);
+        get_cmds(fence, cmd_ptr);
         DPRINT << "after: " << fence << " " << cmd_ptr << ENDL();
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
         switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_DRAM_PAGED:
+            DPRINT << "relay dram page" << ENDL();
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
@@ -197,10 +247,13 @@ void kernel_main() {
             break;
 
         case CQ_PREFETCH_CMD_WRAP:
-            cmd_ptr = cmddat_q_base;
+            DPRINT << "dev wrap: " << (uint32_t)sizeof(CQPrefetchCmd) << ENDL();
+            pcie_read_ptr = pcie_base;
+            cmd_ptr += 32;
             break;
 
         case CQ_PREFETCH_CMD_STALL:
+            DPRINT << "stall" << ENDL();
             break;
 
         case CQ_PREFETCH_CMD_DEBUG:

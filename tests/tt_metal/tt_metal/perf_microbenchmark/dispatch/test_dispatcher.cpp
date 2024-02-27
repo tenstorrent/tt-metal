@@ -129,7 +129,7 @@ void gen_cmds(vector<uint32_t>& dispatch_cmds,
         if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
 
         gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core,
-                                 scratch_addr + total_data_size_bytes, xfer_size_bytes);
+                                 scratch_addr, xfer_size_bytes);
         uint32_t page_size_words = page_size / sizeof(uint32_t);
         dispatch_cmds.resize((dispatch_cmds.size() + page_size_words - 1) / page_size_words * page_size_words);    // pad to page
 

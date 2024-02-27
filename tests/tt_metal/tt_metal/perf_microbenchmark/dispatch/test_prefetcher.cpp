@@ -15,14 +15,23 @@
 
 constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
 constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
-constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 768 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
+// 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
+constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
 constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 100 * 1024;
 constexpr uint32_t DEFAULT_HOST_Q_ENTRIES = 128;
+constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
+constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 64 * 1024;
+constexpr uint32_t DEFAULT_SCRATCH_CB_SIZE = 128 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
-constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
 
+constexpr uint32_t HOST_Q_LOG_MINSIZE = 4;
+constexpr uint32_t PCIE_NOC_ALIGNMENT = 32;
+constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << HOST_Q_LOG_MINSIZE) > PCIE_NOC_ALIGNMENT) ? (1 << HOST_Q_LOG_MINSIZE) : PCIE_NOC_ALIGNMENT;
+
+
+static bool initialize_device_g = true;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -32,13 +41,16 @@ constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
 using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
-uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;
+bool warmup_g = false;
 uint32_t prefetcher_iterations_g = 1;
 bool debug_g;
-bool lazy_g;
+uint32_t max_prefetch_command_size_g;
 
+uint32_t dispatch_buffer_page_size_g = 4096;
 uint32_t host_q_entries_g;
 uint32_t hugepage_buffer_size_g;
+uint32_t cmddat_q_size_g;
+uint32_t scratch_cb_size_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -46,21 +58,25 @@ void init(int argc, char **argv) {
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
-        log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
+        log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
         log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
         log_info(LogTest, "  -d: wrap all commands in debug commands (default disabled)");
-        log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, "  -hp: host huge page buffer size (default {})", DEFAULT_HUGEPAGE_BUFFER_SIZE);
         log_info(LogTest, "  -hq: host queue entries (default {})", DEFAULT_HOST_Q_ENTRIES);
+        log_info(LogTest, "  -cs: max cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
+        log_info(LogTest, "  -ss: max scratch cb size (default {})", DEFAULT_SCRATCH_CB_SIZE);
+        log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
         exit(0);
     }
 
-    warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
+    warmup_g = test_args::has_command_option(input_args, "-w");
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     hugepage_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_BUFFER_SIZE);
     host_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_HOST_Q_ENTRIES);
+    cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
+    scratch_cb_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_CB_SIZE);
+    max_prefetch_command_size_g = test_args::get_command_option_uint32(input_args, "-mc", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
 
-    lazy_g = test_args::has_command_option(input_args, "-z");
     debug_g = test_args::has_command_option(input_args, "-d");
 }
 
@@ -73,13 +89,18 @@ void add_bare_prefetcher_cmd(vector<uint32_t>& cmds,
     }
 }
 
+uint32_t round_cmd_size_up(uint32_t size) {
+    constexpr uint32_t align_mask = HUGEPAGE_ALIGNMENT - 1;
+
+    return (size + align_mask) & ~align_mask;
+}
+
 void add_prefetcher_cmd(vector<uint32_t>& cmds,
-                        vector<uint32_t>& sizes,
+                        vector<uint16_t>& sizes,
                         CQPrefetchCmdId id,
                         vector<uint32_t>& payload) {
 
     vector<uint32_t> data;
-    data.reserve(payload.size());
 
     auto prior_end = cmds.size();
 
@@ -92,23 +113,28 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = id;
 
+    uint32_t payload_length = payload.size() * sizeof(uint32_t);
     switch (id) {
     case CQ_PREFETCH_CMD_RELAY_INLINE:
-        cmd.relay_inline.length = payload.size() * sizeof(uint32_t);
+        cmd.relay_inline.length = payload_length;
+        cmd.relay_inline.stride = round_cmd_size_up(payload_length + sizeof(CQPrefetchCmd));
         break;
 
     case CQ_PREFETCH_CMD_DEBUG:
         {
             static uint32_t key = 0;
             cmd.debug.key = ++key;
-            cmd.debug.size = payload.size() * sizeof(uint32_t);
-            cmd.debug.stride = payload.size() * sizeof(uint32_t) + sizeof(CQPrefetchCmd);;
+            cmd.debug.size = payload_length;
+            cmd.debug.stride = round_cmd_size_up(payload_length + sizeof(CQPrefetchCmd));
             uint32_t checksum = 0;
             for (uint32_t i = 0; i < payload.size(); i++) {
                 checksum += payload[i];
             }
             cmd.debug.checksum = checksum;
         }
+        break;
+
+    case CQ_PREFETCH_CMD_WRAP:
         break;
 
     case CQ_PREFETCH_CMD_TERMINATE:
@@ -119,15 +145,18 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
         break;
     }
 
-    for (uint32_t i = 0; i < payload.size(); i++) {
-        data.push_back(payload[i]);
-    }
-
     add_bare_prefetcher_cmd(cmds, cmd);
-    for (int i = 0; i < data.size(); i++) {
-        cmds.push_back(data[i]);
+    for (int i = 0; i < payload.size(); i++) {
+        cmds.push_back(payload[i]);
     }
-    sizes.push_back((cmds.size() - prior_end) * sizeof(uint32_t));
+    uint32_t pad_size = round_cmd_size_up(sizeof(CQPrefetchCmd) + payload_length) - payload_length - sizeof(CQPrefetchCmd);
+    for (int i = 0; i < pad_size / sizeof(uint32_t); i++) {
+        cmds.push_back(0);
+    }
+    uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
+    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((new_size >> HOST_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    sizes.push_back(new_size >> HOST_Q_LOG_MINSIZE);
 
     if (debug_g) {
         CQPrefetchCmd* debug_cmd_ptr;
@@ -143,7 +172,7 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 }
 
 void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
-                         vector<uint32_t>& cmd_sizes,
+                         vector<uint16_t>& cmd_sizes,
                          vector<uint32_t>& worker_data,
                          CoreCoord worker_core,
                          uint32_t dst_addr) {
@@ -154,13 +183,30 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
 
     vector<uint32_t> rnd_payload;
-    generate_random_payload(rnd_payload, 20);
+    generate_random_payload(rnd_payload, 17);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
 
     // Write to worker
     dispatch_cmds.resize(0);
+    worker_data.resize(0);
     gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, 2048);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    // Write to worker
+    dispatch_cmds.resize(0);
+    gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, 1026);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    // Write to worker
+    dispatch_cmds.resize(0);
+    gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, 8448);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+}
+
+void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
+                        vector<uint16_t>& cmd_sizes) {
+    vector<uint32_t> empty_payload; // don't give me grief, it is just a test
+    vector<uint32_t> dispatch_cmds;
 
     // Terminate dispatcher
     dispatch_cmds.resize(0);
@@ -171,24 +217,106 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_TERMINATE, empty_payload);
 }
 
-void write_prefetcher_cmds(Device *device,
+void write_prefetcher_cmd(Device *device,
+                          vector<uint32_t>& cmds,
+                          uint32_t& cmd_offset,
+                          uint16_t cmd_size16b,
+                          uint32_t*& host_mem_ptr,
+                          uint32_t& host_q_dev_ptr,
+                          uint32_t& host_q_dev_fence,
+                          uint32_t host_q_base,
+                          uint32_t host_q_rd_ptr_addr,
+                          CoreCoord phys_prefetch_core) {
+
+    static vector<uint32_t> read_vec;  // static to avoid realloc
+
+    uint32_t cmd_size_bytes = (uint32_t)cmd_size16b << HOST_Q_LOG_MINSIZE;
+    uint32_t cmd_size_words = cmd_size_bytes / sizeof(uint32_t);
+    for (uint32_t i = 0; i < cmd_size_words; i++) {
+        *host_mem_ptr = cmds[cmd_offset];
+        host_mem_ptr++;
+        cmd_offset++;
+    }
+    // Not clear to me if this is needed, writing to cached PCIe memory
+    tt_driver_atomics::sfence();
+
+    // wait for space
+    while (host_q_dev_ptr == host_q_dev_fence) {
+        tt::Cluster::instance().read_core(read_vec, sizeof(uint32_t), tt_cxy_pair(device->id(), phys_prefetch_core), host_q_rd_ptr_addr);
+        host_q_dev_fence = read_vec[0];
+    }
+
+    // wrap
+    if (host_q_dev_ptr == host_q_base + host_q_entries_g * sizeof(uint16_t)) {
+        host_q_dev_ptr = host_q_base;
+
+        while (host_q_dev_ptr == host_q_dev_fence) {
+            tt::Cluster::instance().read_core(read_vec, sizeof(uint32_t), tt_cxy_pair(device->id(), phys_prefetch_core), host_q_rd_ptr_addr);
+            host_q_dev_fence = read_vec[0];
+        }
+    }
+
+    tt::Cluster::instance().write_core((void *)&cmd_size16b, sizeof(uint16_t), tt_cxy_pair(device->id(), phys_prefetch_core), host_q_dev_ptr, true);
+
+    host_q_dev_ptr += sizeof(uint16_t);
+}
+
+void write_prefetcher_cmds(uint32_t iterations,
+                           Device *device,
                            vector<uint32_t>& prefetch_cmds,
-                           vector<uint32_t>& cmd_sizes,
+                           vector<uint16_t>& cmd_sizes,
                            void * host_hugepage_base,
                            uint32_t dev_hugepage_base,
                            uint32_t host_q_base,
-                           CoreCoord phys_dispatch_core) {
+                           uint32_t host_q_rd_ptr_addr,
+                           CoreCoord phys_prefetch_core) {
 
-    for (uint32_t i = 0; i < prefetch_cmds.size(); i++) {
-        ((uint32_t *)host_hugepage_base)[i] = prefetch_cmds[i];
+    static uint32_t *host_mem_ptr;
+    static uint32_t host_q_dev_ptr;
+    static uint32_t host_q_dev_fence;
+    static vector<uint32_t>wrap_cmd;
+
+    if (wrap_cmd.size() == 0) {
+        CQPrefetchCmd cmd;
+        cmd.base.cmd_id = CQ_PREFETCH_CMD_WRAP;
+        // don't wrap the wrap command in a debug command since we didn't guarantee that there is
+        // wrap+debug space in the hugepage
+        add_bare_prefetcher_cmd(wrap_cmd, cmd);
+        // Pad up to 32 byte alignment
+        wrap_cmd.push_back(0);
+        wrap_cmd.push_back(0);
+        wrap_cmd.push_back(0);
+        wrap_cmd.push_back(0);
     }
-    llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, cmd_sizes, host_q_base);
+
+    if (initialize_device_g) {
+        host_mem_ptr = (uint32_t *)host_hugepage_base;
+        host_q_dev_ptr = host_q_base;
+        host_q_dev_fence = host_q_base + host_q_entries_g * sizeof(uint16_t);
+        initialize_device_g = false;
+    }
+
+    for (uint32_t i = 0; i < iterations; i++) {
+        uint32_t cmd_ptr = 0;
+        for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
+            uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << HOST_Q_LOG_MINSIZE) / sizeof(uint32_t);
+            uint32_t space_at_end_for_wrap_words = sizeof(CQPrefetchCmd) / sizeof(uint32_t);
+            if ((void *)(host_mem_ptr + cmd_size_words + space_at_end_for_wrap_words) >= (void *)((uint8_t *)host_hugepage_base + hugepage_buffer_size_g)) {
+                uint32_t offset = 0;
+                write_prefetcher_cmd(device, wrap_cmd, offset, PCIE_NOC_ALIGNMENT >> HOST_Q_LOG_MINSIZE,
+                                     host_mem_ptr, host_q_dev_ptr, host_q_dev_fence, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+                host_mem_ptr = (uint32_t *)host_hugepage_base;
+            }
+            write_prefetcher_cmd(device, prefetch_cmds, cmd_ptr, cmd_sizes[j],
+                                 host_mem_ptr, host_q_dev_ptr, host_q_dev_fence, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+        }
+    }
 }
 
 int main(int argc, char **argv) {
     init(argc, argv);
 
-    uint32_t dispatch_buffer_pages = (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) * DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages = DISPATCH_BUFFER_BLOCK_SIZE_PAGES * DISPATCH_BUFFER_SIZE_BLOCKS;
 
     bool pass = true;
     try {
@@ -214,7 +342,18 @@ int main(int argc, char **argv) {
         uint32_t dispatch_buffer_base = l1_buf_base;
         uint32_t dev_hugepage_base = 1 * 1024 * 1024 * 1024 - hugepage_buffer_size_g; // XXXXX HACK
         uint32_t host_q_base = l1_buf_base;
-        uint32_t cmddat_q_base = host_q_base + host_q_entries_g * (uint32_t)sizeof(uint32_t);
+        uint32_t host_q_rd_ptr_addr = l1_buf_base - 4; // XXXXX hacks and hacks and hacks
+        uint32_t host_q_size = host_q_entries_g * sizeof(uint16_t);
+        uint32_t noc_read_alignment = 32;
+        uint32_t cmddat_q_base = host_q_base + ((host_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+        uint32_t scratch_cb_base = cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
+        TT_ASSERT(scratch_cb_base < 1024 * 1024); // L1 size
+
+        // Implementation syncs w/ device on host_q but not on hugepage, ie, assumes we can't run
+        // so far ahead in the hugepage that we overright un-read commands since we'll first
+        // stall on the host_q
+        TT_ASSERT(hugepage_buffer_size_g > host_q_entries_g * max_prefetch_command_size_g, "Shrink the max command size or grow the hugepage buffer size or shrink the host_q size");
+        TT_ASSERT(cmddat_q_size_g > 2 * max_prefetch_command_size_g);
 
         void *host_hugepage_base;
         {
@@ -225,12 +364,18 @@ int main(int argc, char **argv) {
             host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base);
         }
 
-        vector<uint32_t> cmds;
-        vector<uint32_t> cmd_sizes;
+        vector<uint32_t> cmds, terminate_cmds;
+        vector<uint16_t> cmd_sizes, terminate_sizes;
         vector<uint32_t> worker_data;
         vector<uint32_t> host_q(DEFAULT_HOST_Q_ENTRIES, 0);
+        vector<uint32_t> host_q_rd_ptr_addr_data;
+
+        host_q_rd_ptr_addr_data.push_back(host_q_base + host_q_entries_g * sizeof(uint16_t));
+        llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q_rd_ptr_addr_data, host_q_rd_ptr_addr);
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q, host_q_base);
+        tt::Cluster::instance().l1_barrier(device->id());
         gen_prefetcher_cmds(cmds, cmd_sizes, worker_data, phys_worker_core, l1_buf_base);
+        gen_terminate_cmds(terminate_cmds, terminate_sizes);
 
         std::map<string, string> defines = {
             {"PREFETCH_NOC_X", std::to_string(phys_prefetch_core.x)},
@@ -244,12 +389,13 @@ int main(int argc, char **argv) {
         tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
         std::vector<uint32_t> dispatch_compile_args = {
-             l1_buf_base,
+             dispatch_buffer_base,
              DISPATCH_BUFFER_LOG_PAGE_SIZE,
              DISPATCH_BUFFER_SIZE_BLOCKS * DISPATCH_BUFFER_BLOCK_SIZE_PAGES,
              dispatch_cb_sem,
              DISPATCH_BUFFER_SIZE_BLOCKS,
         };
+
         std::vector<uint32_t> prefetch_compile_args = {
              dispatch_buffer_base,
              DISPATCH_BUFFER_LOG_PAGE_SIZE,
@@ -258,12 +404,12 @@ int main(int argc, char **argv) {
              dev_hugepage_base,
              hugepage_buffer_size_g,
              host_q_base,
-             host_q_entries_g * (uint32_t)sizeof(uint32_t),
-             l1_buf_base - 4, // XXXXX hacks and hacks and hacks
+             host_q_entries_g * (uint32_t)sizeof(uint16_t),
+             host_q_rd_ptr_addr,
              cmddat_q_base,
-             0,
-             0,
-             0,
+             cmddat_q_size_g,
+             scratch_cb_base,
+             scratch_cb_size_g
         };
 
         auto sp1 = tt_metal::CreateKernel(
@@ -293,28 +439,23 @@ int main(int argc, char **argv) {
             }
         );
 
-        log_info(LogTest, "Prefetch host_q entrires {}", std::to_string(host_q_entries_g));
+        log_info(LogTest, "Prefetch host_q entries {}", std::to_string(host_q_entries_g));
 
         // Cache stuff
-        for (int i = 0; i < warmup_iterations_g; i++) {
+        if (warmup_g) {
             EnqueueProgram(cq, program, false);
-            write_prefetcher_cmds(device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, phys_prefetch_core);
-        }
-        Finish(cq);
-
-        if (lazy_g) {
-            tt_metal::detail::SetLazyCommandQueueMode(true);
+            write_prefetcher_cmds(1, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+            write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+            Finish(cq);
+            initialize_device_g = true;
         }
 
         auto start = std::chrono::system_clock::now();
-        for (int i = 0; i < iterations_g; i++) {
-            EnqueueProgram(cq, program, false);
-            write_prefetcher_cmds(device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, phys_prefetch_core);
-        }
-        if (lazy_g) {
-            start = std::chrono::system_clock::now();
-        }
+        EnqueueProgram(cq, program, false);
+        write_prefetcher_cmds(iterations_g, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
+        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
         Finish(cq);
+
         auto end = std::chrono::system_clock::now();
 
         pass &= validate_results(device, phys_worker_core, worker_data, l1_buf_base);

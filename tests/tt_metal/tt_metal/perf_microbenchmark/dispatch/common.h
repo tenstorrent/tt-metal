@@ -9,6 +9,8 @@
 #include "tt_metal/impl/dispatch/kernels/cq_cmds.hpp"
 
 extern bool debug_g;
+extern bool use_coherent_data_g;
+extern uint32_t dispatch_buffer_page_size_g;
 
 inline void generate_random_payload(vector<uint32_t>& cmds,
                                     uint32_t length) {
@@ -21,9 +23,9 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
 
 inline void generate_random_payload(vector<uint32_t>& cmds,
                                     vector<uint32_t>& data,
-                                    uint32_t length) {
+                                    uint32_t length_words) {
 
-    for (uint32_t i = 0; i < length; i++) {
+    for (uint32_t i = 0; i < length_words; i++) {
         uint32_t datum = std::rand();
         cmds.push_back(datum);
         data.push_back(datum);
@@ -57,12 +59,21 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
     generate_random_payload(cmds, worker_data, length_words);
 
     if (debug_g) {
+        // Doing a checksum on the full command length is problematic in the kernel
+        // as it requires the debug code to pull all the pages in before the actual
+        // command is processed.  So, limit this to doing a checksum on the first page
+        // (which is disappointing).  Any other value requires the checksum code to handle
+        // buffer wrap which then messes up the routines w/ the embedded insn - not worth it
         CQDispatchCmd* debug_cmd_ptr;
         debug_cmd_ptr = (CQDispatchCmd *)&cmds[prior_end];
-        debug_cmd_ptr->debug.size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQDispatchCmd);
+        uint32_t full_size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQDispatchCmd);
+        uint32_t max_size = dispatch_buffer_page_size_g - sizeof(CQDispatchCmd);
+        uint32_t size = (full_size > max_size) ? max_size : full_size;
+        debug_cmd_ptr->debug.size = size;
         debug_cmd_ptr->debug.stride = sizeof(CQDispatchCmd);
         uint32_t checksum = 0;
-        for (uint32_t i = prior_end + sizeof(CQDispatchCmd) / sizeof(uint32_t); i < cmds.size(); i++) {
+        uint32_t start = prior_end + sizeof(CQDispatchCmd) / sizeof(uint32_t);
+        for (uint32_t i = start; i < start + size / sizeof(uint32_t); i++) {
             checksum += cmds[i];
         }
         debug_cmd_ptr->debug.checksum = checksum;
@@ -80,7 +91,7 @@ inline void gen_dispatcher_write_cmd(vector<uint32_t>& cmds,
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
     cmd.base.flags = 0;
     cmd.write.dst_noc_addr = worker_core.x | (worker_core.y << 6);
-    cmd.write.dst_addr = dst_addr;
+    cmd.write.dst_addr = dst_addr + worker_data.size() * sizeof(uint32_t);
     cmd.write.length = length;
 
     add_dispatcher_cmd(cmds, worker_data, cmd, length);
