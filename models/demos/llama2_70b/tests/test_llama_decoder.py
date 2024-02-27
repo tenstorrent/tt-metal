@@ -124,8 +124,8 @@ def run_test_LlamaDecoder_inference(
     for device in devices:
         tt_lib.device.Synchronize(device)
 
-    generation_start_pos = 126
-    generation_length = 3
+    generation_start_pos = 0
+    generation_length = 750
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -157,11 +157,6 @@ def run_test_LlamaDecoder_inference(
 
         assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
-        # for i in range(n_devices):
-        #     # breakpoint()
-        #     tt_out[i] = tt_lib.tensor.sharded_to_interleaved(
-        #         tt_out[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-        #     )
         tt_outs = [tt2torch_tensor(o) for o in tt_out]
         tt_out = torch.cat(tt_outs, dim=-1)
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
