@@ -11,13 +11,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
-# from ttnn.ttnn.operations.normalization import create_group_norm_weight_bias_rm
-# @skip_for_wormhole_b0()
-# @pytest.mark.parametrize("h", [32])
-# @pytest.mark.parametrize("w", [64])
-# @pytest.mark.parametrize("num_groups", [2])
-# def test_group_norm(device, h, w, num_groups):
-#     torch.manual_seed(0)
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
@@ -25,21 +18,17 @@ from models.utility_functions import skip_for_wormhole_b0
 def test_group_norm(device, h, w, num_groups):
     torch.manual_seed(0)
 
-#     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-#     output_tensor = ttnn.group_norm(input_tensor, num_groups=num_groups)
-#     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-#     output_tensor = ttnn.from_device(output_tensor)
-#     output_tensor = ttnn.to_torch(output_tensor)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
 
-#     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.group_norm(input_tensor, num_groups=num_groups)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
-# @skip_for_wormhole_b0()
-# @pytest.mark.parametrize("h", [32])
-# @pytest.mark.parametrize("w", [64])
-# @pytest.mark.parametrize("num_groups", [2])
-# def test_group_norm_with_weight_and_bias(device, h, w, num_groups):
-#     torch.manual_seed(0)
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
@@ -47,16 +36,23 @@ def test_group_norm(device, h, w, num_groups):
 def test_group_norm_with_weight_and_bias(device, h, w, num_groups):
     torch.manual_seed(0)
 
-#     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-#     weight = ttnn.from_torch(torch_weight, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-#     bias = ttnn.from_torch(torch_bias, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
 
-#     output_tensor = ttnn.group_norm(input_tensor, num_groups=num_groups, weight=weight, bias=bias)
-#     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-#     output_tensor = ttnn.from_device(output_tensor)
-#     output_tensor = ttnn.to_torch(output_tensor)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-#     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    output_tensor = ttnn.group_norm(input_tensor, num_groups=num_groups, weight=weight, bias=bias)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
 @pytest.mark.parametrize("N", [1])
@@ -71,7 +67,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
 
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -88,6 +84,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
 
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, num_groups)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, num_groups)
+
     gamma_t = ttnn.from_torch(
         gamma,
         dtype=ttnn.DataType.BFLOAT16,
@@ -102,13 +99,6 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
-    print(torch_weight)
-    print(gamma)
-
-    print(input_tensor.shape)
-    print(gamma_t.shape)
-    print(beta_t.shape)
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
         input_tensor.shape,
