@@ -19,6 +19,7 @@ class TtLlamaMLP_optimized(nn.Module):
         layer_num,
         hidden_size: int,
         model_config,
+        emulated=False,
     ):
         super().__init__()
 
@@ -27,6 +28,7 @@ class TtLlamaMLP_optimized(nn.Module):
         self.num_devices = len(devices)
         self.hidden_size = hidden_size
         self.model_config = model_config
+        self.emulated = emulated
 
         layer_name = f"{base_url}.{layer_num}"
 
@@ -125,12 +127,15 @@ class TtLlamaMLP_optimized(nn.Module):
                 hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
 
-        hidden_states = tt_lib.tensor.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=1,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-        )
+        if self.emulated:
+            hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
+        else:
+            hidden_states = tt_lib.tensor.all_gather(
+                hidden_states,
+                dim=3,
+                num_links=1,
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
         # hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
         # Put AllGather results in L1
         for i in range(len(hidden_states)):

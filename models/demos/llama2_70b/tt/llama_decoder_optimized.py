@@ -9,12 +9,12 @@ import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather
-from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
+import time
 
 
 class TtLlamaDecoder_optimized:
-    def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration, batch):
+    def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration, batch, emulated=False):
         super().__init__()
 
         self.state_dict = state_dict
@@ -26,6 +26,7 @@ class TtLlamaDecoder_optimized:
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
         self.model_config = model_config
+        self.emulated = emulated
 
         layer_name = f"{base_url}.{layer_num}"
 
@@ -53,7 +54,7 @@ class TtLlamaDecoder_optimized:
             self.ffn_norm_list.append(ffn_norm)
 
         self.attention = TtLlamaAttention_optimized(
-            devices, state_dict, base_url, layer_num, model_config, configuration
+            devices, state_dict, base_url, layer_num, model_config, configuration, emulated=emulated
         )
 
         self.mlp = TtLlamaMLP_optimized(
@@ -63,6 +64,7 @@ class TtLlamaDecoder_optimized:
             layer_num,
             self.hidden_size,
             model_config,
+            emulated=emulated,
         )
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
 
@@ -147,13 +149,15 @@ class TtLlamaDecoder_optimized:
                 tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
             )
         ### Duplicate inputs for layernorm
-        # xs_replicated = tt_all_gather(xs_replicated, dim=-1)
-        xs_replicated = tt_lib.tensor.all_gather(
-            xs_replicated,
-            dim=3,
-            num_links=1,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-        )
+        if self.emulated:
+            xs_replicated = tt_all_gather(xs_replicated, dim=-1)
+        else:
+            xs_replicated = tt_lib.tensor.all_gather(
+                xs_replicated,
+                dim=3,
+                num_links=1,
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
 
         for i in range(self.num_devices):
             # RMSNorm must execute on sharded input
@@ -171,7 +175,7 @@ class TtLlamaDecoder_optimized:
                     output_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
                 )
             )  # attn_norm_replicated is sharded
-            # xs_replicated[i].deallocate(True) # Fine to deallocate here, because this is replicated from the sharded
+            # xs_replicated[i].deallocate(True)
         # attn_outs is fractured
         attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks)
 
@@ -199,13 +203,15 @@ class TtLlamaDecoder_optimized:
             )
 
         ### Duplicate attention residual on all chips
-        # attn_resid_replicated = tt_all_gather(attn_resid_fractures, dim=-1)
-        attn_resid_replicated = tt_lib.tensor.all_gather(
-            attn_resid_replicated,
-            dim=3,
-            num_links=1,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-        )
+        if self.emulated:
+            attn_resid_replicated = tt_all_gather(attn_resid_replicated, dim=-1)
+        else:
+            attn_resid_replicated = tt_lib.tensor.all_gather(
+                attn_resid_replicated,
+                dim=3,
+                num_links=1,
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
 
         for i in range(self.num_devices):
             # RMSNorm must execute on sharded input
