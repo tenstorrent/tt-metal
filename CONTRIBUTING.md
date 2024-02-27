@@ -219,7 +219,7 @@ If you are using a machine with bare metal machine specs, please use
   - Run `gdb --args python <python file> `
   - You can add breakpoints for future loaded libraries
 - To log the compile time arguments passed with `-D` during the kernel build phase:
-  - Build with debug symbols `make build CONFIG=debug`
+  - Run with Watcher enabled: `TT_METAL_WATCHER=120`
   - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
