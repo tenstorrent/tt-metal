@@ -29,6 +29,7 @@ constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
 
 static std::atomic<bool> enabled = false;
+static std::atomic<bool> server_running = false;
 static std::mutex watch_mutex;
 static std::unordered_set<Device *> devices;
 static string logfile_path = "";
@@ -472,6 +473,8 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
 }
 
 static void watcher_loop(int sleep_usecs) {
+    TT_ASSERT(watcher::server_running == false);
+    watcher::server_running = true;
     int count = 0;
 
     log_info(LogLLRuntime, "Watcher thread watching...");
@@ -480,7 +483,10 @@ static void watcher_loop(int sleep_usecs) {
     while (true) {
         // Delay an amount such that we wait a minimum of the set sleep_usecs between polls.
         while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double) sleep_usecs) / 1000000.) {
-            // Odds are this thread will be killed during the usleep
+            // Odds are this thread will be killed during the usleep, the kill signal is
+            // watcher::enabled = false from the main thread.
+            if (!watcher::enabled)
+                break;
             usleep(1);
         }
         count++;
@@ -488,6 +494,11 @@ static void watcher_loop(int sleep_usecs) {
 
         {
             const std::lock_guard<std::mutex> lock(watch_mutex);
+
+            // If all devices are detached, we can turn off the server, it will be turned back on
+            // when a new device is attached.
+            if (!watcher::enabled)
+                break;
 
             fprintf(logfile, "-----\n");
             fprintf(logfile, "Dump #%d at %.3lfs\n", count, watcher::get_elapsed_secs());
@@ -511,14 +522,10 @@ static void watcher_loop(int sleep_usecs) {
 
             fprintf(logfile, "Dump #%d completed at %.3lfs\n", count, watcher::get_elapsed_secs());
         }
-
-        // If all devices are detached, we can turn off the server, it will be turned back on when a
-        // new device is attached.
-        if (!watcher::enabled)
-            break;
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
+    watcher::server_running = false;
 }
 
 } // namespace watcher
@@ -604,17 +611,29 @@ void watcher_attach(Device *device, const string& log_path) {
 
 void watcher_detach(Device *old) {
 
-    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+    {
+        const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
-    TT_ASSERT(watcher::devices.find(old) != watcher::devices.end());
-    if (watcher::enabled && watcher::logfile != nullptr) {
-        log_info(LogLLRuntime, "Watcher detached device {}", old->id());
-        fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), old->id());
+        TT_ASSERT(watcher::devices.find(old) != watcher::devices.end());
+        if (watcher::enabled && watcher::logfile != nullptr) {
+            log_info(LogLLRuntime, "Watcher detached device {}", old->id());
+            fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), old->id());
+        }
+        watcher::devices.erase(old);
+        if (watcher::enabled && watcher::devices.empty()) {
+            // If no devices remain, shut down the watcher server.
+            watcher::enabled = false;
+            if (watcher::logfile != nullptr) {
+                std::fclose(watcher::logfile);
+                watcher::logfile = nullptr;
+            }
+        }
     }
-    watcher::devices.erase(old);
-    if (watcher::enabled && watcher::devices.empty()) {
-        watcher::enabled = false;
-    }
+
+    // If we shut down the watcher server, wait until it finishes up. Do this without holding the
+    // lock because the watcher server may be waiting on it before it does its exit check.
+    if (watcher::devices.empty())
+        while (watcher::server_running) { ; }
 }
 
 int watcher_register_kernel(const string& name) {
