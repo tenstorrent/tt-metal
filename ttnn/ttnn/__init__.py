@@ -43,6 +43,8 @@ from ttnn.types import (
     float32,
     MemoryConfig,
     MathFidelity,
+    WormholeComputeKernelConfig,
+    GrayskullComputeKernelConfig,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,

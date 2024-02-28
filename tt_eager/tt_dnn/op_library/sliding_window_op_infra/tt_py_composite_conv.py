@@ -383,6 +383,7 @@ class TTPyCompositeConv(TTPyOp):
         enable_auto_formatting=False,
         deallocate_activation=True,
         padded_input_channels=None,
+        compute_kernel_config=None,
     ):
         if padded_input_channels is None:
             self.padded_input_channels = _nearest_32(input_channels)
@@ -543,6 +544,7 @@ class TTPyCompositeConv(TTPyOp):
             use_shallow_conv_variant=use_shallow_conv_variant,
             padded_input_channels=self.padded_input_channels,
             move_weights_to_device=move_weights_to_device,
+            compute_kernel_config=compute_kernel_config,
         )
 
         if not self.use_matmul_for_1x1_conv:
@@ -672,6 +674,7 @@ class TTPyCompositeConv(TTPyOp):
         use_shallow_conv_variant,
         padded_input_channels,
         move_weights_to_device=False,
+        compute_kernel_config=None,
     ):
         assert len(conv_params) == 10
         K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
@@ -760,6 +763,7 @@ class TTPyCompositeConv(TTPyOp):
                 output_dtype=output_dtype,
                 input_tensor_shape=self.input_tensor_shape,
                 use_shallow_conv_variant=self.use_shallow_conv_variant,
+                compute_kernel_config=compute_kernel_config,
             )
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
@@ -788,19 +792,6 @@ class TTPyCompositeConv(TTPyOp):
             move_output = ttl.tensor.move_sharded(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)
-
-        if is_grayskull():
-            compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=math_fidelity,
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-                math_fidelity=math_fidelity,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
 
         def conv1x1_as_matmul(activation):
             activation = downsample_if_needed(activation)
