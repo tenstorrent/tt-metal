@@ -122,7 +122,7 @@ void kernel_main() {
     if constexpr (pull_and_push_config == tt::PullAndPushConfig::LOCAL or pull_and_push_config == tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH) {
         // //DPRINT << "Programming cb for programs on dispatch core" << ENDL();
         // Dispatch core has a constant CB
-        program_remote_sync_cb<false>(
+        program_remote_sync_cb<SyncCBConfigRegion::TENSIX>(
             local_dispatch_multicore_cb_cfg,
             dispatch_multicore_cb_cfg,
             dispatch_noc_encoding,
@@ -320,7 +320,7 @@ void kernel_main() {
 
             if (is_program) {
                 // Don't add program event to ProgramEventBuffer, only the REMOTE_PULL_AND_PUSH kernel interfaces with the dispatcher kernel
-                program_remote_sync_cb<true, 0>(
+                program_remote_sync_cb<SyncCBConfigRegion::ROUTER_ISSUE>(
                     local_multicore_cb_cfg,
                     remote_multicore_cb_cfg,
                     push_noc_encoding,
@@ -364,7 +364,7 @@ void kernel_main() {
 
                 if ((BufferType)src_buf_type == BufferType::SYSTEM_MEMORY) {
 
-                    program_remote_sync_cb<true, 0>(
+                    program_remote_sync_cb<SyncCBConfigRegion::ROUTER_ISSUE>(
                         local_multicore_cb_cfg,
                         remote_multicore_cb_cfg,
                         push_noc_encoding,
@@ -403,7 +403,7 @@ void kernel_main() {
 
             // Program the CB on the DST router because we may need to pull in data from DST
             volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE);
-            program_remote_sync_cb<true, 0>(
+            program_remote_sync_cb<SyncCBConfigRegion::ROUTER_ISSUE>(
                  local_multicore_cb_cfg,
                  remote_multicore_cb_cfg,
                  pull_noc_encoding,
@@ -536,7 +536,7 @@ void kernel_main() {
                     volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
 
                     //DPRINT << "Programming remote CB" << ENDL();
-                    program_remote_sync_cb<true, 1>(
+                    program_remote_sync_cb<SyncCBConfigRegion::ROUTER_COMPLETION>(
                         local_multicore_cb_cfg,
                         remote_multicore_cb_cfg,
                         push_noc_encoding,
@@ -591,7 +591,7 @@ void kernel_main() {
 
             volatile db_cb_config_t* remote_multicore_cb_cfg = get_remote_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
             // Program the CB on the DST router because we may need to pull in data from DST
-            program_remote_sync_cb<true, 1>(
+            program_remote_sync_cb<SyncCBConfigRegion::ROUTER_COMPLETION>(
                 local_multicore_cb_cfg,
                 remote_multicore_cb_cfg,
                 pull_noc_encoding,

@@ -53,10 +53,12 @@ tt_l1_ptr db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr) {
 }
 
 
-template <uint32_t eth_cb, uint32_t eth_buffer_id = 0>
+template <SyncCBConfigRegion cb_config_region>
 FORCE_INLINE uint32_t get_cb_start_address() {
-    if constexpr (eth_cb) {
-        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + eth_buffer_id * eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    if constexpr (cb_config_region == SyncCBConfigRegion::ROUTER_ISSUE) {
+        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    } else if constexpr (cb_config_region == SyncCBConfigRegion::ROUTER_COMPLETION) {
+        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE +  eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     } else {
         return L1_UNRESERVED_BASE + 2 * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     }

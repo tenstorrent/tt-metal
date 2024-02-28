@@ -18,8 +18,15 @@ inline uint32_t get_command_start_l1_address() {
     return L1_UNRESERVED_BASE;
 }
 
-inline uint32_t get_eth_command_start_l1_address(CQTunnelPath cq_tunnel_path) {
-    return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (uint8_t)cq_tunnel_path * eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
+inline uint32_t get_eth_command_start_l1_address(SyncCBConfigRegion cq_region) {
+    if (cq_region == SyncCBConfigRegion::ROUTER_ISSUE) {
+        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    } else if (cq_region == SyncCBConfigRegion::ROUTER_COMPLETION){
+        return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
+    } else {
+        TT_ASSERT(false, "Unsupported router CB config");
+        return 0;
+    }
 }
 
 // Where issue queue interface core pulls in data (follows command)

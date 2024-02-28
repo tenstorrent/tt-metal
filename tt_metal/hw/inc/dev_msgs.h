@@ -120,16 +120,10 @@ struct eth_word_t {
     uint32_t reserved_1;
 };
 
-enum class CQTunnelPath: uint8_t {
-    ISSUE = 0,
-    COMPLETION = 1,
-};
-
-enum EthRouterMode : uint32_t {
-    FD_SRC = 0,
-    FD_DST = 1,
-    SD = 2,
-    BI_DIR_TUNNELING = 3,
+enum class SyncCBConfigRegion: uint8_t {
+    TENSIX = 0,
+    ROUTER_ISSUE = 1,
+    ROUTER_COMPLETION = 2,
 };
 
 struct routing_info_t {
@@ -137,9 +131,5 @@ struct routing_info_t {
     volatile uint32_t src_sent_valid_cmd;
     volatile uint32_t dst_acked_valid_cmd;
     volatile uint32_t unused_arg0;
-    volatile uint32_t relay_src_x;
-    volatile uint32_t relay_src_y;
-    volatile uint32_t relay_dst_x;
-    volatile uint32_t relay_dst_y;
     eth_word_t fd_buffer_msgs[2];
 };

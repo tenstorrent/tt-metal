@@ -32,6 +32,11 @@ using tt_target_dram = std::tuple<int, int, int>;
 using tt::DEVICE;
 using tt::TargetDevice;
 
+enum EthRouterMode : uint32_t {
+    IDLE = 0,
+    BI_DIR_TUNNELING = 1,
+};
+
 namespace tt {
 
 class Cluster {

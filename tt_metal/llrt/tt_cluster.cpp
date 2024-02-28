@@ -614,7 +614,7 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
             for (const auto &eth_core : eth_cores) {
-              if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::SD) {
+              if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
                 this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
                 this->ethernet_sockets_.at(connected_chip_id)
                     .at(chip_id)
@@ -630,7 +630,7 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
       for (const auto &eth_core: eth_cores) {
-        if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::SD) {
+        if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
             device_ids.insert(other_chip_id);
         }
       }
@@ -720,7 +720,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                                     reserved_chip_connections.insert({std::make_tuple(chip_id, connected_chip_id), true});
                                     reserved_chip_connections.insert({std::make_tuple(connected_chip_id, chip_id), true});
                             } else {
-                                this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::SD});
+                                this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
                             }
                         }
                     }
@@ -730,7 +730,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {
-                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::SD});
+                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
                     }
                 }
             }
@@ -751,7 +751,6 @@ tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
             return tt_cxy_pair(local_chip_id, eth_core);
         }
     }
-    std::cout << " logical dispatch core " << logical_dispatch_core.str() << " mode " << (uint32_t)mode << " " << connected_chip_id << std::endl;
     TT_ASSERT(false, "Cluster does not contain requested eth routing core");
     return {};
 }
@@ -767,19 +766,11 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
         .routing_enabled = 0,
         .src_sent_valid_cmd = 0,
         .dst_acked_valid_cmd = 0,
-        .relay_src_x = 0xffffffff,
-        .relay_src_y = 0xffffffff,
-        .relay_dst_x = 0xffffffff,
-        .relay_dst_y = 0xffffffff,
       };
     const routing_info_t routing_info_enabled = {
         .routing_enabled = 1,
         .src_sent_valid_cmd = 0,
         .dst_acked_valid_cmd = 0,
-        .relay_src_x = 0xffffffff,
-        .relay_src_y = 0xffffffff,
-        .relay_dst_x = 0xffffffff,
-        .relay_dst_y = 0xffffffff,
       };
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
