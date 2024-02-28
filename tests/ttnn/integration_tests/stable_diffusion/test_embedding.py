@@ -6,14 +6,12 @@ import torch
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
 
 
-@skip_for_wormhole_b0()
 def test_embeddings(
     device,
 ):

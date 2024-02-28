@@ -8,7 +8,6 @@ import pytest
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
@@ -48,7 +47,6 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transfor
     ],
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
-@skip_for_wormhole_b0()
 def test_transformer_2d_model_256x256(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
 ):
@@ -157,7 +155,6 @@ def test_transformer_2d_model_256x256(
         ),
     ],
 )
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 def test_transformer_2d_model_512x512(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
@@ -207,7 +204,7 @@ def test_transformer_2d_model_512x512(
     ttnn_encoder_hidden_states = ttnn.from_torch(
         encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-
+    reader_patterns_cache = {}
     ttnn_transformer = transformer_2d_model(
         hidden_states=ttnn_hidden_state,
         parameters=parameters,
@@ -227,6 +224,7 @@ def test_transformer_2d_model_512x512(
         device=device,
         cross_attention_dim=cross_attention_dim,
         upcast_attention=upcast_attention,
+        reader_patterns_cache=reader_patterns_cache,
     )
 
     ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(ttnn_transformer), layout=ttnn.ROW_MAJOR_LAYOUT))
