@@ -164,7 +164,6 @@ class TTPyMaxPool(TTPyOp):
         device,
         reader_patterns_cache,
         pad_val=0xF7FF,
-        parallel_config_override=None,
         output_mem_config=None,
     ):
         if "max_pool" not in reader_patterns_cache:
@@ -180,36 +179,22 @@ class TTPyMaxPool(TTPyOp):
         # if output_mem_config is not None:
         #     dtype = output_mem_config.dtype()
 
-        print(f"==================== TTPyMaxPool ====================")
-        print(f"parallel_config_override: {parallel_config_override}")
-        # self.grid_size, self.shard_grid, self.ncores_nhw = determine_parallel_config(sliding_window_op_params)
         from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
             determine_parallel_config as conv_determine_parallel_config,
         )
 
-        if (
-            parallel_config_override is not None
-            and "grid_size" in parallel_config_override
-            and "ncores_nhw" in parallel_config_override
-        ):
-            print(f"========= parallel_config_override: {parallel_config_override} =========")
-            self.grid_size, self.ncores_nhw = parallel_config_override[
-                "grid_size"
-            ]  # , parallel_config_override["ncores_nhw"]
-        else:
-            conv_parallel_config, self.ncores_nhw, parallel_config2 = conv_determine_parallel_config(
-                True,
-                sliding_window_op_params.batch_size,
-                0,
-                0,
-                sliding_window_op_params.input_h,
-                sliding_window_op_params.input_w,
-                sliding_window_op_params,
-                device,
-                config_override=parallel_config_override,
-            )
-            self.grid_size = (conv_parallel_config.grid_size.x, conv_parallel_config.grid_size.y)
-
+        # self.grid_size, self.shard_grid, self.ncores_nhw = determine_parallel_config(sliding_window_op_params)
+        conv_parallel_config, self.ncores_nhw = conv_determine_parallel_config(
+            True,
+            sliding_window_op_params.batch_size,
+            0,
+            0,
+            sliding_window_op_params.input_h,
+            sliding_window_op_params.input_w,
+            sliding_window_op_params,
+            device,
+        )
+        self.grid_size = (conv_parallel_config.grid_size.x, conv_parallel_config.grid_size.y)
         self.shard_grid = calculate_shard_grid(self.ncores_nhw, self.grid_size)
 
         print(f"grid_size: {self.grid_size}, shard_grid: {self.shard_grid}, ncores_nhw: {self.ncores_nhw}")

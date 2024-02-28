@@ -133,15 +133,5 @@ class Conv2d:
     def copy_output_from_device(self, output: ttnn.Tensor):
         return ttnn.Tensor(self.conv.copy_output_from_device(output.value))
 
-    @ttnn.register_operation(name="ttnn.Conv2d.get_num_cores_nhw", validate_input_tensors=lambda *args, **kwargs: True)
-    def get_num_cores_nhw(self):
-        return self.conv.get_num_cores_nhw()
-
-    @ttnn.register_operation(
-        name="ttnn.Conv2d.get_parallel_config", validate_input_tensors=lambda *args, **kwargs: True
-    )
-    def get_parallel_config(self):
-        return self.conv.get_parallel_config()
-
 
 __all__ = []
