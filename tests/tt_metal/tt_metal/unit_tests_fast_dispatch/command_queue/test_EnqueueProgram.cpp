@@ -607,8 +607,9 @@ namespace stress_tests {
 
 
 TEST_F(CommandQueueSingleCardFixture, TestFillDispatchCoreBuffer) {
+
+    uint32_t NUM_ITER = 10000;
     for (Device *device : devices_) {
-        // if (not device->is_mmio_capable()) continue;
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -616,7 +617,7 @@ TEST_F(CommandQueueSingleCardFixture, TestFillDispatchCoreBuffer) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 256, 256, 7500));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 256, 256, NUM_ITER));
     }
 }
 

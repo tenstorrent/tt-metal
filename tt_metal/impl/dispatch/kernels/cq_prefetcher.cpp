@@ -116,7 +116,7 @@ void kernel_main() {
     volatile db_cb_config_t* local_dispatch_multicore_cb_cfg = get_local_db_cb_config(CQ_DISPATCHER_CB_CONFIG_BASE);
     volatile db_cb_config_t* dispatch_multicore_cb_cfg = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE);
 
-    constexpr uint32_t dispatch_cb_num_pages = (MEM_L1_SIZE - L1_UNRESERVED_BASE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * 2) / DeviceCommand::PROGRAM_PAGE_SIZE;
+    constexpr uint32_t dispatch_cb_num_pages = (MEM_L1_SIZE - L1_UNRESERVED_BASE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * 2) / DeviceCommand::PROGRAM_PAGE_SIZE / 4 * 4;
     constexpr uint32_t dispatch_cb_size = dispatch_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     if constexpr (pull_and_push_config == tt::PullAndPushConfig::LOCAL or pull_and_push_config == tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH) {
@@ -240,7 +240,6 @@ void kernel_main() {
 
             volatile tt_l1_ptr uint32_t* buffer_transfer_ptr = command_ptr + DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
             uint32_t num_pages_to_read = pull_and_push_cb_num_pages / 2;
-            uint32_t num_pages_to_write = 4;//max(num_pages_to_read / 4, 1);
 
             if (is_program) {
                 program_event_buffer.push_event(event);
@@ -252,7 +251,7 @@ void kernel_main() {
                         dst_pr_cfg,
                         page_size,
                         num_pages_to_read,
-                        num_pages_to_write,
+                        program_transfer_num_pages,
                         is_sharded,
                         sharded_buffer_num_cores,
                         pull_noc_encoding,
@@ -265,7 +264,7 @@ void kernel_main() {
                     pull_and_relay<PullAndRelayType::BUFFER, PullAndRelayType::CIRCULAR_BUFFER, write_to_completion_queue>(src_pr_cfg, dst_pr_cfg, num_pages_in_transfer);
                     uint32_t aligned_global_page_idx = align(dst_pr_cfg.cb_buff_cfg.global_page_idx, program_transfer_num_pages);
                     if (aligned_global_page_idx != dst_pr_cfg.cb_buff_cfg.global_page_idx) {
-                        DPRINT << "PUSHBACK " << aligned_global_page_idx - dst_pr_cfg.cb_buff_cfg.global_page_idx << ENDL();
+                        // DPRINT << "PUSHBACK " << aligned_global_page_idx - dst_pr_cfg.cb_buff_cfg.global_page_idx << ENDL();
                         multicore_cb_push_back(
                             dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
                             dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg,
@@ -285,8 +284,8 @@ void kernel_main() {
                         src_pr_cfg,
                         dst_pr_cfg,
                         page_size,
-                        num_pages_to_read, // for the l chip case this will be wrong
-                        num_pages_to_write, // for the l chip case this will be wrong
+                        num_pages_to_read,
+                        (num_pages_to_read / 2),
                         is_sharded,
                         sharded_buffer_num_cores
                     );
@@ -479,7 +478,7 @@ void kernel_main() {
 
                     uint32_t aligned_global_page_idx = align(dst_pr_cfg.cb_buff_cfg.global_page_idx, program_transfer_num_pages);
                     if (aligned_global_page_idx != dst_pr_cfg.cb_buff_cfg.global_page_idx) {
-                        DPRINT << "PUSHBACK " << aligned_global_page_idx - dst_pr_cfg.cb_buff_cfg.global_page_idx << ENDL();
+                        // DPRINT << "PUSHBACK " << aligned_global_page_idx - dst_pr_cfg.cb_buff_cfg.global_page_idx << ENDL();
                         multicore_cb_push_back(
                             dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
                             dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg,

@@ -115,8 +115,6 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
             EnqueueWriteBuffer(cq, bufa, src, false);
         }
         vector<uint32_t> result;
-//        Finish(cq);
-//        detail::ReadFromBuffer(bufa, result);
         if (use_void_star_api) {
             result.resize(buf_size / sizeof(uint32_t));
             EnqueueReadBuffer(cq, bufa, result.data(), true);
@@ -533,6 +531,20 @@ TEST_F(CommandQueueSingleCardFixture, TestBackToBackNon32BAlignedPageSize) {
 
         EXPECT_EQ(src_a, result_a);
         EXPECT_EQ(src_b, result_b);
+    }
+}
+
+// This case was failing for FD v1.3 design
+TEST_F(CommandQueueSingleCardFixture, TestLargeBuffer4096BPageSize) {
+    constexpr BufferType buff_type = BufferType::L1;
+
+    for (Device *device : devices_) {
+        TestBufferConfig config = {
+            .num_pages = 512,
+            .page_size = 4096,
+            .buftype = BufferType::L1};
+
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config));
     }
 }
 

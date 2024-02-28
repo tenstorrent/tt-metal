@@ -291,9 +291,17 @@ class ProgramEventBuffer {
     }
 
     void push_event(uint32_t event) {
+        if (this->num_events == 2) {
+            volatile tt_l1_ptr uint32_t *dispatch_semaphore_addr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));   // Should be initialized to num commands slots on dispatch core by host
+            wait_consumer_idle<2>(dispatch_semaphore_addr);
+            this->write_events<true>();
+            this->num_events = 0;
+        }
+
         if (num_events == 0) {
             this->buffer = (uint64_t)event << 32;
-        } else {
+        } else if (num_events == 1) {
             this->buffer = this->buffer + event;
         }
         this->num_events++;
@@ -302,14 +310,12 @@ class ProgramEventBuffer {
     template <bool write_to_completion_queue>
     void write_events() {
         uint32_t event_addr;
-        if (this->num_events) {
-            //DPRINT << "SENDING " << this->num_events << " EVENTS" << ENDL();
-        }
         while (this->num_events) {
             uint32_t event = (this->buffer >> 32);
             if constexpr (write_to_completion_queue) {
                 //DPRINT << "Write " << event << " back to completion queue" << ENDL();
                 completion_queue_reserve_back(32); // Need to clean up
+                // DPRINT << "DEVICE WRITING EVENT: " << event << ENDL();
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
                 write_event(event_addr);
                 completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
@@ -395,7 +401,7 @@ void pull_and_relay(
 
     dst_pr_cfg.cb_buff_cfg.global_page_idx = 0;
     while (num_writes_completed != num_pages) {
-        if (cb_producer_space_available(src_pr_cfg.num_pages_to_read) and num_reads_issued < num_pages) {
+        if (cb_producer_space_available(num_pages_to_read) and num_reads_issued < num_pages) {
             if constexpr (src_type == PullAndRelayType::CIRCULAR_BUFFER) {
                 /*
                     In this case, we are pulling from a circular buffer. We pull from
@@ -466,8 +472,16 @@ void pull_and_relay(
                 uint32_t dst_addr = dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << 4;
                 uint64_t dst_noc_addr = dst_pr_cfg.cb_buff_cfg.remote_noc_encoding | dst_addr;
 
-                // //DPRINT << "Writing " << num_pages_to_write << " to dispatch addr: " << dst_addr << ENDL();
-                noc_async_write(get_read_ptr(0), dst_noc_addr, (dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_write);
+                // uint32_t rd_ptr = get_read_ptr(0);
+                // DPRINT << "Writing " << num_pages_to_write << " to dispatch addr: " << dst_addr << ENDL();
+                // for (uint32_t i = 0; i < num_pages_to_write * 2048; i += 4) {
+                //     DPRINT << reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rd_ptr + i)[0] << ENDL();
+                // }
+                // if (num_pages != 1) {
+                uint32_t num_bytes = (dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_write;
+                // DPRINT << "SENDING NUM BYTES: " << num_bytes << ENDL();
+                noc_async_write(get_read_ptr(0), dst_noc_addr, num_bytes);
+                // }
                 multicore_cb_push_back(
                     dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
                     dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg,
