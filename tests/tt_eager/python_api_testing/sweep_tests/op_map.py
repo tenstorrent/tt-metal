@@ -1111,6 +1111,10 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,
     },
+    "ttnn-eltwise-lgamma": {
+        "tt_lib_op": ttnn_ops.eltwise_lgamma,
+        "pytorch_op": pytorch_ops.lgamma,
+    },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
