@@ -158,19 +158,22 @@ def query_all_registered_operations(include_experimental=False):
         return ttnn_operations
 
 
-def register_operation(
-    *, name, validate_input_tensors, torch_function=None, is_using_fallback=lambda *args, **kwargs: False
-):
+def register_operation(*, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False):
     if name in REGISTERED_OPERATIONS:
         raise RuntimeError(f"{name} is already registered")
     REGISTERED_OPERATIONS.add(name)
 
+    if is_cpp_function:
+        if validate_input_tensors is not None:
+            raise RuntimeError(f"validate_input_tensors is not supported for {name} because it is a C++ function")
+
     def operation_decorator(function):
-        document_input_tensors(name, function, validate_input_tensors)
+        if not is_cpp_function:
+            document_input_tensors(name, function, validate_input_tensors)
 
         def validate_decorator(function):
             def call_wrapper(*function_args, **function_kwargs):
-                if validate_input_tensors is not None:
+                if not is_cpp_function:
                     validate_input_tensors(name, *function_args, **function_kwargs)
                 return function(*function_args, **function_kwargs)
 
@@ -205,6 +208,9 @@ def register_operation(
                 return output
 
             return call_wrapper
+
+        if ttnn.TTNN_ENABLE_FAST_RUNTIME_MODE:
+            return function
 
         @wraps(function)
         def call_wrapper(*function_args, **function_kwargs):
