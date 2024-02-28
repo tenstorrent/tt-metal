@@ -48,6 +48,10 @@ def custom_preprocessor(model, name, ttnn_module_args):
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.c1_2)
         parameters["p1"] = {}
+        ttnn_module_args.p1["parallel_config_override"] = {
+            "grid_size": parameters["c1"]["parallel_config"][0],
+            "ncores_nhw": parameters["c1"]["num_cores_nhw"],
+        }
 
         # print("parameters['p1']: ", parameters["p1"])
 
@@ -168,7 +172,7 @@ model_graph = draw_graph(
 model_graph.visual_graph.render(format="pdf")
 
 device_id = 0
-device = ttnn.open(device_id)
+device = ttnn.open_device(device_id=device_id)
 
 torch.manual_seed(0)
 
@@ -215,3 +219,4 @@ output_tensor = ttnn_model.torch_call(torch_input_tensor)
 print("torch_output_tensor.size: ", torch_output_tensor.size())
 print("ttnn_output_tensor.size: ", output_tensor.size())
 assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+ttnn.close_device(device)

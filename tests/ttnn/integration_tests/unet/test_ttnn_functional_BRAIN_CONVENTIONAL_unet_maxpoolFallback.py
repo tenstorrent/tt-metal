@@ -90,6 +90,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c4_2["deallocate_activation"] = True
         ttnn_module_args.c4["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
+        # ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
         ttnn_module_args.bnc["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.bnc_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -101,10 +102,8 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.bnc_2["activation"] = "relu"  # Fuse relu with bottle neck conv
         ttnn_module_args.bnc["deallocate_activation"] = True
         ttnn_module_args.bnc_2["deallocate_activation"] = True
-        # ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = None
-        # ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = None
-        ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
-        ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = None
+        ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = None
 
         ttnn_module_args.c5["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c5_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -272,96 +271,96 @@ class UNet(nn.Module):
     def __init__(self):
         super(UNet, self).__init__()
         # Contracting Path
-        self.c1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
-        self.b1 = nn.BatchNorm2d(64)
+        self.c1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.b1 = nn.BatchNorm2d(32)
         self.r1 = nn.ReLU(inplace=True)
-        self.c1_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.b1_2 = nn.BatchNorm2d(64)
+        self.c1_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.b1_2 = nn.BatchNorm2d(32)
         self.r1_2 = nn.ReLU(inplace=True)
         self.p1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.b2 = nn.BatchNorm2d(128)
+        self.c2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.b2 = nn.BatchNorm2d(64)
         self.r2 = nn.ReLU(inplace=True)
-        self.c2_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.b2_2 = nn.BatchNorm2d(128)
+        self.c2_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.b2_2 = nn.BatchNorm2d(64)
         self.r2_2 = nn.ReLU(inplace=True)
         self.p2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.b3 = nn.BatchNorm2d(256)
+        self.c3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.b3 = nn.BatchNorm2d(128)
         self.r3 = nn.ReLU(inplace=True)
-        self.c3_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.b3_2 = nn.BatchNorm2d(256)
+        self.c3_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.b3_2 = nn.BatchNorm2d(128)
         self.r3_2 = nn.ReLU(inplace=True)
         self.p3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c4 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.b4 = nn.BatchNorm2d(512)
+        self.c4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.b4 = nn.BatchNorm2d(256)
         self.r4 = nn.ReLU(inplace=True)
-        self.c4_2 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.b4_2 = nn.BatchNorm2d(512)
+        self.c4_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.b4_2 = nn.BatchNorm2d(256)
         self.r4_2 = nn.ReLU(inplace=True)
         self.p4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.bnc = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
-        self.bnb = nn.BatchNorm2d(1024)
+        self.bnc = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.bnb = nn.BatchNorm2d(512)
         self.bnr = nn.ReLU(inplace=True)
-        self.bnc_2 = nn.Conv2d(1024, 1024, kernel_size=3, padding=1)
-        self.bnb_2 = nn.BatchNorm2d(1024)
+        self.bnc_2 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.bnb_2 = nn.BatchNorm2d(512)
         self.bnr_2 = nn.ReLU(inplace=True)
 
         # self.u4 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c5T = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2, padding=0)
-        self.c5 = nn.Conv2d(1024, 512, kernel_size=3, padding=1)
-        self.b5 = nn.BatchNorm2d(512)
+        self.c5T = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2, padding=0)
+        self.c5 = nn.Conv2d(512, 256, kernel_size=3, padding=1)
+        self.b5 = nn.BatchNorm2d(256)
         self.r5 = nn.ReLU(inplace=True)
-        self.c5_2 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.b5_2 = nn.BatchNorm2d(512)
+        self.c5_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.b5_2 = nn.BatchNorm2d(256)
         self.r5_2 = nn.ReLU(inplace=True)
-        self.c5_3 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.b5_3 = nn.BatchNorm2d(512)
+        self.c5_3 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.b5_3 = nn.BatchNorm2d(256)
         self.r5_3 = nn.ReLU(inplace=True)
         # self.u3 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c6T = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2, padding=0)
-        self.c6 = nn.Conv2d(512, 256, kernel_size=3, padding=1)
-        self.b6 = nn.BatchNorm2d(256)
+        self.c6T = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2, padding=0)
+        self.c6 = nn.Conv2d(256, 128, kernel_size=3, padding=1)
+        self.b6 = nn.BatchNorm2d(128)
         self.r6 = nn.ReLU(inplace=True)
-        self.c6_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.b6_2 = nn.BatchNorm2d(256)
+        self.c6_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.b6_2 = nn.BatchNorm2d(128)
         self.r6_2 = nn.ReLU(inplace=True)
-        self.c6_3 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.b6_3 = nn.BatchNorm2d(256)
+        self.c6_3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.b6_3 = nn.BatchNorm2d(128)
         self.r6_3 = nn.ReLU(inplace=True)
         # self.u2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c7T = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2, padding=0)
-        self.c7 = nn.Conv2d(256, 128, kernel_size=3, padding=1)
-        self.b7 = nn.BatchNorm2d(128)
+        self.c7T = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2, padding=0)
+        self.c7 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
+        self.b7 = nn.BatchNorm2d(64)
         self.r7 = nn.ReLU(inplace=True)
-        self.c7_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.b7_2 = nn.BatchNorm2d(128)
+        self.c7_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.b7_2 = nn.BatchNorm2d(64)
         self.r7_2 = nn.ReLU(inplace=True)
-        self.c7_3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.b7_3 = nn.BatchNorm2d(128)
+        self.c7_3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.b7_3 = nn.BatchNorm2d(64)
         self.r7_3 = nn.ReLU(inplace=True)
         # self.u1 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c8T = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2, padding=0)
-        self.c8 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
-        self.b8 = nn.BatchNorm2d(64)
+        self.c8T = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2, padding=0)
+        self.c8 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
+        self.b8 = nn.BatchNorm2d(32)
         self.r8 = nn.ReLU(inplace=True)
-        self.c8_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.b8_2 = nn.BatchNorm2d(64)
+        self.c8_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.b8_2 = nn.BatchNorm2d(32)
         self.r8_2 = nn.ReLU(inplace=True)
-        self.c8_3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.b8_3 = nn.BatchNorm2d(64)
+        self.c8_3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.b8_3 = nn.BatchNorm2d(32)
         self.r8_3 = nn.ReLU(inplace=True)
 
         # Output layer
-        self.output_layer = nn.Conv2d(64, 2, kernel_size=1)
+        self.output_layer = nn.Conv2d(32, 2, kernel_size=1)
 
     def forward(self, x):
         # Contracting Path
