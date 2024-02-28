@@ -458,27 +458,18 @@ Tensor convert_python_tensor_to_tt_tensor(
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
-#ifndef TTNN_ENABLE_LOGGING
-                    if (not operation::is_logging_enabled()) {
-                        return function(*args, **kwargs);
-                    }
-#endif
-                    const auto start{std::chrono::steady_clock::now()};
-
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
+#ifdef TTNN_ENABLE_LOGGING
+                    const auto start{std::chrono::steady_clock::now()};
                     operation::log_operation(op, input_tensors);
-
+#endif
                     auto profile_scope = tt::tt_metal::op_profiler::OpProfileScope(
                         op.get_type_name(), tt::tt_metal::op_profiler::OpType::python_fallback);
-                    auto do_profile = tt::tt_metal::op_profiler::get_profiler_flag();
-                    if (do_profile) {
-                        op_profiler::set_preferred_name(op.get_type_name());
-                    }
 
                     auto output_tensors = function(*args, **kwargs);
 
-                    const auto end{std::chrono::steady_clock::now()};
 #ifdef TTNN_ENABLE_LOGGING
+                    const auto end{std::chrono::steady_clock::now()};
                     const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                     tt::log_info(
                         tt::LogOp,
