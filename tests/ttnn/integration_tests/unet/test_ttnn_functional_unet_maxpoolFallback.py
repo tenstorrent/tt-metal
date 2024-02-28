@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchview import draw_graph
+# from torchview import draw_graph
 
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
 
