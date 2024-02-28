@@ -918,6 +918,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.concat_bw
 
+.. autofunction:: tt_lib.tensor.hardsigmoid_bw
+
 Loss Functions
 ==============
 

@@ -679,7 +679,7 @@ std::vector<Tensor> squared_difference_bw(const Tensor& grad, const Tensor& inpu
 }
 
 
-// torch reference 
+// torch reference
 // - name: ldexp(Tensor self, Tensor other) -> Tensor
 //   self: 2^other
 //   other: self * ln(2) * (2^other)
@@ -796,6 +796,16 @@ std::vector<Tensor> concat_bw(const Tensor& grad, const Tensor& input, const Ten
 }
 
 
+std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul_unary(grad, 1.0/6);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+std::vector<Tensor> hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _hardsigmoid_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
