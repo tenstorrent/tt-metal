@@ -16,7 +16,6 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     SlidingWindowOpParams,
     SlidingWindowOpParamsWithParallelConfig,
     get_hash_from_sliding_window_op_params,
-    calculate_shard_grid,
 )
 from tt_lib.utils import _nearest_32, _nearest_y
 from models.utility_functions import is_wormhole_b0, is_grayskull
@@ -103,10 +102,12 @@ def determine_parallel_config(
     input_width,
     sliding_window_op_params,
     device,
-    config_override=None,
+    config_override={},
 ):
-    if config_override is None:
-        config_override = {}
+    print(f"==================== determine_parallel_config ====================")
+    print(
+        f"output_channels: {output_channels}, input_channels: {input_channels}, input_height: {input_height}, input_width: {input_width}, sliding_window_op_params: {sliding_window_op_params}"
+    )
 
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
     conv_out_2d_matrix_height = batch_size * output_height * output_width
@@ -198,7 +199,14 @@ def determine_parallel_config(
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
-    return conv_parallelization_config
+    # print("num_cores_nhw=", num_cores_nhw)
+    # print("grid_size=", grid_size)
+    # print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
+    # print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
+    print(
+        f"num_cores_nhw: {num_cores_nhw}, grid_size: {grid_size}, conv_parallelization_config: {conv_parallelization_config}"
+    )
+    return conv_parallelization_config, num_cores_nhw, grid_size
 
 
 def determine_per_core_block_config(
@@ -210,11 +218,8 @@ def determine_per_core_block_config(
     sliding_window_op_params,
     use_shallow_conv_variant,
     padded_input_channels,
-    config_override=None,
+    config_override={},
 ):
-    if config_override is None:
-        config_override = {}
-
     act_block_h_override = 0
     if "act_block_h" in config_override:
         act_block_h_override = config_override["act_block_h"]
@@ -425,7 +430,8 @@ class TTPyCompositeConv(TTPyOp):
         self.is_1d_systolic = is_1d_systolic
         self.device = device
         # determine conv op parallelization and blocking config
-        self.opt_conv_parall_conf_auto = determine_parallel_config(
+        print(f"==================== TTPyCompositeConv ====================")
+        self.opt_conv_parall_conf_auto, num_cores_nhw, grid_size = determine_parallel_config(
             is_1d_systolic,
             batch_size,
             output_channels,
@@ -436,7 +442,7 @@ class TTPyCompositeConv(TTPyOp):
             device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
-        self.parallel_config = (self.opt_conv_parall_conf_auto.grid_size, self.opt_conv_parall_conf_auto.num_cores_nhw)
+        self.parallel_config = (grid_size, num_cores_nhw)
 
         self.opt_conv_block_conf_auto = determine_per_core_block_config(
             is_1d_systolic,
@@ -492,7 +498,7 @@ class TTPyCompositeConv(TTPyOp):
                 input_w=input_width,
                 num_cores_h=self.opt_conv_parall_conf_auto.grid_size.y,
                 num_cores_w=self.opt_conv_parall_conf_auto.grid_size.x,
-                num_cores_nhw=self.opt_conv_parall_conf_auto.num_cores_nhw,
+                num_cores_nhw=num_cores_nhw,
             )
 
         self.sliding_window_op_params = sliding_window_op_params
@@ -881,8 +887,34 @@ class TTPyCompositeConv(TTPyOp):
             # Convert activation RM to tile layout
             conv_input = conv_input.to(ttl.tensor.Layout.TILE)
 
-        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), self.ncores_nhw)
-        assert self.is_1d_systolic == (shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
+        if self.is_1d_systolic and num_cores_nhw % num_cores_w > 0:
+            assert num_cores_h * num_cores_w > num_cores_nhw
+            first_range_num_cores_h = num_cores_nhw // num_cores_w
+            assert num_cores_nhw % num_cores_w < num_cores_w
+
+            shard_grid = ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_w - 1, first_range_num_cores_h - 1),
+                    ),
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, first_range_num_cores_h),
+                        ttl.tensor.CoreCoord((num_cores_nhw % num_cores_w) - 1, first_range_num_cores_h),
+                    ),
+                }
+            )
+        else:
+            if self.is_1d_systolic:
+                assert num_cores_nhw == num_cores_h * num_cores_w
+            shard_grid = ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+                    )
+                }
+            )
+
         shard_orientation = (
             ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
         )
@@ -892,7 +924,12 @@ class TTPyCompositeConv(TTPyOp):
             input_channels if self.is_1d_systolic else (int)(input_channels / act_c_num_blocks),
         ]
         shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
-        mem_config = ttl.tensor.MemoryConfig(shard_layout, ttl.tensor.BufferType.L1)
+        mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+            if self.is_1d_systolic
+            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.BufferType.L1,
+        )
         conv_input_on_device = conv_input.to(self.device, mem_config, shard_spec)
         return conv_input_on_device
 

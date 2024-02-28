@@ -164,7 +164,6 @@ def test_run_optimized_conv(
             ttl.tensor.MathFidelity.HiFi4,
             ttl.tensor.OptimizedConvParallelizationConfig(
                 grid_size=(num_cores_x, num_cores_y),
-                num_cores_nhw=num_cores_x,
                 per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
                 per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
