@@ -23,6 +23,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.demos.llama2_70b.tt.llama_model import TtLlamaModel
+from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 
 
 class PytorchLlamaModel(torch.nn.Module):
@@ -50,23 +51,28 @@ class PytorchLlamaModel(torch.nn.Module):
 
 
 def run_test_LlamaModel_inference(
-    device,
-    model_version,
-    llm_mode,
+    devices,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config,
+    optimized,
     n_layers,
-    n_devices
+    n_devices,
+    emulated=False,
     # tt_cache_path,
     # model_location_generator,
 ):
     # model_name = model_location_generator(model_version, model_subdir="Falcon")
+    if emulated:
+        ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        device = devices[0]
+        devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    else:
+        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
+        tokenizer_path = "/home/llama-data/tokenizer.model"
 
-    ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
-    tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
@@ -80,8 +86,7 @@ def run_test_LlamaModel_inference(
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
 
-    # Prepare configs
-    devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+    # devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
 
     torch.manual_seed(0)
     base_url = "layers"
@@ -94,16 +99,28 @@ def run_test_LlamaModel_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
     # TT model -------------------------------------------------------------
-    tt_model = TtLlamaModel(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
+    if optimized:
+        tt_model = TtLlamaModel_optimized(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
+    else:
+        tt_model = TtLlamaModel(devices, state_dict, base_url, n_layers, model_config, configuration, batch)
+
+    for device in devices:
+        tt_lib.device.Synchronize(device)
 
     generation_start_pos = 0
-    generation_length = 2
+    generation_length = 7
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
         tt_inp_ids = pt_inp_ids.clone()
         start_pos = generation_start_pos + i
+
+        # PyTorch output --------------------------------------------------------------------
+        pytorch_out = pytorch_model(
+            pt_inp_ids,
+            start_pos,
+        )
 
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
@@ -115,14 +132,16 @@ def run_test_LlamaModel_inference(
             attn_mask,
         )
 
-        # PyTorch output --------------------------------------------------------------------
-        pytorch_out = pytorch_model(
-            pt_inp_ids,
-            start_pos,
-        )
+        for device in devices:
+            tt_lib.device.Synchronize(device)
 
-        tt_out = tt2torch_tensor(tt_out)
+        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
+        assert len(tt_out) == len(devices)
 
+        # breakpoint()
+        tt_outs = [tt2torch_tensor(o) for o in tt_out]
+        tt_out = torch.cat(tt_outs, dim=-1)
+        tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
         tt_out = tt_out.float()
         pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
@@ -152,8 +171,8 @@ def run_test_LlamaModel_inference(
             logger.warning(f"[start_pos={start_pos}] Llama2-70b Decoder output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
-    # # Check kv cache
-    # # PyTorch output --------------------------------------------------------------------
+    # Check kv cache
+    # PyTorch output --------------------------------------------------------------------
     # pytorch_layer_present = [
     #     pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(
     #         0, 2, 1, 3
@@ -162,7 +181,7 @@ def run_test_LlamaModel_inference(
     #         0, 2, 1, 3
     #     ),  # [batch, n_kv_heads, seq, head_dim]
     # ]
-    # # TT hardware execution -------------------------------------------------------------
+    # TT hardware execution -------------------------------------------------------------
     # tt_layer_present = []
     # for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
     #     tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
@@ -185,47 +204,56 @@ def run_test_LlamaModel_inference(
     #         all_tests_pass = False
 
     if all_tests_pass:
-        logger.info("Llama2 Decoder output Passed!")
+        logger.info("Llama2 Model output Passed!")
     else:
-        logger.warning("Llama2 Decoder output Failed!")
+        logger.warning("Llama2 Model output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, n_layers, n_devices",
-    (("decode", 32, 1, 128, 2, 8),),
-    ids=["decode_batch32_layers1_devices8"],
+    "batch, seq_len, n_layers, n_devices",
+    (
+        (32, 1, 1, 4),
+        (32, 1, 2, 4),
+        (32, 1, 5, 4),
+        (32, 1, 10, 4),
+        (32, 1, 20, 4),
+        (32, 1, 40, 4),
+    ),
 )
 @pytest.mark.parametrize(
-    "model_version, pcc",
-    (("llama-2-70B", 0.98),),
+    "model_version, pcc, optimized",
+    (("llama-2-70B", 0.98, True),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))  # , "BFLOAT8_B-SHARDED"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_inference(
     model_version,
-    llm_mode,
     batch,
     seq_len,
-    kv_cache_len,
     pcc,
     model_config_str,
+    optimized,
     n_layers,
     n_devices,
     # model_location_generator,
-    device,
+    pcie_devices,
+    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
+    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if len(pcie_devices) < n_devices:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaModel_inference(
-        device,
-        model_version,
-        llm_mode,
+        pcie_devices[:n_devices],
         batch,
         seq_len,
-        kv_cache_len,
         pcc,
         model_config,
+        optimized,
         n_layers,
         n_devices
         # tt_cache_path,
