@@ -8,9 +8,7 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
-def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-    conv_params, input_nchw_shape  # , input_tensor, pad_val: torch.int16 = 0x0
-):
+def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, input_nchw_shape):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
         conv_params[i] for i in range(10)
