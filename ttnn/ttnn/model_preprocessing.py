@@ -13,9 +13,29 @@ from ttnn.dot_access import make_dot_access_dict
 
 from loguru import logger
 import torch
+import os
+import requests
 
 import ttnn
 from ttnn.tracer import trace, visualize
+
+
+def check_huggingface_models_url():
+    url = "https://huggingface.co/models"
+    try:
+        response = requests.get(url, timeout=10)
+        if 200 <= response.status_code < 300:
+            logger.info(f"URL {url} is available.")
+            os.environ["HF_HUB_OFFLINE"] = "0"
+            return True
+        else:
+            logger.warning(f"URL {url} is unavailable : {response.status_code}")
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            return False
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"URL {url} is unavailable.")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        return False
 
 
 def preprocess_linear_weight(weight, *, dtype):
