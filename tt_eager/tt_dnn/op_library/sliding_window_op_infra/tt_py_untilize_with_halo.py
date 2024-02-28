@@ -110,15 +110,8 @@ class TTPyUntilizeWithHalo(TTPyOp):
             # output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
             sliding_window_op_all_params = [1, 1, window_h, window_w, stride_h, stride_w, pad_h, pad_w, 1, 1]
             input_nchw_shape = [input_n, 1, input_h, input_w]
-
-            dummy = torch.rand(input_n * input_h * input_w, dtype=torch.bfloat16)
-            dummy = torch.reshape(dummy, input_nchw_shape)
-            (
-                pad_metadata,
-                data_top_left_indices,
-                _,
-            ) = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-                sliding_window_op_all_params, input_nchw_shape, dummy.reshape(-1).tolist()
+            pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
+                sliding_window_op_all_params, input_nchw_shape
             )
             sliding_window_output_shard_nhw_size = get_sliding_window_op_output_shard_nhw_size(
                 num_cores_nhw,

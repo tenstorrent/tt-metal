@@ -4,16 +4,13 @@
 
 import torch
 import numpy as np
-from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
 def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-    conv_params, input_nchw_shape, input_tensor, pad_val: torch.int16 = 0x0
+    conv_params, input_nchw_shape  # , input_tensor, pad_val: torch.int16 = 0x0
 ):
-    if pad_val == 0xF7FF:
-        pad_val = -1.03e34  ## TODO: how to do this in python properly???
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
         conv_params[i] for i in range(10)
@@ -22,9 +19,6 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
     assert len(input_nchw_shape) == 4
     input_n, input_c, input_h, input_w = [input_nchw_shape[i] for i in range(4)]
 
-    input_tensor_nchw = np.reshape(input_tensor, input_nchw_shape)
-    input_tensor_nhwc = np.transpose(input_tensor_nchw, (0, 2, 3, 1))
-    input_tensor_nhwc = np.reshape(input_tensor_nhwc, (np.prod(input_nchw_shape)))
     # image 1 data
     # 1  2  3  4  5  6  7  8
     # 9  10 11 12 13 14 15 16
@@ -54,25 +48,14 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
     # We encode above shown padded tensor into pad_metadata (list of boolean - true if padding location)
     # pad_meta_data: [true, true, ..., false, ...]
     index = 0
-    input_idx = 0
-    input_pad_idx = 0
     padded_input_h = input_h + (2 * pad_h)
     padded_input_w = input_w + (2 * pad_w)
     pad_metadata = np.full(input_n * padded_input_h * padded_input_w, False, dtype=bool)
-    input_padded_tensor = np.full(
-        input_n * input_c * padded_input_h * padded_input_w, pad_val, dtype=type(input_tensor_nhwc[0])
-    )
     for n in range(input_n):
         for h in range(padded_input_h):
             for w in range(padded_input_w):
                 if h < pad_h or h >= (input_h + pad_h) or w < pad_w or w >= (input_w + pad_w):
                     pad_metadata[index] = True
-                    input_pad_idx += input_c
-                else:
-                    for c in range(input_c):
-                        input_padded_tensor[input_pad_idx + c] = input_tensor_nhwc[input_idx]
-                        input_idx += 1
-                    input_pad_idx += input_c
                 index += 1
 
     # TODO: add support for dilation > 1
@@ -80,15 +63,18 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
     output_w = ((int)((padded_input_w - filter_w) / stride_w)) + 1
     # generate a list of input indices corresponding to the top left position of sliding window
     # the index refers to the location in the padded tensor
-    data_top_left_indices = []
+    # data_top_left_indices = []
+    index = 0
+    data_top_left_indices = np.full(input_n * output_h * output_w, 0, dtype=int)
     for n in range(input_n):
         for oh in range(output_h):
             for ow in range(output_w):
                 ih = oh * stride_h
                 iw = ow * stride_w
                 channel_idx = (n * padded_input_h * padded_input_w) + (ih * padded_input_w) + iw
-                data_top_left_indices.append(channel_idx)
-    return pad_metadata.tolist(), data_top_left_indices, input_padded_tensor.tolist()
+                data_top_left_indices[index] = channel_idx
+                index += 1
+    return pad_metadata.tolist(), data_top_left_indices.tolist()
 
 
 def validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata(
