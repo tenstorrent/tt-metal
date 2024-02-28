@@ -15,7 +15,7 @@ namespace ttnn {
 namespace operations {
 namespace matmul {
 
-void py_module(py::module& m_matmul) {}
+void py_module(py::module& module) {}
 
 }  // namespace matmul
 }  // namespace operations

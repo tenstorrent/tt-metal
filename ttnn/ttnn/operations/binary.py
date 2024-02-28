@@ -88,48 +88,15 @@ def _is_scalar(value):
     return isinstance(value, (int, float, complex))
 
 
-def _add_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        can_be_a_scalar=True,
-    )
-
-
 def _torch_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    input_shape_a = input_tensor_a.shape
-    slices = [slice(0, dim) for dim in input_shape_a]
-    input_tensor_a = ttnn.from_device(input_tensor_a)
-    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_a = input_tensor_a[slices]
-
     if not _is_scalar(input_tensor_b):
-        input_shape_b = input_tensor_b.shape
-        slices = [slice(0, dim) for dim in input_shape_b]
-        input_tensor_b = ttnn.from_device(input_tensor_b)
-        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
         input_tensor_b = ttnn.to_torch(input_tensor_b)
-        input_tensor_b = input_tensor_b[slices]
 
     return input_tensor_a + input_tensor_b
 
 
-@ttnn.register_operation(name="ttnn.add", validate_input_tensors=_add_validate_input_tensors, torch_function=_torch_add)
+@ttnn.register_operation(name="ttnn.add", torch_function=_torch_add, is_cpp_function=True)
 def add(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
@@ -163,10 +130,7 @@ def add(
         ttnn.Tensor([ 1, 3], dtype=bfloat16 )
 
     """
-    input_tensor_a = input_tensor_a.value
-    input_tensor_b = input_tensor_b.value if isinstance(input_tensor_b, ttnn.Tensor) else input_tensor_b
-    output = ttnn._ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config, dtype=dtype)
-    return ttnn.Tensor(output)
+    return ttnn._ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config, dtype=dtype)
 
 
 def _sub_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):

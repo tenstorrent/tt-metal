@@ -23,11 +23,11 @@ def test_deallocate(device, h, w):
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = input_tensor + input_tensor
 
-    # Create input_tensor_a reference to the same storage by using reshape which will create input_tensor_a new flyweight
+    # Create input_tensor_a reference to the same storage by using reshape which will create a new flyweight
     # (If reshape operation changes, then this test might need to be updated)
     output_tensor_reference = ttnn.reshape(output_tensor, (h, w))
 
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
-    assert "ttnn.add: Tensor must be allocated" in str(exception.value)
+    assert "Tensor must be allocated!" in str(exception.value)

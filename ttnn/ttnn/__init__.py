@@ -5,13 +5,15 @@
 import os
 import pathlib
 
+from loguru import logger
+
 TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
 MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
 TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
 
 def get_bool_env_var(name, default):
-    variable = os.environ.get("TTNN_ENABLE_MODEL_CACHE", f"{default}")
+    variable = os.environ.get(name, f"{default}")
     if variable == "True":
         return True
     elif variable == "False":
@@ -21,6 +23,12 @@ def get_bool_env_var(name, default):
 
 
 TTNN_ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
+if TTNN_ENABLE_MODEL_CACHE:
+    logger.info(f"ttnn: model cache was enabled")
+
+TTNN_ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
+if TTNN_ENABLE_FAST_RUNTIME_MODE:
+    logger.info(f"ttnn: fast runtime mode was enabled")
 
 import tt_lib as _tt_lib
 import ttnn._ttnn

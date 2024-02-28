@@ -175,9 +175,8 @@ Basic Examples
 
 Logging will print out the time it took for the operation to execute. It also prints out the execution time of the program.
 
-Logging inserts :ref:`tt::tt_metal::Finish<tt::tt_metal::Finish>` after every operation to in order to calculate the time correctly.
-
-Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for more accurate way to profile.
+Logging cannot provide duration because of Fast Dispatch
+Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
 
 
 .. note::

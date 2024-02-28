@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "tensor/tensor.hpp"
+#include "tt_eager/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -73,17 +73,12 @@ void py_module(py::module& module) {
     PyShape.def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); });
     PyShape.def("with_tile_padding", [](const Shape& self) { return self.with_tile_padding(); });
 
-    // Tensor wrapper class for hiding the internal implementation from python
-    struct Tensor {
-        tt::tt_metal::Tensor value;
-    };
-
-    py::class_<Tensor>(module, "Tensor")
+    py::class_<TensorWrapper>(module, "Tensor")
         .def(py::init<tt::tt_metal::Tensor>())
-        .def_property_readonly("value", [](const Tensor& self) -> auto& { return self.value; })
+        .def_property_readonly("value", [](const TensorWrapper& self) -> auto& { return self.value; })
         .def(
             "__repr__",
-            [](const Tensor& self) {
+            [](const TensorWrapper& self) {
                 if (self.value.is_allocated()) {
                     return self.value.write_to_string(Layout::ROW_MAJOR, true);
                 } else {
@@ -94,25 +89,11 @@ void py_module(py::module& module) {
                         self.value.layout());
                 }
             })
-        .def_property_readonly("shape", [](const Tensor& self) { return py::cast(Shape{self.value.shape()}); })
-        .def_property_readonly("dtype", [](const Tensor& self) { return self.value.dtype(); })
-        .def_property_readonly("layout", [](const Tensor& self) { return self.value.layout(); })
-        .def_property_readonly(
-            "device",
-            [](const Tensor& self) -> Device* {
-                if (self.value.storage_type() == tt::tt_metal::StorageType::DEVICE) {
-                    return self.value.device();
-                } else {
-                    throw std::runtime_error("Tensor is not on device!");
-                }
-            })
-        .def("is_contiguous", [](const Tensor& self) -> bool {
-            if (self.value.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-                return self.value.shape() == self.value.shape().without_padding();
-            } else {
-                return false;
-            }
-        });
+        .def_property_readonly("shape", [](const TensorWrapper& self) { return py::cast(Shape{self.value.shape()}); })
+        .def_property_readonly("dtype", [](const TensorWrapper& self) { return self.value.dtype(); })
+        .def_property_readonly("layout", [](const TensorWrapper& self) { return self.value.layout(); })
+        .def_property_readonly("device", [](const TensorWrapper& self) -> Device& { return *self.value.device(); })
+        .def("is_contiguous", [](const TensorWrapper& self) -> bool { return self.value.is_contiguous(); });
 }
 
 }  // namespace types

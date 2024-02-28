@@ -10,6 +10,7 @@
 #include <experimental/type_traits>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -329,6 +330,21 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vector) {
     return os;
 }
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
+    os << "{";
+    auto index = 0;
+    for (const auto& element : set) {
+        os << element;
+        if (index != set.size() - 1) {
+            os << ", ";
+        }
+        index++;
+    }
+    os << "}";
+    return os;
+}
+
 }  // namespace reflection
 }  // namespace stl
 }  // namespace tt
@@ -428,6 +444,18 @@ struct fmt::formatter<std::vector<T>> {
         using tt::stl::reflection::operator<<;
         std::stringstream ss;
         ss << vector;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename T>
+struct fmt::formatter<std::set<T>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::set<T>& set, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << set;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -536,6 +564,15 @@ inline hash_t hash_object(const T& object) noexcept {
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", boost::core::demangle(typeid(T).name()), object);
+        }
+        auto hash = 0;
+        for (const auto& element : object) {
+            hash = hash_objects(hash, element);
+        }
+        return hash;
+    } else if constexpr (detail::is_specialization_v<T, std::set>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::set of type {}: {}\n", boost::core::demangle(typeid(T).name()), object);
         }
         auto hash = 0;
         for (const auto& element : object) {
