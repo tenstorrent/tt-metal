@@ -29,9 +29,12 @@ tt_dtype_to_torch_dtype = {
         ttl.tensor.DataType.UINT16,
         ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
     ],
 )
 def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
+    torch.manual_seed(0)
+
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
     if dtype in {torch.int16, torch.int32}:
@@ -47,6 +50,13 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
         ttl.tensor.DataType.UINT16,
     }:
         assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
+    else:
+        assert tt_tensor.storage_type() == ttl.tensor.StorageType.OWNED
+
+    if tt_dtype in {
+        ttl.tensor.DataType.BFLOAT8_B,
+    }:
+        tt_tensor = tt_tensor.to(ttl.tensor.Layout.TILE)
 
     if tt_dtype in {
         ttl.tensor.DataType.FLOAT32,
@@ -58,12 +68,21 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
         tt_tensor = tt_tensor.to(device)
         tt_tensor = tt_tensor.cpu()
 
+    if tt_dtype in {
+        ttl.tensor.DataType.BFLOAT8_B,
+    }:
+        tt_tensor = tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
+
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 
     assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
 
-    passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
+    allclose_kwargs = {}
+    if tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        allclose_kwargs = dict(atol=1e-2)
+
+    passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip, **allclose_kwargs)
     assert passing
 
 
