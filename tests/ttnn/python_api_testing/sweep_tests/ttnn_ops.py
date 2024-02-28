@@ -684,6 +684,7 @@ def mul(
     x,
     y,
     *args,
+    scalar=0,
     device,
     dtype,
     layout,
@@ -1281,6 +1282,7 @@ def eltwise_gt(
     x,
     y,
     *args,
+    scalar=0,
     device,
     dtype,
     layout,
@@ -1289,7 +1291,10 @@ def eltwise_gt(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    if scalar == 0:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    else:
+        t1 = scalar
 
     t2 = ttnn.gt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -1300,6 +1305,7 @@ def eltwise_gte(
     x,
     y,
     *args,
+    scalar=0,
     device,
     dtype,
     layout,
@@ -1308,7 +1314,10 @@ def eltwise_gte(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    if scalar == 0:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    else:
+        t1 = scalar
 
     t2 = ttnn.gt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -1319,6 +1328,7 @@ def eltwise_lt(
     x,
     y,
     *args,
+    scalar=0,
     device,
     dtype,
     layout,
@@ -1327,7 +1337,10 @@ def eltwise_lt(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    if scalar == 0:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    else:
+        t1 = scalar
 
     t2 = ttnn.lt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
@@ -1338,6 +1351,7 @@ def eltwise_lte(
     x,
     y,
     *args,
+    scalar=0,
     device,
     dtype,
     layout,
@@ -1346,9 +1360,12 @@ def eltwise_lte(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    if scalar == 0:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    else:
+        t1 = scalar
 
-    t2 = ttnn.lte(t0, t1memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.lte(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
 
