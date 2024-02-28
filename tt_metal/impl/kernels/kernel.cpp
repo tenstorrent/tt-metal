@@ -13,14 +13,14 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "llrt/watcher.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
 Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines) :
-    watcher_kernel_id_(llrt::watcher_register_kernel(kernel_path_file_name)),
+    watcher_kernel_id_(watcher_register_kernel(kernel_path_file_name)),
     kernel_path_file_name_(kernel_path_file_name),
     core_range_set_(core_range_set),
     binary_size16_(0),

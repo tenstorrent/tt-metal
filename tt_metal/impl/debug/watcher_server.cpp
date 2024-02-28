@@ -10,55 +10,19 @@
 #include <memory>
 #include <mutex>
 
-#include "llrt.hpp"
-#include "watcher.hpp"
-#include "rtoptions.hpp"
+#include "llrt/llrt.hpp"
+#include "watcher_server.hpp"
+#include "llrt/rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
+
+#include "debug/sanitize_noc.h"
 
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
-#include "debug/sanitize_noc.h"
-
 namespace tt {
-namespace llrt {
 namespace watcher {
-
-
-#define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + MEM_L1_SIZE))
-
-// what's the size of the NOC<n> address space?  using 0x1000 for now
-#define DEBUG_VALID_REG_ADDR(a)                                                        \
-    (                                                                                  \
-     (((a) >= NOC_OVERLAY_START_ADDR) && ((a) < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) || \
-     (((a) >= NOC0_REGS_START_ADDR) && ((a) < NOC0_REGS_START_ADDR + 0x1000)) || \
-     (((a) >= NOC1_REGS_START_ADDR) && ((a) < NOC1_REGS_START_ADDR + 0x1000)) || \
-     ((a) == RISCV_DEBUG_REG_SOFT_RESET_0))
-#define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
-#define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
-
-#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
-
-
-class WatcherDevice {
-  public:
-    int device_id_;
-    std::function<CoreCoord ()>get_grid_size_;
-    std::function<CoreCoord (CoreCoord)>worker_from_logical_;
-    std::function<const std::set<CoreCoord> &()> storage_only_cores_;
-    std::function<const std::unordered_set<CoreCoord> ()> ethernet_cores_;
-    std::function<CoreCoord (CoreCoord)>ethernet_from_logical_;
-
-    WatcherDevice(
-        int device_id,
-        std::function<CoreCoord ()>get_grid_size,
-        std::function<CoreCoord (CoreCoord)>worker_from_logical,
-        std::function<const std::set<CoreCoord> &()>storage_only_cores,
-        std::function<const std::unordered_set<CoreCoord> ()>ethernet_cores,
-        std::function<CoreCoord (CoreCoord)>ethernet_from_logical
-    );
-};
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
@@ -66,7 +30,7 @@ constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
 
 static std::atomic<bool> enabled = false;
 static std::mutex watch_mutex;
-static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
+static std::unordered_set<Device *> devices;
 static string logfile_path = "";
 static string logfile_name = "watcher.log";
 static FILE *logfile = nullptr;
@@ -75,23 +39,6 @@ static std::vector<string> kernel_names;
 
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
-
-WatcherDevice::WatcherDevice(
-    int device_id,
-    std::function<CoreCoord ()>get_grid_size,
-    std::function<CoreCoord (CoreCoord)>worker_from_logical,
-    std::function<const std::set<CoreCoord> &()> storage_only_cores,
-    std::function<const std::unordered_set<CoreCoord> ()>ethernet_cores,
-    std::function<CoreCoord (CoreCoord)>ethernet_from_logical
-):
-    device_id_(device_id),
-    get_grid_size_(get_grid_size),
-    worker_from_logical_(worker_from_logical),
-    storage_only_cores_(storage_only_cores),
-    ethernet_cores_(ethernet_cores),
-    ethernet_from_logical_(ethernet_from_logical)
-{
-}
 
 static double get_elapsed_secs() {
     std::chrono::time_point now_time = std::chrono::system_clock::now();
@@ -104,7 +51,7 @@ static FILE * create_file(const string& log_path) {
 
     FILE *f;
 
-    const char *fmode = OptionsG.get_watcher_append()? "a" : "w";
+    const char *fmode = tt::llrt::OptionsG.get_watcher_append()? "a" : "w";
     string fname = log_path + watcher::logfile_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
@@ -141,11 +88,11 @@ static void log_running_kernels(const launch_msg_t *launch_msg) {
     log_info(" triscs: {}", kernel_names[launch_msg->triscs_watcher_kernel_id]);
 }
 
-static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core, const launch_msg_t *launch_msg) {
+static void dump_l1_status(FILE *f, Device *device, CoreCoord core, const launch_msg_t *launch_msg) {
 
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->device_id_, core, MEM_L1_BASE, sizeof(uint32_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core, MEM_L1_BASE, sizeof(uint32_t));
     // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
     if (data[0] != 0x2010006f) {
         log_running_kernels(launch_msg);
@@ -391,7 +338,7 @@ static void dump_debug_status(FILE *f, CoreCoord core, const launch_msg_t *launc
     fprintf(f, "%s ", out.c_str());
 }
 
-static void dump_sync_regs(FILE *f, WatcherDevice *wdev, CoreCoord core) {
+static void dump_sync_regs(FILE *f, Device *device, CoreCoord core) {
 
     // Read back all of the stream state, most of it is unused
     std::vector<uint32_t> data;
@@ -401,11 +348,11 @@ static void dump_sync_regs(FILE *f, WatcherDevice *wdev, CoreCoord core) {
         uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
 
         uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
-        data = read_hex_vec_from_core(wdev->device_id_, core, rcvd_addr, sizeof(uint32_t));
+        data = tt::llrt::read_hex_vec_from_core(device->id(), core, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
         uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
-        data = read_hex_vec_from_core(wdev->device_id_, core, ackd_addr, sizeof(uint32_t));
+        data = tt::llrt::read_hex_vec_from_core(device->id(), core, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];
 
         if (rcvd != ackd) {
@@ -438,21 +385,21 @@ static void validate_kernel_ids(FILE *f,
     used_kernel_names[launch->triscs_watcher_kernel_id] = true;
 }
 
-static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDevice *wdev, CoreCoord core, bool dump_all) {
+static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, Device *device, CoreCoord core, bool dump_all) {
 
     string pad(11 - core.str().length(), ' ');
-    fprintf(f, "Device %i, ", wdev->device_id_);
+    fprintf(f, "Device %i, ", device->id());
     fprintf(f, "Core %s:%s  ", core.str().c_str(), pad.c_str());
 
     // Ethernet cores have a different mailbox base addr
-    bool is_eth_core = tt::llrt::is_ethernet_core(core, wdev->device_id_);
+    bool is_eth_core = tt::llrt::is_ethernet_core(core, device->id());
     uint64_t mailbox_addr = MEM_MAILBOX_BASE;
     if (is_eth_core) {
         mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
     }
 
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->device_id_, core, mailbox_addr, sizeof(mailboxes_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core, mailbox_addr, sizeof(mailboxes_t));
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
 
     // Validate these first since they are used in diagnostic messages below.
@@ -464,7 +411,7 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
         // magic value.
         if (!is_eth_core)
-            dump_l1_status(f, wdev, core,  &mbox_data->launch);
+            dump_l1_status(f, device, core,  &mbox_data->launch);
         dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
     }
 
@@ -472,10 +419,10 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
     if (!is_eth_core) {
         // Dump state always available
         dump_run_mailboxes(f, core, &mbox_data->launch, &mbox_data->slave_sync);
-        if (dump_all || OptionsG.get_watcher_dump_all()) {
+        if (dump_all || tt::llrt::OptionsG.get_watcher_dump_all()) {
             // Reading registers while running can cause hangs, only read if
             // requested explicitly
-            dump_sync_regs(f, wdev, core);
+            dump_sync_regs(f, device, core);
         }
     }
 
@@ -496,28 +443,26 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
 
 // noinline so that this fn exists to be called from dgb
 static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
-    for (auto const& dev_pair : devices) {
-        std::shared_ptr<WatcherDevice>wdev = dev_pair.second;
-
+    for (Device* device : devices) {
         if (f != stdout && f != stderr) {
-            log_info(LogLLRuntime, "Watcher checking device {}", wdev->device_id_);
+            log_info(LogLLRuntime, "Watcher checking device {}", device->id());
         }
 
         std::map<int, bool> used_kernel_names;
-        CoreCoord grid_size = wdev->get_grid_size_();
+        CoreCoord grid_size = device->logical_grid_size();
         for (uint32_t y = 0; y < grid_size.y; y++) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
                 CoreCoord logical_core(x, y);
-                CoreCoord worker_core = wdev->worker_from_logical_(logical_core);
-                if (wdev->storage_only_cores_().find(logical_core) == wdev->storage_only_cores_().end()) {
-                    dump_core(f, used_kernel_names, wdev.get(), worker_core, dump_all);
+                CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
+                if (device->storage_only_cores().find(logical_core) == device->storage_only_cores().end()) {
+                    dump_core(f, used_kernel_names, device, worker_core, dump_all);
                 }
             }
         }
 
-        for (const CoreCoord &eth_core : wdev->ethernet_cores_()) {
-            CoreCoord physical_core = wdev->ethernet_from_logical_(eth_core);
-            dump_core(f, used_kernel_names, wdev.get(), physical_core, dump_all);
+        for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+            CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+            dump_core(f, used_kernel_names, device, physical_core, dump_all);
         }
 
         for (auto k_id : used_kernel_names) {
@@ -555,7 +500,7 @@ static void watcher_loop(int sleep_usecs) {
                 dump(logfile, false);
             } catch (std::runtime_error& e) {
                 // Depending on whether test mode is enabled, catch and stop server, or re-throw.
-                if (OptionsG.get_test_mode_enabled()) {
+                if (tt::llrt::OptionsG.get_test_mode_enabled()) {
                     watcher::watcher_killed_due_to_error = true;
                     watcher::enabled = false;
                     break;
@@ -578,77 +523,7 @@ static void watcher_loop(int sleep_usecs) {
 
 } // namespace watcher
 
-static bool coord_found_p(vector<CoreCoord>coords, CoreCoord core) {
-    for (CoreCoord item : coords) {
-        if (item == core) return true;
-    }
-    return false;
-}
-
-static bool coord_found_p(CoreCoord range, CoreCoord core) {
-    return
-        core.x >= 1 && core.x <= range.x &&
-        core.y >= 1 && core.y <= range.y;
-}
-
-static string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
-    std::stringstream ss;
-    ss << "noc{" << core.str() << ", 0x" << std::setfill('0') << std::setw(8) << std::hex << a << ", " << std::dec << l << "}";
-    return ss.str();
-}
-
-static void print_stack_trace (void) {
-    void *array[15];
-
-    int size = backtrace (array, 15);
-    char **strings = backtrace_symbols(array, size);
-    if (strings != NULL) {
-        fprintf(stderr, "Obtained %d stack frames.\n", size);
-        for (int i = 0; i < size; i++) fprintf(stderr, "%s\n", strings[i]);
-    }
-
-    free (strings);
-}
-
-static void watcher_sanitize_host_noc(const char* what,
-                                      const metal_SocDescriptor& soc_d,
-                                      CoreCoord core,
-                                      uint64_t addr,
-                                      uint32_t lbytes) {
-
-    if (coord_found_p(soc_d.get_pcie_cores(), core)) {
-        TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
-    } else if (coord_found_p(soc_d.get_dram_cores(), core)) {
-        uint64_t dram_addr_base = 0;
-        uint64_t dram_addr_size = soc_d.dram_core_size;
-        uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
-        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
-            print_stack_trace();
-            TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
-        }
-    } else if (coord_found_p(soc_d.get_physical_ethernet_cores(), core)) {
-        if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
-            print_stack_trace();
-            TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
-        }
-    } else if (coord_found_p(soc_d.grid_size, core)) {
-        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
-            print_stack_trace();
-            TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
-        }
-    } else {
-        // Bad COORD
-        print_stack_trace();
-        TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
-    }
-}
-
-void watcher_init(int device_id,
-                  std::function<CoreCoord ()>get_grid_size,
-                  std::function<CoreCoord (CoreCoord)>worker_from_logical,
-                  const std::function<const std::unordered_set<CoreCoord> ()> &ethernet_cores,
-                  const std::function<CoreCoord (CoreCoord)> &ethernet_from_logical
-                  ) {
+void watcher_init(Device *device) {
 
     // Initialize debug status values to "unknown"
     std::vector<uint32_t> debug_status_init_val = { 'X', 'X', 'X', 'X', 'X' };
@@ -666,48 +541,41 @@ void watcher_init(int device_id,
     }
 
     // Initialize worker cores debug values
-    CoreCoord grid_size = get_grid_size();
+    CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = worker_from_logical(logical_core);
-            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
-            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
+            CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
         }
     }
 
     // Initialize ethernet cores debug values
-    for (const CoreCoord &eth_core : ethernet_cores()) {
-        CoreCoord physical_core = ethernet_from_logical(eth_core);
+    for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
-            device_id,
+            device->id(),
             physical_core,
             debug_status_init_val,
             GET_ETH_MAILBOX_ADDRESS_HOST(debug_status)
         );
         tt::llrt::write_hex_vec_to_core(
-            device_id,
+            device->id(),
             physical_core,
             debug_sanity_init_val,
             GET_ETH_MAILBOX_ADDRESS_HOST(sanitize_noc)
         );
     }
 
-    log_debug(LogLLRuntime, "Watcher initialized device {}", device_id);
+    log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());
 }
 
-void watcher_attach(void *dev,
-                    int device_id,
-                    const std::function<CoreCoord ()>& get_grid_size,
-                    const std::function<CoreCoord (CoreCoord)>& worker_from_logical,
-                    const std::function<const std::set<CoreCoord> &()>& storage_only_cores,
-                    const std::function<const std::unordered_set<CoreCoord> ()>& ethernet_cores,
-                    const std::function<CoreCoord (CoreCoord)> &ethernet_from_logical,
-                    const string& log_path) {
+void watcher_attach(Device *device, const string& log_path) {
 
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
-    if (!watcher::enabled && OptionsG.get_watcher_enabled()) {
+    if (!watcher::enabled && tt::llrt::OptionsG.get_watcher_enabled()) {
 
         watcher::logfile_path = log_path;
         watcher::logfile = watcher::create_file(log_path);
@@ -716,47 +584,37 @@ void watcher_attach(void *dev,
         watcher::kernel_names.push_back("blank");
         watcher::enabled = true;
 
-        int sleep_usecs = OptionsG.get_watcher_interval() * 1000;
+        int sleep_usecs = tt::llrt::OptionsG.get_watcher_interval() * 1000;
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
         watcher_thread.detach();
     }
 
-    if (llrt::watcher::logfile != nullptr) {
-        fprintf(watcher::logfile, "At %.3lfs attach device %d\n", watcher::get_elapsed_secs(), device_id);
+    if (watcher::logfile != nullptr) {
+        fprintf(watcher::logfile, "At %.3lfs attach device %d\n", watcher::get_elapsed_secs(), device->id());
     }
 
     if (watcher::enabled) {
-        log_info(LogLLRuntime, "Watcher attached device {}", device_id);
+        log_info(LogLLRuntime, "Watcher attached device {}", device->id());
     }
 
     // Always register the device w/ watcher, even if disabled
     // This allows dump() to be called from debugger
-    std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(device_id, get_grid_size, worker_from_logical, storage_only_cores, ethernet_cores, ethernet_from_logical));
-    watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
+    watcher::devices.insert(device);
 }
 
-void watcher_detach(void *old) {
+void watcher_detach(Device *old) {
 
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
-    auto pair = watcher::devices.find(old);
-    TT_ASSERT(pair != watcher::devices.end());
+    TT_ASSERT(watcher::devices.find(old) != watcher::devices.end());
     if (watcher::enabled && watcher::logfile != nullptr) {
-        log_info(LogLLRuntime, "Watcher detached device {}", pair->second->device_id_);
-        fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), pair->second->device_id_);
+        log_info(LogLLRuntime, "Watcher detached device {}", old->id());
+        fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), old->id());
     }
     watcher::devices.erase(old);
     if (watcher::enabled && watcher::devices.empty()) {
         watcher::enabled = false;
     }
-}
-
-void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
-    watcher_sanitize_host_noc("read", soc_d, core, addr, lbytes);
-}
-
-void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
-    watcher_sanitize_host_noc("write", soc_d, core, addr, lbytes);
 }
 
 int watcher_register_kernel(const string& name) {
@@ -783,5 +641,4 @@ string watcher_get_log_file_name() {
     return watcher::logfile_path + watcher::logfile_name;
 }
 
-} // namespace llrt
 } // namespace tt

@@ -912,6 +912,12 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.xlogy_bw
 
+.. autofunction:: tt_lib.tensor.logaddexp_bw
+
+.. autofunction:: tt_lib.tensor.logaddexp2_bw
+
+.. autofunction:: tt_lib.tensor.concat_bw
+
 Loss Functions
 ==============
 

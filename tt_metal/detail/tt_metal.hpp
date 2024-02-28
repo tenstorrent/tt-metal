@@ -13,7 +13,6 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/detail/program.hpp"
-#include "tt_metal/llrt/watcher.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/host_api.hpp"
 

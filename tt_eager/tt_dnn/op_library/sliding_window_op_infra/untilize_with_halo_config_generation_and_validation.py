@@ -8,29 +8,6 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
-def construct_2d_padded_tensor_list(input_tensor, input_nchw_shape, pad_metadata, pad_val: torch.int16 = 0x0):
-    if pad_val == 0xF7FF:
-        pad_val = -1.03e34  ## TODO: how to do this in python properly???
-    # Construct the padded tensor using pad_metadata
-    input_padded_tensor = []
-    input_tensor_idx = 0
-    assert len(input_nchw_shape) == 4
-    input_n, input_c, input_h, input_w = [input_nchw_shape[i] for i in range(4)]
-    # Permute input tensor from nchw shape to nhwc shape
-    input_tensor_nchw = np.reshape(input_tensor, input_nchw_shape)
-    input_tensor_nhwc = np.transpose(input_tensor_nchw, (0, 2, 3, 1))
-    input_tensor_nhwc = np.reshape(input_tensor_nhwc, (np.prod(input_nchw_shape)))
-    for i in range(len(pad_metadata)):
-        for c in range(input_c):
-            if pad_metadata[i]:
-                input_padded_tensor.append(pad_val)
-            else:
-                assert input_tensor_idx < len(input_tensor_nhwc)
-                input_padded_tensor.append(input_tensor_nhwc[input_tensor_idx])
-                input_tensor_idx += 1
-    return input_padded_tensor
-
-
 def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, input_nchw_shape):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
@@ -39,6 +16,7 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
     assert dilation == 1 and groups == 1
     assert len(input_nchw_shape) == 4
     input_n, input_c, input_h, input_w = [input_nchw_shape[i] for i in range(4)]
+
     # image 1 data
     # 1  2  3  4  5  6  7  8
     # 9  10 11 12 13 14 15 16
@@ -67,39 +45,34 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
 
     # We encode above shown padded tensor into pad_metadata (list of boolean - true if padding location)
     # pad_meta_data: [true, true, ..., false, ...]
-
+    index = 0
     padded_input_h = input_h + (2 * pad_h)
     padded_input_w = input_w + (2 * pad_w)
-    pad_metadata = []
+    pad_metadata = np.full(input_n * padded_input_h * padded_input_w, False, dtype=bool)
     for n in range(input_n):
         for h in range(padded_input_h):
             for w in range(padded_input_w):
                 if h < pad_h or h >= (input_h + pad_h) or w < pad_w or w >= (input_w + pad_w):
-                    pad_metadata.append(True)
-                else:
-                    pad_metadata.append(False)
+                    pad_metadata[index] = True
+                index += 1
 
     # TODO: add support for dilation > 1
     output_h = ((int)((padded_input_h - filter_h) / stride_h)) + 1
     output_w = ((int)((padded_input_w - filter_w) / stride_w)) + 1
     # generate a list of input indices corresponding to the top left position of sliding window
     # the index refers to the location in the padded tensor
-    data_top_left_indices = []
+    # data_top_left_indices = []
+    index = 0
+    data_top_left_indices = np.full(input_n * output_h * output_w, 0, dtype=int)
     for n in range(input_n):
         for oh in range(output_h):
             for ow in range(output_w):
                 ih = oh * stride_h
                 iw = ow * stride_w
                 channel_idx = (n * padded_input_h * padded_input_w) + (ih * padded_input_w) + iw
-                data_top_left_indices.append(channel_idx)
-
-    return pad_metadata, data_top_left_indices
-
-
-def construct_input_padded_tensor(input_pyt_tensor, pad_metadata, pad_val: torch.int16 = 0x0):
-    return construct_2d_padded_tensor_list(
-        input_pyt_tensor.reshape(-1).tolist(), list(input_pyt_tensor.size()), pad_metadata, pad_val
-    )
+                data_top_left_indices[index] = channel_idx
+                index += 1
+    return pad_metadata.tolist(), data_top_left_indices.tolist()
 
 
 def validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata(
@@ -188,12 +161,12 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
     for padded_input_tensor_idx in range(len(pad_metadata)):
         pad_stick = pad_metadata[padded_input_tensor_idx]
         if pad_stick:
-            tensor_metadata.append((pad_stick, 0, 0))
+            tensor_metadata.append((True, 0, 0))
         else:
             # sanity check
             assert core_id < num_cores
             assert unpadded_input_shard_local_idx < unpadded_input_shard_height
-            tensor_metadata.append((pad_stick, core_id, unpadded_input_shard_local_idx))
+            tensor_metadata.append((False, core_id, unpadded_input_shard_local_idx))
             unpadded_input_shard_local_idx += 1
             if unpadded_input_shard_local_idx == unpadded_input_shard_height:
                 unpadded_input_shard_local_idx = 0
@@ -385,7 +358,6 @@ NEIGHBORHOOD_DIST = 2  ## ll, l, r, rr
 def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_start_and_end: list):
     # print(f'tensor metadata: {tensor_metadata}')
     ncores = len(resharded_start_and_end)
-
     ## data :: { core -> [
     ##              [],    ## ll
     ##              [],    ## l

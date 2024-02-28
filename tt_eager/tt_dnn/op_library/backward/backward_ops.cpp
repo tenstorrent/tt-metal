@@ -9,6 +9,7 @@
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
 
 namespace tt {
 
@@ -715,6 +716,86 @@ std::vector<Tensor> xlogy_bw(const Tensor& grad, const Tensor& input, const Tens
 {
     return operation::decorate_as_composite(__func__, _xlogy_bw)(grad, input, other, output_mem_config);
 }
+
+/*
+Torch Reference:
+name: logaddexp(Tensor self, Tensor other) -> Tensor
+self: grad / (1 + exp(other - self)).conj()
+other: grad / (1 + exp(self - other)).conj()
+*/
+std::vector<Tensor> _logaddexp_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor opexp = add1(exp(sub(other, input_a, std::nullopt, output_mem_config), output_mem_config), output_mem_config);
+    Tensor grad_a = mul(grad, recip(opexp, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    opexp = add1(exp(sub(input_a, other, std::nullopt, output_mem_config), output_mem_config), output_mem_config);
+    Tensor grad_b = mul(grad, recip(opexp, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> logaddexp_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logaddexp_bw)(grad, input_a, other, output_mem_config);
+}
+
+/*
+Torch reference
+name: logaddexp2(Tensor self, Tensor other) -> Tensor
+self: grad / (1 + pow(2, other - self))
+other: grad / (1 + pow(2, self - other))
+*/
+
+std::vector<Tensor> _logaddexp2_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor oppow = add1(rpow(sub(other, input_a, std::nullopt, output_mem_config), 2,  output_mem_config), output_mem_config);
+    Tensor grad_a = mul(grad, recip(oppow, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    oppow = add1(rpow(sub(input_a, other, std::nullopt, output_mem_config), 2, output_mem_config), output_mem_config);
+    Tensor grad_b = mul(grad, recip(oppow, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> logaddexp2_bw(const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logaddexp2_bw)(grad, input_a, other, output_mem_config);
+}
+std::vector<Tensor> _concat_bw(const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    const Shape start_index = {0, 0, 0, 0};
+    const Shape end_index = {input.shape()[0] - 1, input.shape()[1] - 1, input.shape()[2] - 1, input.shape()[3] - 1};
+
+    Tensor grad_a = unpad(grad, start_index, end_index);
+    grad_tensor.emplace_back(grad_a);
+
+    Shape start_index_2 = {0, 0, 0, 0};
+    if(dim == 0)
+    {
+      start_index_2 = {input.shape()[0], 0, 0, 0};
+    }
+    else if(dim == 1)
+    {
+        start_index_2 = {input.shape()[0] - 1, input.shape()[1], 0, 0};
+    }
+    else if(dim == 2)
+    {
+        start_index_2 = {input.shape()[0] - 1, input.shape()[1] - 1, input.shape()[2], 0};
+    }
+    else if(dim == 3)
+    {
+        start_index_2 = {input.shape()[0] - 1, input.shape()[1] - 1, 0, input.shape()[3]};
+    }
+    const Shape end_index_2 = {grad.shape()[0] - 1, grad.shape()[1] - 1, grad.shape()[2] - 1, grad.shape()[3] - 1};
+    Tensor grad_b = unpad(grad, start_index_2, end_index_2);
+    grad_tensor.emplace_back(grad_b);
+
+    return grad_tensor;
+}
+std::vector<Tensor> concat_bw(const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _concat_bw)(grad, input, other, dim, output_mem_config);
+}
+
+
 }//namespace tt_metal
 
 }//namespace tt
