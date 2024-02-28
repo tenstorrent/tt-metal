@@ -10,8 +10,10 @@ void kernel_main() {
     erisc_info->unused_arg2 = 21500000;
     constexpr bool sender_is_issue_path = get_compile_time_arg_val(0);
 
-    uint32_t consumer_noc_encoding = uint32_t(NOC_XY_ENCODING(7, 10)); // soon to be unified
-    uint32_t producer_noc_encoding = uint32_t(NOC_XY_ENCODING(2, 10));
+
+    uint32_t consumer_noc_encoding = uint32_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y)); // soon to be unified
+    uint32_t producer_noc_encoding = uint32_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
+
     uint32_t eth_router_noc_encoding = uint32_t(NOC_XY_ENCODING(my_x[0], my_y[0]));
 
     volatile tt_l1_ptr uint32_t *eth_src_db_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));

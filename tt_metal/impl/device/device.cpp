@@ -362,6 +362,8 @@ void Device::compile_command_queue_programs() {
                         {"DISPATCH_KERNEL", "1"}, //TODO: do we need this?
                         {"CONSUMER_NOC_X", std::to_string(completion_q_physical_core.x)},
                         {"CONSUMER_NOC_Y", std::to_string(completion_q_physical_core.y)},
+                        {"PRODUCER_NOC_X", std::to_string(completion_q_physical_core.x)},
+                        {"PRODUCER_NOC_Y", std::to_string(completion_q_physical_core.y)},
                     };
                     // TODO remove hardcoding for return path
                     eth_tunneller_compile_args = {false}; // TODO: what is this? SENDER is ISSUE?
@@ -564,6 +566,8 @@ void Device::compile_command_queue_programs() {
                {"DISPATCH_KERNEL", "1"}, //TODO: do we need this?
                 {"PRODUCER_NOC_X", std::to_string(remote_processor_physical_core.x)},
                 {"PRODUCER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
+                {"CONSUMER_NOC_X", std::to_string(remote_processor_physical_core.x)},
+                {"CONSUMER_NOC_Y", std::to_string(remote_processor_physical_core.y)},
            };
           eth_tunneller_compile_args = {false}; // TODO: what is this? SENDER is ISSUE?
            command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/temp_return_path.cpp";
