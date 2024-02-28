@@ -327,6 +327,8 @@ def determine_1x1conv_as_matmul_config(
             mcast_in0=False,
         )
     else:
+        if conv_blocking_config.act_block_w_ntiles % conv_blocking_config.act_c_num_blocks != 0:
+            breakpoint()
         assert (
             conv_blocking_config.act_block_w_ntiles % conv_blocking_config.act_c_num_blocks == 0
         ), "Expected act block width to be divisible by act channel num blocks."
@@ -429,6 +431,8 @@ class TTPyCompositeConv(TTPyOp):
             device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
+        self.per_core_out_matrix_height = self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
+        self.per_core_out_matrix_width = self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles * 32
         self.parallel_config = self.opt_conv_parall_conf_auto
 
         self.opt_conv_block_conf_auto = determine_per_core_block_config(
@@ -553,6 +557,7 @@ class TTPyCompositeConv(TTPyOp):
                 device, self.sliding_window_op_params, reader_patterns_cache["halo"]
             )
         self.set_input_sharded_memory_config()
+        self.set_output_sharded_memory_config()
 
     def set_input_sharded_memory_config(self):
         num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
@@ -620,6 +625,73 @@ class TTPyCompositeConv(TTPyOp):
             shard_spec,
         )
         self.grid_size = (num_cores_w, num_cores_h)
+
+    def set_output_sharded_memory_config(self):
+        num_cores_nhw = self.sliding_window_op_params.num_cores_nhw
+        num_cores_w = self.sliding_window_op_params.num_cores_w
+        num_cores_h = self.sliding_window_op_params.num_cores_h
+
+        output_channels = self.conv_output_shape[3]
+        padded_output_channels = _nearest_32(output_channels)
+        assert padded_output_channels >= output_channels
+        act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
+
+        output_size_to_shard_evenly = _nearest_y(
+            self.conv_output_shape[0] * self.conv_output_shape[1] * self.conv_output_shape[2], num_cores_nhw * 32
+        )
+        output_shard_height = (int)(output_size_to_shard_evenly / num_cores_nhw)
+
+        if self.is_1d_systolic and num_cores_nhw % num_cores_w > 0:
+            assert num_cores_h * num_cores_w > num_cores_nhw
+            first_range_num_cores_h = num_cores_nhw // num_cores_w
+            assert num_cores_nhw % num_cores_w < num_cores_w
+
+            shard_grid = ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_w - 1, first_range_num_cores_h - 1),
+                    ),
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, first_range_num_cores_h),
+                        ttl.tensor.CoreCoord((num_cores_nhw % num_cores_w) - 1, first_range_num_cores_h),
+                    ),
+                }
+            )
+        else:
+            if self.is_1d_systolic:
+                assert num_cores_nhw == num_cores_h * num_cores_w
+            shard_grid = ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+                    )
+                }
+            )
+
+        self.output_shard_orientation = (
+            ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
+        )
+        shard_halo = False
+        shard_shape = [
+            output_shard_height,
+            padded_output_channels if self.is_1d_systolic else (int)(padded_output_channels / act_c_num_blocks),
+        ]
+        assert shard_shape[0] == self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
+        if shard_shape[1] != self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles * 32:
+            breakpoint()
+        assert shard_shape[1] == self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles * 32
+        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.output_shard_orientation, shard_halo)
+        self.output_shard_scheme = (
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+            if self.is_1d_systolic
+            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+        )
+        self.output_sharded_memory_config = ttl.tensor.MemoryConfig(
+            self.output_shard_scheme,
+            ttl.tensor.BufferType.L1,
+            shard_spec,
+        )
 
     # override abstract methods from base class TTPyOp
     def set_op_configs(
@@ -793,9 +865,12 @@ class TTPyCompositeConv(TTPyOp):
                 bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
                 # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
+                import ttnn
+
                 bias_untiled = bias_untiled.to_torch()
-                bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
-                bias_on_device = bias_.to(device) if move_weights_to_device else bias_
+                bias_ = ttnn.from_torch(bias_untiled, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT)
+                # bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
+                bias_on_device = bias_.value.to(device) if move_weights_to_device else bias_
             self.bias = bias_on_device
         else:
             self.weight = weight

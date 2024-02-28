@@ -59,7 +59,7 @@ void Tensor::deallocate(bool force) {
         [&force](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, OwnedStorage>) {
-                std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
+               std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 if (storage.buffer.use_count() == 1 or force) {
                     DeallocateBuffer(*storage.buffer);
