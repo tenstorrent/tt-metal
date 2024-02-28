@@ -18,7 +18,6 @@ enum class OptimizedConvOpParallelizationStrategy {
 
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
-    uint32_t num_cores_nhw;
     uint32_t per_core_out_matrix_height_ntiles;
     uint32_t per_core_weight_matrix_width_ntiles;
     // std::size_t in0_block_w;
@@ -28,17 +27,12 @@ struct OptimizedConvParallelizationConfig {
     // std::size_t per_core_N;
 
     static constexpr auto attribute_names =
-        std::make_tuple("grid_size", "num_cores_nhw", "per_core_out_matrix_height_ntiles", "per_core_weight_matrix_width_ntiles");
+        std::make_tuple("grid_size", "per_core_out_matrix_height_ntiles", "per_core_weight_matrix_width_ntiles");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->grid_size),
-            std::cref(this->num_cores_nhw),
             std::cref(this->per_core_out_matrix_height_ntiles),
             std::cref(this->per_core_weight_matrix_width_ntiles));
-    }
-
-    CoreCoord get_grid_size() const {
-        return this->grid_size;
     }
 };
 
