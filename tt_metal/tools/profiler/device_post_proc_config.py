@@ -147,7 +147,7 @@ class test_noc(default_setup):
         "NoC For Loop": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 5},
-            "end": {"risc": "NCRISC", "timerID": 6},
+            "start": {"risc": "NCRISC", "zoneName": "NOC-FOR-LOOP"},
+            "end": {"risc": "NCRISC", "zoneName": "NOC-FOR-LOOP"},
         }
     }

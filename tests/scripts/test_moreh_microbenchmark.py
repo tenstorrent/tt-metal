@@ -67,9 +67,9 @@ def profile_results():
     setup.deviceInputLog = profiler_log_path
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
-    total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["T0 -> ANY CORE ANY RISC FW end"][
-        "stats"
-    ]["Average"]
+    total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["FW_START->FW_END"]["stats"][
+        "Average"
+    ]
     return total_cycle
 
 
