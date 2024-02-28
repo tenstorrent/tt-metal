@@ -5,7 +5,7 @@
 import ttnn
 
 
-def geglu(config, hidden_states, parameters, device):
+def geglu(config, hidden_states, parameters):
     output = ttnn.matmul(hidden_states, parameters.proj.weight)
 
     output = ttnn.add(output, parameters.proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
