@@ -142,3 +142,85 @@ def test_multi_input_concat(shapes, dim, device, function_level_defaults):
     passing, output = comp_equal(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
+
+
+# 1st concat -
+# (grid_size=(x=12;y=6); shard_spec=tt::tt_metal::ShardSpec(shard_grid={[(x=0;y=0) _ (x=11;y=4)]; [(x=0;y=5) _ (x=5;y=5)]}; shard_shape={20; 64}; shard_orientation=ShardOrientation::ROW_MAJOR; halo=false); sharded_op_type=ShardedOpType::InterleavedToSharded; output_mem_config=tt::tt_metal::MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED;buffer_type=BufferType::L1;shard_spec=tt::tt_metal::ShardSpec(shard_grid={[(x=0;y=0) _ (x=11;y=4)]; [(x=0;y=5) _ (x=5;y=5)]}; shard_shape={20; 64}; shard_orientation=ShardOrientation::ROW_MAJOR; halo=false)); output_dtype=DataType::BFLOAT16)
+
+
+@pytest.mark.parametrize(
+    "input_shape, shard_shape, shard_grid",
+    (
+        # ((1, 1, 32, 64), (16, 64), ttl.tensor.CoreRangeSet({
+        #    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11,4)),
+        #    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 5), ttl.tensor.CoreCoord(5,5)),
+        # }
+        # )),
+        (
+            (1, 1, 16, 16),
+            (8, 16),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+        ),
+    ),
+)
+def test_sharded_concat(input_shape, shard_shape, shard_grid, device):
+    num_inputs = 2
+    inputs = []
+    tt_inputs = []
+    input_shard_scheme = ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+    input_shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, input_shard_orientation, False)
+    sharded_mem_config = ttl.tensor.MemoryConfig(input_shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    total_elements = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
+    for i in range(num_inputs):
+        shape = torch.Size(input_shape)
+        inputs.append(i * total_elements + torch.arange(0, shape.numel()).reshape(shape).to(torch.bfloat16))
+        tt_inputs.append(
+            ttl.tensor.Tensor(
+                inputs[i],
+                ttl.tensor.DataType.BFLOAT16,
+            )
+            .to(ttl.tensor.Layout.ROW_MAJOR)
+            .to(device, sharded_mem_config)
+        )
+
+    #        tt_inputs[len(tt_inputs) - 1] = ttl.tensor.interleaved_to_sharded(
+    #            tt_inputs[len(tt_inputs) - 1],
+    #            shard_grid,
+    #            shard_shape,
+    #            input_shard_scheme,
+    #            input_shard_orientation,
+    #            output_dtype=ttl.tensor.DataType.BFLOAT16,
+    #        )
+    dram_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    #    output_shard_scheme = ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+    #    output_shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+    #    compute_grid = ttl.tensor.CoreCoord(output_shard_grid[0], output_shard_grid[1])
+    #    output_shard_grid_core_range_set = ttl.tensor.CoreRangeSet(
+    #        {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)}
+    #    )
+    #    output_shard_spec = ttl.tensor.ShardSpec(
+    #        output_shard_grid_core_range_set, output_shard_shape, output_shard_orientation, False
+    #    )
+    #    output_mem_config = ttl.tensor.MemoryConfig(output_shard_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
+    tt_output_interleaved = ttl.tensor.concat(tt_inputs, 2, dram_memory_config)
+
+    #    tt_output_interleaved = ttl.tensor.sharded_to_interleaved(
+    #        tt_output_sharded,
+    #        dram_memory_config,
+    #    )
+    tt_dev = tt_output_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    print(tt_dev)
+    tt_cpu = torch.concat(inputs, 2)
+    print(tt_cpu)
+
+    print("first input")
+    print(inputs[0])
+    print("second input")
+    print(inputs[1])
+    passing, output = comp_equal(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
