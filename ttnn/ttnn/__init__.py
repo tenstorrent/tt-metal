@@ -25,8 +25,6 @@ TTNN_ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
 import tt_lib as _tt_lib
 import ttnn._ttnn
 
-from ttnn._ttnn import TTNN_ENABLE_LOGGING
-
 from ttnn.types import (
     TILE_SIZE,
     DataType,

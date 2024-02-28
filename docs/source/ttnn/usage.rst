@@ -163,8 +163,6 @@ Basic Examples
 8. Enabling Logging
 -------------------
 
-Recompile with TTNN_ENABLE_LOGGING=1 to enable logging then export the following variables as needed:
-
 .. code-block:: bash
 
     # To generate a csv with all of the operations, their attributes and their input tensors:
