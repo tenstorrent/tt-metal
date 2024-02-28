@@ -236,7 +236,6 @@ def resnet50_optimized_conv(
 
     opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
-        num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )
@@ -357,7 +356,6 @@ def resnet50_first_conv(
 
     opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
-        num_cores_nhw=grid_size[0],
         per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
     )

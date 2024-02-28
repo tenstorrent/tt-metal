@@ -209,7 +209,6 @@ def test_resnet50_first_conv(
             ttl.tensor.MathFidelity.HiFi4,
             ttl.tensor.OptimizedConvParallelizationConfig(
                 grid_size=grid_size,
-                num_cores_nhw=grid_size[0],
                 per_core_out_matrix_height_ntiles=per_core_out_h_ntiles,
                 per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
