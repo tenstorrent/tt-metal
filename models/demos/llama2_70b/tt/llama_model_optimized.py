@@ -117,6 +117,12 @@ class TtLlamaModel_optimized(nn.Module):
 
         x_fractured = torch.chunk(x, self.num_devices, dim=-1)
         xs, rot_mats, attn_masks = [], [], []
+        # Put attn_mask on the device with the sharded config
+        attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = padded_layer_past_len
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
         for i in range(self.num_devices):
             device = self.devices[i]
             xs.append(
@@ -131,13 +137,6 @@ class TtLlamaModel_optimized(nn.Module):
             rot_mats.append(
                 torch2tt_tensor(rot_mat.clone(), device, tt_memory_config=self.model_config["ROT_MAT_MEMCFG"])
             )
-
-            # Put attn_mask on the device with the sharded config
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = padded_layer_past_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
             attn_masks.append(
                 torch2tt_tensor(
                     attn_mask.clone(),
@@ -155,10 +154,10 @@ class TtLlamaModel_optimized(nn.Module):
 
     def forward(
         self,
-        xs: tt_lib.tensor.Tensor,
-        rot_mats: tt_lib.tensor.Tensor,
+        xs: list,
+        rot_mats: list,
         start_pos: int,
-        attn_masks: tt_lib.tensor.Tensor,
+        attn_masks: list,
     ) -> tt_lib.tensor.Tensor:
         ### Run all layers
         for layer in self.layers:
@@ -173,7 +172,7 @@ class TtLlamaModel_optimized(nn.Module):
         xs = tt_lib.tensor.all_gather(
             xs,
             dim=3,
-            num_links=1,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
 

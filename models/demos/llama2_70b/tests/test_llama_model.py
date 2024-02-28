@@ -63,7 +63,7 @@ def run_test_LlamaModel_inference(
     # tt_cache_path,
     # model_location_generator,
 ):
-    # model_name = model_location_generator(model_version, model_subdir="Falcon")
+    # model_name = model_location_generator(model_version, model_subdir="Llama2")
     if emulated:
         ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
@@ -86,8 +86,6 @@ def run_test_LlamaModel_inference(
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
 
-    # devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
-
     torch.manual_seed(0)
     base_url = "layers"
     configuration = hugging_face_reference_model.params
@@ -107,8 +105,8 @@ def run_test_LlamaModel_inference(
     for device in devices:
         tt_lib.device.Synchronize(device)
 
-    generation_start_pos = 0
-    generation_length = 7
+    generation_start_pos = 1
+    generation_length = 20
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -166,42 +164,42 @@ def run_test_LlamaModel_inference(
         logger.info(f"Mean Top-5: {top5_acc}")
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] Llama2-70b Decoder output Passed!")
+            logger.info(f"[start_pos={start_pos}] Llama2-70b Model output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Llama2-70b Decoder output Failed! PCC value is lower than {pcc}")
+            logger.warning(f"[start_pos={start_pos}] Llama2-70b Model output Failed! PCC value is lower than {pcc}")
             all_tests_pass = False
 
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
-    # pytorch_layer_present = [
-    #     pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(
-    #         0, 2, 1, 3
-    #     ),  # [batch, n_kv_heads, seq, head_dim]
-    #     pytorch_LlamaDecoder_model.decoder.attention.cache_v.clone().permute(
-    #         0, 2, 1, 3
-    #     ),  # [batch, n_kv_heads, seq, head_dim]
-    # ]
+    pytorch_layer_present = [
+        pytorch_model.model.layers[0]
+        .attention.cache_k.clone()
+        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_model.model.layers[0]
+        .attention.cache_v.clone()
+        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+    ]
     # TT hardware execution -------------------------------------------------------------
-    # tt_layer_present = []
-    # for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
-    #     tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-    # # concat the pasts by heads
-    # tt_layer_present = [
-    #     torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-    # ]
+    tt_layer_present = []
+    for layer_past in tt_model.layers[0].attention.layer_past_list:
+        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+    # concat the pasts by heads
+    tt_layer_present = [
+        torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+    ]
 
-    # for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
-    #     cache_length_to_check = generation_start_pos + generation_length + 1
-    #     cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-    #     cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-    #     does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-    #     logger.info(f"Output: {output_pcc}")
+    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
+        cache_length_to_check = generation_start_pos + generation_length + 1
+        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+        logger.info(f"Output: {output_pcc}")
 
-    #     if does_pass:
-    #         logger.info(f"KV Cache Passed!")
-    #     else:
-    #         logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-    #         all_tests_pass = False
+        if does_pass:
+            logger.info(f"KV Cache Passed!")
+        else:
+            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+            all_tests_pass = False
 
     if all_tests_pass:
         logger.info("Llama2 Model output Passed!")
@@ -215,7 +213,9 @@ def run_test_LlamaModel_inference(
     (
         (32, 1, 1, 4),
         (32, 1, 2, 4),
+        (32, 1, 4, 4),
         (32, 1, 5, 4),
+        (32, 1, 8, 4),
         (32, 1, 10, 4),
         (32, 1, 20, 4),
         (32, 1, 40, 4),
@@ -237,7 +237,6 @@ def test_LlamaModel_inference(
     n_devices,
     # model_location_generator,
     pcie_devices,
-    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)

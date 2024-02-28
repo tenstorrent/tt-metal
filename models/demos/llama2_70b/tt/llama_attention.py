@@ -11,7 +11,7 @@ from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
-    tt_all_gather,
+    tt_all_gather_torch,
 )
 
 
@@ -300,7 +300,7 @@ class TtLlamaAttention(nn.Module):
             dense_inputs.append(attn_output)
 
         # All gather input to dense
-        dense_inputs_replicated = tt_all_gather(dense_inputs, dim=-1)
+        dense_inputs_replicated = tt_all_gather_torch(dense_inputs, dim=-1)
 
         for i in range(self.num_devices):
             dense_out = tt_lib.tensor.matmul(

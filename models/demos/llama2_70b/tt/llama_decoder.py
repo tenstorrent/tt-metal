@@ -13,7 +13,7 @@ from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttentio
 # from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from models.demos.llama2_70b.tt.llama_mlp import TtLlamaMLP
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch
 
 
 class TtLlamaDecoder:
@@ -122,7 +122,7 @@ class TtLlamaDecoder:
         ### xs (residual stream) is fractured on all chips
 
         ### Duplicate inputs for layernorm
-        xs_replicated = tt_all_gather(xs, dim=-1)
+        xs_replicated = tt_all_gather_torch(xs, dim=-1)
 
         attn_norm_replicated = []
         for i in range(self.num_devices):
@@ -155,7 +155,7 @@ class TtLlamaDecoder:
             attn_resid_fractures.append(attn_resid)
 
         ### Duplicate attention residual on all chips
-        attn_resid_replicated = tt_all_gather(attn_resid_fractures, dim=-1)
+        attn_resid_replicated = tt_all_gather_torch(attn_resid_fractures, dim=-1)
 
         ### Duplicate layernorm
         ffn_norm_replicated = []

@@ -126,7 +126,7 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
         "MOVE_DECODER_OUTPUT_BOOL": False,
         "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 4),
-        "ALL_GATHER_NUM_LINKS": 2,
+        "ALL_GATHER_NUM_LINKS": 1,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/llama2_70b/datasets/"),
         "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.LoFi,
@@ -486,6 +486,17 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             fused_activation=None,
             mcast_in0=True,
         )
+        model_config["FP32_FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 1),
+            in0_block_w=16,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=5,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     if num_devices == 4:
         model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
@@ -530,19 +541,14 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
         )
     model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
-    model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"] = L1_MEMCFG
-    model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
-    model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        per_core_M=1,
-        per_core_N=4,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
+    model_config["L1_HEADS_INTERLEAVED_MEMCFG"] = L1_MEMCFG
+    model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     )
+    model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     if num_devices == 4:
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -556,9 +562,31 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             fused_activation=None,
             mcast_in0=False,
         )
+        model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(2, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
     elif num_devices == 8:
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+        model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=4,

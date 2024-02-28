@@ -7,7 +7,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch
 
 
 class TtLlamaMLP(nn.Module):

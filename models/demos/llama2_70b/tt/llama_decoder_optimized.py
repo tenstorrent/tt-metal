@@ -155,7 +155,7 @@ class TtLlamaDecoder_optimized:
             xs_replicated = tt_lib.tensor.all_gather(
                 xs_replicated,
                 dim=3,
-                num_links=1,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
 
@@ -209,7 +209,7 @@ class TtLlamaDecoder_optimized:
             attn_resid_replicated = tt_lib.tensor.all_gather(
                 attn_resid_replicated,
                 dim=3,
-                num_links=1,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
 

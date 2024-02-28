@@ -18,7 +18,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
 
 FF_DIM = int(32 * 1024 / 8)
 USE_ACC = True
