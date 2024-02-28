@@ -87,11 +87,20 @@ split_chunks = {
 
 
 class resnetBlock2D:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self,
+        device,
+        parameters,
+        reader_patterns_cache,
+        batch_size,
+        input_height,
+        input_width,
+        group_norm_on_device=False,
+    ):
         self.device = device
         self.parameters = parameters
         self.conv1s = []
-
+        self.group_norm_on_device = group_norm_on_device
         parameters.conv1.weight, parameters.conv1.bias = permute_conv_weights(
             parameters.conv1.weight, parameters.conv1.bias
         )
@@ -139,7 +148,7 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     conv_blocking_and_parallelization_config_override=conv1_config_override,
                     use_shallow_conv_variant=False,
-                    enable_auto_formatting=True,
+                    enable_auto_formatting=(conv1_split_chunks > 1) or not group_norm_on_device,
                     reallocate_halo_output=True,
                 )
             )
@@ -178,7 +187,7 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override=conv2_config_override,
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
+            enable_auto_formatting=not group_norm_on_device,
             deallocate_activation=True,
             # reallocate_halo_output=(out_channels, out_channels, input_height, input_width) == (640, 640, 64, 64)
         )
@@ -219,7 +228,7 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 conv_blocking_and_parallelization_config_override=conv_shortcut_config_override,
                 use_shallow_conv_variant=False,
-                enable_auto_formatting=True,
+                enable_auto_formatting=not group_norm_on_device,
             )
             self.output_height = self.conv_shortcut.output_height
             self.output_width = self.conv_shortcut.output_width
@@ -244,6 +253,8 @@ class resnetBlock2D:
         dtype: Optional[ttnn.DataType] = None,
         group_norm_sharded_config=None,
     ):
+        # breakpoint()
+        assert self.group_norm_on_device == (group_norm_sharded_config is not None)
         if non_linearity == "mish":
             assert False, "Mish is not implemented!"
         else:
@@ -264,7 +275,7 @@ class resnetBlock2D:
                 output_memory_config=ttnn.get_memory_config(hidden_states),
                 use_multicore=True,
             )
-
+            print("Starting group norm")
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -276,7 +287,11 @@ class resnetBlock2D:
                     group_norm_sharded_config["grid_size"][1], group_norm_sharded_config["grid_size"][0]
                 ),
             )
+            print("Done group norm. Convert to tile layout.")
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
+            print("done tile layout")
+            group_norm_output_sharded_mem_config = ttnn.get_memory_config(hidden_states)
+            print("Convert to interleaved memory config")
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         else:
             hidden_states = ttnn.group_norm(
@@ -301,9 +316,7 @@ class resnetBlock2D:
             print("THIS IS THE RESNETBLOCK WITH GROUPNORM ON DEVICE!!!!!!!!!!!")
 
         conv1_split_chunks = len(self.conv1s)
-        if conv1_split_chunks == 1:
-            hidden_states = [hidden_states]
-        else:
+        if conv1_split_chunks > 1:
             split_hidden_states = []
             output_tensor_start_width_dim = 0
             in_channels = self.parameters.conv1.weight.shape[1]
@@ -318,7 +331,15 @@ class resnetBlock2D:
                 output_tensor_end_width_dim += split_input_channels
             hidden_states = split_hidden_states
         if conv1_split_chunks == 1:
-            hidden_states = self.conv1s[0](hidden_states[0])
+            if group_norm_sharded_config is not None:
+                # breakpoint()
+                hidden_states = ttnn.to_memory_config(hidden_states, self.conv1s[0].conv.input_sharded_memory_config)
+                # breakpoint()
+            hidden_states = self.conv1s[0](hidden_states)
+            # breakpoint()
+            if group_norm_sharded_config is not None:
+                # get conv output sharded memory config
+                conv_output_sharded_memory_config = ttnn.get_memory_config(hidden_states)
         else:
             for i in range(conv1_split_chunks):
                 hidden_states[i] = self.conv1s[i](hidden_states[i])
@@ -327,8 +348,8 @@ class resnetBlock2D:
                     ttnn.deallocate(hidden_states[i - 1])
             hidden_states = hidden_states[-1]
 
-        split_hidden_states = []
-
+        # split_hidden_states = []
+        # breakpoint()
         if temb is not None:
             temb = nonlinearity(temb)
             if temb_channels is not None:
@@ -356,34 +377,69 @@ class resnetBlock2D:
             temb = ttnn.reshape(temb, (self.conv1s[0].batch_size, 1, 1, out_channels))
             hidden_states = hidden_states + temb
 
-        hidden_states = post_process_output(
-            self.device,
-            hidden_states,
-            self.conv1s[0].batch_size,
-            self.conv1s[0].input_height,
-            self.conv1s[0].input_width,
-            out_channels,
-        )
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=groups,
-            weight=self.parameters.norm2.weight,
-            bias=self.parameters.norm2.bias,
-            epsilon=eps,
-        )
+        if group_norm_sharded_config is not None:
+            breakpoint()
+            self.parameters.norm2.weight = pad_group_norm_weight(self.parameters.norm2.weight, groups, out_channels)
+            self.parameters.norm2.bias = pad_group_norm_weight(self.parameters.norm2.bias, groups, out_channels)
+
+            hidden_states = ttnn.to_layout(
+                hidden_states,
+                ttnn.ROW_MAJOR_LAYOUT,
+                output_memory_config=conv_output_sharded_memory_config,
+                use_multicore=True,
+            )
+            hidden_states = ttnn.reshape(
+                hidden_states,
+                (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
+            )
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=groups,
+                weight=self.parameters.norm2.weight,
+                bias=self.parameters.norm2.bias,
+                epsilon=eps,
+                memory_config=conv_output_sharded_memory_config,
+                core_grid=ttnn.CoreGrid(
+                    group_norm_sharded_config["grid_size"][1], group_norm_sharded_config["grid_size"][0]
+                ),
+            )
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        else:
+            hidden_states = post_process_output(
+                self.device,
+                hidden_states,
+                self.conv1s[0].batch_size,
+                self.conv1s[0].input_height,
+                self.conv1s[0].input_width,
+                out_channels,
+            )
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=groups,
+                weight=self.parameters.norm2.weight,
+                bias=self.parameters.norm2.bias,
+                epsilon=eps,
+            )
         hidden_states = nonlinearity(hidden_states)
 
-        hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            self.device,
-            self.conv2,
-            hidden_states,
-            self.conv2.batch_size,
-            self.conv2.input_height,
-            self.conv2.input_width,
-            self.conv2.out_channels,
-        )
+        if group_norm_sharded_config is not None:
+            hidden_states = self.conv2(hidden_states)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, use_multicore=True)
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        else:
+            hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+                self.device,
+                self.conv2,
+                hidden_states,
+                self.conv2.batch_size,
+                self.conv2.input_height,
+                self.conv2.input_width,
+                self.conv2.out_channels,
+            )
 
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
+        breakpoint()
         if use_in_shortcut:
             input_tensor = run_ttnn_conv_with_pre_and_post_tensor_formatting(
                 self.device,

@@ -9,12 +9,29 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downsam
 
 
 class cross_attention_down_block_2d:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self,
+        device,
+        parameters,
+        reader_patterns_cache,
+        batch_size,
+        input_height,
+        input_width,
+        group_norm_on_device=False,
+    ):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
-            for resnet in parameters.resnets
+            resnetBlock2D(
+                device,
+                resnet,
+                reader_patterns_cache,
+                batch_size,
+                input_height,
+                input_width,
+                group_norm_on_device=group_norm_on_device if i == 0 else False,
+            )
+            for i, resnet in enumerate(parameters.resnets)
         ]
         self.attentions = [
             transformer_2d_model(device, attention, reader_patterns_cache, batch_size, input_height, input_width)

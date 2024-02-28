@@ -114,6 +114,7 @@ class UNet2DConditionModel:
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
         )
+        # breakpoint()
         self.down_blocks = []
         input_height = self.conv_in.output_height
         input_width = self.conv_in.output_height
@@ -122,7 +123,13 @@ class UNet2DConditionModel:
         for i, down_block_type in enumerate(down_block_types):
             if down_block_type == "CrossAttnDownBlock2D":
                 down_block = cross_attention_down_block_2d(
-                    device, parameters.down_blocks[i], reader_patterns_cache, batch_size, input_height, input_width
+                    device,
+                    parameters.down_blocks[i],
+                    reader_patterns_cache,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    group_norm_on_device=True if i == 0 else False,
                 )
             elif down_block_type == "DownBlock2D":
                 down_block = downblock2d(
