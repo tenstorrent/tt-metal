@@ -22,16 +22,6 @@ namespace tt::tt_metal::operation {
 bool skip_profile = false;
 std::map<chip_id_t, std::reference_wrapper<Program>> skipped_programs;
 
-bool is_logging_enabled() {
-    bool enabled = false;
-    if (std::getenv("TT_METAL_LOGGER_TYPES") != nullptr and std::getenv("TT_METAL_LOGGER_LEVEL") != nullptr) {
-        enabled |= std::string{std::getenv("TT_METAL_LOGGER_TYPES")} == "Op" and
-                   std::string{std::getenv("TT_METAL_LOGGER_LEVEL")} == "DEBUG";
-    }
-    enabled |= std::getenv("OPERATION_HISTORY_CSV") != nullptr;
-    return enabled;
-}
-
 namespace detail {
 
 static Device* get_device(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
@@ -116,18 +106,15 @@ constexpr op_profiler::OpType get_profiler_operation_type() {
 template <typename Function>
 constexpr auto decorate_host_operation(const Function& function) {
     return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
-#ifndef TTNN_ENABLE_LOGGING
-        if (not is_logging_enabled()) {
-            return function(operation, args...);
-        }
-#endif
-
+#ifdef TTNN_ENABLE_LOGGING
         const auto start{std::chrono::steady_clock::now()};
         log_operation(operation, args...);
+#endif
+
         auto output_tensors = function(operation, args...);
-        const auto end{std::chrono::steady_clock::now()};
 
 #ifdef TTNN_ENABLE_LOGGING
+        const auto end{std::chrono::steady_clock::now()};
         const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
         tt::log_info(
             tt::LogOp, "Finished Operation {:50} in {:15} nanoseconds", operation.get_type_name(), elapsed_seconds);
@@ -141,18 +128,15 @@ template <typename Function>
 constexpr auto decorate_device_operation(const Function& function) {
     return [function]<typename Operation, typename... Tensors>(
                std::optional<std::reference_wrapper<CommandQueue>> queue, const Operation& operation, Tensors&&... tensors) {
-#ifndef TTNN_ENABLE_LOGGING
-        if (not is_logging_enabled()) {
-            return function(queue, operation, tensors...);
-        }
-#endif
-
+#ifdef TTNN_ENABLE_LOGGING
         const auto start{std::chrono::steady_clock::now()};
         log_operation(operation, tensors...);
+#endif
+
         auto output_tensors = function(queue, operation, tensors...);
-        const auto end{std::chrono::steady_clock::now()};
 
 #ifdef TTNN_ENABLE_LOGGING
+        const auto end{std::chrono::steady_clock::now()};
         const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
         tt::log_info(
             tt::LogOp, "Finished Operation {:50} in {:15} nanoseconds", operation.get_type_name(), elapsed_seconds);
@@ -263,9 +247,10 @@ std::vector<Tensor> run_device_operation(
                     Finish(cq);
                     const auto end{std::chrono::steady_clock::now()};
                     const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
+
                     tt::log_info(
                         tt::LogOp,
-                        "Program   {:100} finished in {:15} nanoseconds",
+                        "Finished Program   {:50} in {:15} nanoseconds",
                         operation.get_type_name(),
                         elapsed_seconds);
 #endif
