@@ -56,7 +56,7 @@ def setup_ttnn_tensor(x, device, layout, input_mem_config, dtype):
     return input_tensor
 
 
-def ttnn_tensor_to_torch(x, output_mem_config):
+def ttnn_tensor_to_torch(x, output_mem_config=None):
     output_tensor = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     # assert output_mem_config == tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -81,7 +81,7 @@ def ones(
         memory_config=memory_config_to_ttnn(output_mem_config),
     )
 
-    return ttnn_tensor_to_torch(t0, output_mem_config)
+    return ttnn_tensor_to_torch(t0)
 
 
 def ones_like(
@@ -95,9 +95,9 @@ def ones_like(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.ones_like(t0)
+    t1 = ttnn.ones_like(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def full(
@@ -120,7 +120,7 @@ def full(
         memory_config=memory_config_to_ttnn(output_mem_config),
     )
 
-    return ttnn_tensor_to_torch(t0, output_mem_config)
+    return ttnn_tensor_to_torch(t0)
 
 
 def eltwise_hardswish(
@@ -134,9 +134,9 @@ def eltwise_hardswish(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.hardswish(t0)
+    t1 = ttnn.hardswish(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_hardtanh(
@@ -150,9 +150,9 @@ def eltwise_hardtanh(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.hardtanh(t0)
+    t1 = ttnn.hardtanh(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_heaviside(
@@ -167,9 +167,9 @@ def eltwise_heaviside(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.heaviside(t0, scalar)
+    t1 = ttnn.heaviside(t0, scalar, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_hypot(
@@ -185,9 +185,9 @@ def eltwise_hypot(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.hypot(t0, t1)
+    t2 = ttnn.hypot(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t2, output_mem_config)
+    return ttnn_tensor_to_torch(t2)
 
 
 def eltwise_i0(
@@ -201,9 +201,9 @@ def eltwise_i0(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.i0(t0)
+    t1 = ttnn.i0(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_isfinite(
@@ -217,9 +217,9 @@ def eltwise_isfinite(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.isfinite(t0)
+    t1 = ttnn.isfinite(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_isinf(
@@ -233,9 +233,9 @@ def eltwise_isinf(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.isinf(t0)
+    t1 = ttnn.isinf(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_isnan(
@@ -249,9 +249,9 @@ def eltwise_isnan(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.isnan(t0)
+    t1 = ttnn.isnan(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_isneginf(
@@ -265,9 +265,9 @@ def eltwise_isneginf(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.isneginf(t0)
+    t1 = ttnn.isneginf(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_isposinf(
@@ -281,9 +281,44 @@ def eltwise_isposinf(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.isposinf(t0)
+    t1 = ttnn.isposinf(t0, memory_config=memory_config_to_ttnn(output_mem_config))
 
-    return ttnn_tensor_to_torch(t1, output_mem_config)
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_leaky_relu(
+    x,
+    *args,
+    negative_slope,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.leaky_relu(t0, negative_slope, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_lerp(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.lerp(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
 
 
 def eltwise_add(

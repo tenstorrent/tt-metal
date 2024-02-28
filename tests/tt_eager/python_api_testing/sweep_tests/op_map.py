@@ -1107,6 +1107,10 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_isposinf,
         "pytorch_op": pytorch_ops.isposinf,
     },
+    "ttnn-eltwise-leaky_relu": {
+        "tt_lib_op": ttnn_ops.eltwise_leaky_relu,
+        "pytorch_op": pytorch_ops.leaky_relu,
+    },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
