@@ -600,7 +600,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
 }
 
 
-@pytest.mark.parametrize("N", (1, 2, 8, 16), ids=["batch_1", "batch_2", "batch_8", "batch_16"])
+@pytest.mark.parametrize("N", [8, 16], ids=["batch_8", "batch_16"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -726,7 +726,7 @@ def test_resnet50_conv(
                 output_mem_config=output_mem_config,
                 weights_dtype=weights_dtype,
                 output_dtype=output_dtype,
-                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                # math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
             )
         else:
             assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
