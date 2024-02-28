@@ -522,6 +522,7 @@ class TTPyCompositeConv(TTPyOp):
                 conv_params,
                 not is_1d_systolic,
                 reader_patterns_cache["conv"],
+                move_weights_to_device=move_weights_to_device,
             )
             assert sliding_window_op_params_hash in reader_patterns_cache["conv"]
             conv_reader_indices = reader_patterns_cache["conv"][sliding_window_op_params_hash]
@@ -562,6 +563,7 @@ class TTPyCompositeConv(TTPyOp):
         conv_params,
         conv_is_2d,
         conv_reader_patterns_cache,
+        move_weights_to_device,
     ):
         # TODO: Need way of hashing sliding_window_op_params
         if sliding_window_op_params_hash not in conv_reader_patterns_cache:
@@ -646,7 +648,7 @@ class TTPyCompositeConv(TTPyOp):
             )
             conv_reader_indices_sharded_tensor = (
                 conv_reader_indices_tt_tensor.to(device, mem_config)
-                if device is not None
+                if move_weights_to_device
                 else conv_reader_indices_tt_tensor
             )
 
