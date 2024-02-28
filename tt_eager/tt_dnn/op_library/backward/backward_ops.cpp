@@ -849,6 +849,21 @@ std::vector<Tensor> hardshrink_bw(const Tensor& grad, const Tensor& input, float
     return operation::decorate_as_composite(__func__, _hardshrink_bw)(grad, input, lambd, output_mem_config);
 }
 
+// Hardswish
+// result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
+std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = where(lt(input, full_like(input, -3.0f), std::nullopt, output_mem_config),
+                        0.0, where(lte(input, full_like(input, 3.0f), std::nullopt, output_mem_config),
+                        mul(grad, add_unary(mul_unary(input, 0.3333f, output_mem_config), 0.5f, output_mem_config), std::nullopt, output_mem_config), grad), output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> hardswish_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _hardswish_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
