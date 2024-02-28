@@ -201,7 +201,6 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
         return ttnn.Tensor(ttl_input_tensor.reshape(shape.value))
 
     layout = input_tensor.layout
-    ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
 
     if input_tensor.is_contiguous():
         if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
@@ -327,6 +326,7 @@ def from_torch(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
     """
 
+    shape_with_padding = None
     if dtype == ttnn.bfloat8_b:
         if len(tensor.shape) < 2:
             raise RuntimeError("ttnn.from_torch: bfloat8_b requires at least 2 dimensions!")
@@ -334,6 +334,7 @@ def from_torch(
             raise RuntimeError("ttnn.from_torch: bfloat8_b requires TILE_LAYOUT!")
         # Tilize tensor
         tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT)
+        shape_with_padding = tensor.shape
         tensor = ttnn.Tensor(tensor.value.reshape(tensor.shape.with_tile_padding()))
         tensor = ttnn.to_torch(tensor)
 
@@ -353,6 +354,9 @@ def from_torch(
         if memory_config is None:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
+
+    if shape_with_padding is not None:
+        tensor = ttnn.reshape(tensor, shape_with_padding)
 
     return tensor
 
@@ -578,6 +582,9 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
         >>> tensor = ttnn.to_memory_config(tensor, memory_config)
     """
 
+    original_shape = tensor.shape
+    tensor = ttnn.unsqueeze_to_4D(tensor)
+
     ttl_tensor = tensor.value
     if ttnn.get_memory_config(tensor) == memory_config:
         return tensor
@@ -586,56 +593,34 @@ def to_memory_config(tensor, memory_config: ttnn.MemoryConfig):
     if memory_config.is_sharded():
         if ttl_tensor.is_sharded():
             # reshard
-            def impl(ttl_tensor, sharded_memory_config):
-                input_memory_config = ttnn.get_memory_config(tensor)
-                input_shard_spec = input_memory_config.shard_spec
-                output_shard_spec = sharded_memory_config.shard_spec
-                if tensor.layout == ttnn.TILE_LAYOUT or input_shard_spec.shape[1] == output_shard_spec.shape[1]:
-                    return ttl.tensor.reshard(ttl_tensor, sharded_memory_config)
+            input_memory_config = ttnn.get_memory_config(tensor)
+            input_shard_spec = input_memory_config.shard_spec
+            output_shard_spec = memory_config.shard_spec
+            if tensor.layout == ttnn.TILE_LAYOUT or input_shard_spec.shape[1] == output_shard_spec.shape[1]:
+                ttl_tensor = ttl.tensor.reshard(ttl_tensor, memory_config)
 
-                else:
-                    # for row-major tensors where shard-spec[1] is different for input shard and output shard
-                    ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
-                    return ttl.tensor.interleaved_to_sharded(
-                        ttl_tensor,
-                        sharded_memory_config,
-                    )
-
-            ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
-                ttl_tensor, memory_config
-            )
-
-        else:
-
-            def impl(ttl_tensor, sharded_memory_config):
-                return ttl.tensor.interleaved_to_sharded(
+            else:
+                # for row-major tensors where shard-spec[1] is different for input shard and output shard
+                ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, ttnn.DRAM_MEMORY_CONFIG)
+                ttl_tensor = ttl.tensor.interleaved_to_sharded(
                     ttl_tensor,
-                    sharded_memory_config,
+                    memory_config,
                 )
 
-            ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
-                ttl_tensor, memory_config
+        else:
+            ttl_tensor = ttl.tensor.interleaved_to_sharded(
+                ttl_tensor,
+                memory_config,
             )
     # to_interleaved path
     else:
         if not ttl_tensor.is_sharded():
             # L1 to DRAM or DRAM to L1
-            def impl(ttl_tensor, output_memory_config):
-                return ttl.tensor.clone(ttl_tensor, output_memory_config)
-
-            ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
-                ttl_tensor, memory_config
-            )
-
+            ttl_tensor = ttl.tensor.clone(ttl_tensor, memory_config)
         else:
-
-            def impl(ttl_tensor, interleaved_memory_config):
-                return ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config)
-
-            ttl_tensor = ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_memory_config")(
-                ttl_tensor, memory_config
-            )
-    return ttnn.Tensor(ttl_tensor)
+            ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, memory_config)
+    tensor = ttnn.Tensor(ttl_tensor)
+    return ttnn.reshape(tensor, original_shape)
 
 
 def _to_layout_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):

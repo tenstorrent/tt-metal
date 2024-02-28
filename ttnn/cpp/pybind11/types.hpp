@@ -56,6 +56,7 @@ void py_module(py::module& m_types) {
     PyShape.def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); });
     PyShape.def("with_tile_padding", [](const Shape& self) { return self.with_tile_padding(); });
 
+    // Tensor wrapper class for hiding the internal implementation from python
     struct Tensor {
         tt::tt_metal::Tensor value;
     };
@@ -63,7 +64,19 @@ void py_module(py::module& m_types) {
     py::class_<Tensor>(m_types, "Tensor")
         .def(py::init<tt::tt_metal::Tensor>())
         .def_property_readonly("value", [](const Tensor& self) -> auto& { return self.value; })
-        .def("__repr__", [](const Tensor& self) { return self.value.write_to_string(Layout::ROW_MAJOR, true); })
+        .def(
+            "__repr__",
+            [](const Tensor& self) {
+                if (self.value.is_allocated()) {
+                    return self.value.write_to_string(Layout::ROW_MAJOR, true);
+                } else {
+                    return fmt::format(
+                        "Tensor(shape={}, dtype={}, layout={})",
+                        self.value.ttnn_shape(),
+                        self.value.dtype(),
+                        self.value.layout());
+                }
+            })
         .def_property_readonly("shape", [](const Tensor& self) { return py::cast(Shape{self.value.shape()}); })
         .def_property_readonly("dtype", [](const Tensor& self) { return self.value.dtype(); })
         .def_property_readonly("layout", [](const Tensor& self) { return self.value.layout(); })

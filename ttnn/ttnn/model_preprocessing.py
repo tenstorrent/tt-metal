@@ -13,7 +13,6 @@ from ttnn.dot_access import make_dot_access_dict
 
 from loguru import logger
 import torch
-import torchtrail
 
 import ttnn
 from ttnn.tracer import trace, visualize
@@ -106,6 +105,9 @@ class ParameterList(list):
         file = io.StringIO()
         repr_parameters(file, self)
         return file.getvalue()
+
+    def __contains__(self, index: int) -> bool:
+        return index < len(self)
 
 
 class ParameterDict(dict):
@@ -314,6 +316,9 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
 
         if path.is_dir():
             parameters = _load_parameters(path)
+            if all(str(key).isdigit() for key in parameters):
+                parameters = {int(key): value for key, value in parameters.items()}
+                parameters = ParameterList([parameters[index] for index in sorted(parameters.keys())])
             output[name] = parameters
         elif extension == ".bin":
             output[name] = ttnn.load_tensor(path)
@@ -417,7 +422,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
         for node in graph:
             attributes = graph.nodes[node]
             operation = attributes["operation"]
-            if isinstance(operation, torchtrail.tracer.TorchModule):
+            if isinstance(operation, ttnn.tracer.TorchModule):
                 *_, module_name = operation.module.torchtrail_name.split(".")
                 (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
                 input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]

@@ -39,6 +39,9 @@ from ttnn.types import (
     MathFidelity,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
+    L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
     Layout,
@@ -125,9 +128,6 @@ from ttnn.operations.creation import (
 from ttnn.operations.reduction import (
     std,
     var,
-    max,
-    min,
-    sum,
 )
 
 from ttnn.operations.losses import (
@@ -182,8 +182,6 @@ from ttnn.operations.binary import (
     logaddexp,
     logaddexp2,
     xlogy,
-    maximum,
-    minimum,
     add_and_apply_activation,
     add_and_apply_activation_,
     nextafter,

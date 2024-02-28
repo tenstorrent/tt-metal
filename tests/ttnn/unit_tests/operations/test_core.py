@@ -142,3 +142,61 @@ def test_reshard(
     output = ttnn.to_torch(interleaved_output_tensor)
 
     assert_with_pcc(torch_input_tensor, output, 1.0)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,  input_sharded_memory_config_args",
+    [
+        (
+            [1, 1, 32, 1024],
+            [32, 256],
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 3)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+            ),
+        ),
+        (
+            [1, 1, 32, 1024],
+            [32, 128],
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                        ),
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 2), ttnn.experimental.tensor.CoreCoord(0, 3)
+                        ),
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 4), ttnn.experimental.tensor.CoreCoord(0, 7)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+            ),
+        ),
+    ],
+)
+def test_shard_with_corerangeset(device, input_shape, input_shard_shape, input_sharded_memory_config_args):
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    interleaved_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_shard_memory_config = ttnn.create_sharded_memory_config(
+        input_shard_shape, **input_sharded_memory_config_args, use_height_and_width_as_shard_shape=True
+    )
+    # interleaved_to_sharded
+    sharded_input_tensor = ttnn.to_memory_config(interleaved_input_tensor, input_shard_memory_config)
+
+    # sharded_to_interleaved
+    interleaved_output_tensor = ttnn.to_memory_config(sharded_input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.to_torch(interleaved_output_tensor)
+
+    assert_with_pcc(torch_input_tensor, output, 1.0)

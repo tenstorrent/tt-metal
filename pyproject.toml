@@ -26,7 +26,7 @@ dependencies = [
   # extra index required https://download.pytorch.org/whl/cpu
   "torch==2.2.1+cpu",
   "networkx==3.1",
-  "torchtrail==0.0.13",
+  "torchtrail==0.0.15",
 
   # profiler
   "click==8.1.3",

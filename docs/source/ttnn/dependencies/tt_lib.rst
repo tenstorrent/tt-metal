@@ -898,6 +898,20 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.hypot_bw
 
+.. autofunction:: tt_lib.tensor.gelu_bw
+
+.. autofunction:: tt_lib.tensor.bias_gelu_bw
+
+.. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
+
+.. autofunction:: tt_lib.tensor.squared_difference_bw
+
+.. autofunction:: tt_lib.tensor.lerp_bw
+
+.. autofunction:: tt_lib.tensor.ldexp_bw
+
+.. autofunction:: tt_lib.tensor.xlogy_bw
+
 Loss Functions
 ==============
 
