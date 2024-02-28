@@ -101,7 +101,7 @@ std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const u
                 if (profiler_info.parallelization_strategy.has_value()) {
                     op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
                 }
-                op_profiler::append_math_fidelities(program);
+                op_profiler::append_kernel_info(program);
                 op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
             }
             op_profiler::dump_device_profiler_results(input_tensors[i].device(), program);

@@ -56,6 +56,10 @@ OPS_CSV_HEADER = [
     "INPUTS",
     "OUTPUTS",
     "CALL DEPTH",
+    "COMPUTE KERNEL PATH",
+    "COMPUTE KERNEL HASH",
+    "DATA MOVEMENT KERNEL PATH",
+    "DATA MOVEMENT KERNEL HASH",
 ]
 
 SORT_KEY = OPS_CSV_HEADER[2]
@@ -296,6 +300,10 @@ def parse_ops_logs(opsFolder):
                             maxOutputCount = len(outputs.keys())
 
                         mathFidelity = row[" Math Fidelity"].strip()
+                        computeKernelPaths = row[" Compute Kernel Paths"].strip()
+                        computeKernelHashes = row[" Compute Kernel Hashes"].strip()
+                        datamovementKernelPaths = row[" Data Movement Kernel Paths"].strip()
+                        datamovementKernelHashes = row[" Data Movement Kernel Hashes"].strip()
                         parallelizationStrategy = row[" Parallelization Strategy"].strip()
                         preferredName = row[" Preferred Name"].strip().split("tt::tt_metal::")[-1]
                         metadata = row[" Meta Data"].strip()
@@ -333,6 +341,10 @@ def parse_ops_logs(opsFolder):
                             "INPUTS": inputs,
                             "OUTPUTS": outputs,
                             "MATH FIDELITY": mathFidelity,
+                            "COMPUTE KERNEL PATH": computeKernelPaths,
+                            "COMPUTE KERNEL HASH": computeKernelHashes,
+                            "DATA MOVEMENT KERNEL PATH": datamovementKernelPaths,
+                            "DATA MOVEMENT KERNEL HASH": datamovementKernelHashes,
                             "PARALLELIZATION STRATEGY": parallelizationStrategy,
                             "HOST DURATION [ns]": delta_time,
                             "ATTRIBUTES": metadata,

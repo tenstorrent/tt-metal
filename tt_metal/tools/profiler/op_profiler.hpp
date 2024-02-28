@@ -112,6 +112,11 @@ namespace op_profiler {
             vector<string> inputs = {};
             vector<string> outputs = {};
             vector<string> mathFidelities = {};
+            vector<string> computeKernelPaths = {};
+            vector<string> computeKernelHashes = {};
+            vector<string> datamovementKernelPaths = {};
+            vector<string> datamovementKernelHashes = {};
+
             string parlStrategy = "";
             string preferredName = "";
 
@@ -203,6 +208,10 @@ namespace op_profiler {
                     additionalFields.push_back({"Inputs", join_vector(opData.inputs)});
                     additionalFields.push_back({"Outputs", join_vector(opData.outputs)});
                     additionalFields.push_back({"Math Fidelity", join_vector(opData.mathFidelities)});
+                    additionalFields.push_back({"Compute Kernel Paths", join_vector(opData.computeKernelPaths)});
+                    additionalFields.push_back({"Compute Kernel Hashes", join_vector(opData.computeKernelHashes)});
+                    additionalFields.push_back({"Data Movement Kernel Paths", join_vector(opData.datamovementKernelPaths)});
+                    additionalFields.push_back({"Data Movement Kernel Hashes", join_vector(opData.datamovementKernelHashes)});
                     additionalFields.push_back({"Parallelization Strategy", opData.parlStrategy});
                     additionalFields.push_back({"Preferred Name", opData.preferredName});
                     additionalFields.push_back({"Meta Data", join_vector(opData.metaDataVector)});
@@ -291,10 +300,21 @@ namespace op_profiler {
 #endif
                 }
 
-                void append_math_fidelity (const string& fidelity)
+                void append_kernel_info (Kernel* kernel)
                 {
 #if defined(PROFILER)
-                    get_op_data().mathFidelities.push_back(replace_comma(fidelity));
+                    if (kernel->processor() == RISCV::COMPUTE) {
+                        ComputeKernel * compute_kernel = static_cast<ComputeKernel*>(kernel);
+                        MathFidelity math_fidelity = std::get<ComputeConfig>(compute_kernel->config()).math_fidelity;
+                        get_op_data().mathFidelities.push_back(replace_comma(fmt::format("{}", magic_enum::enum_name(math_fidelity))));
+                        get_op_data().computeKernelPaths.push_back(replace_comma(compute_kernel->kernel_path_file_name()));
+                        get_op_data().computeKernelHashes.push_back(replace_comma(compute_kernel->get_full_kernel_name()));
+                    }
+                    else
+                    {
+                        get_op_data().datamovementKernelPaths.push_back(replace_comma(kernel->kernel_path_file_name()));
+                        get_op_data().datamovementKernelHashes.push_back(replace_comma(kernel->get_full_kernel_name()));
+                    }
 #endif
                 }
 
@@ -509,16 +529,12 @@ namespace op_profiler {
 #endif
     }
 
-    static void append_math_fidelities (const Program& program)
+    static void append_kernel_info (const Program& program)
     {
 #if defined(PROFILER)
         for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
             Kernel * kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
-            if (kernel->processor() == RISCV::COMPUTE) {
-                ComputeKernel * compute_kernel = static_cast<ComputeKernel*>(kernel);
-                MathFidelity math_fidelity = std::get<ComputeConfig>(compute_kernel->config()).math_fidelity;
-                detail::operationProfiler.append_math_fidelity(fmt::format("{}", magic_enum::enum_name(math_fidelity)));
-            }
+            detail::operationProfiler.append_kernel_info(kernel);
         }
 #endif
     }

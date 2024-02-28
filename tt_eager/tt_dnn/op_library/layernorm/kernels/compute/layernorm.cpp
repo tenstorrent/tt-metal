@@ -235,6 +235,7 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
                         //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
                         //if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
+            unpack_reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr(do_gamma == 0 && do_beta == 0) {
                 pack_reconfig_data_format(cb_out);
             } else {
