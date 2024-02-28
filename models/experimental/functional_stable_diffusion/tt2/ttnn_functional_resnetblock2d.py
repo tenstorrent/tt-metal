@@ -66,7 +66,16 @@ split_chunks = {
 
 
 class resnetBlock2D:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self,
+        device,
+        parameters,
+        reader_patterns_cache,
+        batch_size,
+        input_height,
+        input_width,
+        compute_kernel_config=None,
+    ):
         self.device = device
         self.parameters = parameters
         self.conv1s = []
@@ -119,6 +128,7 @@ class resnetBlock2D:
                     conv_blocking_and_parallelization_config_override=conv1_config_override,
                     use_shallow_conv_variant=False,
                     enable_auto_formatting=True,
+                    compute_kernel_config=compute_kernel_config,
                 )
             )
 
@@ -159,6 +169,7 @@ class resnetBlock2D:
             enable_auto_formatting=True,
             deallocate_activation=True,
             # reallocate_halo_output=(out_channels, out_channels, input_height, input_width) == (640, 640, 64, 64)
+            compute_kernel_config=compute_kernel_config,
         )
 
         self.output_height = self.conv2.output_height
@@ -198,6 +209,7 @@ class resnetBlock2D:
                 conv_blocking_and_parallelization_config_override=conv_shortcut_config_override,
                 use_shallow_conv_variant=False,
                 enable_auto_formatting=True,
+                compute_kernel_config=compute_kernel_config,
             )
             self.output_height = self.conv_shortcut.output_height
             self.output_width = self.conv_shortcut.output_width

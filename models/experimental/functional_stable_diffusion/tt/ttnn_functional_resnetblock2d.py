@@ -85,6 +85,7 @@ def resnetBlock2D(
     use_in_shortcut: Optional[bool] = None,
     reader_patterns_cache=None,
     dtype: Optional[ttnn.DataType] = None,
+    compute_kernel_config: Optional[Dict] = None,
 ):
     convs_on_device = reader_patterns_cache is not None
     if non_linearity == "mish":
@@ -161,6 +162,7 @@ def resnetBlock2D(
                     conv_blocking_and_parallelization_config_override=conv1_config_override,
                     use_shallow_conv_variant=False,
                     enable_auto_formatting=True,
+                    compute_kernel_config=compute_kernel_config,
                 )
             )
         # breakpoint()
@@ -283,6 +285,7 @@ def resnetBlock2D(
             enable_auto_formatting=True,
             deallocate_activation=True,
             # reallocate_halo_output=(out_channels, out_channels, input_height, input_width) == (640, 640, 64, 64)
+            compute_kernel_config=compute_kernel_config,
         )
 
         hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
@@ -344,6 +347,7 @@ def resnetBlock2D(
                 conv_blocking_and_parallelization_config_override=conv_shortcut_config_override,
                 use_shallow_conv_variant=False,
                 enable_auto_formatting=True,
+                compute_kernel_config=compute_kernel_config,
             )
             input_tensor = run_ttnn_conv_with_pre_and_post_tensor_formatting(
                 device, conv_shortcut, input_tensor, batch_size, input_height, input_width, out_channels

@@ -14,6 +14,7 @@ from models.utility_functions import (
 )
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import is_grayskull
 
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn import (
@@ -30,6 +31,26 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upblock_
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
 )
+
+
+fp32_accum = True
+
+conv_compute_kernel_config = None
+if not is_grayskull():
+    if fp32_accum:
+        conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+    else:
+        conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
 
 def permute_conv_weights(weight, bias):
@@ -195,6 +216,7 @@ def UNet2DConditionModel(
         batch_size = sample.shape[0]
         input_height = sample.shape[2]
         input_width = sample.shape[3]
+
         conv_in = ttnn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -215,6 +237,7 @@ def UNet2DConditionModel(
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
             enable_auto_formatting=True,
+            compute_kernel_config=conv_compute_kernel_config,
         )
         sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
             device, conv_in, sample, batch_size, input_height, input_width, out_channels
@@ -281,6 +304,7 @@ def UNet2DConditionModel(
                 device=device,
                 dtype=dtype,
                 reader_patterns_cache=reader_patterns_cache,
+                compute_kernel_config=conv_compute_kernel_config,
             )
         else:
             assert (
@@ -450,6 +474,7 @@ def UNet2DConditionModel(
             use_shallow_conv_variant=False,
             enable_auto_formatting=True,
             deallocate_activation=True,
+            compute_kernel_config=conv_compute_kernel_config,
         )
         sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
             device, conv_out, sample, batch_size, input_height, input_width, out_channels

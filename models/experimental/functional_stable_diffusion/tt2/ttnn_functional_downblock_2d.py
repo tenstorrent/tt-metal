@@ -10,11 +10,28 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downsam
 
 
 class downblock2d:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self,
+        device,
+        parameters,
+        reader_patterns_cache,
+        batch_size,
+        input_height,
+        input_width,
+        compute_kernel_config=None,
+    ):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
+            resnetBlock2D(
+                device,
+                resnet,
+                reader_patterns_cache,
+                batch_size,
+                input_height,
+                input_width,
+                compute_kernel_config=compute_kernel_config,
+            )
             for resnet in parameters.resnets
         ]
         # self.downsample_2d = downsample_2d(device, parameters.downsamplers[0], reader_patterns_cache, batch_size, input_height, input_width)
@@ -40,6 +57,7 @@ class downblock2d:
         add_downsample=False,
         downsample_padding=1,
         dtype: Optional[ttnn.DataType] = None,
+        compute_kernel_config=None,
     ):
         output_states = ()
         for i, resnet in enumerate(self.resnets):
@@ -74,6 +92,7 @@ class downblock2d:
                     padding=downsample_padding,
                     name="op",
                     dtype=dtype,
+                    compute_kernel_config=compute_kernel_config,
                 )
             ]
 

@@ -86,7 +86,8 @@ Tensor optimized_conv(const Tensor& a,
         TT_ASSERT((output_mem_config.value().is_sharded() || output_mem_config.value().memory_layout == TensorMemoryLayout::INTERLEAVED));
     }
     auto arch = a.storage_type() == StorageType::DEVICE ? a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, false, false);
+    bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
+    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
     return operation::run_without_autoformat(
         OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.dtype()), ashape, use_shallow_conv_variant, kernel_config_val
         ),

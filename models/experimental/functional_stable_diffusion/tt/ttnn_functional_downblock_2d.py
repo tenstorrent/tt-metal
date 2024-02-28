@@ -29,6 +29,7 @@ def downblock2d(
     parameters=None,
     reader_patterns_cache: Optional[dict] = None,
     dtype: Optional[ttnn.DataType] = None,
+    compute_kernel_config=None,
 ):
     output_states = ()
     for i in range(num_layers):
@@ -69,6 +70,7 @@ def downblock2d(
                 device=device,
                 dtype=dtype,
                 reader_patterns_cache=reader_patterns_cache,
+                compute_kernel_config=compute_kernel_config,
             )
         ]
 
