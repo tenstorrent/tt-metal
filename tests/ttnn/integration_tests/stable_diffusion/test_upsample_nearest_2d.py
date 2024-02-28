@@ -9,10 +9,9 @@ import ttnn
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.utility_functions import skip_for_wormhole_b0, torch_random
+from models.utility_functions import torch_random
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("input_shape", [(2, 1280, 4, 4), (2, 1280, 8, 8), (2, 640, 16, 16)])
 @pytest.mark.parametrize("scale_factor", [2])
 def test_upsample_nearest2d_256x256(reset_seeds, device, input_shape, scale_factor):
@@ -29,7 +28,6 @@ def test_upsample_nearest2d_256x256(reset_seeds, device, input_shape, scale_fact
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("input_shape", [(2, 1280, 8, 8), (2, 1280, 16, 16), (2, 640, 32, 32)])
 @pytest.mark.parametrize("scale_factor", [2])
 def test_upsample_nearest2d_512x512(reset_seeds, device, input_shape, scale_factor):

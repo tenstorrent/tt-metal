@@ -12,7 +12,7 @@ from models.experimental.functional_stable_diffusion.custom_preprocessing import
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.utility_functions import skip_for_wormhole_b0, tt_to_torch_tensor, torch_random
+from models.utility_functions import torch_random
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -31,7 +31,6 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     ],
 )
 @pytest.mark.parametrize("scale_factor", [2])
-@skip_for_wormhole_b0()
 def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input_height, input_width, index):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -76,7 +75,6 @@ def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input
     ],
 )
 @pytest.mark.parametrize("scale_factor", [2])
-@skip_for_wormhole_b0()
 def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input_height, input_width, index):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -99,6 +97,7 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
     torch_output = resnet_upsampler(input)
 
     tt_input_tensor = ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    reader_patterns_cache = {}
     tt_up = upsample2d(
         device,
         tt_input_tensor,
@@ -106,6 +105,7 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
         in_channels,
         out_channels,
         scale_factor,
+        reader_patterns_cache,
     )
     torch_up = ttnn.to_torch(tt_up)
 

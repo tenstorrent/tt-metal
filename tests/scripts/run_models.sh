@@ -12,6 +12,10 @@ if [[ $ARCH_NAME == "grayskull" ]]; then
   env pytest tests/ttnn/integration_tests
 fi
 
+if [[ $ARCH_NAME == "wormhole" ]]; then
+  env pytest tests/ttnn/integration_tests/stable_diffusion
+fi
+
 env pytest models/experimental/whisper -k whisper_attention
 env pytest models/experimental/whisper -k WhipserDecoderLayer_inference
 
