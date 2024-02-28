@@ -174,15 +174,18 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 *************************************************************************/
 
 template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize_init() {
-    _llk_pack_untilize_init_<block_ct_dim>();
+inline void llk_pack_untilize_init(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+    _llk_pack_untilize_init_<block_ct_dim>(
+        face_r_dim,
+        num_faces
+    );
 
     // Pack row by row
     TT_SETADCXX(p_setadc::PAC, FACE_R_DIM-1, 0x0);
 }
 
-template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
+template <std::uint32_t block_ct_dim = 8, bool pack_dense = false /*not used*/>
+inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
 
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
@@ -191,7 +194,9 @@ inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
 
         _llk_pack_untilize_<block_ct_dim>(
             pack_tile_addr,
-            pack_dst_format[output_id]
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces
         );
 
         pack_tile_addr += block_ct_dim*cb_interface[output_id].fifo_page_size;

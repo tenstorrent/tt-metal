@@ -180,11 +180,12 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t operandB,
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
-    std::uint32_t block_ct_dim) {
+    std::uint32_t block_ct_dim,
+    std::uint32_t num_faces) {
 
     std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    //const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -205,7 +206,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     // Program srcA and srcB base addresses
-    std::uint32_t num_loops = narrow_tile ? 2 : num_faces/2;
+    std::uint32_t num_loops = narrow_tile ? 2 : ((num_faces>1) ? num_faces/2 : 1);
 
     // Clear z/w start counters for SrcB
     TTI_SETADCZW(UNP1, 0, 0, 0, 0, 0b1111);
@@ -249,8 +250,9 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
-    std::uint32_t tile_idx_b) {
+    std::uint32_t tile_idx_b,
+    std::uint32_t num_faces) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
+        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
 }
