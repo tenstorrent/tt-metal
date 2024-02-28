@@ -1145,6 +1145,7 @@ class Bottleneck:
             per_core_weight_w,
             num_cores_nhw,  # This number is only meaningful for batch 8, 16
         ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][(conv2_output_padded_face_size, width)]
+
         assert per_core_act_h % 32 == 0
         per_core_act_h_ntiles = (int)(per_core_act_h / 32)
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
@@ -1168,16 +1169,17 @@ class Bottleneck:
             config_override = {
                 "act_block_w": act_block_w,
                 "act_block_h": act_block_h,
-                "weight_block_w": weight_block_w,
                 "out_subblock_h": out_subblock_h,
                 "out_subblock_w": out_subblock_w,
-                "out_block_h": out_block_h,
-                "act_c_num_blocks": grid_size[1] if conv_2d else 1,
                 "grid_size": grid_size,
                 "per_core_out_matrix_height": per_core_act_h,
                 "per_core_weight_matrix_width": per_core_weight_w,
                 "num_cores_nhw": num_cores_nhw,
             }
+
+            assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
+            assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
+
             move_utwh_output = False
             if self.deallocate and (
                 self.module_input_shape[0] == 20
@@ -1525,16 +1527,16 @@ class ResNet(nn.Module):
             config_override = {
                 "act_block_w": act_block_w,
                 "act_block_h": act_block_h,
-                "weight_block_w": weight_block_w,
                 "out_subblock_h": out_subblock_h,
                 "out_subblock_w": out_subblock_w,
-                "out_block_h": out_block_h,
-                "act_c_num_blocks": 1,
                 "grid_size": grid_size,
                 "per_core_out_matrix_height": per_core_act_h,
                 "per_core_weight_matrix_width": per_core_weight_w,
                 "num_cores_nhw": self.first_conv_num_cores_nhw,
             }
+
+            assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
+            assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
 
             tt_tensor_conv_weight = tt_lib.tensor.Tensor(
                 conv1_weight.reshape(-1).tolist(),
