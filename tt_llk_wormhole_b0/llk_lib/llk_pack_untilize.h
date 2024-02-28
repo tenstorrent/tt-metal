@@ -32,8 +32,8 @@ inline void _llk_pack_untilize_configure_addrmod_() {
 }
 
 template <std::uint32_t block_ct_dim>
-inline void _llk_pack_untilize_mop_config_() {
-    const uint PACKCNT = 4;
+inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+    const uint PACKCNT = (face_r_dim < FACE_R_DIM) ? 1 : num_faces;
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr uint MOP_INNER_LOOP = 1;
@@ -49,19 +49,21 @@ inline void _llk_pack_untilize_mop_config_() {
 }
 
 template <std::uint32_t block_ct_dim>
-inline void _llk_pack_untilize_init_() {
+inline void _llk_pack_untilize_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
 
     _llk_pack_untilize_configure_addrmod_();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim>();
+    _llk_pack_untilize_mop_config_<block_ct_dim>(face_r_dim, num_faces);
 }
 
 template <std::uint32_t block_ct_dim>
-inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t pack_dst_format) {
+inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t pack_dst_format,const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4 /*not used*/) {
 
     program_packer_untilized_destination<block_ct_dim>(address, pack_dst_format);
 
-    for (std::uint32_t row=0; row<TILE_R_DIM/4; row++) {
+    const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : TILE_R_DIM/4;
+
+    for (std::uint32_t row=0; row<num_rows; row++) {
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 0); // Clear tile counter
         ckernel::ckernel_template::run(instrn_buffer);
         TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile

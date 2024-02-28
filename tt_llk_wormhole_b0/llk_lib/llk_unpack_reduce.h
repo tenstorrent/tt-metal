@@ -62,7 +62,8 @@ inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_trans
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
-    TTI_SETADCXX(0b11, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+    TTI_SETADCXX(p_setadc::UNP0, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM-1, 0x0);
 
     _llk_unpack_reduce_mop_config_<type, dim>(num_faces);
 }
@@ -78,9 +79,6 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
     // Wait for free context
     wait_for_next_context(2);
 
-    // Load only 16 datums into srcB
-    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM-1, 0x0);
-
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
 
@@ -93,9 +91,6 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
 
     // Run MOP
     ckernel::ckernel_template::run(instrn_buffer);
-
-    // Restore face height
-    TTI_SETADCXX(p_setadc::UNP1, FACE_R_DIM*FACE_C_DIM-1, 0x0);
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

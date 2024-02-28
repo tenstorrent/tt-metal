@@ -20,7 +20,7 @@ template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
 template <PoolType type, ReduceDim dim, int MATH_FIDELITY_DESC = 0, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
-inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false) {
+inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, const uint num_faces = 4) {
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
@@ -160,7 +160,8 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false) {
         // Increment dest by 32 for next accumulation
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
     } else if constexpr (dim == ReduceDim::REDUCE_COL) {
-        for (int row_tile = 0; row_tile < 2; row_tile++) {
+        const uint num_row_tiles = narrow_tile ? 2 : ((num_faces>1) ? num_faces/2 : 1); 
+        for (uint row_tile = 0; row_tile < num_row_tiles; row_tile++) {
             // Just pool
             if constexpr (type == PoolType::MAX) {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
@@ -171,16 +172,18 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false) {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
                 }
             }
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            if (!narrow_tile) {
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
-            if constexpr (type == PoolType::MAX) {
-                TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            } else {
-                if constexpr (HIGH_FIDELITY) {
-                    ckernel_template::run(instrn_buffer);
+                if constexpr (type == PoolType::MAX) {
+                    TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
                 } else {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+                    if constexpr (HIGH_FIDELITY) {
+                        ckernel_template::run(instrn_buffer);
+                    } else {
+                        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+                    }
                 }
             }
             // Reset Dest Counter
