@@ -55,7 +55,6 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
-
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -115,10 +114,17 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     # setup pytorch model
     torch.manual_seed(0)
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
-    model = pipe.unet
-    model.eval()
+    load_from_disk = True
+    if not load_from_disk:
+        pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+
+        model = pipe.unet
+        model.eval()
+        config = model.config
+    else:
+        model = torch.load("unet.pt")
+        config = torch.load("unet_config.pt")
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
@@ -130,7 +136,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     attention_mask = None
     cross_attention_kwargs = None
     return_dict = True
-    config = model.config
 
     hidden_states_shape = [batch_size, in_channels, input_height, input_width]
 

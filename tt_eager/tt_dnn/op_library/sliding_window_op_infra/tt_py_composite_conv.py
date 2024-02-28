@@ -314,6 +314,8 @@ def determine_1x1conv_as_matmul_config(
             mcast_in0=False,
         )
     else:
+        if conv_blocking_config.act_block_w_ntiles % conv_blocking_config.act_c_num_blocks != 0:
+            breakpoint()
         assert (
             conv_blocking_config.act_block_w_ntiles % conv_parallelization_config.grid_size.y == 0
         ), "Expected act block width to be divisible by act channel num blocks."
@@ -418,6 +420,8 @@ class TTPyCompositeConv(TTPyOp):
             device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
+        self.per_core_out_matrix_height = self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
+        self.per_core_out_matrix_width = self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles * 32
         self.parallel_config = self.opt_conv_parall_conf_auto
 
         self.opt_conv_block_conf_auto = determine_per_core_block_config(
@@ -854,9 +858,12 @@ class TTPyCompositeConv(TTPyOp):
                 bias_channels_padded_shape = [1, 1, 32, _nearest_y(K, weight_block_w_ntiles * 32)]
                 bias_untiled = bias.pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
                 # TODO: what api to use to convert the datatype of tensor?? Converting to pytorch for now and creating another tensor with it
+                import ttnn
+
                 bias_untiled = bias_untiled.to_torch()
-                bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
-                bias_on_device = bias_.to(device) if move_weights_to_device else bias_
+                bias_ = ttnn.from_torch(bias_untiled, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT)
+                # bias_ = ttl.tensor.Tensor(bias_untiled, weights_dtype).to(ttl.tensor.Layout.TILE)
+                bias_on_device = bias_.value.to(device) if move_weights_to_device else bias_
             self.bias = bias_on_device
         else:
             self.weight = weight
