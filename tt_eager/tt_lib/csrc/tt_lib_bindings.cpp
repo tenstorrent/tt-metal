@@ -82,6 +82,15 @@ void DeviceModule(py::module &m_device) {
         | device           | TT Device to close     | tt_lib.device.Device  |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
+    m_device.def("ResetDevice", &tt::tt_metal::detail::ResetDevice, R"doc(
+        Reset an instance of TT accelerator device to default state.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | TT Device to reset     | tt_lib.device.Device  |             | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+    )doc");
     m_device.def("CloseDevices", &tt::tt_metal::detail::CloseDevices, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 

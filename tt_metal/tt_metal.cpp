@@ -153,6 +153,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
     }
 }
 
+void ResetDevice(Device *device) {
+    device->reset_device();
+}
+
     void print_page(uint32_t dev_page_id, CoreCoord core, uint32_t host_page_id, CoreCoord noc_coordinates, uint32_t l1_address, uint32_t bank_id, std::vector<uint32_t> page){
         std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
         std::cout << "host_page_index " << host_page_id << std::endl;

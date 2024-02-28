@@ -810,6 +810,19 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     return true;
 }
 
+void Device::reset_device(){
+    log_info(tt::LogMetal, "Resetting device {}", this->id_);
+    this->deallocate_buffers();
+
+    log_info(tt::LogMetal, "clearing L1");
+    if (llrt::OptionsG.get_clear_l1()) {
+        this->clear_l1_state();
+    }
+    tt::Cluster::instance().l1_barrier(this->id_);
+    allocator::clear(*this->allocator_);
+    log_info(tt::LogMetal, "device reset");
+}
+
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
@@ -818,7 +831,7 @@ bool Device::close() {
     this->deallocate_buffers();
     watcher_detach(this);
     DprintServerDetach(this);
-
+    // this->reset_device(this);
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {

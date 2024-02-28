@@ -36,6 +36,7 @@ namespace tt::tt_metal{
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
 
+        void ResetDevice(Device *device);
         /**
         * Copies data from a host buffer into the specified buffer
         *
