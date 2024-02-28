@@ -36,6 +36,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     disable_compilation_reports,
     is_e75,
+    is_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -344,6 +345,13 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"falcon {comment} inference time: {second_iter_time}")
     logger.info(f"falcon {comment} compile time: {compile_time}")
 
+    if does_pass:
+        logger.info("Falcon PCC Check Passed!")
+    else:
+        logger.warning("Falcon PCC Check Failed!")
+        if is_wormhole_b0():  # only assert for pcc on wormhole until grayskull pcc is fixed
+            assert does_pass, f"PCC value is lower than {pcc}"
+
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -365,7 +373,7 @@ def run_test_FalconCausalLM_end_to_end(
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((32, 0.86),),
+    ((32, 0.89),),
     ids=["layers_32"],
 )
 @pytest.mark.parametrize(
@@ -433,7 +441,7 @@ def test_perf_bare_metal(
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((32, 0.86),),
+    ((32, 0.89),),
     ids=["layers_32"],
 )
 @pytest.mark.parametrize(
