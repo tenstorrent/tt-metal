@@ -127,8 +127,6 @@ void kernel_main() {
     // Reduce scalar = 1
     cb_reserve_back(in_scalar_cb_id, 1);
 
-    // kernel_profiler::mark_time(7);
-
     uint16_t bf16_one_u16 = bf16_one_u32 >> 16;
     // fill 1 tile w/ scalar
     fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_HW, bf16_one_u16);
@@ -145,8 +143,6 @@ void kernel_main() {
     fill_with_val_async(s_const, in_l1_write_addr, in_cb_nrows, in_nbytes_c);
     noc_async_read_barrier();
 
-    // kernel_profiler::mark_time(8);
-
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
         int32_t start_h = base_start_h;
@@ -161,8 +157,6 @@ void kernel_main() {
                 int32_t curr_start_w = start_w;
                 for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
                     // if (out_w_i * out_elem_i >= out_w) continue; // TODO: Need some guard for the out of bounds when out_w is not multiple of out_nelems
-
-                    // kernel_profiler::mark_time(9);
 
                     // start = {start_h, curr_start_w}
                     int32_t end_h = start_h + window_h;
@@ -192,7 +186,6 @@ void kernel_main() {
                     }
                     in_l1_write_addr += in_cb_pagesize;
                     curr_start_w += stride_w; // increment by stride_w
-                    // kernel_profiler::mark_time(10);
                 }
                 noc_async_read_barrier();
                 // input for current output index (out_h_i, out_w_i) are ready for this block to be consumed by triscs
