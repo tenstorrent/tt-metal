@@ -74,35 +74,13 @@ class default_setup(metaclass=MergeMetaclass):
         },
     }
 
-    riscsData = {
-        "BRISC": {"color": "light:g"},
-        "NCRISC": {"color": "light:r"},
-        "TRISC_0": {"color": "light:gray"},
-        "TRISC_1": {"color": "light:gray"},
-        "TRISC_2": {"color": "light:gray"},
-        "TENSIX": {"color": "light:b"},
-    }
-
     displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum", "Range"]
 
-    cycleRange = None
-    # Example
-    # cycleRange = (34.676e9, 60e9)
-
-    intrestingCores = None
-    # Example
-    # intrestingCores = [(0, 0), (0, 9), (6, 9)]
-
-    # ignoreMarkers = None
-    # Example
-    ignoreMarkers = [65535]
+    detectOps = True
 
     outputFolder = f"output/device"
     deviceInputLog = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
-    deviceRearranged = "device_rearranged_timestamps.csv"
     deviceAnalysisData = "device_analysis_data.json"
-    deviceChromeTracing = "device_chrome_tracing.json"
-    devicePerfHTML = "timeline.html"
     deviceStatsTXT = "device_stats.txt"
     deviceTarball = "device_perf_results.tgz"
 

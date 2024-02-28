@@ -197,12 +197,7 @@ def extract_device_info(deviceInfo):
         raise Exception
 
 
-def import_device_profile_log(
-    logPath,
-    xRange=None,
-    intrestingCores=None,
-    ignoreMarkers=None,
-):
+def import_device_profile_log(logPath):
     devicesData = {"devices": {}}
     with open(logPath) as csvFile:
         csvReader = csv.reader(csvFile, delimiter=",")
@@ -216,12 +211,8 @@ def import_device_profile_log(
             elif lineCount > 1:
                 chipID = int(row[0].strip())
                 core = (int(row[1].strip()), int(row[2].strip()))
-                if intrestingCores and core not in intrestingCores:
-                    continue
                 risc = row[3].strip()
                 timerID = {"id": int(row[4].strip()), "zoneName": "", "zonePhase": "", "srcLine": "", "srcFile": ""}
-                if ignoreMarkers and timerID in ignoreMarkers:
-                    continue
                 timeData = int(row[5].strip())
                 if len(row) > 6:
                     runID = int(row[6].strip())
@@ -272,22 +263,15 @@ def import_device_profile_log(
             for core, coreData in deviceData["cores"].items():
                 for risc, riscData in coreData["riscs"].items():
                     riscData["timeseries"].sort(key=lambda x: x[1])
-                    newTimeseries = []
                     for marker, timestamp in riscData["timeseries"]:
                         shiftedTS = timestamp - globalMinTS
-                        if xRange and xRange[0] < shiftedTS < xRange[1]:
-                            newTimeseries.append((marker, shiftedTS))
-                    if newTimeseries:
-                        riscData["timeseries"] = newTimeseries
-                        foundRange.add((chipID, core, risc))
-                    else:
-                        riscData["timeseries"].insert(
-                            0,
-                            (
-                                {"id": 0, "zoneName": "", "zonePhase": "", "srcLine": "", "srcFile": ""},
-                                deviceData["metadata"]["global_min"]["ts"],
-                            ),
-                        )
+                    riscData["timeseries"].insert(
+                        0,
+                        (
+                            {"id": 0, "zoneName": "", "zonePhase": "", "srcLine": "", "srcFile": ""},
+                            deviceData["metadata"]["global_min"]["ts"],
+                        ),
+                    )
 
         if foundRange:
             for chipID, deviceData in devicesData["devices"].items():
@@ -337,7 +321,7 @@ def is_new_op_device(tsCore, coreOpMap):
     return appendTs, isNewOp, isNewOpFinished
 
 
-def risc_to_core_timeseries(devicesData):
+def risc_to_core_timeseries(devicesData, detectOps):
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
             tmpTimeseries = []
@@ -348,18 +332,19 @@ def risc_to_core_timeseries(devicesData):
             tmpTimeseries.sort(key=lambda x: x[1])
 
             ops = []
-            for ts in tmpTimeseries:
-                timerID, tsValue, risc = ts
-                if is_new_op_core(ts):
-                    ops.append([ts])
-                else:
-                    if len(ops) > 0:
-                        ops[-1].append(ts)
+            if detectOps:
+                for ts in tmpTimeseries:
+                    timerID, tsValue, risc = ts
+                    if is_new_op_core(ts):
+                        ops.append([ts])
+                    else:
+                        if len(ops) > 0:
+                            ops[-1].append(ts)
 
             coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "ops": ops}
 
 
-def core_to_device_timeseries(devicesData):
+def core_to_device_timeseries(devicesData, detectOps):
     for chipID, deviceData in devicesData["devices"].items():
         tmpTimeseries = {"riscs": {}}
         for core, coreData in deviceData["cores"].items():
@@ -378,16 +363,17 @@ def core_to_device_timeseries(devicesData):
             tmpTimeseries["riscs"][risc]["timeseries"].sort(key=lambda x: x[1])
 
         ops = []
-        coreOpMap = {}
-        for ts in tmpTimeseries["riscs"]["TENSIX"]["timeseries"]:
-            appendTs, isNewOp, isNewOpFinished = is_new_op_device(ts, coreOpMap)
-            if appendTs:
-                if isNewOp:
-                    ops.append({"timeseries": []})
-                if len(ops) > 0:
-                    ops[-1]["timeseries"].append(ts)
-            if isNewOpFinished:
-                coreOpMap = {}
+        if detectOps:
+            coreOpMap = {}
+            for ts in tmpTimeseries["riscs"]["TENSIX"]["timeseries"]:
+                appendTs, isNewOp, isNewOpFinished = is_new_op_device(ts, coreOpMap)
+                if appendTs:
+                    if isNewOp:
+                        ops.append({"timeseries": []})
+                    if len(ops) > 0:
+                        ops[-1]["timeseries"].append(ts)
+                if isNewOpFinished:
+                    coreOpMap = {}
 
         tmpTimeseries["riscs"]["TENSIX"]["ops"] = ops
         deviceData["cores"]["DEVICE"] = tmpTimeseries
@@ -659,11 +645,9 @@ def validate_setup(ctx, param, setup):
 
 
 def import_log_run_stats(setup=device_post_proc_config.default_setup()):
-    devicesData = import_device_profile_log(
-        setup.deviceInputLog, setup.cycleRange, setup.intrestingCores, setup.ignoreMarkers
-    )
-    risc_to_core_timeseries(devicesData)
-    core_to_device_timeseries(devicesData)
+    devicesData = import_device_profile_log(setup.deviceInputLog)
+    risc_to_core_timeseries(devicesData, setup.detectOps)
+    core_to_device_timeseries(devicesData, setup.detectOps)
 
     for name, analysis in sorted(setup.timerAnalysis.items()):
         if analysis["across"] == "core":
@@ -695,16 +679,16 @@ def generate_artifact_tarball(setup):
     "-d", "--device-input-log", type=click.Path(exists=True, dir_okay=False), help="Input device side csv log"
 )
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
-@click.option("-p", "--port", type=int, help="Dashboard webapp port")
 @click.option("--no-print-stats", default=False, is_flag=True, help="Do not print timeline stats")
 @click.option("--no-artifacts", default=False, is_flag=True, help="Do not generate artifacts tarball")
-def main(setup, device_input_log, output_folder, port, no_print_stats, no_artifacts):
+@click.option("--no-op-detection", default=False, is_flag=True, help="Do not attempt to detect ops")
+def main(setup, device_input_log, output_folder, no_print_stats, no_artifacts, no_op_detection):
     if device_input_log:
         setup.deviceInputLog = device_input_log
     if output_folder:
         setup.outputFolder = output_folder
-    if port:
-        setup.webappPort = port
+    if no_op_detection:
+        setup.detectOps = False
 
     devicesData = import_log_run_stats(setup)
 
