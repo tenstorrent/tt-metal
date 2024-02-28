@@ -465,10 +465,6 @@ Tensor convert_python_tensor_to_tt_tensor(
 #endif
                     auto profile_scope = tt::tt_metal::op_profiler::OpProfileScope(
                         op.get_type_name(), tt::tt_metal::op_profiler::OpType::python_fallback);
-                    auto do_profile = tt::tt_metal::op_profiler::get_profiler_flag();
-                    if (do_profile) {
-                        op_profiler::set_preferred_name(op.get_type_name());
-                    }
 
                     auto output_tensors = function(*args, **kwargs);
 
