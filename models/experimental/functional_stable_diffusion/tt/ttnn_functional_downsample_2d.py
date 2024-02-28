@@ -49,6 +49,7 @@ def downsample_2d(
     padding=1,
     reader_patterns_cache: Optional[dict] = None,
     dtype: Optional[ttnn.DataType] = None,
+    compute_kernel_config=None,
 ):
     stride = 2
 
@@ -89,6 +90,7 @@ def downsample_2d(
                 conv_blocking_and_parallelization_config_override=conv_config_override,
                 use_shallow_conv_variant=False,
                 enable_auto_formatting=True,
+                compute_kernel_config=compute_kernel_config,
             )
         else:
             parameters.conv.weight = torch_to_tt_tensor_rm(parameters.conv.weight, device, put_on_device=False)

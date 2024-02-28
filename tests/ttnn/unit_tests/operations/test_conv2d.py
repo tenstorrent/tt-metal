@@ -57,6 +57,7 @@ def run_conv(
     use_shallow_conv_variant=False,
     enable_auto_formatting=False,
     padded_input_channels=None,
+    fp32_accum=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -90,7 +91,7 @@ def run_conv(
     )
 
     if not is_grayskull():
-        if activations_dtype == ttnn.DataType.FLOAT32 or weights_dtype == ttnn.DataType.FLOAT32:
+        if fp32_accum:
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=math_fidelity,
                 math_approx_mode=True,
@@ -516,17 +517,25 @@ def test_resnet50_conv_wh(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.float32],
+    [ttnn.float32, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.float32, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "fp32_accum",
+    [
+        False,
+        True,
+    ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 def test_resnet50_conv_wh_fp32(
     use_program_cache,
     device,
     math_fidelity,
+    fp32_accum,
     activations_dtype,
     weights_dtype,
     batch_size,
@@ -579,6 +588,7 @@ def test_resnet50_conv_wh_fp32(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        fp32_accum=fp32_accum,
     )
 
 
@@ -711,6 +721,147 @@ def test_sd_conv(
             use_shallow_conv_variant=(input_channels == 16),
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
+        )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    (
+        # sd convs with HxW=32x32
+        # (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
+        # (1, 320, 320, 32, 32, 3, 3, 2, 2, 1, 1, False, None),
+        # (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, False, None),
+        # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, False, None), # bfloat16 activations doesnt fit
+        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, None), # slighlty low pcc with 0.99689. bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 8, 8, 3, 3, 2, 2, 1, 1, False, None), #fails to parallelize with sharding
+        # (1, 1280, 1280, 4, 4, 3, 3, 1, 1, 1, 1, False, None), #fails to parallelize with sharding
+        # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit
+        # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None), # doesnt fit at all.. for all data types
+        # sd convs with HxW=64x64 with batch size = 1
+        # (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
+        # (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
+        # (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),
+        # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  #
+        # (1, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
+        # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit.
+        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
+        # (1, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
+        # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        # # sd convs with HxW=64x64 with batch size=2
+        (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
+        (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
+        (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
+        (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 doesnt fit
+        (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
+        (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
+        (2, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        (2, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
+        (2, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        (2, 1280, 1920, 16, 16, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 1920, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # 1x1 conv
+        (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, False, None),
+        # Small conv
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, None),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "fp32_accum",
+    [
+        False,
+        True,
+    ],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("enable_auto_formatting", [True, False])
+def test_sd_conv_wh(
+    use_program_cache,
+    device,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    fp32_accum,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    enable_auto_formatting,
+):
+    if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
+        if enable_auto_formatting:
+            pytest.skip("Not running split SD conv with auto formatting")
+        run_conv_with_split(
+            device,
+            math_fidelity,
+            activations_dtype,
+            weights_dtype,
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            filter_height,
+            filter_width,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            use_1d_systolic_array,
+            config_override,
+            split_factor=3 if input_channels == 1920 else 2,
+        )
+    else:
+        run_conv(
+            device,
+            math_fidelity,
+            activations_dtype,
+            weights_dtype,
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            filter_height,
+            filter_width,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            use_1d_systolic_array,
+            config_override,
+            use_shallow_conv_variant=(input_channels == 16),
+            enable_auto_formatting=enable_auto_formatting,
+            padded_input_channels=16 if input_channels == 16 else None,
+            fp32_accum=fp32_accum,
         )
 
 
