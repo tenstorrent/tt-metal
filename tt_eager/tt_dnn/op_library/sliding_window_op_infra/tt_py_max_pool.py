@@ -29,132 +29,102 @@ GS_GRID_SIZE = (12, 9)
 WH_GRID_SIZE = (8, 8)
 
 
-# def determine_parallel_config(swo_params: SlidingWindowOpParams):
-#     dilation_h, dilation_w = 1, 1
-#     out_h = (
-#         math.floor(
-#             (swo_params.input_h + 2 * swo_params.pad_h - (dilation_h * swo_params.window_h - 1) - 1)
-#             / swo_params.stride_h
-#         )
-#         + 1
-#     )
-#     out_w = (
-#         math.floor(
-#             (swo_params.input_w + 2 * swo_params.pad_w - (dilation_w * swo_params.window_w - 1) - 1)
-#             / swo_params.stride_w
-#         )
-#         + 1
-#     )
+def determine_parallel_config(swo_params: SlidingWindowOpParams):
+    dilation_h, dilation_w = 1, 1
+    out_h = (
+        math.floor(
+            (swo_params.input_h + 2 * swo_params.pad_h - (dilation_h * swo_params.window_h - 1) - 1)
+            / swo_params.stride_h
+        )
+        + 1
+    )
+    out_w = (
+        math.floor(
+            (swo_params.input_w + 2 * swo_params.pad_w - (dilation_w * swo_params.window_w - 1) - 1)
+            / swo_params.stride_w
+        )
+        + 1
+    )
 
-#     ncores_nhw = 1
-#     grid_size = (1, 1)
-#     shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))})
-#     out_hw = out_h * out_w
-#     out_nhw = swo_params.batch_size * out_hw
+    ncores_nhw = 1
+    grid_size = (1, 1)
+    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))})
+    out_hw = out_h * out_w
+    out_nhw = swo_params.batch_size * out_hw
 
-#     ## NOTE: these should match the max_pool op code for now.
-#     if out_nhw == 1024:
-#         ncores_nhw = 32
-#         grid_size = (12, 3)
-#         shard_grid = ttl.tensor.CoreRangeSet(
-#             {
-#                 ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 1)),
-#                 ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 2), ttl.tensor.CoreCoord(7, 2)),
-#             }
-#         )
-#     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
-#         ncores_nhw = 64
-#         grid_size = (12, 6)
-#         shard_grid = ttl.tensor.CoreRangeSet(
-#             {
-#                 ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 4)),
-#                 ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 5), ttl.tensor.CoreCoord(3, 5)),
-#             }
-#         )
-#     elif (
-#         out_nhw == 3136
-#         or out_nhw == 6272
-#         or out_nhw == 12544
-#         or out_nhw == 25088
-#         or out_nhw == 50176
-#         or out_nhw == 62720
-#     ):
-#         ncores_nhw = 98
-#         grid_size = (12, 9)
-#         shard_grid = ttl.tensor.CoreRangeSet(
-#             {
-#                 ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 7)),
-#                 ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 8), ttl.tensor.CoreCoord(1, 8)),
-#             }
-#         )
-#     else:
-#         grid_size = GS_GRID_SIZE
-#         ncores_nhw = grid_size[0] * grid_size[1]
-#         while ncores_nhw > 0:
-#             ## 1. each shard should be equal, 2. each shard should be multiple of 32 (this is needed only for bfp8_b datatype (TILE))
-#             if out_nhw % ncores_nhw == 0 and out_nhw // ncores_nhw % 32 == 0:
-#                 break
-#             ncores_nhw -= 1
-#         if ncores_nhw == 0:
-#             assert False, f"Unsupported output shape for max_pool: {out_nhw}"
-#         grid_size = (grid_size[0], math.ceil(ncores_nhw / grid_size[0]))  ## bounding box
-#         if ncores_nhw < grid_size[0]:
-#             shard_grid = ttl.tensor.CoreRangeSet(
-#                 {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(ncores_nhw - 1, 0))}
-#             )
-#         else:
-#             if ncores_nhw % grid_size[0] == 0:
-#                 shard_grid = ttl.tensor.CoreRangeSet(
-#                     {
-#                         ttl.tensor.CoreRange(
-#                             ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
-#                         )
-#                     }
-#                 )
-#             else:
-#                 shard_grid = ttl.tensor.CoreRangeSet(
-#                     {
-#                         ttl.tensor.CoreRange(
-#                             ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 2)
-#                         ),
-#                         ttl.tensor.CoreRange(
-#                             ttl.tensor.CoreCoord(0, grid_size[1] - 1),
-#                             ttl.tensor.CoreCoord(ncores_nhw % grid_size[0] - 1, grid_size[1] - 1),
-#                         ),
-#                     }
-#                 )
-
-#     return grid_size, shard_grid, ncores_nhw
-
-
-def calculate_shard_grid(ncores_nhw, grid_size):
-    shard_grid = None
-    if ncores_nhw < grid_size[0]:
+    ## NOTE: these should match the max_pool op code for now.
+    if out_nhw == 1024:
+        ncores_nhw = 32
+        grid_size = (12, 3)
         shard_grid = ttl.tensor.CoreRangeSet(
-            {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(ncores_nhw - 1, 0))}
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 1)),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 2), ttl.tensor.CoreCoord(7, 2)),
+            }
+        )
+    elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
+        ncores_nhw = 64
+        grid_size = (12, 6)
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 4)),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 5), ttl.tensor.CoreCoord(3, 5)),
+            }
+        )
+    elif (
+        out_nhw == 3136
+        or out_nhw == 6272
+        or out_nhw == 12544
+        or out_nhw == 25088
+        or out_nhw == 50176
+        or out_nhw == 62720
+    ):
+        ncores_nhw = 98
+        grid_size = (12, 9)
+        shard_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 7)),
+                ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 8), ttl.tensor.CoreCoord(1, 8)),
+            }
         )
     else:
-        if ncores_nhw % grid_size[0] == 0:
+        grid_size = GS_GRID_SIZE
+        ncores_nhw = grid_size[0] * grid_size[1]
+        while ncores_nhw > 0:
+            ## 1. each shard should be equal, 2. each shard should be multiple of 32 (this is needed only for bfp8_b datatype (TILE))
+            if out_nhw % ncores_nhw == 0 and out_nhw // ncores_nhw % 32 == 0:
+                break
+            ncores_nhw -= 1
+        if ncores_nhw == 0:
+            assert False, f"Unsupported output shape for max_pool: {out_nhw}"
+        grid_size = (grid_size[0], math.ceil(ncores_nhw / grid_size[0]))  ## bounding box
+        if ncores_nhw < grid_size[0]:
             shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
-                    )
-                }
+                {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(ncores_nhw - 1, 0))}
             )
         else:
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 2)
-                    ),
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, grid_size[1] - 1),
-                        ttl.tensor.CoreCoord(ncores_nhw % grid_size[0] - 1, grid_size[1] - 1),
-                    ),
-                }
-            )
-    return shard_grid
+            if ncores_nhw % grid_size[0] == 0:
+                shard_grid = ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
+                        )
+                    }
+                )
+            else:
+                shard_grid = ttl.tensor.CoreRangeSet(
+                    {
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 2)
+                        ),
+                        ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, grid_size[1] - 1),
+                            ttl.tensor.CoreCoord(ncores_nhw % grid_size[0] - 1, grid_size[1] - 1),
+                        ),
+                    }
+                )
+
+    return grid_size, shard_grid, ncores_nhw
 
 
 class TTPyMaxPool(TTPyOp):
@@ -179,26 +149,7 @@ class TTPyMaxPool(TTPyOp):
         # if output_mem_config is not None:
         #     dtype = output_mem_config.dtype()
 
-        from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
-            determine_parallel_config as conv_determine_parallel_config,
-        )
-
-        # self.grid_size, self.shard_grid, self.ncores_nhw = determine_parallel_config(sliding_window_op_params)
-        conv_parallel_config, self.ncores_nhw = conv_determine_parallel_config(
-            True,
-            sliding_window_op_params.batch_size,
-            0,
-            0,
-            sliding_window_op_params.input_h,
-            sliding_window_op_params.input_w,
-            sliding_window_op_params,
-            device,
-        )
-        self.grid_size = (conv_parallel_config.grid_size.x, conv_parallel_config.grid_size.y)
-        self.shard_grid = calculate_shard_grid(self.ncores_nhw, self.grid_size)
-
-        print(f"grid_size: {self.grid_size}, shard_grid: {self.shard_grid}, ncores_nhw: {self.ncores_nhw}")
-
+        self.grid_size, self.shard_grid, self.ncores_nhw = determine_parallel_config(sliding_window_op_params)
         if isinstance(sliding_window_op_params, SlidingWindowOpParams):
             self.sliding_window_op_params = SlidingWindowOpParamsWithParallelConfig(
                 stride_h=sliding_window_op_params.stride_h,
