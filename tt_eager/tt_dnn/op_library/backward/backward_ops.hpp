@@ -109,6 +109,8 @@ std::vector<Tensor> bias_gelu_bw(const Tensor& grad, const Tensor& input_a, cons
 
 std::vector<Tensor> bias_gelu_unary_bw(const Tensor& grad, const Tensor& input, float bias, string approximate, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> squared_difference_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
