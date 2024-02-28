@@ -23,6 +23,9 @@ struct ProgramCache {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) {
         auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
+        // Update program hash to be per device
+        program_hash = tt::stl::hash::hash_objects(program_hash, input_tensors.at(0).device()->id());
+
         auto cache_hit = this->cache_.count(program_hash) > 0;
         if (cache_hit) {
             tt::log_debug(tt::LogOp, "Program Cache: HIT - Getting program from the cache with hash \"{}\"", program_hash);
