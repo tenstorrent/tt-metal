@@ -3,19 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import pytest
 from loguru import logger
 
 import math
 import tt_lib
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32
+from models.utility_functions import torch2tt_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_common import (
-    tt_all_gather,
     tt_all_gather_torch,
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
-    tt_all_gather,
 )
 
 
@@ -235,10 +232,12 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 tt_lib.operations.primary.matmul_1d(
                     xs[i],
                     self.qkv_list[i],
-                    program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
+                    program_config=self.model_config["FP32_FUSED_QKV_MM_PROGCFG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    # compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"], #TODO: Need to pad & change PROCFG
+                    compute_kernel_config=self.model_config[
+                        "COMPUTE_KERNEL_CONFIG"
+                    ],  # TODO: Need to pad & change PROCFG
                 )
             )
             xs[i].deallocate(True)
@@ -272,22 +271,38 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             value_layer.append(v_heads)
             fused_query_key_value[i].deallocate(True)
 
+        for i in range(len(query_layer)):
+            query_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+                query_layer[i], output_mem_config=self.model_config["L1_HEADS_INTERLEAVED_MEMCFG"]
+            )
+            key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+                key_layer[i], output_mem_config=self.model_config["L1_HEADS_INTERLEAVED_MEMCFG"]
+            )
+
         # ROTARY EMBEDDINGS
         for i in range(len(query_layer)):
-            query_layer[i] = tt_lib.operations.primary.matmul_1d(
+            # query_layer[i] = tt_lib.operations.primary.matmul_1d(
+            #     query_layer[i],
+            #     rot_mats[i],
+            #     program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
+            #     output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
+            #     compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
+            #     # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
+            # )
+            # # TODO: matmul_1d is bugged for single core and causes hang.
+            # key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
+            #     key_layer[i], output_mem_config=self.model_config["L1_HEADS_INTERLEAVED_MEMCFG"]
+            # )
+            query_layer[i] = tt_lib.operations.primary.matmul(
                 query_layer[i],
                 rot_mats[i],
-                program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
-                output_mem_config=self.model_config["ROT_MAT_Q_MM_OUTPUT_MEMCFG"],
-                # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
-            )
-            # TODO: matmul_1d is bugged for single core and causes hang.
-            key_layer[i] = tt_lib.tensor.sharded_to_interleaved(
-                key_layer[i], output_mem_config=self.model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"]
+                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+                # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             )
             key_layer[i] = tt_lib.operations.primary.matmul(
                 key_layer[i],
                 rot_mats[i],
+                compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
                 # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
             )
             # rot_mats[i].deallocate(True) # If rot_mat on L1, deallocate here
@@ -421,7 +436,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             attn_output = tt_lib.tensor.all_gather(
                 attn_output,
                 dim=3,
-                num_links=1,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
 

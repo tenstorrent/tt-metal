@@ -230,7 +230,6 @@ def test_LlamaDecoder_inference(
     optimized,
     n_devices,
     pcie_devices,
-    use_program_cache,
     emulated,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)

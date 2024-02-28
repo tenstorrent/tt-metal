@@ -18,12 +18,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
 from models.demos.llama2_70b.tt.llama_common import (
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
-    tt_all_gather,
+    tt_all_gather_torch,
 )
 from models.demos.llama2_70b.reference.llama.model import precompute_freqs_cis
 

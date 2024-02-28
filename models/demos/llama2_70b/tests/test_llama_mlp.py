@@ -151,7 +151,6 @@ def test_LlamaMLP_inference(
     n_devices,
     # model_location_generator,
     pcie_devices,
-    use_program_cache,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()

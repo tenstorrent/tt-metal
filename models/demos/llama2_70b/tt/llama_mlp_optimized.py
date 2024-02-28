@@ -7,7 +7,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch
 
 
 class TtLlamaMLP_optimized(nn.Module):
@@ -133,7 +133,7 @@ class TtLlamaMLP_optimized(nn.Module):
             hidden_states = tt_lib.tensor.all_gather(
                 hidden_states,
                 dim=3,
-                num_links=1,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
         # hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
