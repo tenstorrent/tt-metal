@@ -82,7 +82,6 @@ void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>&
         op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
     }
 
-    op_profiler::append_math_fidelities(program);
     op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
 }
 
