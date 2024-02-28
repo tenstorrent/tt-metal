@@ -2,11 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from tt_lib.utils import _nearest_y
 import numpy as np
 from collections import namedtuple
-
-import tt_lib as ttl
-from tt_lib.utils import _nearest_y
 
 SlidingWindowOpParams = namedtuple(
     "SlidingWindowOpParams", "stride_h stride_w pad_h pad_w window_h window_w batch_size input_h input_w"
@@ -41,14 +39,3 @@ def get_sliding_window_op_output_shard_nhw_size(
         output_nhw_size_to_shard_evenly = _nearest_y(np.prod(output_nhw_shape), num_cores_nhw)
     output_shard_nhw_size = (int)(output_nhw_size_to_shard_evenly / num_cores_nhw)
     return output_shard_nhw_size
-
-
-class SWOParallelConfig:
-    config_keys = ["num_cores", "grid_size", "shard_layout"]
-
-    def __init__(
-        self, num_cores=1, grid_size=(1, 1), shard_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    ) -> None:
-        self.num_cores = num_cores
-        self.grid_size = grid_size
-        self.shard_layout = shard_layout
