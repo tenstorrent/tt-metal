@@ -98,15 +98,15 @@ def run_test_FalconMLP_inference(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (4,))
 @pytest.mark.parametrize(
-    "model_version, llm_mode, batch, seq_len",
+    "llm_mode, batch, seq_len",
     (
-        (
-            "tiiuae/falcon-40b-instruct",
-            "decode",
-            32,
-            1,
-        ),
+        ("decode", 32, 1),
+        ("prefill", 1, 32),
     ),
+)
+@pytest.mark.parametrize(
+    "model_version",
+    (("tiiuae/falcon-40b-instruct"),),
 )
 @pytest.mark.parametrize("model_config_str, pcc", [("BFLOAT8_B-SHARDED", 0.9987), ("BFLOAT16-SHARDED", 0.9987)])
 def test_FalconMLP_inference(
@@ -122,7 +122,8 @@ def test_FalconMLP_inference(
     pcie_devices,
     use_program_cache,
 ):
-    model_config = get_model_config(model_config_str, llm_mode, num_devices)
+    input_shape = [batch, seq_len]
+    model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")

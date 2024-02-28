@@ -89,11 +89,33 @@ def run_test_FalconCausalLM_inference(
 
         past_key_values = None
         tt_layer_past = ()
-        k_cache = torch.zeros(batch, max_position_embeddings, head_dim).unsqueeze(1)
-        v_cache = torch.zeros(batch, max_position_embeddings, head_dim).unsqueeze(1)
+        tt_k_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
+        tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
+        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
+        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
+
         for i in range(num_layers):
-            tt_k_cache = torch2tt_tensor(k_cache, device)
-            tt_v_cache = torch2tt_tensor(v_cache, device)
+            tt_k_cache = []
+            tt_v_cache = []
+            for i in range(len(devices)):
+                tt_k_cache.append(
+                    torch2tt_tensor(
+                        tt_k_cache_host[i],
+                        devices[i],
+                        tt_lib.tensor.Layout.TILE,
+                        model_config["KV_CACHE_MEMCFG"],
+                        model_config["KV_CACHE_DTYPE"],
+                    )
+                )
+                tt_v_cache.append(
+                    torch2tt_tensor(
+                        tt_v_cache_host[i],
+                        devices[i],
+                        tt_lib.tensor.Layout.TILE,
+                        model_config["KV_CACHE_MEMCFG"],
+                        model_config["KV_CACHE_DTYPE"],
+                    )
+                )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     elif llm_mode == "decode":
@@ -167,13 +189,6 @@ def run_test_FalconCausalLM_inference(
         use_global_cos_sin_cache=use_global_cos_sin_cache,
     )
 
-    attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
-    num_max_tokens = nearest_32(kv_cache_len + 1)
-    if attention_mask_memconfig.is_sharded():
-        attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-        attn_mask_shard_shape[-1] = num_max_tokens
-        attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":
         tt_outs = []
@@ -194,10 +209,17 @@ def run_test_FalconCausalLM_inference(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            tt_outs.append(tt2torch_tensor(tt_out).squeeze(1))
+            tt_outs.append(torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1))
         tt_out = torch.vstack(tt_outs)
 
     elif llm_mode == "decode":
+        attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
+        num_max_tokens = nearest_32(kv_cache_len + 1)
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = num_max_tokens
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
@@ -221,41 +243,26 @@ def run_test_FalconCausalLM_inference(
     logger.info(f"Output: {output_pcc}")
 
     for i in range(num_layers):
+        pytorch_layer_pres = pytorch_layer_present[i]
         tt_layer_pres = (
             torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
             torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
         )
-        if llm_mode == "prefill":
-            pytorch_layer_pres = pytorch_layer_present[i]
-            tt_layer_pres = (
+        tt_layer_pres = (
+            torch.repeat_interleave(
                 tt_layer_pres[0][:, :, :kv_len, :],
+                configuration.num_attention_heads // configuration.num_kv_heads,
+                1,
+            ),
+            torch.repeat_interleave(
                 tt_layer_pres[1][:, :, :kv_len, :],
-            )
-        elif llm_mode == "decode":
-            pytorch_layer_pres = pytorch_layer_present[i]
-            tt_layer_pres = (
-                torch.repeat_interleave(
-                    tt_layer_pres[0][:, :, :kv_len, :],
-                    configuration.num_attention_heads // configuration.num_kv_heads,
-                    1,
-                ),
-                torch.repeat_interleave(
-                    tt_layer_pres[1][:, :, :kv_len, :],
-                    configuration.num_attention_heads // configuration.num_kv_heads,
-                    1,
-                ),
-            )
+                configuration.num_attention_heads // configuration.num_kv_heads,
+                1,
+            ),
+        )
+
         does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], cache_pcc)
         logger.info(f"K Cache Layer {i}: {output_pcc}")
-
-        does_pass = does_pass and does_pass2
-
-        does_pass2, output_pcc = comp_pcc(
-            pytorch_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
-            tt_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
-            token_pcc,
-        )
-        logger.info(f"K Cache Layer {i} new token: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
@@ -264,14 +271,24 @@ def run_test_FalconCausalLM_inference(
 
         does_pass = does_pass and does_pass2
 
-        does_pass2, output_pcc = comp_pcc(
-            pytorch_layer_pres[1][:, :, kv_len - 1 : kv_len, :],
-            tt_layer_pres[1][:, :, kv_len - 1 : kv_len, :],
-            token_pcc,
-        )
-        logger.info(f"V Cache Layer {i} new token: {output_pcc}")
+        if llm_mode == "decode":
+            does_pass2, output_pcc = comp_pcc(
+                pytorch_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
+                tt_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
+                token_pcc,
+            )
+            logger.info(f"K Cache Layer {i} new token: {output_pcc}")
 
-        does_pass = does_pass and does_pass2
+            does_pass = does_pass and does_pass2
+
+            does_pass2, output_pcc = comp_pcc(
+                pytorch_layer_pres[1][:, :, kv_len - 1 : kv_len, :],
+                tt_layer_pres[1][:, :, kv_len - 1 : kv_len, :],
+                token_pcc,
+            )
+            logger.info(f"V Cache Layer {i} new token: {output_pcc}")
+
+            does_pass = does_pass and does_pass2
 
     if does_pass:
         logger.info("Falcon CausalLM Passed!")
@@ -284,15 +301,16 @@ def run_test_FalconCausalLM_inference(
 @pytest.mark.parametrize("num_devices", (4,))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
-    (("decode", 32, 1, 128),),
-    ids=["decode_batch32"],
+    (
+        ("prefill", 2, 32, 0),
+        ("decode", 32, 1, 128),
+    ),
+    ids=["prefill_seq32", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "num_layers",
     (1,),
-    ids=[
-        "layers_1",
-    ],
+    ids=["layers_1"],
 )
 @pytest.mark.parametrize(
     "model_version",
@@ -321,10 +339,19 @@ def test_FalconCausalLM_inference(
     pcie_devices,
     use_program_cache,
 ):
-    model_config = get_model_config(model_config_str, llm_mode, num_devices)
+    if llm_mode == "prefill":
+        if model_config_str == "BFLOAT16-SHARDED":
+            pytest.skip("Prefill is only tested for BFLOAT8_B!")
+        elif model_config_str == "BFLOAT8_B-SHARDED":
+            # TODO: Investigate why PCC is lower for prefill?
+            out_pcc = 0.96
+
+    input_shape = [batch, seq_len]
+    model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

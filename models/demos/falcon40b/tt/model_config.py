@@ -76,6 +76,40 @@ NO_DTYPE = (
 
 ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-SHARDED", "BFLOAT8_B-SHARDED")
 
+model_config_entries = {
+    "_name_or_path": "tiiuae/falcon-40b-instruct",
+    "alibi": False,
+    "apply_residual_connection_post_layernorm": False,
+    "architectures": ["FalconForCausalLM"],
+    "attention_dropout": 0.0,
+    "auto_map": {
+        "AutoConfig": "configuration_falcon.FalconConfig",
+        "AutoModel": "modeling_falcon.FalconModel",
+        "AutoModelForCausalLM": "modeling_falcon.FalconForCausalLM",
+        "AutoModelForQuestionAnswering": "modeling_falcon.FalconForQuestionAnswering",
+        "AutoModelForSequenceClassification": "modeling_falcon.FalconForSequenceClassification",
+        "AutoModelForTokenClassification": "modeling_falcon.FalconForTokenClassification",
+    },
+    "bias": False,
+    "bos_token_id": 11,
+    "eos_token_id": 11,
+    "hidden_dropout": 0.0,
+    "hidden_size": 8192,
+    "initializer_range": 0.02,
+    "layer_norm_epsilon": 1e-05,
+    "model_type": "falcon",
+    "multi_query": True,
+    "new_decoder_architecture": True,
+    "num_attention_heads": 128,
+    "num_hidden_layers": 60,
+    "num_kv_heads": 8,
+    "parallel_attn": True,
+    "torch_dtype": "bfloat16",
+    "transformers_version": "4.28.1",
+    "use_cache": True,
+    "vocab_size": 65024,
+}
+
 
 def pretty_print_model_config(model_config):
     print_str = []
@@ -92,9 +126,10 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, llm_mode, num_devices):
+def get_model_config(model_config_str, llm_mode, input_shape, num_devices):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    assert llm_mode == "decode"
+    assert llm_mode in ("prefill", "decode")
+    assert len(input_shape) == 2
     assert num_devices in (4,)
 
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
@@ -161,23 +196,54 @@ def get_model_config(model_config_str, llm_mode, num_devices):
 
     if mem_config_str == "SHARDED":
         head_dim = 64
+        hidden_size = model_config_entries["hidden_size"]
+        vocab_size = model_config_entries["vocab_size"]
+
+        batch, seq_len = input_shape
+        if llm_mode == "prefill":
+            shard_height = seq_len
+        elif llm_mode == "decode":
+            assert batch == 32
+            shard_height = batch
+
+        shard_width_hidden_dim_across_32_cores = hidden_size // 32
+        shard_width_4x_hidden_dim_across_32_cores = hidden_size * 4 // 32
+        shard_width_hidden_dim_per_device_across_32_cores = shard_width_hidden_dim_across_32_cores // num_devices
+        shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 3),
+                ),
+            }
+        )
+        shard_width_hidden_dim_across_8_cores = hidden_size // 8
+        shard_spec_8_cores_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(7, 0),
+                ),
+            }
+        )
+        shard_spec_2_cores_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(1, 0),
+                ),
+            }
+        )
 
         # Embeddings
         model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    64,
+                    shard_height,
+                    shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -187,16 +253,9 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
+                    shard_height,
                     1,  # Dynamic
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -207,17 +266,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    64,
+                    shard_height,
+                    shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -227,17 +279,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    64,
+                    shard_height,
+                    shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -249,17 +294,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    256,
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -269,17 +307,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    256,
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -309,17 +340,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    256,
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -331,17 +355,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
-                        ),
-                    }
-                ),
+                shard_spec_8_cores_grid,
                 [
-                    32,
-                    1024,
+                    shard_height,
+                    shard_width_hidden_dim_across_8_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -349,10 +366,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
         )
         model_config["QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
-            in0_block_w=32,
-            out_subblock_h=1,
+            in0_block_w=32,  # TODO: Can this be larger
+            out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=3,
-            per_core_M=1,
+            per_core_M=shard_height // 32,
             per_core_N=9,
             fuse_batch=True,
             fused_activation=None,
@@ -362,16 +379,9 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
-                        ),
-                    }
-                ),
+                shard_spec_8_cores_grid,
                 [
-                    32,
+                    shard_height,
                     288,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -382,16 +392,9 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(1, 0),
-                        ),
-                    }
-                ),
+                shard_spec_2_cores_grid,
                 [
-                    32,
+                    shard_height,
                     1152,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -399,19 +402,39 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ),
         )
         model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+        # TODO: Remove this once nlp_create_qkv_heads supports HEIGHT > 32 for sharded
+        model_config["CREATE_Q_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    head_dim,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_2_cores_grid,
+                [
+                    shard_height,
+                    head_dim,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
                     1,  # Dynamic
                     head_dim,
@@ -422,10 +445,37 @@ def get_model_config(model_config_str, llm_mode, num_devices):
         )
         model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
+        # TODO: Remove if we can update prefill matmul to directly output sharded
+        model_config["PREFILL_4CHIPS_PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    shard_height,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        model_config["PREFILL_4CHIPS_POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    shard_height,
+                    head_dim,
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
         model_config["SOFTMAX_PROGCFG"] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             subblock_w=1,
-            block_h=1,
+            block_h=shard_height // 32,
             block_w=1,  # Dynamic
             math_fidelity=ttl.tensor.MathFidelity.HiFi4,
             im_data_format=ttl.tensor.DataType.BFLOAT16,
@@ -436,17 +486,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    256,
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -455,10 +498,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
         model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
         model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,
-            out_subblock_h=1,
+            in0_block_w=8,  # TODO: Can this be larger
+            out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=2,
-            per_core_M=1,
+            per_core_M=shard_height // 32,
             per_core_N=2,
             fuse_batch=True,
             fused_activation=None,
@@ -468,10 +511,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
         model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
         model_config["DENSE_H_TO_4H_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,
-            out_subblock_h=1,
+            in0_block_w=8,  # TODO: Can this be larger
+            out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=4,
-            per_core_M=1,
+            per_core_M=shard_height // 32,
             per_core_N=8,
             fuse_batch=True,
             fused_activation=[ttl.tensor.FusibleActivation.GELU, True],
@@ -481,17 +524,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    1024,
+                    shard_height,
+                    shard_width_4x_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -500,10 +536,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
         model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
         model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
-            in0_block_w=32,
-            out_subblock_h=1,
+            in0_block_w=32,  # TODO: Can this be larger
+            out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=2,
-            per_core_M=1,
+            per_core_M=shard_height // 32,
             per_core_N=2,
             fuse_batch=True,
             fused_activation=None,
@@ -514,17 +550,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    256,
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -534,17 +563,10 @@ def get_model_config(model_config_str, llm_mode, num_devices):
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             ttl.tensor.BufferType.L1,
             ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
-                    {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
-                        ),
-                    }
-                ),
+                shard_spec_32_cores_grid,
                 [
-                    32,
-                    256,
+                    shard_height,
+                    shard_width_hidden_dim_across_32_cores,
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -579,38 +601,3 @@ def get_model_config(model_config_str, llm_mode, num_devices):
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config
-
-
-model_config_entries = {
-    "_name_or_path": "tiiuae/falcon-40b-instruct",
-    "alibi": False,
-    "apply_residual_connection_post_layernorm": False,
-    "architectures": ["FalconForCausalLM"],
-    "attention_dropout": 0.0,
-    "auto_map": {
-        "AutoConfig": "configuration_falcon.FalconConfig",
-        "AutoModel": "modeling_falcon.FalconModel",
-        "AutoModelForCausalLM": "modeling_falcon.FalconForCausalLM",
-        "AutoModelForQuestionAnswering": "modeling_falcon.FalconForQuestionAnswering",
-        "AutoModelForSequenceClassification": "modeling_falcon.FalconForSequenceClassification",
-        "AutoModelForTokenClassification": "modeling_falcon.FalconForTokenClassification",
-    },
-    "bias": False,
-    "bos_token_id": 11,
-    "eos_token_id": 11,
-    "hidden_dropout": 0.0,
-    "hidden_size": 8192,
-    "initializer_range": 0.02,
-    "layer_norm_epsilon": 1e-05,
-    "model_type": "falcon",
-    "multi_query": True,
-    "new_decoder_architecture": True,
-    "num_attention_heads": 128,
-    "num_hidden_layers": 60,
-    "num_kv_heads": 8,
-    "parallel_attn": True,
-    "torch_dtype": "bfloat16",
-    "transformers_version": "4.28.1",
-    "use_cache": True,
-    "vocab_size": 65024,
-}
