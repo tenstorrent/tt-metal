@@ -116,6 +116,7 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     uint32_t num_pages_transferred = 0;
 
     while (routing_info->routing_enabled) {
+        DeviceZoneScopedMainN("ERISC-FW");
         // FD: assume that no more host -> remote writes are pending
         if (erisc_info->launch_user_kernel == 1) {
             DEBUG_STATUS('R');

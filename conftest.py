@@ -258,10 +258,6 @@ def reset_tensix(request, silicon_arch_name):
 @pytest.fixture(scope="function")
 def device_init_destroy(request):
     import tt_lib as ttl
-    from tracy import Profiler
-
-    profiler = Profiler()
-    profiler.enable()
 
     device_id = request.config.getoption("device_id")
 
@@ -271,7 +267,6 @@ def device_init_destroy(request):
     yield device
 
     ttl.device.CloseDevice(device)
-    profiler.disable()
 
 
 @pytest.fixture(scope="function")

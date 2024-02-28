@@ -21,10 +21,6 @@ import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_confi
 import tt_metal.tools.profiler.dummy_refresh as dummy_refresh
 
 
-# TODO(MO): Grab this from the core_descriptor yaml files
-NON_COMPUTE_ROW = 11
-
-
 def coreCompare(core):
     if type(core) == str:
         return (1 << 64) - 1
@@ -298,26 +294,25 @@ def is_new_op_device(tsCore, coreOpMap):
     appendTs = False
     isNewOp = False
     isNewOpFinished = False
-    if core[1] != NON_COMPUTE_ROW:
-        if timerID["id"] != 0:
-            appendTs = True
-        if risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "begin":
-            assert (
-                core not in coreOpMap.keys()
-            ), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}, this could be caused by soft resets"
-            if not coreOpMap:
-                isNewOp = True
-            coreOpMap[core] = (tsValue,)
-        elif risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "end":
-            assert core in coreOpMap.keys() and len(coreOpMap[core]) == 1, "Unexpected BRISC end"
-            coreOpMap[core] = (coreOpMap[core][0], tsValue)
-            isNewOpFinished = True
-            for opDuration in coreOpMap.values():
-                pairSize = len(opDuration)
-                assert pairSize == 1 or pairSize == 2, "Wrong op duration"
-                if pairSize == 1:
-                    isNewOpFinished = False
-                    break
+    if timerID["id"] != 0:
+        appendTs = True
+    if risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "begin":
+        assert (
+            core not in coreOpMap.keys()
+        ), f"Unexpected BRISC start in {tsCore} {coreOpMap[core]}, this could be caused by soft resets"
+        if not coreOpMap:
+            isNewOp = True
+        coreOpMap[core] = (tsValue,)
+    elif risc == "BRISC" and timerID["zoneName"] == "BRISC-FW" and timerID["zonePhase"] == "end":
+        assert core in coreOpMap.keys() and len(coreOpMap[core]) == 1, "Unexpected BRISC end"
+        coreOpMap[core] = (coreOpMap[core][0], tsValue)
+        isNewOpFinished = True
+        for opDuration in coreOpMap.values():
+            pairSize = len(opDuration)
+            assert pairSize == 1 or pairSize == 2, "Wrong op duration"
+            if pairSize == 1:
+                isNewOpFinished = False
+                break
     return appendTs, isNewOp, isNewOpFinished
 
 

@@ -12,7 +12,7 @@ import re
 import click
 from loguru import logger
 
-from device_log_run import beautify_tt_js_blob, filter_device_analysis_data
+from device_log_run import filter_device_analysis_data
 
 from tt_metal.tools.profiler.common import TT_METAL_HOME, PROFILER_SCRIPTS_ROOT, PROFILER_ARTIFACTS_DIR, rm
 
@@ -115,7 +115,6 @@ def main(wipe):
                 assert ret == 0, f"Log process script crashed with exit code {ret}"
 
                 os.system(f"cp {PROFILER_ARTIFACTS_DIR}/output/device/*.* {GOLDEN_OUTPUTS_DIR}/test_{testName}/")
-                # beautify_tt_js_blob(f"{GOLDEN_OUTPUTS_DIR}/test_{testName}/")
                 filter_device_analysis_data(f"{GOLDEN_OUTPUTS_DIR}/test_{testName}/")
 
             # Remove line ending from the last test

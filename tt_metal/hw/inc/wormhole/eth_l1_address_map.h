@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 

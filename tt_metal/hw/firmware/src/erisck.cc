@@ -27,12 +27,11 @@ uint8_t noc_index = NOC_INDEX;
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 void __attribute__((section("erisc_l1_code"))) kernel_launch() {
+    DeviceZoneScopedMainChildN("BRISC-FW");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    kernel_profiler::mark_kernel_start();
     kernel_main();
     uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
     internal_::notify_dispatch_core_done(dispatch_addr);
     erisc_info->launch_user_kernel = 0;
-    kernel_profiler::mark_kernel_end();
 }
