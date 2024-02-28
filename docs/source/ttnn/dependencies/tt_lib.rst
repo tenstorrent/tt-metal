@@ -922,6 +922,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.i0_bw
 
+.. autofunction:: tt_lib.tensor.hardshrink_bw
+
 Loss Functions
 ==============
 

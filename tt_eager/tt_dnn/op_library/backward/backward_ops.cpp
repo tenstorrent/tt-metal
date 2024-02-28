@@ -837,6 +837,18 @@ std::vector<Tensor> i0_bw(const Tensor& grad, const Tensor& input, const MemoryC
     return operation::decorate_as_composite(__func__, _i0_bw)(grad, input, output_mem_config);
 }
 
+std::vector<Tensor> _hardshrink_bw(const Tensor& grad, const Tensor& input_tensor, float lambd, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor hardshrink_result = hardshrink(input_tensor, lambd, output_mem_config);
+    Tensor result = where(eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> hardshrink_bw(const Tensor& grad, const Tensor& input, float lambd, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _hardshrink_bw)(grad, input, lambd, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
