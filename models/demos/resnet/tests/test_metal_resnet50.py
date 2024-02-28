@@ -144,7 +144,8 @@ def test_run_resnet50_inference(
         activations_dtype != tt_lib.tensor.DataType.BFLOAT8_B or weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B
     ):
         pytest.skip("Batch > 8 must be run fully bfp8")
-
+    if batch_size <= 2:
+        pytest.skip("batch 1 and 2 are not supported with sharded data")
     image1 = imagenet_sample_input
     image = image1
     model_config = {

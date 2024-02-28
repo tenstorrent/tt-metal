@@ -205,7 +205,7 @@ def determine_parallel_config(
         grid_size=grid_size,
         num_cores_nhw=num_cores_nhw,
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
-        per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
+        per_core_out_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
 
 
@@ -267,29 +267,6 @@ def determine_per_core_block_config(
                 f"Overriding config: act_block_w from {act_block_w_ntiles * 32} to user provided config={act_block_w_override}"
             )
             act_block_w_ntiles = act_block_w_override // 32
-    if "act_c_num_blocks" in config_override:
-        act_c_num_blocks_override = config_override["act_c_num_blocks"]
-        if config_override["act_c_num_blocks"] != act_c_num_blocks:
-            warnings.warn(
-                f"Overriding config: act_c_num_blocks from {act_c_num_blocks} to user provided config={act_c_num_blocks_override}"
-            )
-            act_c_num_blocks = act_c_num_blocks_override
-    if "weight_block_w" in config_override:
-        weight_block_w_override = config_override["weight_block_w"]
-        assert weight_block_w_override % 32 == 0, "weight_block_w must be divisible by 32 (tile width)"
-        if (weight_block_w_override // 32) != weight_block_w_ntiles:
-            warnings.warn(
-                f"Overriding config: weight_block_w from {weight_block_w_ntiles * 32} to user provided config={weight_block_w_override}"
-            )
-            weight_block_w_ntiles = weight_block_w_override // 32
-    if "out_block_h" in config_override:
-        out_block_h_override = config_override["out_block_h"]
-        assert out_block_h_override % 32 == 0, "out_block_h must be divisible by 32 (tile height)"
-        if (out_block_h_override // 32) != out_block_h_ntiles:
-            warnings.warn(
-                f"Overriding config: out_block_h from {out_block_h_ntiles * 32} to user provided config={out_block_h_override}"
-            )
-            out_block_h_ntiles = out_block_h_override // 32
     if "out_subblock_h" in config_override:
         assert (
             "out_subblock_w" in config_override
@@ -313,9 +290,6 @@ def determine_per_core_block_config(
     conv_blocking_config = ttl.tensor.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h_ntiles,
         act_block_w_ntiles=act_block_w_ntiles,
-        act_c_num_blocks=act_c_num_blocks,
-        weight_block_w_ntiles=weight_block_w_ntiles,
-        out_block_h_ntiles=out_block_h_ntiles,
         out_subblock_h_ntiles=out_subblock_h_ntiles,
         out_subblock_w_ntiles=out_subblock_w_ntiles,
     )
@@ -332,7 +306,7 @@ def determine_1x1conv_as_matmul_config(
             out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
             out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
             per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
-            per_core_N=conv_parallelization_config.per_core_weight_matrix_width_ntiles,
+            per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
             fuse_batch=True,
             fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
             if fuse_relu
@@ -341,15 +315,15 @@ def determine_1x1conv_as_matmul_config(
         )
     else:
         assert (
-            conv_blocking_config.act_block_w_ntiles % conv_blocking_config.act_c_num_blocks == 0
+            conv_blocking_config.act_block_w_ntiles % conv_parallelization_config.grid_size.y == 0
         ), "Expected act block width to be divisible by act channel num blocks."
         matmul_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=conv_parallelization_config.grid_size,
-            in0_block_w=conv_blocking_config.act_block_w_ntiles // conv_blocking_config.act_c_num_blocks,
+            in0_block_w=conv_blocking_config.act_block_w_ntiles // conv_parallelization_config.grid_size.y,
             out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
             out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
             per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
-            per_core_N=conv_parallelization_config.per_core_weight_matrix_width_ntiles,
+            per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
             transpose_mcast=True,
             fused_activation=ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)
             if fuse_relu
@@ -366,9 +340,6 @@ class TTPyCompositeConv(TTPyOp):
         "per_core_weight_matrix_width",
         "act_block_h",
         "act_block_w",
-        "act_c_num_blocks",
-        "weight_block_w",
-        "out_block_h",
         "out_block_w",
         "out_subblock_h",
         "out_subblock_w",
@@ -453,7 +424,7 @@ class TTPyCompositeConv(TTPyOp):
             is_1d_systolic,
             self.opt_conv_parall_conf_auto.grid_size,
             self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles,
-            self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles,
+            self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles,
             input_channels,
             sliding_window_op_params,
             use_shallow_conv_variant,
@@ -548,7 +519,7 @@ class TTPyCompositeConv(TTPyOp):
             conv_params,
             self.device,
             self.opt_conv_block_conf_auto.act_block_w_ntiles,
-            self.opt_conv_block_conf_auto.weight_block_w_ntiles,
+            self.opt_conv_block_conf_auto.out_subblock_w_ntiles,
             self.opt_conv_parall_conf_auto,
             self.opt_conv_block_conf_auto,
             fuse_relu,
@@ -583,7 +554,9 @@ class TTPyCompositeConv(TTPyOp):
             _nearest_y(input_channels, 16) if self.use_shallow_conv_variant else _nearest_32(input_channels)
         )
         assert padded_input_channels >= input_channels
-        act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
+        act_c_num_blocks = (
+            1 if self.is_1d_systolic else self.opt_conv_parall_conf_auto.grid_size.y
+        )  ###will fix it at the time of merging
         grid_size = (num_cores_w, num_cores_h)
 
         input_size_to_shard_evenly = _nearest_y(
@@ -648,7 +621,9 @@ class TTPyCompositeConv(TTPyOp):
         output_channels = self.conv_output_shape[3]
         padded_output_channels = _nearest_32(output_channels)
         assert padded_output_channels >= output_channels
-        act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
+        act_c_num_blocks = (
+            1 if self.is_1d_systolic else self.opt_conv_parall_conf_auto.grid_size.y
+        )  ###will fix it at the time of merging
 
         output_size_to_shard_evenly = _nearest_y(
             self.conv_output_shape[0] * self.conv_output_shape[1] * self.conv_output_shape[2], num_cores_nhw * 32
@@ -692,9 +667,9 @@ class TTPyCompositeConv(TTPyOp):
             padded_output_channels if self.is_1d_systolic else (int)(padded_output_channels / act_c_num_blocks),
         ]
         assert shard_shape[0] == self.opt_conv_parall_conf_auto.per_core_out_matrix_height_ntiles * 32
-        if shard_shape[1] != self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles * 32:
+        if shard_shape[1] != self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32:
             breakpoint()
-        assert shard_shape[1] == self.opt_conv_parall_conf_auto.per_core_weight_matrix_width_ntiles * 32
+        assert shard_shape[1] == self.opt_conv_parall_conf_auto.per_core_out_matrix_width_ntiles * 32
         shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, self.output_shard_orientation, shard_halo)
         self.output_shard_scheme = (
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
@@ -1003,8 +978,6 @@ class TTPyCompositeConv(TTPyOp):
         num_cores_w = self.sliding_window_op_params.num_cores_w
         num_cores_h = self.sliding_window_op_params.num_cores_h
         input_channels = self.input_tensor_shape[3]
-        act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
-        assert input_channels % act_c_num_blocks == 0
         input_size_to_shard_evenly = _nearest_y(
             self.input_tensor_shape[0] * self.input_tensor_shape[1] * self.input_tensor_shape[2], num_cores_nhw * 32
         )
@@ -1028,7 +1001,9 @@ class TTPyCompositeConv(TTPyOp):
         shard_halo = False
         shard_shape = [
             untilize_with_halo_input_shard_height,
-            input_channels if self.is_1d_systolic else (int)(input_channels / act_c_num_blocks),
+            input_channels
+            if self.is_1d_systolic
+            else (int)(input_channels / self.opt_conv_parall_conf_auto.grid_size.y),
         ]
         shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
         mem_config = ttl.tensor.MemoryConfig(shard_layout, ttl.tensor.BufferType.L1)
@@ -1044,7 +1019,6 @@ class TTPyCompositeConv(TTPyOp):
         padded_input_channels = conv_input_on_device.get_legacy_shape()[3]
         assert padded_input_channels >= input_channels
         assert padded_input_channels == self.padded_input_channels
-        act_c_num_blocks = self.opt_conv_block_conf_auto.act_c_num_blocks
         grid_size = (num_cores_w, num_cores_h)
 
         input_size_to_shard_evenly = _nearest_y(
@@ -1052,22 +1026,7 @@ class TTPyCompositeConv(TTPyOp):
         )
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
-        if act_c_num_blocks > 1:  # 2D conv
-            assert padded_input_channels % act_c_num_blocks == 0
-            assert (
-                not self.use_shallow_conv_variant
-            ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
-            conv_input_on_device = ttl.tensor.interleaved_to_sharded(
-                conv_input_on_device,
-                grid_size,
-                [
-                    untilize_with_halo_input_shard_height,
-                    (int)(padded_input_channels / act_c_num_blocks),
-                ],  # act_block_w_datums may include reads of multiple pixels in window
-                ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
-            )
-        else:
+        if self.is_1d_systolic:
             conv_input_on_device = ttl.tensor.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
@@ -1078,6 +1037,23 @@ class TTPyCompositeConv(TTPyOp):
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
             )
+        else:
+            grid_size_y = self.opt_conv_parall_conf_auto.grid_size.y
+            assert padded_input_channels % grid_size_y == 0
+            assert (
+                not self.use_shallow_conv_variant
+            ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
+            conv_input_on_device = ttl.tensor.interleaved_to_sharded(
+                conv_input_on_device,
+                grid_size,
+                [
+                    untilize_with_halo_input_shard_height,
+                    (int)(padded_input_channels / grid_size_y),
+                ],  # act_block_w_datums may include reads of multiple pixels in window
+                ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                ttl.tensor.ShardOrientation.COL_MAJOR,
+            )
+
         return conv_input_on_device
 
     def copy_input_to_device(self, conv_input: ttl.tensor.Tensor):
