@@ -38,21 +38,6 @@ def tt_all_reduce(tensors, output_mem_config=None):
     return res
 
 
-def tt_all_gather(tensors, dim=-1):
-    assert all([tensor.memory_config().buffer_type == tt_lib.tensor.BufferType.DRAM for tensor in tensors])
-    assert all(
-        [tensor.memory_config().memory_layout == tt_lib.tensor.TensorMemoryLayout.INTERLEAVED for tensor in tensors]
-    )
-    # Needs to be on DRAM Interleaved
-    all_gathered_output = tt_lib.tensor.concat(tensors, dim=dim)
-    # Emulate replication on all chips
-    dev = all_gathered_output.device()
-    res_pt = tt2torch_tensor(all_gathered_output)
-    res = [torch2tt_tensor(res_pt.clone(), dev) for _ in range(len(tensors))]
-
-    return res
-
-
 def tt_all_gather_torch(tensors, dim=-1):
     tensors_torch = [tt2torch_tensor(tensor) for tensor in tensors]
     all_gathered_output_torch = torch.cat(tensors_torch, dim=dim)
