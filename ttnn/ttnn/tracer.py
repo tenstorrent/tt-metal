@@ -152,8 +152,6 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         end_time = time.time()
 
         duration = None
-        if ttnn.TTNN_ENABLE_LOGGING:
-            duration = end_time - start_time
 
         output_tensors = preprocess_return_value(operation_return_type)
 
