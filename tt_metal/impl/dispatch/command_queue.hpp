@@ -29,11 +29,18 @@ using std::tuple;
 using std::unique_ptr;
 
 // Only contains the types of commands which are enqueued onto the device
-<<<<<<< HEAD
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, FLUSH, ENQUEUE_RECORD_EVENT, ENQUEUE_WAIT_FOR_EVENT, INVALID };
-=======
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, ENQUEUE_WRAP, ENQUEUE_TRACE, FLUSH, INVALID };
->>>>>>> #5449: Implemented Host API based on 3-stage Metal Trace proposal. Stub functionality brought up with test_EnqueueTrace unit test
+enum class EnqueueCommandType {
+    ENQUEUE_READ_BUFFER,
+    ENQUEUE_WRITE_BUFFER,
+    ENQUEUE_PROGRAM,
+    ENQUEUE_TRACE,
+    ENQUEUE_RECORD_EVENT,
+    ENQUEUE_WAIT_FOR_EVENT,
+    ENQUEUE_WRAP,
+    FINISH,
+    FLUSH,
+    INVALID
+};
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 

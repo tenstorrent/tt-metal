@@ -1552,6 +1552,8 @@ std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type) {
         case EnqueueCommandType::ENQUEUE_WRITE_BUFFER: os << "ENQUEUE_WRITE_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_PROGRAM: os << "ENQUEUE_PROGRAM"; break;
         case EnqueueCommandType::ENQUEUE_TRACE: os << "ENQUEUE_TRACE"; break;
+        case EnqueueCommandType::ENQUEUE_RECORD_EVENT: os << "ENQUEUE_RECORD_EVENT"; break;
+        case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT: os << "ENQUEUE_WAIT_FOR_EVENT"; break;
         case EnqueueCommandType::FINISH: os << "FINISH"; break;
         case EnqueueCommandType::FLUSH: os << "FLUSH"; break;
         default: tt::log_fatal("Invalid command type!");

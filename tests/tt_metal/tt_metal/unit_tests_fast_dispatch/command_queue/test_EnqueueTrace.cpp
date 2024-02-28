@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+
 #include "command_queue_fixture.hpp"
+#include "common/env_lib.hpp"
 #include "gtest/gtest.h"
+#include "logger.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 
-
+using namespace tt;
 using namespace tt::tt_metal;
 
 struct TestBufferConfig {
@@ -75,118 +79,26 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
 // the eager mode results
 namespace basic_tests {
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
+constexpr bool kBlocking = true;
+constexpr bool kNonBlocking = false;
+vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
-
-    CommandQueue command_queue(this->device_, 0);
-    CommandQueue data_movement_queue(this->device_, 1);
-
-    Program simple_program = create_simple_unary_program(input, output);
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = i;
-    }
-
-    // Eager mode
-    vector<uint32_t> eager_output_data;
-    eager_output_data.resize(input_data.size());
-
-    EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
-    EnqueueProgram(command_queue, simple_program, true);
-    EnqueueReadBuffer(data_movement_queue, output, eager_output_data.data(), true);
-
-    // Trace mode
-    vector<uint32_t> trace_output_data;
-    trace_output_data.resize(input_data.size());
-
-    Trace trace;
-    EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
-
-    BeginTrace(trace);
-    EnqueueProgram(trace.trace_queue(), simple_program, false);
-    EndTrace(trace);
-    // Instantiate a trace on a device queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
-
-    EnqueueTrace(command_queue, trace_id, true);
-    EnqueueReadBuffer(data_movement_queue, output, trace_output_data.data(), true);
-    EXPECT_TRUE(eager_output_data == trace_output_data);
-
-    // Done
-    Finish(command_queue);
-}
-
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
-
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
-
-    CommandQueue command_queue(this->device_, 0);
-    CommandQueue data_movement_queue(this->device_, 1);
-
-    Program simple_program = create_simple_unary_program(input, output);
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = i;
-    }
-
-    // Trace mode output
-    uint32_t num_loops = 10;
-    vector<vector<uint32_t>> trace_outputs;
-
-    for (auto i = 0; i < num_loops; i++) {
-        trace_outputs.push_back({});
-        trace_outputs[i].resize(input_data.size());
-    }
-
-    // Trace mode execution
-    Trace trace;
-    uint32_t trace_id;
-    bool trace_captured = false;
-    for (auto i = 0; i < num_loops; i++) {
-        EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
-
-        if (!trace_captured) {
-            BeginTrace(trace);
-            EnqueueProgram(trace.trace_queue(), simple_program, false);
-            EndTrace(trace);
-            // Instantiate a trace on a device queue
-            trace_id = InstantiateTrace(trace, command_queue);
-            trace_captured = true;
-        }
-
-        EnqueueTrace(command_queue, trace_id, false);
-        EnqueueReadBuffer(data_movement_queue, output, trace_outputs[i].data(), true);
-
-        // Expect same output across all loops
-        EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
-    }
-
-    // Done
-    Finish(command_queue);
-}
-
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
-
-    constexpr bool kBlocking = true;
-    constexpr bool kNonBlocking = false;
-    vector<bool> blocking_flags = {kBlocking, kNonBlocking};
-
-    // Single Q for data and commands
+TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     CommandQueue command_queue(this->device_, 0, CommandQueue::CommandQueueMode::ASYNC);
 
-    Program simple_program = create_simple_unary_program(input, output);
+    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
+    Buffer interm(this->device_, 2048, 2048, BufferType::DRAM);
+    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+
+    Program op0 = create_simple_unary_program(input, interm);
+    Program op1 = create_simple_unary_program(interm, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
 
     // Trace mode output
-    uint32_t num_loops = 10;
+    uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 5);
     vector<vector<uint32_t>> trace_outputs;
 
     for (auto i = 0; i < num_loops; i++) {
@@ -202,16 +114,18 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
 
     // Warm up and use the eager blocking run as the expected output
     EnqueueWriteBuffer(command_queue, input, input_data.data(), kBlocking);
-    EnqueueProgram(command_queue, simple_program, kBlocking);
+    EnqueueProgram(command_queue, op0, kBlocking);
+    EnqueueProgram(command_queue, op1, kBlocking);
     EnqueueReadBuffer(command_queue, output, expected_output_data.data(), kBlocking);
     Finish(command_queue);
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
         for (auto i = 0; i < num_loops; i++) {
-            tt::ScopedTimer timer(mode + " loop " + std::to_string(i));
+            ScopedTimer timer(mode + " loop " + std::to_string(i));
             EnqueueWriteBuffer(command_queue, input, input_data.data(), blocking);
-            EnqueueProgram(command_queue, simple_program, blocking);
+            EnqueueProgram(command_queue, op0, blocking);
+            EnqueueProgram(command_queue, op1, blocking);
             EnqueueReadBuffer(command_queue, output, eager_output_data.data(), blocking);
         }
         if (!blocking) {
@@ -224,7 +138,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     // Capture trace on a trace queue
     Trace trace;
     CommandQueue& trace_queue = BeginTrace(trace);
-    EnqueueProgram(trace_queue, simple_program, false);
+    EnqueueProgram(trace_queue, op0, kNonBlocking);
+    EnqueueProgram(trace_queue, op1, kNonBlocking);
     EndTrace(trace);
 
     // Instantiate a trace on a device bound command queue
@@ -232,7 +147,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
-        tt::ScopedTimer timer("Trace loop " + std::to_string(i));
+        ScopedTimer timer("Trace loop " + std::to_string(i));
         EnqueueWriteBuffer(command_queue, input, input_data.data(), kNonBlocking);
         EnqueueTrace(command_queue, trace_id, kNonBlocking);
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
@@ -243,6 +158,84 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     for (auto i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
+}
+
+TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
+    CommandQueue command_queue(this->device_, 0);
+
+    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
+    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+
+    uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
+    uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
+    vector<Buffer> interm_buffers;
+    vector<Program> programs;
+
+    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
+
+    for (int i = 0; i < num_programs; i++) {
+        interm_buffers.push_back(Buffer(this->device_, 2048, 2048, BufferType::DRAM));
+        if (i == 0) {
+            programs.push_back(create_simple_unary_program(input, interm_buffers[i]));
+        } else if (i == (num_programs - 1)) {
+            programs.push_back(create_simple_unary_program(interm_buffers[i - 1], output));
+        } else {
+            programs.push_back(create_simple_unary_program(interm_buffers[i - 1], interm_buffers[i]));
+        }
+    }
+
+    // Eager mode
+    vector<uint32_t> eager_output_data;
+    eager_output_data.resize(input_data.size());
+
+    // Trace mode output
+    vector<vector<uint32_t>> trace_outputs;
+
+    for (uint32_t i = 0; i < num_loops; i++) {
+        trace_outputs.push_back({});
+        trace_outputs[i].resize(input_data.size());
+    }
+
+    for (bool blocking : blocking_flags) {
+        std::string mode = blocking ? "Eager-B" : "Eager-NB";
+        log_info(LogTest, "Starting {} profiling with {} programs", mode, num_programs);
+        for (uint32_t iter = 0; iter < num_loops; iter++) {
+            ScopedTimer timer(mode + " loop " + std::to_string(iter));
+            EnqueueWriteBuffer(command_queue, input, input_data.data(), blocking);
+            for (uint32_t i = 0; i < num_programs; i++) {
+                EnqueueProgram(command_queue, programs[i], blocking);
+            }
+            EnqueueReadBuffer(command_queue, output, eager_output_data.data(), blocking);
+        }
+        if (!blocking) {
+            // (Optional) wait for the last non-blocking command to finish
+            Finish(command_queue);
+        }
+    }
+
+    // Capture trace on a trace queue
+    Trace trace;
+    CommandQueue& trace_queue = BeginTrace(trace);
+    for (uint32_t i = 0; i < num_programs; i++) {
+        EnqueueProgram(trace_queue, programs[i], kNonBlocking);
+    }
+    EndTrace(trace);
+
+    // Instantiate a trace on a device bound command queue
+    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+
+    // Trace mode execution
+    for (auto i = 0; i < num_loops; i++) {
+        ScopedTimer timer("Trace loop " + std::to_string(i));
+        EnqueueWriteBuffer(command_queue, input, input_data.data(), kNonBlocking);
+        EnqueueTrace(command_queue, trace_id, kNonBlocking);
+        EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
+    }
+    Finish(command_queue);
+
 }
 
 } // end namespace basic_tests
