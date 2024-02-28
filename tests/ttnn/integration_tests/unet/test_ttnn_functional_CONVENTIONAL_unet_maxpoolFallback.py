@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchview import draw_graph
+# from torchview import draw_graph
 
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
 
@@ -20,7 +20,7 @@ import ttnn
 
 
 def update_ttnn_module_args(ttnn_module_args):
-    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256
+    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 511
 
 
 def custom_preprocessor(model, name, ttnn_module_args):
@@ -34,7 +34,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         # ttnn_module_args.c1["padded_input_channels"] = 16
         # ttnn_module_args.c1["use_shallow_conv_variant"] = True
         ttnn_module_args.c1_2["math_fidelity"] = ttnn.MathFidelity.LoFi
-        # ttnn_module_args.c1_2["use_shallow_conv_variant"] = True
+        ttnn_module_args.c1_2["use_shallow_conv_variant"] = True
         ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1_2["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1["weights_dtype"] = ttnn.bfloat8_b
@@ -44,7 +44,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c1["deallocate_activation"] = True
         ttnn_module_args.c1_2["deallocate_activation"] = True
         ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
-        ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        # ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"per_core_out_matrix_height": 6272}
         #        ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
         #        ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
@@ -89,7 +89,8 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c4["deallocate_activation"] = True
         ttnn_module_args.c4_2["deallocate_activation"] = True
         ttnn_module_args.c4["conv_blocking_and_parallelization_config_override"] = None
-        ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
+        # ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
+        ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
         ttnn_module_args.bnc["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.bnc_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -103,8 +104,8 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.bnc_2["deallocate_activation"] = True
         # ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = None
         # ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = None
-        ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
-        ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        # ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        # ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
 
         ttnn_module_args.c5["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c5_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -215,29 +216,29 @@ def custom_preprocessor(model, name, ttnn_module_args):
         conv8_2_weight, conv8_2_bias = fold_batch_norm2d_into_conv2d(model.c8_2, model.b8_2)
         # conv8_3_weight, conv8_3_bias = fold_batch_norm2d_into_conv2d(model.c8_3, model.b8_3)
 
-        #        update_ttnn_module_args(ttnn_module_args.c1)
-        #        update_ttnn_module_args(ttnn_module_args.c1_2)
-        #        update_ttnn_module_args(ttnn_module_args.c2)
-        #        update_ttnn_module_args(ttnn_module_args.c2_2)
-        #        update_ttnn_module_args(ttnn_module_args.c3)
-        #        update_ttnn_module_args(ttnn_module_args.c3_2)
-        #        update_ttnn_module_args(ttnn_module_args.c4)
-        #        update_ttnn_module_args(ttnn_module_args.c4_2)
-        #        update_ttnn_module_args(ttnn_module_args.bnc)
-        #        update_ttnn_module_args(ttnn_module_args.bnc_2)
-        #        update_ttnn_module_args(ttnn_module_args.c5)
-        #        update_ttnn_module_args(ttnn_module_args.c5_2)
-        #        #update_ttnn_module_args(ttnn_module_args.c5_3)
-        #        update_ttnn_module_args(ttnn_module_args.c6)
-        #        update_ttnn_module_args(ttnn_module_args.c6_2)
-        #        #update_ttnn_module_args(ttnn_module_args.c6_3)
-        #        update_ttnn_module_args(ttnn_module_args.c7)
-        #        update_ttnn_module_args(ttnn_module_args.c7_2)
-        #        #update_ttnn_module_args(ttnn_module_args.c7_3)
-        #        update_ttnn_module_args(ttnn_module_args.c8)
-        #        update_ttnn_module_args(ttnn_module_args.c8_2)
-        #        #update_ttnn_module_args(ttnn_module_args.c8_3)
-        #        update_ttnn_module_args(ttnn_module_args.output_layer)
+        update_ttnn_module_args(ttnn_module_args.c1)
+        update_ttnn_module_args(ttnn_module_args.c1_2)
+        update_ttnn_module_args(ttnn_module_args.c2)
+        update_ttnn_module_args(ttnn_module_args.c2_2)
+        update_ttnn_module_args(ttnn_module_args.c3)
+        update_ttnn_module_args(ttnn_module_args.c3_2)
+        update_ttnn_module_args(ttnn_module_args.c4)
+        update_ttnn_module_args(ttnn_module_args.c4_2)
+        update_ttnn_module_args(ttnn_module_args.bnc)
+        update_ttnn_module_args(ttnn_module_args.bnc_2)
+        update_ttnn_module_args(ttnn_module_args.c5)
+        update_ttnn_module_args(ttnn_module_args.c5_2)
+        # update_ttnn_module_args(ttnn_module_args.c5_3)
+        update_ttnn_module_args(ttnn_module_args.c6)
+        update_ttnn_module_args(ttnn_module_args.c6_2)
+        # update_ttnn_module_args(ttnn_module_args.c6_3)
+        update_ttnn_module_args(ttnn_module_args.c7)
+        update_ttnn_module_args(ttnn_module_args.c7_2)
+        # update_ttnn_module_args(ttnn_module_args.c7_3)
+        update_ttnn_module_args(ttnn_module_args.c8)
+        update_ttnn_module_args(ttnn_module_args.c8_2)
+        # update_ttnn_module_args(ttnn_module_args.c8_3)
+        update_ttnn_module_args(ttnn_module_args.output_layer)
 
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv1_2_weight, conv1_2_bias, ttnn_module_args.c1_2)
@@ -272,7 +273,7 @@ class UNet(nn.Module):
     def __init__(self):
         super(UNet, self).__init__()
         # Contracting Path
-        self.c1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        self.c1 = nn.Conv2d(4, 64, kernel_size=3, padding=1)
         self.b1 = nn.BatchNorm2d(64)
         self.r1 = nn.ReLU(inplace=True)
         self.c1_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
@@ -484,20 +485,8 @@ for name, parameter in torch_model.state_dict().items():
 
 torch_model.load_state_dict(new_state_dict)
 
-torch_input_tensor = torch.randn(2, 3, 256, 256)  # Batch size of 2, 3 channels (RGB), 1056x160 input
+torch_input_tensor = torch.randn(1, 4, 224, 224)  # Batch size of 2, 3 channels (RGB), 1056x160 input
 torch_output_tensor = torch_model(torch_input_tensor)
-
-model_graph = draw_graph(
-    torch_model,
-    # input_size=(2, 3, 1056, 160),
-    input_size=(2, 3, 256, 256),
-    dtypes=[torch.float32],
-    expand_nested=True,
-    graph_name="UNetConventional",
-    depth=2,
-    directory=".",
-)
-model_graph.visual_graph.render(format="pdf")
 
 
 reader_patterns_cache = {}
