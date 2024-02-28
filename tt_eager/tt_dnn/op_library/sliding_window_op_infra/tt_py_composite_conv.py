@@ -593,17 +593,10 @@ class TTPyCompositeConv(TTPyOp):
 
             input_padded_width = input_w + 2 * pad_w
 
-            dummy = torch.rand(batch_size * input_h * input_w, dtype=torch.bfloat16)
-            dummy = torch.reshape(dummy, input_nchw_shape)
-
             # TODO: We should remove C from input_nchw_shape since none of the specs depend on it
             # TODO: Pass sliding_window_op_params instead of conv_param?
-            (
-                pad_metadata,
-                data_top_left_indices,
-                _,
-            ) = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-                conv_params, input_nchw_shape, dummy.reshape(-1).tolist()
+            pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
+                conv_params, input_nchw_shape
             )
 
             req_conv_input_shard_start_end, tensor_metadata = decompose_conv_into_shards_and_generate_tensor_metadata(

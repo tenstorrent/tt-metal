@@ -119,14 +119,14 @@ def test_generate_all_configs_and_references(
     input_padded_height = input_h + 2 * pad_h
     # Generate following configs by tracing conv -
     logger.info("Trace conv and generate following configs - pad_metadata and data_top_left_indices.")
-    (
-        pad_metadata,
-        data_top_left_indices,
-        input_padded_tensor,
-    ) = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-        conv_params, input_nchw_shape, input_pyt_tensor.reshape(-1).tolist()
+    pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
+        conv_params, input_nchw_shape
     )
 
+    logger.info("Generate input tensor")
+    input_padded_pyt_tensor = torch.nn.functional.pad(input_pyt_tensor, (pad_w, pad_w, pad_h, pad_h), value=0)
+    input_padded_pyt_tensor = input_padded_pyt_tensor.permute(0, 2, 3, 1)
+    input_padded_tensor = input_padded_pyt_tensor.reshape(-1).tolist()
     # run trace conv reference to validate pad_metadata and data_top_left_indices
     logger.info("Validate pad_metadata and data_top_left_indices.")
 
