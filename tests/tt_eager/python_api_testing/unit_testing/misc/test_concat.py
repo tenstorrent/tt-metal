@@ -142,3 +142,72 @@ def test_multi_input_concat(shapes, dim, device, function_level_defaults):
     passing, output = comp_equal(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape, shard_shape, output_shard_shape, shard_grid",
+    (
+        (
+            (1, 1, 16, 16),
+            (8, 16),
+            (8, 32),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+        ),
+        (
+            (1, 1, 160, 32),
+            (80, 32),
+            (80, 64),
+            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+        ),
+        (
+            (1, 1, 5280, 32),
+            (80, 32),
+            (80, 64),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(11, 4)),
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 5), ttl.tensor.CoreCoord(5, 5)),
+                }
+            ),
+        ),
+    ),
+)
+def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid, device):
+    num_inputs = 2
+    inputs = []
+    tt_inputs = []
+    input_shard_scheme = ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+    input_shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, input_shard_orientation, False)
+    sharded_mem_config = ttl.tensor.MemoryConfig(input_shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+
+    output_shard_spec = ttl.tensor.ShardSpec(shard_grid, output_shard_shape, input_shard_orientation, False)
+    output_sharded_mem_config = ttl.tensor.MemoryConfig(input_shard_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
+
+    total_elements = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
+    for i in range(num_inputs):
+        shape = torch.Size(input_shape)
+        inputs.append(i * 1000 * total_elements + torch.arange(0, shape.numel()).reshape(shape).to(torch.bfloat16))
+        tt_inputs.append(
+            ttl.tensor.Tensor(
+                inputs[i],
+                ttl.tensor.DataType.BFLOAT16,
+            )
+            .to(ttl.tensor.Layout.ROW_MAJOR)
+            .to(device, sharded_mem_config)
+        )
+
+    dram_memory_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    dim = 3
+    tt_output_interleaved = ttl.tensor.concat(tt_inputs, dim, output_sharded_mem_config)
+
+    tt_dev = tt_output_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_cpu = torch.concat(inputs, dim)
+
+    passing, output = comp_equal(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
