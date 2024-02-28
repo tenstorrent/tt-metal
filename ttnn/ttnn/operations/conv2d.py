@@ -44,6 +44,7 @@ class Conv2d:
         enable_auto_formatting: bool = False,
         deallocate_activation: bool = False,
         padded_input_channels: Optional[int] = None,
+        compute_kernel_config: Union[ttnn.GrayskullComputeKernelConfig, ttnn.WormholeComputeKernelConfig] = None,
     ):
         assert (
             padding_mode == "zeros"
@@ -115,6 +116,7 @@ class Conv2d:
             enable_auto_formatting=enable_auto_formatting,
             deallocate_activation=deallocate_activation,
             padded_input_channels=padded_input_channels,
+            compute_kernel_config=compute_kernel_config,
         )
         self.batch_size = batch_size
         self.input_height = input_height
