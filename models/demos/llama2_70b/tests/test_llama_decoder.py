@@ -94,7 +94,7 @@ def run_test_LlamaDecoder_inference(
 
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
-        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=True
+        ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
