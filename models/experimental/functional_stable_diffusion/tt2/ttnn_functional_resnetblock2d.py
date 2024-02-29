@@ -312,7 +312,6 @@ class resnetBlock2D:
                 hidden_states,
                 (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, out_channels),
             )
-            temb = ttnn.reshape(temb, (self.conv1s[0].batch_size, 1, 1, out_channels))
             hidden_states = hidden_states + temb
 
         hidden_states = post_process_output(
