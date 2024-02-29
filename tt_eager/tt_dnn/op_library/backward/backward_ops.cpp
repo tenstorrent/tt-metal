@@ -924,6 +924,18 @@ std::vector<Tensor> asinh_bw(const Tensor& grad, const Tensor& input, const Memo
 {
     return operation::decorate_as_composite(__func__, _asinh_bw)(grad, input, output_mem_config);
 }
+
+std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul(grad, sinh(input, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+std::vector<Tensor> cosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _cosh_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
