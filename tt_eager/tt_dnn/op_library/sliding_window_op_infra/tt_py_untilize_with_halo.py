@@ -68,6 +68,40 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
         self.utwh = utwh_
 
+    def get_expected_memory_config(self, shape: list):
+        assert len(shape) == 4
+        assert shape[1] == 1
+        assert (
+            shape[0] * shape[1] * shape[2]
+            == self.sliding_window_op_params.batch_size
+            * self.sliding_window_op_params.input_h
+            * self.sliding_window_op_params.input_w
+        ), f"{shape} {self.sliding_window_op_params}"
+        assert (shape[0] * shape[1] * shape[2]) % self.sliding_window_op_params.num_cores_nhw == 0
+        block_sharding = self.sliding_window_op_params.num_cores_nhw == self.sliding_window_op_params.num_cores_w
+        logical_grid_y = self.sliding_window_op_params.num_cores_h if block_sharding else 1
+        assert shape[3] % logical_grid_y == 0
+        shard_grid, shard_layout = calculate_shard_grid(
+            (self.sliding_window_op_params.num_cores_w, self.sliding_window_op_params.num_cores_h),
+            self.sliding_window_op_params.num_cores_nhw,
+        )
+        shard_shape = [
+            (shape[0] * shape[1] * shape[2]) // self.sliding_window_op_params.num_cores_nhw,
+            shape[3] // logical_grid_y,
+        ]
+        shard_orientation = (
+            ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
+        )
+        shard_halo = False
+        shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+        mem_layout = (
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            if block_sharding
+            else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        )
+        mem_config = ttl.tensor.MemoryConfig(mem_layout, ttl.tensor.BufferType.L1, shard_spec)
+        return mem_config
+
     # override abstract methods from base class TTPyOp
     def set_op_configs(
         self,

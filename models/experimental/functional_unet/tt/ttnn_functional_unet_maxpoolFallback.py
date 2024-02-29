@@ -11,6 +11,29 @@ import tt_lib.fallback_ops
 from loguru import logger
 
 
+def unet_reshard(
+    ttnn_tensor,
+    sharded_memory_config,
+    use_reshard=True,
+    interleaved_memory_config=ttnn.L1_MEMORY_CONFIG,
+    dtype=None,
+):
+    if use_reshard:
+        return ttnn.to_memory_config(
+            ttnn_tensor,
+            memory_config=sharded_memory_config,
+        )
+    else:
+        ttl_tensor = ttnn_tensor.value
+        ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
+        ttl_tensor = ttl.tensor.interleaved_to_sharded(
+            ttl_tensor,
+            sharded_memory_config,
+            dtype,
+        )
+        return ttnn.Tensor(ttl_tensor)
+
+
 class UNet:
     def __init__(
         self,
@@ -57,18 +80,27 @@ class UNet:
         save_c1_2_out = ttnn.to_layout(save_c1_2_out, layout=ttnn.TILE_LAYOUT)
         output_tensor = self.p1(output_tensor)
 
+        output_tensor = unet_reshard(
+            output_tensor, self.c2.get_expected_memory_config(output_tensor.shape), use_reshard=False
+        )
         output_tensor = self.c2(output_tensor)
         output_tensor = self.c2_2(output_tensor)
         save_c2_2_out = output_tensor
         save_c2_2_out = ttnn.to_layout(save_c2_2_out, layout=ttnn.TILE_LAYOUT)
         output_tensor = self.p2(output_tensor)
 
+        output_tensor = unet_reshard(
+            output_tensor, self.c3.get_expected_memory_config(output_tensor.shape), use_reshard=False
+        )
         output_tensor = self.c3(output_tensor)
         output_tensor = self.c3_2(output_tensor)
         save_c3_2_out = output_tensor
         save_c3_2_out = ttnn.to_layout(save_c3_2_out, layout=ttnn.TILE_LAYOUT)
         output_tensor = self.p3(output_tensor)
 
+        output_tensor = unet_reshard(
+            output_tensor, self.c4.get_expected_memory_config(output_tensor.shape)
+        )  # , use_reshard=False)
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
         save_c4_2_out = output_tensor

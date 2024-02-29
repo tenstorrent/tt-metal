@@ -553,6 +553,11 @@ class TTPyCompositeConv(TTPyOp):
                 device, self.sliding_window_op_params, reader_patterns_cache["halo"]
             )
 
+    def get_expected_memory_config(self, shape: list):
+        return (
+            None if self.use_matmul_for_1x1_conv else self.tt_py_untilize_with_halo_op.get_expected_memory_config(shape)
+        )
+
     # override abstract methods from base class TTPyOp
     def set_op_configs(
         self,
