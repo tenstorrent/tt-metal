@@ -26,7 +26,7 @@ def run_eltwise_gte_tests(
     torch.manual_seed(data_seed)
     x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
 
-    if scalar == 0:
+    if scalar == 0.0:
         y = torch.Tensor(size=input_shape[1]).uniform_(-100, 100).to(torch.bfloat16)
     else:
         y = scalar
@@ -36,7 +36,7 @@ def run_eltwise_gte_tests(
         ref_value = x >= y
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
-        if scalar == 0:
+        if scalar == 0.0:
             y = ttnn_ops.setup_ttnn_tensor(y, device, dlayout[1], in_mem_config[1], dtype[1])
 
         tt_result = ttnn.gte(x, y)
@@ -55,21 +55,21 @@ def run_eltwise_gte_tests(
 test_sweep_args = [
     (
         [(128, 192), (128, 192)],
-        [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        (ttnn.DRAM_MEMORY_CONFIG),
-        -99.0,
-        2763978,
-    ),
-    (
-        [(128, 192), (128, 192)],
         [ttnn.bfloat8_b, ttnn.bfloat16],
         [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         (ttnn.L1_MEMORY_CONFIG),
-        -100.0,
-        2482923,
+        -94.5,
+        895795,
+    ),
+    (
+        [(6, 224, 32), (6, 224, 32)],
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
+        [ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        (ttnn.L1_MEMORY_CONFIG),
+        -88.5,
+        15777836,
     ),
 ]
 
