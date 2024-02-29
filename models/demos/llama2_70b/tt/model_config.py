@@ -22,8 +22,7 @@ OP_KEYS = (
     "LN_MLP_BIAS",
     "LN_MLP_OUTPUT",
     # Rotary
-    "SIN_CACHED_WEIGHTS",
-    "COS_CACHED_WEIGHTS",
+    "ROT_MAT",
     # Attention
     "FUSED_QKV_MM_WEIGHTS",
     "FUSED_QKV_MM_OUTPUT",
@@ -135,6 +134,8 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "L1_MEMCFG": L1_MEMCFG,
+        "DRAM_MEMCFG": DRAM_MEMCFG,
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
