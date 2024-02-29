@@ -1296,7 +1296,7 @@ def eltwise_gt(
     else:
         t1 = scalar
 
-    t2 = ttnn.gt(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.gte(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
 
