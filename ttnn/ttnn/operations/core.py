@@ -138,7 +138,7 @@ def _torch_reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int
     input_tensor = to_torch(input_tensor)
 
     if isinstance(shape, ttnn.Shape):
-        shape = tuple(shape)
+        shape = tuple(shape.with_tile_padding())
 
     return torch.reshape(input_tensor, shape).contiguous().clone()
 
@@ -155,8 +155,55 @@ def _reshape_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
+def _reshape_fallback(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
+    if isinstance(shape, tuple):
+        if not (0 <= shape.count(-1) <= 1):
+            raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
+
+        volume = math.prod(input_tensor.shape)
+        new_volume = math.prod(shape)
+        if new_volume < 0:
+            index_of_negative_1 = shape.index(-1)
+            shape = list(shape)
+            shape[index_of_negative_1] = volume // (-new_volume)
+            shape = tuple(shape)
+        shape = ttnn.Shape(shape)
+
+    layout = input_tensor.layout
+
+    device = None
+    if ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
+        device = input_tensor.device
+
+    tensor = input_tensor
+    tensor = ttnn.from_device(input_tensor)
+    # Using `to` method instead of `ttnn.to_layout` because we don't want to remove the padding
+    tensor = ttnn.Tensor(tensor.value.to(ttnn.ROW_MAJOR_LAYOUT))
+    tensor = ttnn.to_torch(tensor)
+    tensor = tensor.reshape(tuple(shape.with_tile_padding())).contiguous().clone()
+    tensor = ttnn.from_torch(tensor, dtype=input_tensor.dtype, layout=layout, device=device)
+    # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
+    # tensor = _to_layout(tensor, layout)
+
+    shape_with_tile_padding = shape.with_tile_padding()
+    if layout == ttnn.TILE_LAYOUT:
+        *_, height, width = shape_with_tile_padding
+        if height % ttnn.TILE_SIZE != 0 or width % ttnn.TILE_SIZE != 0:
+            raise RuntimeError(
+                "ttnn.reshape: cannot reshape a tensor with TILE_LAYOUT to a shape that is not a multiple of TILE_SIZE on height and width!"
+            )
+
+    tensor = ttnn.reshape(tensor, shape)
+
+    return tensor
+
+
 @ttnn.register_operation(
-    name="ttnn.reshape", validate_input_tensors=_reshape_validate_input_tensors, torch_function=_torch_reshape
+    name="ttnn.reshape",
+    torch_function=_torch_reshape,
+    is_cpp_function=True,
+    fallback=_reshape_fallback,
+    validate_input_tensors=_reshape_validate_input_tensors,
 )
 def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
     r"""
@@ -176,111 +223,13 @@ def reshape(input_tensor: ttnn.Tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]
         ttnn.Shape([32, 64])
 
     """
-
-    if isinstance(shape, tuple):
-        if not (0 <= shape.count(-1) <= 1):
-            raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
-
-        volume = math.prod(input_tensor.shape)
-        new_volume = math.prod(shape)
-        if new_volume < 0:
-            index_of_negative_1 = shape.index(-1)
-            shape = list(shape)
-            shape[index_of_negative_1] = volume // (-new_volume)
-            shape = tuple(shape)
-        shape = ttnn.Shape(shape)
-
-    if not isinstance(shape, ttnn.Shape):
-        raise RuntimeError("Shape must be of type Shape")
-
-    if input_tensor.shape == shape and list(input_tensor.shape) == list(shape):
-        return input_tensor
-
-    def ttnn_reshape(tensor: ttnn.Tensor, shape: ttnn.Shape) -> ttnn.Tensor:
-        ttl_input_tensor = tensor.value
-        return ttnn.Tensor(ttl_input_tensor.reshape(shape.value))
-
-    layout = input_tensor.layout
-
-    if input_tensor.is_contiguous():
-        if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            # Page size depends on the width, so only modify the shape if the width is the same
-            if input_tensor.shape[-1] == shape[-1]:
-                return ttnn_reshape(input_tensor, shape)
-        else:
-            return ttnn_reshape(input_tensor, shape)
-
-    if input_tensor.layout == ttnn.TILE_LAYOUT:
-        *_, new_height, new_width = tuple(shape.with_tile_padding())
-        if new_height % ttnn.TILE_SIZE == 0 and new_width % ttnn.TILE_SIZE == 0:
-            return ttnn_reshape(input_tensor, shape)
-        else:
-            raise RuntimeError(
-                "Unable to reshape a tensor in TILE_LAYOUT to non-tile height and width! Please convert the tensor to ROW_MAJOR_LAYOUT first."
-            )
-
-    if (
-        ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE)
-        and len(input_tensor.shape) == 4
-        and len(shape) == 4
-        and input_tensor.dtype == ttnn.bfloat16
-    ):
-        ttl_input_tensor = input_tensor.value
-        w, z, y, x = shape
-        ttl_output_tensor = ttl.tensor.reshape(ttl_input_tensor, w, z, y, x)
-        output_tensor = ttnn.Tensor(ttl_output_tensor)
-        output_tensor = ttnn_reshape(output_tensor, shape)
-        # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
-        # output_tensor = _to_layout(output_tensor, layout)
-        return output_tensor
-    else:
-
-        def torch_reshape(tensor, shape):
-            return tensor.reshape(tuple(shape.with_tile_padding())).contiguous().clone()
-
-        if ttnn.has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
-            device = input_tensor.device
-        else:
-            device = None
-
-        tensor = input_tensor
-        tensor = ttnn.from_device(input_tensor)
-        tensor = ttnn.Tensor(tensor.value.to(ttnn.ROW_MAJOR_LAYOUT))
-        tensor = ttnn.to_torch(tensor)
-        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-        tensor = ttnn.from_torch(tensor, dtype=input_tensor.dtype, layout=layout, device=device)
-        # Unable to handle 5D tensors!  See ttnn_optimized_functional_whisper.
-        # tensor = _to_layout(tensor, layout)
-        tensor = ttnn_reshape(tensor, shape)
-
-        return tensor
-
-
-def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
-    import torch
-
-    ranks = (1, 2, 3, 4, 5, 6, 7, 8)
-    if len(tensor.shape) not in ranks:
-        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64, torch.float16)
-    if tensor.dtype not in dtypes:
-        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
-    # if not tensor.is_contiguous():
-    #     raise RuntimeError(f"{operation_name}: ttnn.Tensor must be contiguous")
+    return ttnn._ttnn.operations.core.reshape(input_tensor, shape)
 
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
+@ttnn.register_operation(name="ttnn.unsqueeze_to_4D", is_cpp_function=True)
 def unsqueeze_to_4D(tensor):
-    if len(tensor.shape) == 4:
-        return tensor
-    if len(tensor.shape) > 4:
-        raise RuntimeError("Tensor cannot have more than 4 dimensions!")
-    num_missing_dims = 4 - len(tensor.shape)
-    shape = tuple(tensor.shape)
-    padded_shape = tuple(tensor.shape.with_tile_padding())
-    shape = (1,) * num_missing_dims + shape
-    padded_shape = (1,) * num_missing_dims + padded_shape
-    return ttnn.reshape(tensor, shape=ttnn.Shape(shape, padded_shape))
+    return ttnn._ttnn.operations.core.unsqueeze_to_4D(tensor)
 
 
 def squeeze(tensor, dim):
@@ -295,6 +244,19 @@ def squeeze(tensor, dim):
     _, *shape = tensor.shape
     _, *full_shape = tensor.shape.with_tile_padding()
     return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
+
+
+def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
+    import torch
+
+    ranks = (1, 2, 3, 4, 5, 6, 7, 8)
+    if len(tensor.shape) not in ranks:
+        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
+    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64, torch.float16)
+    if tensor.dtype not in dtypes:
+        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
+    # if not tensor.is_contiguous():
+    #     raise RuntimeError(f"{operation_name}: ttnn.Tensor must be contiguous")
 
 
 @ttnn.register_operation(name="ttnn.from_torch", validate_input_tensors=_from_torch_validate_input_tensors)
