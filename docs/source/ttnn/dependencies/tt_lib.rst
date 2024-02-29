@@ -928,6 +928,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.polygamma_bw
 
+.. autofunction:: tt_lib.tensor.atan_bw
+
+.. autofunction:: tt_lib.tensor.atanh_bw
+
 Loss Functions
 ==============
 
