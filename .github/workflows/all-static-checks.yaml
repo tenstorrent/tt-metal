@@ -3,11 +3,12 @@ name: "[post-commit] all - Static checks, linters etc."
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
+    branches: ["main", "esmal/lint-clang-format"]
   workflow_call:
   pull_request:
     branches:
-      - "main"
+      - main
+      - 'esmal/lint-clang-format'
 
 jobs:
   check-spdx-licenses:
@@ -49,7 +50,7 @@ jobs:
         if: ${{ github.ref != 'refs/heads/main' }}
         run: BASE_COMMIT_SHA=origin/$GITHUB_BASE_REF scripts/lint_clang_format.sh -m diff
       - name: Run formatter against previous commit (main only)
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/esmal/lint-clang-format' }}
         run: BASE_COMMIT_SHA=${{ github.event.before }} scripts/lint_clang_format.sh -m diff
   check-doc:
     runs-on: ubuntu-latest
