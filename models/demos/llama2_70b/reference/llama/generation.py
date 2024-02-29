@@ -134,6 +134,8 @@ class Llama:
 
         if n_layers is not None:
             params["n_layers"] = n_layers
+        else:
+            n_layers = params["n_layers"]
 
         checkpoint = {}
         if not skip_model_load:
