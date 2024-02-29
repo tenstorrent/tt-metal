@@ -938,6 +938,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.cosh_bw
 
+.. autofunction:: tt_lib.tensor.cos_bw
+
 Loss Functions
 ==============
 
