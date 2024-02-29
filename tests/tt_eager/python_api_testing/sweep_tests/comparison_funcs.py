@@ -9,6 +9,7 @@ from loguru import logger
 
 def get_atol_rtol_pcc(golden, calculated):
     calculated_dtype = calculated.dtype
+    is_calculate_float = calculated.is_floating_point()
 
     if golden.dtype != calculated.dtype:
         logger.warning(f"Converting calculated to golden.dtype {golden.dtype}")
@@ -69,11 +70,12 @@ def get_atol_rtol_pcc(golden, calculated):
         golden[torch.isnan(golden)] = 0
         calculated[torch.isnan(calculated)] = 0
 
-        golden[torch.isposinf(golden)] = torch.finfo(calculated_dtype).max
-        calculated[torch.isposinf(calculated)] = torch.finfo(calculated_dtype).max
+        if is_calculate_float:
+            golden[torch.isposinf(golden)] = torch.finfo(calculated_dtype).max
+            calculated[torch.isposinf(calculated)] = torch.finfo(calculated_dtype).max
 
-        golden[torch.isneginf(golden)] = torch.finfo(calculated_dtype).min
-        calculated[torch.isneginf(calculated)] = torch.finfo(calculated_dtype).min
+            golden[torch.isneginf(golden)] = torch.finfo(calculated_dtype).min
+            calculated[torch.isneginf(calculated)] = torch.finfo(calculated_dtype).min
 
         if torch.equal(golden, calculated):
             return 1.0
