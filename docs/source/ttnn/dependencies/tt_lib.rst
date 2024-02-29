@@ -940,6 +940,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.cos_bw
 
+.. autofunction:: tt_lib.tensor.hardtanh_bw
+
 Loss Functions
 ==============
 
