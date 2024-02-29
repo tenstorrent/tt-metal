@@ -172,7 +172,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
                 }
             }
-            if (!narrow_tile) {
+            if ((!narrow_tile) && (num_faces>1)) {
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                 TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
