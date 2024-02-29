@@ -114,9 +114,9 @@ ALWI void unpack_tilize_block(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
 }
 
-ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b)
+ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b, uint32_t num_faces = 4)
 {
-    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b) ));
+    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b, num_faces) ));
 }
 
 /**
