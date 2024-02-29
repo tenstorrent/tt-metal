@@ -545,15 +545,7 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto input_shape = input_tensors.at(0).shape();
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
-    for (auto index = 0; index < input_shape.rank(); index++) {
-        auto front = this->input_tensor_start[index];
-        auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
-        dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
-    }
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {Shape(this->output_tensor_shape, padding)};
+    return {Shape(this->output_tensor_shape)};
 }
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

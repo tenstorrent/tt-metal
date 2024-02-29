@@ -40,8 +40,8 @@ ttnn/ttnn/_ttnn.so: $(TTNN_PYBIND11_LIB)
 
 $(OBJDIR)/ttnn/cpp/ttnn/%.o: ttnn/cpp/ttnn/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TTNN_INCLUDES) -c -o $@ $<
+	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TTNN_INCLUDES) -MMD -MP -c -o $@ $<
 
 $(OBJDIR)/ttnn/cpp/pybind11/%.o: ttnn/cpp/pybind11/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TTNN_PYBIND11_INCLUDES) -c -o $@ $<
+	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TTNN_PYBIND11_INCLUDES) -MMD -MP -c -o $@ $<
