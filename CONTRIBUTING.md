@@ -25,6 +25,7 @@ Table of Contents
     - [Debugging device hangs](#debugging-device-hangs)
   - [Contribution standards](#contribution-standards)
     - [File structure and formats](#file-structure-and-formats)
+    - [Code style](#code-style)
     - [CI/CD Principles](#cicd-principles)
     - [Using CI/CD for development](#using-cicd-for-development)
     - [Documentation](#documentation)
@@ -458,6 +459,16 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   //
   // SPDX-License-Identifier: Apache-2.0
   ```
+
+### Code style
+
+- All C++ code must comply with the code style described in the `.clang-format`
+  configuration file. The CI pipeline will check any files you have modified
+  against this format and fail if the style does not match. You can run
+  `clang-format` manually or using the script found in
+  [scripts/lint_clang_format.sh](./scripts/README.md).
+  - The CI pipeline is currently using `clang-format` 14.
+- All Python code must comply with the `black` code style.
 
 ### CI/CD Principles
 
