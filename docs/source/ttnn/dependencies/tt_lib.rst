@@ -992,6 +992,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.rad2deg_bw
 
+.. autofunction:: tt_lib.tensor.reciprocal_bw
+
 Loss Functions
 ==============
 
