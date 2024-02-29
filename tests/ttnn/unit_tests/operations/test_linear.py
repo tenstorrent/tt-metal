@@ -186,7 +186,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    program_config = ttnn.create_matmul_1d_systolic_array_config(
+    program_config = ttnn.create_matmul_1d_systolic_array_program_config(
         input_shape_a=input_tensor_a.shape,
         input_shape_b=input_tensor_b.shape,
         core_grid=input_tensor_a.device.core_grid,

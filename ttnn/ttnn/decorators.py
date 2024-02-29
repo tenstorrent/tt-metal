@@ -172,7 +172,7 @@ def register_operation(*, name, validate_input_tensors=None, torch_function=None
         else:
             if validate_input_tensors is not None:
                 raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks"
+                    f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks because the input tensors are validated in C++"
                 )
     else:
         if validate_input_tensors is None:

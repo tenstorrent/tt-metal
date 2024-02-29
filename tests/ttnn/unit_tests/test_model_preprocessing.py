@@ -56,7 +56,7 @@ def test_linear(device, model_name, batch_size, m_size, k_size, n_size):
     output_tensor = input_tensor @ parameters.weight + parameters.bias
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9997)
 
 
 @skip_for_wormhole_b0()

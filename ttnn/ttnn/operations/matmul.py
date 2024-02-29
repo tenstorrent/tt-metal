@@ -76,7 +76,7 @@ def _validate_activation(activation):
         )
 
 
-def create_matmul_1d_systolic_array_config(
+def create_matmul_1d_systolic_array_program_config(
     *,
     input_shape_a: Tuple[int, ...],
     input_shape_b: Tuple[int, ...],
@@ -156,13 +156,11 @@ def create_matmul_1d_systolic_array_config(
     )
 
 
-def _get_matmul_program_config(
-    *, operation_name, input_tensor_a, input_tensor_b, core_grid, activation, use_1d_systolic_array
-):
+def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, activation, use_1d_systolic_array):
     *batch_shape_a, m_size, k_size = input_tensor_a.shape.with_tile_padding()
     *batch_shape_b, _, n_size = input_tensor_b.shape.with_tile_padding()
     *_, intended_k_size_of_a = input_tensor_a.shape
-    *_, intended_k_size_of_b, intended_n_size = input_tensor_b.shape
+    *_, intended_k_size_of_b, _ = input_tensor_b.shape
 
     if intended_k_size_of_a != intended_k_size_of_b:
         raise RuntimeError(f"The k dimension does not match between tensors")
@@ -185,7 +183,7 @@ def _get_matmul_program_config(
         use_1d_systolic_array = is_more_rectangular_than_square
 
     if use_1d_systolic_array:
-        return create_matmul_1d_systolic_array_config(
+        return create_matmul_1d_systolic_array_program_config(
             input_shape_a=input_tensor_a.shape,
             input_shape_b=input_tensor_b.shape,
             core_grid=core_grid,
@@ -194,14 +192,9 @@ def _get_matmul_program_config(
 
     # TODO: clean up the code below by mvoing it to separate create_*_config functions
 
-    if m_size % ttnn.TILE_SIZE != 0 or k_size % ttnn.TILE_SIZE != 0:
+    if (batch_size * m_size) % ttnn.TILE_SIZE != 0 or k_size % ttnn.TILE_SIZE != 0 or n_size % ttnn.TILE_SIZE != 0:
         raise RuntimeError(
-            f"{operation_name}: The last two dimensions of the first tensor must be a multiple of {ttnn.TILE_SIZE}"
-        )
-
-    if k_size % ttnn.TILE_SIZE != 0 or n_size % ttnn.TILE_SIZE != 0:
-        raise RuntimeError(
-            f"{operation_name}: The last two dimensions of the second tensor must be a multiple of {ttnn.TILE_SIZE}"
+            f"The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of {ttnn.TILE_SIZE}"
         )
 
     if input_b_is_batched:
@@ -211,7 +204,7 @@ def _get_matmul_program_config(
             k_tiles_per_core = 1  # TODO(arakhmati): Can it be more than 1 without running out of memory?
         elif ttnn.is_sharded(input_tensor_a):
             if input_tensor_a_memory_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED:
-                raise RuntimeError(f"{operation_name}: Cannot be width sharded")
+                raise RuntimeError(f"MatmulMultiCoreReuseProgramConfig: Cannot be width sharded")
             shard_shape = input_tensor_a_memory_config.shard_spec.shape
             N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
             m_tiles_per_core = shard_shape[0] // ttnn.TILE_SIZE
@@ -219,11 +212,22 @@ def _get_matmul_program_config(
             k_tiles_per_core = shard_shape[1] // ttnn.TILE_SIZE
         elif ttnn.is_sharded(input_tensor_b):
             if input_tensor_b_memory_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED:
-                raise RuntimeError(f"{operation_name}: Cannot be width sharded")
+                raise RuntimeError(f"MatmulMultiCoreReuseProgramConfig: Cannot be width sharded")
             shard_shape = input_tensor_b_memory_config.shard_spec.shape
             m_tiles_per_core = int(math.ceil((m_size / ttnn.TILE_SIZE)))
             n_tiles_per_core = shard_shape[1] // ttnn.TILE_SIZE
             k_tiles_per_core = 1
+
+        m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core)
+
+        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            per_core_M=m_tiles_per_core,
+            per_core_N=n_tiles_per_core,
+            in0_block_w=k_tiles_per_core,
+            out_subblock_h=m_subblock_size,
+            out_subblock_w=n_subblock_size,
+        )
     else:
         if not ttnn.is_sharded(input_tensor_a):
             m_tiles_per_core = int(math.ceil(((batch_size * m_size) / ttnn.TILE_SIZE) / core_grid.y))
@@ -236,7 +240,7 @@ def _get_matmul_program_config(
                 not input_tensor_a_memory_config.memory_layout
                 == ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
             ):
-                raise RuntimeError(f"{operation_name}: Must be block sharded")
+                raise RuntimeError(f"MatmulMultiCoreReuseMultiCastProgramConfig: Must be block sharded")
             K = input_tensor_a.shape[-1] // ttnn.TILE_SIZE
             N = input_tensor_b.shape[-1] // ttnn.TILE_SIZE
             shard_shape = input_tensor_a_memory_config.shard_spec.shape
@@ -244,18 +248,8 @@ def _get_matmul_program_config(
             n_tiles_per_core = (N * shard_shape[1]) // (K * ttnn.TILE_SIZE)
             k_tiles_per_core = 1
 
-    m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core)
+        m_subblock_size, n_subblock_size = _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core)
 
-    if input_b_is_batched:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            per_core_M=m_tiles_per_core,
-            per_core_N=n_tiles_per_core,
-            in0_block_w=k_tiles_per_core,
-            out_subblock_h=m_subblock_size,
-            out_subblock_w=n_subblock_size,
-        )
-    else:
         program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             per_core_M=m_tiles_per_core,
@@ -329,20 +323,17 @@ def _matmul(
             f"{operation_name}: The width of the first tensor must be equal to the height of the second tensor"
         )
 
-    apply_activation_separately = False
-    if core_grid is not None or program_config is not None:
-        if core_grid is not None:
-            if core_grid.num_cores == 1:
-                raise RuntimeError(f"{operation_name}: core_grid must have more than 1 core")
-            program_config = _get_matmul_program_config(
-                operation_name=operation_name,
-                input_tensor_a=input_tensor_a,
-                input_tensor_b=input_tensor_b,
-                core_grid=core_grid,
-                activation=activation,
-                use_1d_systolic_array=use_1d_systolic_array,
-            )
+    if core_grid is not None:
+        program_config = create_matmul_program_config(
+            input_tensor_a=input_tensor_a,
+            input_tensor_b=input_tensor_b,
+            core_grid=core_grid,
+            activation=activation,
+            use_1d_systolic_array=use_1d_systolic_array,
+        )
 
+    apply_activation_separately = False
+    if program_config is not None:
         apply_activation_separately = not hasattr(program_config, "fused_activation")
 
         try:
