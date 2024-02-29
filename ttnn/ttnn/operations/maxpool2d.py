@@ -42,6 +42,7 @@ class MaxPool2d:
         input_width: int,
         reader_patterns_cache: Dict,
         parallel_config_override: Dict = None,
+        deallocate_activation: bool = False,
     ):
         if isinstance(kernel_size, int):
             window_h = kernel_size
@@ -86,6 +87,7 @@ class MaxPool2d:
             reader_patterns_cache,
             pad_val=0xF7FF,
             parallel_config_override=parallel_config_override,
+            deallocate_activation=deallocate_activation,
         )
 
     def __call__(self, activation: ttnn.Tensor):

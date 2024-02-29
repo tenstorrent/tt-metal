@@ -406,7 +406,7 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * | event        | An event that will be populated by this function, and inserted in CQ   | Event &                       |                                    | Yes      |
  */
-void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
+void EnqueueRecordEvent(CommandQueue& cq, Event &event);
 
 /**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
@@ -417,7 +417,7 @@ void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
  * |              | and waits for the event to complete.                                   |                               |                                    |          |
  * | event        | The event object that this CQ will wait on for completion.             | Event &                       |                                    | Yes      |
  */
-void EnqueueQueueWaitForEvent(CommandQueue& cq, Event &event);
+void EnqueueWaitForEvent(CommandQueue& cq, Event &event);
 
 /**
  * Blocking function for host to synchronize (wait) on an event completion on device.

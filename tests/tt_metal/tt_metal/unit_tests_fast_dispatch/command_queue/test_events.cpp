@@ -39,7 +39,7 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     size_t num_events = 100000; // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
     for (size_t i = 0; i < num_events; i++) {
         Event event;
-        EnqueueQueueRecordEvent(*this->cmd_queue, event);
+        EnqueueRecordEvent(*this->cmd_queue, event);
         EXPECT_EQ(event.event_id, i);
         EXPECT_EQ(event.cq_id, this->cmd_queue->id());
     }
@@ -59,7 +59,7 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronize) {
         // Uncomment this to ensure syncing on uninitialized event would assert.
         // EventSynchronize(event);
 
-        EnqueueQueueRecordEvent(*this->cmd_queue, event);
+        EnqueueRecordEvent(*this->cmd_queue, event);
         log_debug(tt::LogTest, "Done recording event. Got Event(event_id: {} cq_id: {})", event.event_id, event.cq_id);
         EXPECT_EQ(event.event_id, i);
         EXPECT_EQ(event.cq_id, this->cmd_queue->id());
@@ -94,25 +94,25 @@ TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventBasic) {
     // A bunch of events recorded, occasionally will sync from device.
     for (size_t i = 0; i < num_events; i++) {
         auto &event = sync_events.emplace_back(Event());
-        EnqueueQueueRecordEvent(*this->cmd_queue, event);
+        EnqueueRecordEvent(*this->cmd_queue, event);
 
         // Device synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             log_debug(tt::LogTest, "Going to WaitForEvent(event_id: {} cq_id: {}) - should pass.", event.event_id, event.cq_id);
-            EnqueueQueueWaitForEvent(*this->cmd_queue, event);
+            EnqueueWaitForEvent(*this->cmd_queue, event);
         }
     }
 
     // A bunch of bonus syncs where event_id is mod on earlier ID's.
-    EnqueueQueueWaitForEvent(*this->cmd_queue, sync_events.at(0));
-    EnqueueQueueWaitForEvent(*this->cmd_queue, sync_events.at(sync_events.size() - 5));
-    EnqueueQueueWaitForEvent(*this->cmd_queue, sync_events.at(4));
+    EnqueueWaitForEvent(*this->cmd_queue, sync_events.at(0));
+    EnqueueWaitForEvent(*this->cmd_queue, sync_events.at(sync_events.size() - 5));
+    EnqueueWaitForEvent(*this->cmd_queue, sync_events.at(4));
 
     // Uncomment this to confirm future events not yet seen would hang.
     // Event future_event = sync_events.at(0);
     // future_event.event_id = (num_events * 2) + 2;
     // log_debug(tt::LogTest, "The next event (event_id: {}) is not yet seen, would hang", future_event.event_id);
-    // EnqueueQueueWaitForEvent(*this->cmd_queue, future_event);
+    // EnqueueWaitForEvent(*this->cmd_queue, future_event);
 
 }
 
@@ -129,14 +129,14 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
 
         // Record Event
         Event event;
-        EnqueueQueueRecordEvent(*this->cmd_queue, event);
+        EnqueueRecordEvent(*this->cmd_queue, event);
         EXPECT_EQ(event.cq_id, this->cmd_queue->id());
         EXPECT_EQ(event.event_id, i * 3);
 
         Buffer buf(this->device_, page_size, page_size, BufferType::DRAM);
         EnqueueWriteBuffer(*this->cmd_queue, buf, page, false);
 
-        EnqueueQueueWaitForEvent(*this->cmd_queue, event);
+        EnqueueWaitForEvent(*this->cmd_queue, event);
 
         if (i % 10 == 0) {
             EventSynchronize(event);

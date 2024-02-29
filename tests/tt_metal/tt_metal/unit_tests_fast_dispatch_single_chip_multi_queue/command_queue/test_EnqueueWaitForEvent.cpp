@@ -38,7 +38,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
         for (uint i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "Recording and Host Syncing on event for CQ ID: {}", cqs[i].get().id());
             auto &event = sync_events[i].emplace_back(Event());
-            EnqueueQueueRecordEvent(cqs[i], event);
+            EnqueueRecordEvent(cqs[i], event);
             EXPECT_EQ(event.cq_id, cqs[i].get().id());
             EXPECT_EQ(event.event_id, j); // 1 cmd per CQ
             EventSynchronize(event);
@@ -56,7 +56,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
 }
 
 // Simplest test to record and wait-for-events on same CQ.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueQueueWaitForEventSanity) {
+TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventSanity) {
     CommandQueue a(this->device_, 0);
     CommandQueue b(this->device_, 1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
@@ -66,10 +66,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueQueueWaitForEventS
         for (uint i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "Recording and Device Syncing on event for CQ ID: {}", cqs[i].get().id());
             Event event;
-            EnqueueQueueRecordEvent(cqs[i], event);
+            EnqueueRecordEvent(cqs[i], event);
             EXPECT_EQ(event.cq_id, cqs[i].get().id());
             EXPECT_EQ(event.event_id, j * 2);
-            EnqueueQueueWaitForEvent(cqs[i], event);
+            EnqueueWaitForEvent(cqs[i], event);
         }
     }
     local_test_functions::FinishAllCqs(cqs);
@@ -77,7 +77,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueQueueWaitForEventS
 
 // Record event on one CQ, wait-for-that-event on another CQ. Then do the flip. Occasionally insert
 // syncs from Host per CQ, and verify completion queues per CQ are correct.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueQueueWaitForEventCrossCQs) {
+TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossCQs) {
     CommandQueue a(this->device_, 0);
     CommandQueue b(this->device_, 1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
@@ -101,10 +101,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueQueueWaitForEventC
             Event event;
             log_debug(tt::LogTest, "Recording event on CQ ID: {} and Device Syncing on CQ ID: {}", cq_record_event.get().id(), cq_wait_event.get().id());
 
-            EnqueueQueueRecordEvent(cq_record_event, event);
+            EnqueueRecordEvent(cq_record_event, event);
             EXPECT_EQ(event.cq_id, cq_record_event.get().id());
             EXPECT_EQ(event.event_id, i + (j * num_cmds_per_cq));
-            EnqueueQueueWaitForEvent(cq_wait_event, event);
+            EnqueueWaitForEvent(cq_wait_event, event);
 
             // Occasionally do host wait for extra coverage from both CQs.
             if (j > 0 && ((j % 3) == 0)) {
@@ -153,12 +153,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
             log_debug(tt::LogTest, "Doing Write to cq_id: {} of data: {}", i, srcs[i]);
             EnqueueWriteBuffer(cqs[i], *buffers[i], srcs[i], false);
             auto &event = sync_events[i].emplace_back(Event());
-            EnqueueQueueRecordEvent(cqs[i], event);
+            EnqueueRecordEvent(cqs[i], event);
         }
 
         for (uint i = 0; i < cqs.size(); i++) {
             auto &event = sync_events[i][buf_idx];
-            EnqueueQueueWaitForEvent(cqs[i], event);
+            EnqueueWaitForEvent(cqs[i], event);
             vector<uint32_t> result;
             EnqueueReadBuffer(cqs[i], *buffers[i], result, true);
             log_debug(tt::LogTest, "Doing Read to cq_id: {} got data: {}", i, result);
@@ -209,8 +209,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
             // Blocking Read after Non-Blocking Write on alternate CQs, events ensure ordering.
             log_debug(tt::LogTest, "Doing Write (page_size: {} num_pages: {}) to cq_id: {}", config.page_size, config.num_pages, cq_write.get().id());
             EnqueueWriteBuffer(cq_write, *buffers[i], srcs[i], false);
-            EnqueueQueueRecordEvent(cq_write, event);
-            EnqueueQueueWaitForEvent(cq_read, event);
+            EnqueueRecordEvent(cq_write, event);
+            EnqueueWaitForEvent(cq_read, event);
             EnqueueReadBuffer(cq_read, *buffers[i], result, true);
             pass &= (srcs[i] == result);
         }
@@ -264,24 +264,24 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
             // Issue non-blocking write via first CQ and record event to synchronize with read on other CQ.
             log_debug(tt::LogTest, "Doing Write j: {} (page_size: {} num_pages: {}) to cq_id: {} write_data: {}", j, config.page_size, config.num_pages, cq_write.get().id(), write_data.back());
             EnqueueWriteBuffer(cq_write, *buffers.back(), write_data.back(), false);
-            if (use_events) EnqueueQueueRecordEvent(cq_write, event_sync_read_after_write);
+            if (use_events) EnqueueRecordEvent(cq_write, event_sync_read_after_write);
 
             // Issue wait for write to complete, and non-blocking read from the second CQ.
-            if (use_events) EnqueueQueueWaitForEvent(cq_read, event_sync_read_after_write);
+            if (use_events) EnqueueWaitForEvent(cq_read, event_sync_read_after_write);
             EnqueueReadBuffer(cq_read, *buffers.back(), read_results.back(), false);
             log_debug(tt::LogTest, "Issued Read for j: {} got data: {}", j, read_results.back()); // Data not ready since non-blocking.
 
             // If more loops, Record Event on second CQ and wait for it to complete on first CQ before next loop's write.
             if (use_events && j < num_wr_rd_per_buf-1) {
-                EnqueueQueueRecordEvent(cq_read, event_sync_write_after_read);
-                EnqueueQueueWaitForEvent(cq_write, event_sync_write_after_read);
+                EnqueueRecordEvent(cq_read, event_sync_write_after_read);
+                EnqueueWaitForEvent(cq_write, event_sync_write_after_read);
             }
         }
 
         // Basically like Finish, but use host sync on event to ensure all read cmds are finished.
         if (use_events) {
             Event event_done_reads;
-            EnqueueQueueRecordEvent(cq_read, event_done_reads);
+            EnqueueRecordEvent(cq_read, event_done_reads);
             EventSynchronize(event_done_reads);
         }
 

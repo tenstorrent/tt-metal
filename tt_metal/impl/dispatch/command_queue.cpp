@@ -1248,10 +1248,10 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
     }, program);
 }
 
-void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event) {
-    TT_ASSERT(event.device == nullptr, "EnqueueQueueRecordEvent expected to be given an uninitialized event");
-    TT_ASSERT(event.event_id == -1, "EnqueueQueueRecordEvent expected to be given an uninitialized event");
-    TT_ASSERT(event.cq_id == -1, "EnqueueQueueRecordEvent expected to be given an uninitialized event");
+void EnqueueRecordEvent(CommandQueue& cq, Event &event) {
+    TT_ASSERT(event.device == nullptr, "EnqueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event.event_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event.cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
 
     detail::DispatchStateCheck(true);
     cq.hw_command_queue().populate_record_event(event);
@@ -1267,11 +1267,11 @@ void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> even
 }
 
 
-void EnqueueQueueWaitForEvent(CommandQueue& cq, Event &event) {
-    TT_ASSERT(event.device != nullptr, "EnqueueQueueRecordEvent expected to be given Event with initialized device ptr");
-    TT_ASSERT(event.event_id != -1, "EnqueueQueueWaitForEvent expected to be given Event with initialized event_id");
-    TT_ASSERT(event.cq_id != -1, "EnqueueQueueWaitForEvent expected to be given Event with initialized cq_id");
-    log_trace(tt::LogMetal, "EnqueueQueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
+void EnqueueWaitForEvent(CommandQueue& cq, Event &event) {
+    TT_ASSERT(event.device != nullptr, "EnqueueRecordEvent expected to be given Event with initialized device ptr");
+    TT_ASSERT(event.event_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized event_id");
+    TT_ASSERT(event.cq_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized cq_id");
+    log_trace(tt::LogMetal, "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
         event.device->id(), event.cq_id, event.event_id, cq.device()->id(), cq.id());
 
     detail::DispatchStateCheck(true);

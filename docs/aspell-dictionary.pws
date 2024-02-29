@@ -57,8 +57,8 @@ ENDL
 ETH
 EltwiseUnary
 EnqueueProgram
-EnqueueQueueRecordEvent
-EnqueueQueueWaitForEvent
+EnqueueRecordEvent
+EnqueueWaitForEvent
 EnqueueReadBuffer
 EnqueueWriteBuffer
 Enum
