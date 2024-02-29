@@ -312,7 +312,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
         auto core_range = *(shard_spec.grid.ranges().begin());
         TT_FATAL(ncores_nhw_ == core_range.end.x - core_range.start.x + 1);
     } else {
-        TT_FATAL(ncores_nhw_ == shard_spec.grid.num_cores());
+        TT_FATAL(ncores_nhw_ == shard_spec.grid.num_cores(), "ncores_nhw ({}) != shard_spec.grid.num_cores ({})", ncores_nhw_, shard_spec.grid.num_cores());
     }
     auto out_shard_spec = shard_spec;
     out_shard_spec.shape[0] = div_up(output_shape[0] * output_shape[2], ncores_nhw_);
