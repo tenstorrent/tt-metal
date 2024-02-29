@@ -366,6 +366,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
                     output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
             query_layer[i].deallocate(True)
@@ -414,6 +415,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
                     output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
             attn_weights[i].deallocate(True)
