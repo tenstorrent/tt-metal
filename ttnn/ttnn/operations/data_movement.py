@@ -255,7 +255,7 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
             input_tensor,
             ranks=(2, 3, 4),
             dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
-            layouts=(ttnn.TILE_LAYOUT,),
+            layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
             can_be_on_device=True,
             can_be_on_cpu=False,
         )
@@ -325,7 +325,7 @@ def concat(
         tensor.layout != ttnn.TILE_LAYOUT or ttnn.has_padding(tensor) for tensor in tensors
     )
 
-    if rank < 4 and all_tensors_are_tile_layout_without_padding:
+    if True:  # rank < 4 and all_tensors_are_tile_layout_without_padding:
         any_tensor_has_padding = any(ttnn.has_padding(tensor) for tensor in tensors)
 
         def convert_to_ttl_tensor(tensor):
