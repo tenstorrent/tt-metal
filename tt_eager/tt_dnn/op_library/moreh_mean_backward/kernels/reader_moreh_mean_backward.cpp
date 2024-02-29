@@ -2,25 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "tt_eager/tt_dnn/op_library/moreh_sum_backward/kernels/utils.hpp"
-
-class NextArg {
-   private:
-    int arg_idx = 0;
-
-   public:
-    template <typename T>
-    T get_next_arg_val() {
-        return get_arg_val<T>(arg_idx++);
-    }
-};
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    NextArg arg_fetcher;
+    ArgFetcher arg_fetcher;
     const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
