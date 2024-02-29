@@ -54,6 +54,12 @@ struct TensorSchema {
     const bool is_optional;
 };
 
+struct CoreGrid {
+    std::size_t x;
+    std::size_t y;
+
+    CoreGrid(std::size_t x, std::size_t y) : x(x), y(y) {}
+};
 }
 
 using namespace types;

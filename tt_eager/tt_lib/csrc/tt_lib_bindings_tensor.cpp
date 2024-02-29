@@ -322,6 +322,8 @@ void TensorModule(py::module &m_tensor) {
     auto py_borrowed_buffer_for_bfloat16_t = py::class_<borrowed_buffer::Buffer<bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
 
+    py::class_<DeviceComputeKernelConfig>(m_tensor, "DeviceComputeKernelConfig");
+
     py::class_<GrayskullComputeKernelConfig>(m_tensor, "GrayskullComputeKernelConfig")
         .def(
             py::init<MathFidelity, bool>(),

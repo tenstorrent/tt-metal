@@ -7,7 +7,7 @@ import ttnn
 # from models.demos.metal_BERT_large_11.tt.model_config import get_model_config
 # model_config = get_model_config(8, ttnn.CoreGrid(8, 8), "BFLOAT8_B-SHARDED")
 
-core_grid = ttnn.CoreGrid(8, 8)
+core_grid = ttnn.CoreGrid(y=8, x=8)
 
 program_configs = {
     "query_key_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(

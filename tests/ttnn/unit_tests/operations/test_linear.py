@@ -128,7 +128,7 @@ def test_linear_with_core_grid(
                 bias=bias,
                 core_grid=ttnn.CoreGrid(y=batch_size, x=6),
             )
-        assert "ttnn.linear: ttl.operations.primary.matmul failed" in str(exception.value)
+        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
     else:
         output_tensor = ttnn.linear(
             input_tensor_a,

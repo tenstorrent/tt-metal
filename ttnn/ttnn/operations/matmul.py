@@ -5,8 +5,6 @@
 import math
 from typing import Optional, Tuple
 
-from loguru import logger
-
 import ttnn
 
 MatmulDefaultProgramConfig = ttnn.experimental.operations.primary.MatmulDefaultProgramConfig
@@ -198,6 +196,8 @@ def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, a
         )
 
     if input_b_is_batched:
+        if activation is not None:
+            raise RuntimeError(f"Cannot use activation with batched input b")
         if (not ttnn.is_sharded(input_tensor_a)) and (not ttnn.is_sharded(input_tensor_b)):
             m_tiles_per_core = int(math.ceil((m_size / ttnn.TILE_SIZE)))
             n_tiles_per_core = int(math.ceil((n_size / ttnn.TILE_SIZE)))
@@ -264,147 +264,6 @@ def create_matmul_program_config(*, input_tensor_a, input_tensor_b, core_grid, a
     return program_config
 
 
-def _matmul(
-    operation_name,
-    input_tensor_a: ttnn.Tensor,
-    input_tensor_b: ttnn.Tensor,
-    *,
-    bias: Optional[ttnn.Tensor] = None,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    dtype: Optional[ttnn.DataType] = None,
-    program_config: Optional[MatmulProgramConfig] = None,
-    core_grid: Optional[Tuple[int, int]] = None,
-    activation: Optional[str] = None,
-    use_1d_systolic_array: Optional[bool] = None,
-) -> ttnn.Tensor:
-    _validate_activation(activation)
-
-    if program_config is not None and core_grid is not None:
-        raise RuntimeError(f"{operation_name}: program_config and core_grid cannot be used together")
-
-    if program_config is not None and use_1d_systolic_array is not None:
-        raise RuntimeError(f"{operation_name}: program_config and use_1d_systolic_array cannot be used together")
-
-    if program_config is not None and activation is not None:
-        raise RuntimeError(f"{operation_name}: program_config and activation cannot be used together")
-
-    if core_grid is not None and not isinstance(core_grid, ttnn.CoreGrid):
-        raise RuntimeError(f"{operation_name}: core_grid must be a valid CoreGrid object")
-
-    if use_1d_systolic_array is not None and core_grid is None:
-        core_grid = input_tensor_a.device.core_grid
-
-    if dtype is None:
-        dtype = input_tensor_a.dtype
-
-    input_shape_a = input_tensor_a.shape
-    input_shape_b = input_tensor_b.shape
-
-    output_shape_list = []
-    padded_output_shape_list = []
-    for index in range(len(input_shape_a) - 1):
-        output_shape_list.append(input_shape_a[index])
-        padded_output_shape_list.append(input_shape_a.with_tile_padding()[index])
-    output_shape_list.append(input_shape_b[-1])
-    padded_output_shape_list.append(input_shape_b.with_tile_padding()[-1])
-    output_shape = ttnn.Shape(output_shape_list, padded_output_shape_list)
-
-    *_, _, width_a = input_shape_a
-    *batch_shape_b, height_b, _ = input_shape_b
-
-    input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-    input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-
-    if bias is not None:
-        bias = ttnn.unsqueeze_to_4D(bias)
-
-    if width_a != height_b:
-        raise RuntimeError(
-            f"{operation_name}: The width of the first tensor must be equal to the height of the second tensor"
-        )
-
-    if core_grid is not None:
-        program_config = create_matmul_program_config(
-            input_tensor_a=input_tensor_a,
-            input_tensor_b=input_tensor_b,
-            core_grid=core_grid,
-            activation=activation,
-            use_1d_systolic_array=use_1d_systolic_array,
-        )
-
-    apply_activation_separately = False
-    if program_config is not None:
-        apply_activation_separately = not hasattr(program_config, "fused_activation")
-
-        try:
-            output_tensor = ttnn.experimental.operations.primary.matmul(
-                input_tensor_a,
-                input_tensor_b,
-                bias=bias,
-                program_config=program_config,
-                output_mem_config=memory_config,
-                output_dtype=dtype,
-            )
-        except Exception as exception:
-            first_line_of_exception = "\n".join(str(exception).split("\n")[:3])
-            raise RuntimeError(
-                f"{operation_name}: ttl.operations.primary.matmul failed with error: {first_line_of_exception}"
-            )
-
-    else:
-        apply_activation_separately = activation is not None
-        if dtype != input_tensor_a.dtype:
-            raise RuntimeError("dtype must be the same as the input tensors")
-
-        input_b_is_batched = math.prod(batch_shape_b) > 1
-        if input_b_is_batched:
-            output_tensor = ttnn.experimental.tensor.bmm(
-                input_tensor_a,
-                input_tensor_b,
-                output_mem_config=memory_config,
-            )
-        else:
-            output_tensor = ttnn.experimental.tensor.matmul(
-                input_tensor_a,
-                input_tensor_b,
-                output_mem_config=memory_config,
-            )
-            if bias is not None:
-                output_tensor += bias
-
-    if apply_activation_separately and activation is not None:
-        activation_to_function = {
-            "gelu": ttnn.gelu,
-            "relu": ttnn.relu,
-        }
-        output_tensor = activation_to_function[activation](output_tensor)
-
-    if output_tensor.shape != output_shape:
-        output_tensor = ttnn.reshape(output_tensor, output_shape)
-    return output_tensor
-
-
-def _matmul_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
     input_tensor_a = ttnn.from_device(input_tensor_a)
     input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
@@ -417,21 +276,20 @@ def _torch_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_)
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@ttnn.register_operation(
-    name="ttnn.matmul", validate_input_tensors=_matmul_validate_input_tensors, torch_function=_torch_matmul
-)
+@ttnn.register_operation(name="ttnn.matmul", is_cpp_function=True, torch_function=_torch_matmul)
 def matmul(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
     *,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
-    core_grid: Optional[Tuple[int, int]] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
     program_config: Optional[MatmulProgramConfig] = None,
     use_1d_systolic_array: Optional[bool] = None,
+    compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
 ) -> ttnn.Tensor:
     """
-    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[Tuple[int, int]] = None, program_config: Optional[MatmulProgramConfig] = None, use_1d_systolic_array: Optional[bool] = None) -> ttnn.Tensor
+    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, use_1d_systolic_array: Optional[bool] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor
 
     Returns the matrix product of two tensors.
 
@@ -472,9 +330,10 @@ def matmul(
     Keyword Arguments:
         * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
         * :attr:`dtype` (ttnn.DataType): the data type of the output tensor. Defaults to None
-        * :attr:`core_grid` (Tuple[int, int]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
+        * :attr:`core_grid` (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
         * :attr:`program_config` (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to None
         * :attr:`use_1d_systolic_array` (bool): whether to use a 1D systolic array. Defaults to None which means it will be determined automatically
+        * :attr:`compute_kernel_config` (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to None
 
     Example::
 
@@ -510,46 +369,33 @@ def matmul(
         [10, 64, 128]
     """
 
-    return _matmul(
-        "ttnn.matmul",
+    if use_1d_systolic_array is not None or core_grid is not None:
+        if program_config is not None:
+            raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
+        program_config = create_matmul_program_config(
+            input_tensor_a=input_tensor_a,
+            input_tensor_b=input_tensor_b,
+            core_grid=core_grid or input_tensor_a.device.core_grid,
+            activation=None,
+            use_1d_systolic_array=use_1d_systolic_array,
+        )
+
+    if program_config is not None:
+        return ttnn._ttnn.operations.matmul.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=memory_config,
+            dtype=dtype,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    return ttnn._ttnn.operations.matmul.matmul(
         input_tensor_a,
         input_tensor_b,
         memory_config=memory_config,
         dtype=dtype,
-        core_grid=core_grid,
-        program_config=program_config,
-        use_1d_systolic_array=use_1d_systolic_array,
-    )
-
-
-def _linear_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, bias=None, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        bias,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
+        compute_kernel_config=compute_kernel_config,
     )
 
 
@@ -582,9 +428,7 @@ def _torch_linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, b
     return output_tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.linear", validate_input_tensors=_linear_validate_input_tensors, torch_function=_torch_linear
-)
+@ttnn.register_operation(name="ttnn.linear", is_cpp_function=True, torch_function=_torch_linear)
 def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -592,13 +436,14 @@ def linear(
     bias: Optional[ttnn.Tensor] = None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
-    core_grid: Optional[Tuple[int, int]] = None,
+    core_grid: Optional[ttnn.CoreGrid] = None,
     program_config: Optional[MatmulProgramConfig] = None,
     activation: Optional[str] = None,
     use_1d_systolic_array: Optional[bool] = None,
+    compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
 ) -> ttnn.Tensor:
     """
-    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[Tuple[int, int]] = None, proggram_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, use_1d_systolic_array: Optional[bool] = None) -> ttnn.Tensor
+    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, proggram_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, use_1d_systolic_array: Optional[bool] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor
 
     Returns the linear transformation of the inputs
 
@@ -610,10 +455,11 @@ def linear(
         * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. Defaults to None
         * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
         * :attr:`dtype` (Optional[ttnn.DataType]): the data type of the output tensor. Defaults to None
-        * :attr:`core_grid` (Optional[Tuple[int, int]]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
+        * :attr:`core_grid` (Optional[ttnn.CoreGrid]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
         * :attr:`program_config` (Optional[MatmulProgramConfig]): the program configuration for the matmul operation. Defaults to None
         * :attr:`activation` (Optional[str]): the activation function to be applied. Defaults to None
         * :attr:`use_1d_systolic_array` (Optional[bool]): whether to use 1D systolic array. Defaults to None which means it will be determined automatically
+        * :attr:`compute_kernel_config` (Optional[ttnn.DeviceComputeKernelConfig]): the compute kernel configuration for the matmul operation. Defaults to None
 
     Example::
         >>> # batched matrix x broadcasted matrix
@@ -625,17 +471,36 @@ def linear(
         [10, 64, 128]
     """
 
-    return _matmul(
-        "ttnn.linear",
+    if use_1d_systolic_array is not None or core_grid is not None:
+        if program_config is not None:
+            raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
+        program_config = create_matmul_program_config(
+            input_tensor_a=input_tensor_a,
+            input_tensor_b=input_tensor_b,
+            core_grid=core_grid or input_tensor_a.device.core_grid,
+            activation=activation,
+            use_1d_systolic_array=use_1d_systolic_array,
+        )
+
+    if program_config is not None:
+        return ttnn._ttnn.operations.matmul.linear(
+            input_tensor_a,
+            input_tensor_b,
+            bias=bias,
+            memory_config=memory_config,
+            dtype=dtype,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    return ttnn._ttnn.operations.matmul.linear(
         input_tensor_a,
         input_tensor_b,
-        bias=bias,
         memory_config=memory_config,
+        bias=bias,
         dtype=dtype,
-        core_grid=core_grid,
-        program_config=program_config,
         activation=activation,
-        use_1d_systolic_array=use_1d_systolic_array,
+        compute_kernel_config=compute_kernel_config,
     )
 
 

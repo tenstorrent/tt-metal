@@ -28,7 +28,7 @@ inline ttnn::Tensor add(
     const ttnn::Tensor& input_tensor_a_arg,
     const ttnn::Tensor& input_tensor_b_arg,
     const tt::tt_metal::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    std::optional<DataType> dtype = std::nullopt) {
+    const std::optional<const DataType> dtype = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.add", input_tensor_a_arg, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.add", input_tensor_b_arg, input_schemas[1]);
 
@@ -86,8 +86,8 @@ ttnn::Tensor operator+(const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& i
 inline ttnn::Tensor add(
     const ttnn::Tensor& input_tensor_a,
     const float scalar,
-    const tt::tt_metal::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    std::optional<DataType> dtype = std::nullopt) {
+    const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+    const std::optional<const DataType> dtype = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.add", input_tensor_a, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.add", scalar, input_schemas[1]);
 

@@ -482,21 +482,34 @@ struct Shape {
     const Shape to_rank() const {
         return std::visit(
             []<std::size_t Rank>(const RankedShape<Rank> &shape) -> Shape {
+                auto shape_with_tile_padding = shape.with_tile_padding();
+
+                std::array<uint32_t, NewRank> new_shape{};
+                std::array<uint32_t, NewRank> new_padded_shape{};
                 if constexpr (Rank == NewRank) {
                     return Shape(shape);
                 } else if constexpr (Rank > NewRank) {
-                    TT_THROW("Cannot reduce rank");
-                }
-                auto num_missing_dims = NewRank - Rank;
-                std::array<uint32_t, NewRank> new_shape{};
-                std::array<uint32_t, NewRank> new_padded_shape{};
+                    auto num_extra_dims = Rank - NewRank;
 
-                new_shape.fill(1);
-                new_padded_shape.fill(1);
+                    for (auto index = 0; index < num_extra_dims; index++) {
+                        TT_ASSERT(shape[index] == 1);
+                        TT_ASSERT(shape_with_tile_padding[index] == 1);
+                    }
 
-                for (auto index = 0; index < Rank; index++) {
-                    new_shape[index + num_missing_dims] = shape[index];
-                    new_padded_shape[index + num_missing_dims] = shape.with_tile_padding()[index];
+                    for (auto index = 0; index < NewRank; index++) {
+                        new_shape[index] = shape[index + num_extra_dims];
+                        new_padded_shape[index] = shape_with_tile_padding[index + num_extra_dims];
+                    }
+                } else {
+                    auto num_missing_dims = NewRank - Rank;
+
+                    new_shape.fill(1);
+                    new_padded_shape.fill(1);
+
+                    for (auto index = 0; index < Rank; index++) {
+                        new_shape[index + num_missing_dims] = shape[index];
+                        new_padded_shape[index + num_missing_dims] = shape_with_tile_padding[index];
+                    }
                 }
                 return Shape(RankedShape<NewRank>(new_shape, new_padded_shape));
             },

@@ -7,7 +7,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
 
 
 # fmt: off
@@ -384,7 +383,7 @@ def test_matmul_with_core_grid(device, batch_size):
                 input_tensor_b,
                 core_grid=ttnn.CoreGrid(y=batch_size, x=12),
             )
-        assert "ttnn.matmul: ttl.operations.primary.matmul failed" in str(exception.value)
+        assert "1D mcast for in0 or in1 is not implemented ye" in str(exception.value)
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
@@ -478,7 +477,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
 @pytest.mark.parametrize("n_size", [4672])
-@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(8, 8)])
+@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=8, x=8)])
 def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_size, core_grid):
     torch.manual_seed(0)
 

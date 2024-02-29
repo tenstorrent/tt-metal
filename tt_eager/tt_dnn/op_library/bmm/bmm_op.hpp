@@ -314,12 +314,12 @@ inline Tensor matmul(
 
 inline Tensor matmul(
     const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b, std::optional<const Tensor> bias,
-    const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
-    const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const Tensor &input_tensor_b,
+    std::optional<const Tensor> bias,
+    const MatmulProgramConfig &program_config = MatmulDefaultProgramConfig{},
+    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DataType> output_dtype = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
-) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
     return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), kernel_config_val}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
