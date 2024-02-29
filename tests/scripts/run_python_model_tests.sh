@@ -19,9 +19,6 @@ fi
 # you can move to where you'd like.
 
 if [ "$ARCH_NAME" != "wormhole_b0" ]; then
-    # TODO(arakhmati): Run ttnn tests only on graskull until the issue with ttnn.reshape on wormhole is resolved
-    env pytest $TT_METAL_HOME/tests/ttnn/unit_tests
-
     # Tests for tensors in L1
     pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large*matmul* -k in0_L1-in1_L1-bias_L1-out_L1
     pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large*bmm* -k in0_L1-in1_L1-out_L1
