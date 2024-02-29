@@ -1159,6 +1159,10 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,
     },
+    "ttnn-eltwise-logical_not": {
+        "tt_lib_op": ttnn_ops.eltwise_logical_not,
+        "pytorch_op": pytorch_ops.logical_not,
+    },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,

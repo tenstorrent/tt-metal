@@ -36,8 +36,8 @@ def run_eltwise_scalar_tests(
         # get ref result
         ref_value = pt_op(x, y, alpha=scalar)
 
-        x = ttnn_ops.torch_to_ttnn(x, device, dlayout[0], in_mem_config, dtype[0])
-        y = ttnn_ops.torch_to_ttnn(y, device, dlayout[1], in_mem_config, dtype[1])
+        x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config, dtype[0])
+        y = ttnn_ops.setup_ttnn_tensor(y, device, dlayout[1], in_mem_config, dtype[1])
 
         tt_result = tt_op(x, y, alpha=scalar)
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
