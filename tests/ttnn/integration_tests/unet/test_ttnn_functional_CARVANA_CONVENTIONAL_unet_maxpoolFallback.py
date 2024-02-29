@@ -7,6 +7,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+# from torchview import draw_graph
+
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -16,29 +18,37 @@ from models.experimental.functional_unet.tt import ttnn_functional_CONVENTIONAL_
 
 import ttnn
 
+from types import SimpleNamespace
 from collections.abc import MutableMapping
 
 
-def flatten_dict(dictionary, parent_key="", separator="."):
+def dict_to_namespace(d):
+    """
+    Recursively converts a dictionary to a SimpleNamespace object.
+    """
+    if isinstance(d, dict):
+        return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+    else:
+        return d
+
+
+def flatten(dictionary, parent_key="", separator="."):
     items = []
     for key, value in dictionary.items():
         new_key = parent_key + separator + key if parent_key else key
         if isinstance(value, MutableMapping):
-            items.extend(flatten_dict(value, new_key, separator=separator).items())
+            items.extend(flatten(value, new_key, separator=separator).items())
         else:
             items.append((new_key, value))
     return dict(items)
 
 
+def update_ttnn_module_args(ttnn_module_args):
+    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 511
+
+
 def creat_state_dict_from_torchhub():
-    model = torch.hub.load(
-        "mateuszbuda/brain-segmentation-pytorch",
-        "unet",
-        in_channels=3,
-        out_channels=1,
-        init_features=32,
-        pretrained=True,
-    )
+    model = torch.hub.load("milesial/Pytorch-UNet", "unet_carvana", pretrained=True, scale=0.5)
     model_dict_orig = list(model.state_dict().items())
 
     keys = [
@@ -81,126 +91,127 @@ def creat_state_dict_from_torchhub():
         "output_layer",
     ]
     """
-    encoder1.enc1conv1.weight
-    encoder1.enc1norm1.weight
-    encoder1.enc1norm1.bias
-    encoder1.enc1norm1.running_mean
-    encoder1.enc1norm1.running_var
-    encoder1.enc1norm1.num_batches_tracked
-    encoder1.enc1conv2.weight
-    encoder1.enc1norm2.weight
-    encoder1.enc1norm2.bias
-    encoder1.enc1norm2.running_mean
-    encoder1.enc1norm2.running_var
-    encoder1.enc1norm2.num_batches_tracked
-    encoder2.enc2conv1.weight
-    encoder2.enc2norm1.weight
-    encoder2.enc2norm1.bias
-    encoder2.enc2norm1.running_mean
-    encoder2.enc2norm1.running_var
-    encoder2.enc2norm1.num_batches_tracked
-    encoder2.enc2conv2.weight
-    encoder2.enc2norm2.weight
-    encoder2.enc2norm2.bias
-    encoder2.enc2norm2.running_mean
-    encoder2.enc2norm2.running_var
-    encoder2.enc2norm2.num_batches_tracked
-    encoder3.enc3conv1.weight
-    encoder3.enc3norm1.weight
-    encoder3.enc3norm1.bias
-    encoder3.enc3norm1.running_mean
-    encoder3.enc3norm1.running_var
-    encoder3.enc3norm1.num_batches_tracked
-    encoder3.enc3conv2.weight
-    encoder3.enc3norm2.weight
-    encoder3.enc3norm2.bias
-    encoder3.enc3norm2.running_mean
-    encoder3.enc3norm2.running_var
-    encoder3.enc3norm2.num_batches_tracked
-    encoder4.enc4conv1.weight
-    encoder4.enc4norm1.weight
-    encoder4.enc4norm1.bias
-    encoder4.enc4norm1.running_mean
-    encoder4.enc4norm1.running_var
-    encoder4.enc4norm1.num_batches_tracked
-    encoder4.enc4conv2.weight
-    encoder4.enc4norm2.weight
-    encoder4.enc4norm2.bias
-    encoder4.enc4norm2.running_mean
-    encoder4.enc4norm2.running_var
-    encoder4.enc4norm2.num_batches_tracked
-    bottleneck.bottleneckconv1.weight
-    bottleneck.bottlenecknorm1.weight
-    bottleneck.bottlenecknorm1.bias
-    bottleneck.bottlenecknorm1.running_mean
-    bottleneck.bottlenecknorm1.running_var
-    bottleneck.bottlenecknorm1.num_batches_tracked
-    bottleneck.bottleneckconv2.weight
-    bottleneck.bottlenecknorm2.weight
-    bottleneck.bottlenecknorm2.bias
-    bottleneck.bottlenecknorm2.running_mean
-    bottleneck.bottlenecknorm2.running_var
-    bottleneck.bottlenecknorm2.num_batches_tracked
-    upconv4.weight
-    upconv4.bias
-    decoder4.dec4conv1.weight
-    decoder4.dec4norm1.weight
-    decoder4.dec4norm1.bias
-    decoder4.dec4norm1.running_mean
-    decoder4.dec4norm1.running_var
-    decoder4.dec4norm1.num_batches_tracked
-    decoder4.dec4conv2.weight
-    decoder4.dec4norm2.weight
-    decoder4.dec4norm2.bias
-    decoder4.dec4norm2.running_mean
-    decoder4.dec4norm2.running_var
-    decoder4.dec4norm2.num_batches_tracked
-    upconv3.weight
-    upconv3.bias
-    decoder3.dec3conv1.weight
-    decoder3.dec3norm1.weight
-    decoder3.dec3norm1.bias
-    decoder3.dec3norm1.running_mean
-    decoder3.dec3norm1.running_var
-    decoder3.dec3norm1.num_batches_tracked
-    decoder3.dec3conv2.weight
-    decoder3.dec3norm2.weight
-    decoder3.dec3norm2.bias
-    decoder3.dec3norm2.running_mean
-    decoder3.dec3norm2.running_var
-    decoder3.dec3norm2.num_batches_tracked
-    upconv2.weight
-    upconv2.bias
-    decoder2.dec2conv1.weight
-    decoder2.dec2norm1.weight
-    decoder2.dec2norm1.bias
-    decoder2.dec2norm1.running_mean
-    decoder2.dec2norm1.running_var
-    decoder2.dec2norm1.num_batches_tracked
-    decoder2.dec2conv2.weight
-    decoder2.dec2norm2.weight
-    decoder2.dec2norm2.bias
-    decoder2.dec2norm2.running_mean
-    decoder2.dec2norm2.running_var
-    decoder2.dec2norm2.num_batches_tracked
-    upconv1.weight
-    upconv1.bias
-    decoder1.dec1conv1.weight
-    decoder1.dec1norm1.weight
-    decoder1.dec1norm1.bias
-    decoder1.dec1norm1.running_mean
-    decoder1.dec1norm1.running_var
-    decoder1.dec1norm1.num_batches_tracked
-    decoder1.dec1conv2.weight
-    decoder1.dec1norm2.weight
-    decoder1.dec1norm2.bias
-    decoder1.dec1norm2.running_mean
-    decoder1.dec1norm2.running_var
-    decoder1.dec1norm2.num_batches_tracked
-    conv.weight
-    conv.bias
-    """
+    inc.double_conv.0.weight
+    inc.double_conv.1.weight
+    inc.double_conv.1.bias
+    inc.double_conv.1.running_mean
+    inc.double_conv.1.running_var
+    inc.double_conv.1.num_batches_tracked
+    inc.double_conv.3.weight
+    inc.double_conv.4.weight
+    inc.double_conv.4.bias
+    inc.double_conv.4.running_mean
+    inc.double_conv.4.running_var
+    inc.double_conv.4.num_batches_tracked
+    down1.maxpool_conv.1.double_conv.0.weight
+    down1.maxpool_conv.1.double_conv.1.weight
+    down1.maxpool_conv.1.double_conv.1.bias
+    down1.maxpool_conv.1.double_conv.1.running_mean
+    down1.maxpool_conv.1.double_conv.1.running_var
+    down1.maxpool_conv.1.double_conv.1.num_batches_tracked
+    down1.maxpool_conv.1.double_conv.3.weight
+    down1.maxpool_conv.1.double_conv.4.weight
+    down1.maxpool_conv.1.double_conv.4.bias
+    down1.maxpool_conv.1.double_conv.4.running_mean
+    down1.maxpool_conv.1.double_conv.4.running_var
+    down1.maxpool_conv.1.double_conv.4.num_batches_tracked
+    down2.maxpool_conv.1.double_conv.0.weight
+    down2.maxpool_conv.1.double_conv.1.weight
+    down2.maxpool_conv.1.double_conv.1.bias
+    down2.maxpool_conv.1.double_conv.1.running_mean
+    down2.maxpool_conv.1.double_conv.1.running_var
+    down2.maxpool_conv.1.double_conv.1.num_batches_tracked
+    down2.maxpool_conv.1.double_conv.3.weight
+    down2.maxpool_conv.1.double_conv.4.weight
+    down2.maxpool_conv.1.double_conv.4.bias
+    down2.maxpool_conv.1.double_conv.4.running_mean
+    down2.maxpool_conv.1.double_conv.4.running_var
+    down2.maxpool_conv.1.double_conv.4.num_batches_tracked
+    down3.maxpool_conv.1.double_conv.0.weight
+    down3.maxpool_conv.1.double_conv.1.weight
+    down3.maxpool_conv.1.double_conv.1.bias
+    down3.maxpool_conv.1.double_conv.1.running_mean
+    down3.maxpool_conv.1.double_conv.1.running_var
+    down3.maxpool_conv.1.double_conv.1.num_batches_tracked
+    down3.maxpool_conv.1.double_conv.3.weight
+    down3.maxpool_conv.1.double_conv.4.weight
+    down3.maxpool_conv.1.double_conv.4.bias
+    down3.maxpool_conv.1.double_conv.4.running_mean
+    down3.maxpool_conv.1.double_conv.4.running_var
+    down3.maxpool_conv.1.double_conv.4.num_batches_tracked
+    down4.maxpool_conv.1.double_conv.0.weight
+    down4.maxpool_conv.1.double_conv.1.weight
+    down4.maxpool_conv.1.double_conv.1.bias
+    down4.maxpool_conv.1.double_conv.1.running_mean
+    down4.maxpool_conv.1.double_conv.1.running_var
+    down4.maxpool_conv.1.double_conv.1.num_batches_tracked
+    down4.maxpool_conv.1.double_conv.3.weight
+    down4.maxpool_conv.1.double_conv.4.weight
+    down4.maxpool_conv.1.double_conv.4.bias
+    down4.maxpool_conv.1.double_conv.4.running_mean
+    down4.maxpool_conv.1.double_conv.4.running_var
+    down4.maxpool_conv.1.double_conv.4.num_batches_tracked
+    ##up1.up.weight
+    ##up1.up.bias
+    up1.conv.double_conv.0.weight
+    up1.conv.double_conv.1.weight
+    up1.conv.double_conv.1.bias
+    up1.conv.double_conv.1.running_mean
+    up1.conv.double_conv.1.running_var
+    up1.conv.double_conv.1.num_batches_tracked
+    up1.conv.double_conv.3.weight
+    up1.conv.double_conv.4.weight
+    up1.conv.double_conv.4.bias
+    up1.conv.double_conv.4.running_mean
+    up1.conv.double_conv.4.running_var
+    up1.conv.double_conv.4.num_batches_tracked
+    #up2.up.weight
+    #up2.up.bias
+    up2.conv.double_conv.0.weight
+    up2.conv.double_conv.1.weight
+    up2.conv.double_conv.1.bias
+    up2.conv.double_conv.1.running_mean
+    up2.conv.double_conv.1.running_var
+    up2.conv.double_conv.1.num_batches_tracked
+    up2.conv.double_conv.3.weight
+    up2.conv.double_conv.4.weight
+    up2.conv.double_conv.4.bias
+    up2.conv.double_conv.4.running_mean
+    up2.conv.double_conv.4.running_var
+    up2.conv.double_conv.4.num_batches_tracked
+    #up3.up.weight
+    #up3.up.bias
+    up3.conv.double_conv.0.weight
+    up3.conv.double_conv.1.weight
+    up3.conv.double_conv.1.bias
+    up3.conv.double_conv.1.running_mean
+    up3.conv.double_conv.1.running_var
+    up3.conv.double_conv.1.num_batches_tracked
+    up3.conv.double_conv.3.weight
+    up3.conv.double_conv.4.weight
+    up3.conv.double_conv.4.bias
+    up3.conv.double_conv.4.running_mean
+    up3.conv.double_conv.4.running_var
+    up3.conv.double_conv.4.num_batches_tracked
+    #up4.up.weight
+    #up4.up.bias
+    up4.conv.double_conv.0.weight
+    up4.conv.double_conv.1.weight
+    up4.conv.double_conv.1.bias
+    up4.conv.double_conv.1.running_mean
+    up4.conv.double_conv.1.running_var
+    up4.conv.double_conv.1.num_batches_tracked
+    up4.conv.double_conv.3.weight
+    up4.conv.double_conv.4.weight
+    up4.conv.double_conv.4.bias
+    up4.conv.double_conv.4.running_mean
+    up4.conv.double_conv.4.running_var
+    up4.conv.double_conv.4.num_batches_tracked
+    outc.conv.weight
+    outc.conv.bias
 
+    """
+    # model_dict = dict.fromkeys(keys, {})
     model_dict = {}
 
     c1_dict = {}
@@ -444,25 +455,70 @@ def creat_state_dict_from_torchhub():
     output_layer_dict["bias"] = model_dict_orig[117][1]
     model_dict["output_layer"] = output_layer_dict
 
+    # model_dict = dict_to_namespace(model_dict)
+
     return model_dict
-
-
-def update_ttnn_module_args(ttnn_module_args):
-    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 511
 
 
 def custom_preprocessor(model, name, ttnn_module_args):
     parameters = {}
-    if isinstance(model, UNet):
-        print("\n\n\n")
-        print("model output weights type: ", type(model.output_layer.weight))
+    # if isinstance(model, UNet):
+    if 1:
+        # print("\n\n\n")
+        # print("model output weights type: ", type(model.output_layer.weight))
         # print("model output weights: ", list(model.output_layer.weight))
+
+        """
+        ttnn_module_args.c1 = ttnn_module_args.inc.double_conv['0']
+        ttnn_module_args.b1 = ttnn_module_args.inc.double_conv['1']
+        ttnn_module_args.c1_2 = ttnn_module_args.inc.double_conv['3']
+        ttnn_module_args.b1_2 = ttnn_module_args.inc.double_conv['4']
+        ttnn_module_args.c2 = ttnn_module_args.down1.maxpool_conv['1']['double_conv']['0']
+        ttnn_module_args.b2 = ttnn_module_args.down1.maxpool_conv['1']['double_conv']['1']
+        ttnn_module_args.c2_2 = ttnn_module_args.down1.maxpool_conv['1']['double_conv']['3']
+        ttnn_module_args.b2_2 = ttnn_module_args.down1.maxpool_conv['1']['double_conv']['4']
+        ttnn_module_args.c3 = ttnn_module_args.down2.maxpool_conv['1']['double_conv']['0']
+        ttnn_module_args.b3 = ttnn_module_args.down2.maxpool_conv['1']['double_conv']['1']
+        ttnn_module_args.c3_2 = ttnn_module_args.down2.maxpool_conv['1']['double_conv']['3']
+        ttnn_module_args.b3_2 = ttnn_module_args.down2.maxpool_conv['1']['double_conv']['4']
+        ttnn_module_args.c4 = ttnn_module_args.down3.maxpool_conv['1']['double_conv']['0']
+        ttnn_module_args.b4 = ttnn_module_args.down3.maxpool_conv['1']['double_conv']['1']
+        ttnn_module_args.c4_2 = ttnn_module_args.down3.maxpool_conv['1']['double_conv']['3']
+        ttnn_module_args.b4_2 = ttnn_module_args.down3.maxpool_conv['1']['double_conv']['4']
+        ttnn_module_args.bnc = ttnn_module_args.down4.maxpool_conv['1']['double_conv']['0']
+        ttnn_module_args.bnr = ttnn_module_args.down4.maxpool_conv['1']['double_conv']['1']
+        ttnn_module_args.bnc_2 = ttnn_module_args.down4.maxpool_conv['1']['double_conv']['3']
+        ttnn_module_args.bnr_2 = ttnn_module_args.down4.maxpool_conv['1']['double_conv']['4']
+        #up1.up
+        ttnn_module_args.c5 = ttnn_module_args.up1.conv.double_conv['0']
+        ttnn_module_args.b5 = ttnn_module_args.up1.conv.double_conv['1']
+        ttnn_module_args.c5_2 = ttnn_module_args.up1.conv.double_conv['3']
+        ttnn_module_args.b5_2 = ttnn_module_args.up1.conv.double_conv['4']
+        #up2.up
+        ttnn_module_args.c6 = ttnn_module_args.up2.conv.double_conv['0']
+        ttnn_module_args.b6 = ttnn_module_args.up2.conv.double_conv['1']
+        ttnn_module_args.c6_2 = ttnn_module_args.up2.conv.double_conv['3']
+        ttnn_module_args.b6_2 = ttnn_module_args.up2.conv.double_conv['4']
+        #up3.up
+        ttnn_module_args.c7 = ttnn_module_args.up3.conv.double_conv['0']
+        ttnn_module_args.b7 = ttnn_module_args.up3.conv.double_conv['1']
+        ttnn_module_args.c7_2 = ttnn_module_args.up3.conv.double_conv['3']
+        ttnn_module_args.b7_2 = ttnn_module_args.up3.conv.double_conv['4']
+        #up4.up
+        ttnn_module_args.c8 = ttnn_module_args.up4.conv.double_conv['0']
+        ttnn_module_args.b8 = ttnn_module_args.up4.conv.double_conv['1']
+        ttnn_module_args.c8_2 = ttnn_module_args.up4.conv.double_conv['3']
+        ttnn_module_args.b8_2 = ttnn_module_args.up4.conv.double_conv['4']
+        ttnn_module_args.output_layer = ttnn_module_args.outc.conv
+        """
+
+        ################
 
         ttnn_module_args.c1["math_fidelity"] = ttnn.MathFidelity.LoFi
         # ttnn_module_args.c1["padded_input_channels"] = 16
         # ttnn_module_args.c1["use_shallow_conv_variant"] = True
         ttnn_module_args.c1_2["math_fidelity"] = ttnn.MathFidelity.LoFi
-        # ttnn_module_args.c1_2["use_shallow_conv_variant"] = True
+        ttnn_module_args.c1_2["use_shallow_conv_variant"] = True
         ttnn_module_args.c1["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1_2["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c1["weights_dtype"] = ttnn.bfloat8_b
@@ -472,7 +528,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c1["deallocate_activation"] = True
         ttnn_module_args.c1_2["deallocate_activation"] = True
         ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
-        ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        # ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"per_core_out_matrix_height": 6272}
         #        ttnn_module_args.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
         #        ttnn_module_args.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
@@ -517,8 +573,8 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c4["deallocate_activation"] = True
         ttnn_module_args.c4_2["deallocate_activation"] = True
         ttnn_module_args.c4["conv_blocking_and_parallelization_config_override"] = None
-        ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
-        # ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
+        # ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
+        ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
         ttnn_module_args.bnc["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.bnc_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -530,8 +586,10 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.bnc_2["activation"] = "relu"  # Fuse relu with bottle neck conv
         ttnn_module_args.bnc["deallocate_activation"] = True
         ttnn_module_args.bnc_2["deallocate_activation"] = True
-        ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = None
-        # ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = {"act_block_hnn": 64}
+        # ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = None
+        # ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = None
+        # ttnn_module_args.bnc["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
+        # ttnn_module_args.bnc_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 64}
 
         ttnn_module_args.c5["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c5_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -666,6 +724,8 @@ def custom_preprocessor(model, name, ttnn_module_args):
         # update_ttnn_module_args(ttnn_module_args.c8_3)
         update_ttnn_module_args(ttnn_module_args.output_layer)
 
+        # print(conv1_weight.shape, "__", conv1_bias.shape,"__",  ttnn_module_args.c1)
+
         parameters["c1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.c1)
         parameters["c1_2"] = preprocess_conv2d(conv1_2_weight, conv1_2_bias, ttnn_module_args.c1_2)
         parameters["c2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.c2)
@@ -699,96 +759,96 @@ class UNet(nn.Module):
     def __init__(self):
         super(UNet, self).__init__()
         # Contracting Path
-        self.c1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.b1 = nn.BatchNorm2d(32)
+        self.c1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        self.b1 = nn.BatchNorm2d(64)
         self.r1 = nn.ReLU(inplace=True)
-        self.c1_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b1_2 = nn.BatchNorm2d(32)
+        self.c1_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.b1_2 = nn.BatchNorm2d(64)
         self.r1_2 = nn.ReLU(inplace=True)
         self.p1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.b2 = nn.BatchNorm2d(64)
+        self.c2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.b2 = nn.BatchNorm2d(128)
         self.r2 = nn.ReLU(inplace=True)
-        self.c2_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.b2_2 = nn.BatchNorm2d(64)
+        self.c2_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.b2_2 = nn.BatchNorm2d(128)
         self.r2_2 = nn.ReLU(inplace=True)
         self.p2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.b3 = nn.BatchNorm2d(128)
+        self.c3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.b3 = nn.BatchNorm2d(256)
         self.r3 = nn.ReLU(inplace=True)
-        self.c3_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.b3_2 = nn.BatchNorm2d(128)
+        self.c3_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.b3_2 = nn.BatchNorm2d(256)
         self.r3_2 = nn.ReLU(inplace=True)
         self.p3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.c4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.b4 = nn.BatchNorm2d(256)
+        self.c4 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.b4 = nn.BatchNorm2d(512)
         self.r4 = nn.ReLU(inplace=True)
-        self.c4_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.b4_2 = nn.BatchNorm2d(256)
+        self.c4_2 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.b4_2 = nn.BatchNorm2d(512)
         self.r4_2 = nn.ReLU(inplace=True)
         self.p4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.bnc = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.bnb = nn.BatchNorm2d(512)
+        self.bnc = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
+        self.bnb = nn.BatchNorm2d(1024)
         self.bnr = nn.ReLU(inplace=True)
-        self.bnc_2 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.bnb_2 = nn.BatchNorm2d(512)
+        self.bnc_2 = nn.Conv2d(1024, 1024, kernel_size=3, padding=1)
+        self.bnb_2 = nn.BatchNorm2d(1024)
         self.bnr_2 = nn.ReLU(inplace=True)
 
         # self.u4 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c5T = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2, padding=0)
-        self.c5 = nn.Conv2d(512, 256, kernel_size=3, padding=1)
-        self.b5 = nn.BatchNorm2d(256)
+        self.c5T = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2, padding=0)
+        self.c5 = nn.Conv2d(1024, 512, kernel_size=3, padding=1)
+        self.b5 = nn.BatchNorm2d(512)
         self.r5 = nn.ReLU(inplace=True)
-        self.c5_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.b5_2 = nn.BatchNorm2d(256)
+        self.c5_2 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.b5_2 = nn.BatchNorm2d(512)
         self.r5_2 = nn.ReLU(inplace=True)
-        self.c5_3 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.b5_3 = nn.BatchNorm2d(256)
-        self.r5_3 = nn.ReLU(inplace=True)
+        # self.c5_3 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        # self.b5_3 = nn.BatchNorm2d(512)
+        # self.r5_3 = nn.ReLU(inplace=True)
         # self.u3 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c6T = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2, padding=0)
-        self.c6 = nn.Conv2d(256, 128, kernel_size=3, padding=1)
-        self.b6 = nn.BatchNorm2d(128)
+        self.c6T = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2, padding=0)
+        self.c6 = nn.Conv2d(512, 256, kernel_size=3, padding=1)
+        self.b6 = nn.BatchNorm2d(256)
         self.r6 = nn.ReLU(inplace=True)
-        self.c6_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.b6_2 = nn.BatchNorm2d(128)
+        self.c6_2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.b6_2 = nn.BatchNorm2d(256)
         self.r6_2 = nn.ReLU(inplace=True)
-        self.c6_3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.b6_3 = nn.BatchNorm2d(128)
-        self.r6_3 = nn.ReLU(inplace=True)
+        # self.c6_3 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        # self.b6_3 = nn.BatchNorm2d(256)
+        # self.r6_3 = nn.ReLU(inplace=True)
         # self.u2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c7T = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2, padding=0)
-        self.c7 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
-        self.b7 = nn.BatchNorm2d(64)
+        self.c7T = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2, padding=0)
+        self.c7 = nn.Conv2d(256, 128, kernel_size=3, padding=1)
+        self.b7 = nn.BatchNorm2d(128)
         self.r7 = nn.ReLU(inplace=True)
-        self.c7_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.b7_2 = nn.BatchNorm2d(64)
+        self.c7_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.b7_2 = nn.BatchNorm2d(128)
         self.r7_2 = nn.ReLU(inplace=True)
-        self.c7_3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.b7_3 = nn.BatchNorm2d(64)
-        self.r7_3 = nn.ReLU(inplace=True)
+        # self.c7_3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        # self.b7_3 = nn.BatchNorm2d(128)
+        # self.r7_3 = nn.ReLU(inplace=True)
         # self.u1 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
-        self.c8T = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2, padding=0)
-        self.c8 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.b8 = nn.BatchNorm2d(32)
+        self.c8T = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2, padding=0)
+        self.c8 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
+        self.b8 = nn.BatchNorm2d(64)
         self.r8 = nn.ReLU(inplace=True)
-        self.c8_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b8_2 = nn.BatchNorm2d(32)
+        self.c8_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.b8_2 = nn.BatchNorm2d(64)
         self.r8_2 = nn.ReLU(inplace=True)
-        self.c8_3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.b8_3 = nn.BatchNorm2d(32)
-        self.r8_3 = nn.ReLU(inplace=True)
+        # self.c8_3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        # self.b8_3 = nn.BatchNorm2d(64)
+        # self.r8_3 = nn.ReLU(inplace=True)
 
         # Output layer
-        self.output_layer = nn.Conv2d(32, 2, kernel_size=1)
+        self.output_layer = nn.Conv2d(64, 2, kernel_size=1)
 
     def forward(self, x):
         # Contracting Path
@@ -833,8 +893,8 @@ class UNet(nn.Module):
         bnr_2 = self.bnr_2(bnb_2)
         # u4 = self.u4(bnr_2)
         c5T = self.c5T(bnr_2)
-        print("the shape of c5T is: ", c5T.size())
-        print("the shape of r4_2 is: ", r4_2.size())
+        # print("the shape of c5T is: ", c5T.size())
+        # print("the shape of r4_2 is: ", r4_2.size())
         conc1 = torch.cat([c5T, r4_2], dim=1)
 
         c5 = self.c5(conc1)
@@ -884,12 +944,12 @@ class UNet(nn.Module):
         c8_2 = self.c8_2(r8)
         b8_2 = self.b8_2(c8_2)
         r8_2 = self.r8_2(b8_2)
-        c8_3 = self.c8_3(r8_2)
-        b8_3 = self.b8_3(c8_3)
-        r8_3 = self.r8_3(b8_3)
+        # c8_3 = self.c8_3(r8_2)
+        # b8_3 = self.b8_3(c8_3)
+        # r8_3 = self.r8_3(b8_3)
 
         # Output layer
-        output = self.output_layer(r8_3)
+        output = self.output_layer(r8_2)
 
         return output
         # return r8_3
@@ -901,18 +961,20 @@ device = ttnn.open_device(device_id=device_id)
 torch.manual_seed(0)
 
 torch_model = UNet()
-for layer in torch_model.children():
-    print(layer)
+# for layer in torch_model.children():
+#    print(layer)
 
-new_state_dict = {}
-for name, parameter in torch_model.state_dict().items():
-    if isinstance(parameter, torch.FloatTensor):
-        new_state_dict[name] = parameter + 100.0
 
+# new_state_dict = {}
+new_state_dict = creat_state_dict_from_torchhub()
+new_state_dict = flatten(new_state_dict)
 torch_model.load_state_dict(new_state_dict)
 
-torch_input_tensor = torch.randn(1, 3, 256, 256)  # Batch size of 2, 3 channels (RGB), 1056x160 input
+torch_input_tensor = torch.randn(1, 3, 224, 224)  # Batch size of 2, 3 channels (RGB), 1056x160 input
+
+# torch_model = torch.hub.load('milesial/Pytorch-UNet', 'unet_carvana', pretrained=True, scale=0.5)
 torch_output_tensor = torch_model(torch_input_tensor)
+# print(torch_output_tensor.shape)
 
 
 reader_patterns_cache = {}
@@ -924,6 +986,7 @@ parameters = preprocess_model(
     device=device,
 )
 
+print("PARAM", parameters)
 ttnn_model = ttnn_functional_CONVENTIONAL_unet_maxpoolFallback.UNet(parameters)
 output_tensor = ttnn_model.torch_call(torch_input_tensor)
 output_tensor = output_tensor[:, 0, :, :]
