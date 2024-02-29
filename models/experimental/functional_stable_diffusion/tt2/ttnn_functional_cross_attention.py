@@ -129,8 +129,17 @@ class cross_attention:
             )
             del qkv_out
         else:
+            hidden_seq_len = hidden_states.shape.with_tile_padding()[-2]
+            encoder_hidden_seq_len = encoder_hidden_states.shape.with_tile_padding()[-2]
+
             q_proj = ttnn.linear(hidden_states, self.parameters.to_q.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if encoder_hidden_seq_len > hidden_seq_len:
+                padding_needed = encoder_hidden_seq_len - hidden_seq_len
+                q_proj = ttnn.pad(q_proj, ((0, 0), (0, padding_needed), (0, 0)), 0)
             kv_proj = ttnn.linear(encoder_hidden_states, self.parameters.kv.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if hidden_seq_len > encoder_hidden_seq_len:
+                padding_needed = hidden_seq_len - encoder_hidden_seq_len
+                kv_proj = ttnn.pad(kv_proj, ((0, 0), (0, padding_needed), (0, 0)), 0)
             query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(q_proj, kv_proj, num_heads=heads)
             del kv_proj
             del q_proj

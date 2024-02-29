@@ -194,7 +194,7 @@ class transformer_2d_model:
         height = self.input_height
         width = self.input_width
         # breakpoint()
-        encoder_hidden_states = pad_encoder_hidden_states(self.device, encoder_hidden_states, height * width)
+
         hidden_states = pre_process_input(self.device, hidden_states)
         # sample in l1 interelaved and tiled and nhwc
 
