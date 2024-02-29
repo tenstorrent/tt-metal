@@ -44,13 +44,14 @@ def test_resnet_block_2d_256x256(
     device, batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels
 ):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    model_name = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
 
     model = pipe.unet
     model.eval()
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
 
     if block_name == "up":
@@ -125,13 +126,14 @@ def test_resnet_block_2d_512x512(
     device, batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels
 ):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    model_name = "CompVis/stable-diffusion-v1-4"
+    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
 
     model = pipe.unet
     model.eval()
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
 
     if block_name == "up":

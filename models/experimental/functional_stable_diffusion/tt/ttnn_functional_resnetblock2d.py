@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
+
 import torch
 from typing import Optional, Dict
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -15,20 +11,6 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_utility_
     pre_process_input,
     post_process_output,
 )
-
-
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
 
 
 def permute_conv_weights(weight, bias):
@@ -192,24 +174,18 @@ def resnetBlock2D(
 
         split_hidden_states = []
     else:
-        parameters.conv1.weight = torch_to_tt_tensor_rm(parameters.conv1.weight, device, put_on_device=False)
-        parameters.conv1.bias = torch_to_tt_tensor_rm(parameters.conv1.bias, device, put_on_device=False)
-        # Using fallback Conv2d as we face issue with ttnn.Conv2d
-        # assert out_channels == parameters.conv1.bias.shape()[-1]
-        conv1 = fallback_ops.Conv2d(
-            parameters.conv1.weight,
-            parameters.conv1.bias,
-            in_channels,
-            out_channels,
-            kernel_size=3,
+        # Falling back to torch as we face issue with ttnn.Conv2d
+        torch_hidden_states = ttnn.to_torch(hidden_states)
+        torch_hidden_states = torch.nn.functional.conv2d(
+            torch_hidden_states,
+            weight=parameters.conv1.weight,
+            bias=parameters.conv1.bias.squeeze(),
             stride=1,
             padding=1,
         )
-        hidden_states = ttnn_to_torch(hidden_states)
-        hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
-        hidden_states = conv1(hidden_states)
-        hidden_states = tt_to_torch_tensor(hidden_states)
-        hidden_states = torch_to_ttnn(hidden_states, device=device)
+        hidden_states = ttnn.from_torch(
+            torch_hidden_states, device=hidden_states.device, dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
+        )
 
     if temb is not None:
         temb = nonlinearity(temb)
@@ -237,7 +213,6 @@ def resnetBlock2D(
                 hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat16
             )
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, input_height * input_width, out_channels))
-            temb = ttnn.reshape(temb, (batch_size, 1, 1, out_channels))
         # breakpoint()
         hidden_states = hidden_states + temb
     if convs_on_device:
@@ -292,23 +267,18 @@ def resnetBlock2D(
             device, conv2, hidden_states, batch_size, input_height, input_width, out_channels
         )
     else:
-        parameters.conv2.weight = torch_to_tt_tensor_rm(parameters.conv2.weight, device, put_on_device=False)
-        parameters.conv2.bias = torch_to_tt_tensor_rm(parameters.conv2.bias, device, put_on_device=False)
-        # Using fallback Conv2d as we face issue with ttnn.Conv2d
-        conv2 = fallback_ops.Conv2d(
-            parameters.conv2.weight,
-            parameters.conv2.bias,
-            out_channels,
-            out_channels,
-            kernel_size=3,
+        # Falling back to torch as we face issue with ttnn.Conv2d
+        torch_hidden_states = ttnn.to_torch(hidden_states)
+        torch_hidden_states = torch.nn.functional.conv2d(
+            torch_hidden_states,
+            weight=parameters.conv2.weight,
+            bias=parameters.conv2.bias.squeeze(),
             stride=1,
             padding=1,
         )
-        hidden_states = ttnn_to_torch(hidden_states)
-        hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
-        hidden_states = conv2(hidden_states)
-        hidden_states = tt_to_torch_tensor(hidden_states)
-        hidden_states = torch_to_ttnn(hidden_states, device=device)
+        hidden_states = ttnn.from_torch(
+            torch_hidden_states, device=hidden_states.device, dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
+        )
 
     use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
     if use_in_shortcut:
@@ -353,27 +323,18 @@ def resnetBlock2D(
                 device, conv_shortcut, input_tensor, batch_size, input_height, input_width, out_channels
             )
         else:
-            parameters.conv_shortcut.weight = torch_to_tt_tensor_rm(
-                parameters.conv_shortcut.weight, device, put_on_device=False
-            )
-            parameters.conv_shortcut.bias = torch_to_tt_tensor_rm(
-                parameters.conv_shortcut.bias, device, put_on_device=False
-            )
-            # Using fallback Conv2d as we face issue with ttnn.Conv2d
-            conv_shortcut = fallback_ops.Conv2d(
-                parameters.conv_shortcut.weight,
-                parameters.conv_shortcut.bias,
-                in_channels,
-                out_channels,
-                kernel_size=1,
+            # Falling back to torch as we face issue with ttnn.Conv2d
+            torch_input_tensor = ttnn.to_torch(input_tensor)
+            torch_input_tensor = torch.nn.functional.conv2d(
+                torch_input_tensor,
+                weight=parameters.conv_shortcut.weight,
+                bias=parameters.conv_shortcut.bias.squeeze(),
                 stride=1,
                 padding=0,
             )
-            input_tensor = ttnn_to_torch(input_tensor)
-            input_tensor = torch_to_tt_tensor_rm(input_tensor, device)
-            input_tensor = conv_shortcut(input_tensor)
-            input_tensor = tt_to_torch_tensor(input_tensor)
-            input_tensor = torch_to_ttnn(input_tensor, device=device)
+            input_tensor = ttnn.from_torch(
+                torch_input_tensor, device=hidden_states.device, dtype=hidden_states.dtype, layout=ttnn.TILE_LAYOUT
+            )
 
     output_sc_recip = 1 / output_scale_factor
     output_tensor = ttnn.add(input_tensor, hidden_states)

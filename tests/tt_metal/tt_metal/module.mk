@@ -96,7 +96,7 @@ tests/tt_metal/all: $(TT_METAL_TESTS)
 tests/tt_metal/%: $(TESTDIR)/tt_metal/% ;
 
 .PRECIOUS: $(TESTDIR)/tt_metal/%
-$(TESTDIR)/tt_metal/%: $(OBJDIR)/tt_metal/tests/%.o $(TT_METAL_LIB) $(TT_DNN_LIB)
+$(TESTDIR)/tt_metal/%: $(OBJDIR)/tt_metal/tests/%.o $(TT_METAL_LIB)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TESTS_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_METAL_TESTS_LDFLAGS)
 
