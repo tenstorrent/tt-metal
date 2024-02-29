@@ -353,7 +353,9 @@ void Finish(CommandQueue& cq);
 /**
  * Begins capture on a trace, when the trace is in capture mode all programs push into the trace queue will not be executed.
  * The capture must be later ended via EndTrace, and can be instantiated via InstantiateTrace on a device command queue.
+ *
  * Return value: CommandQueue&
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | trace        | Trace in which to initiate the capture                                 | Trace &                       |                                    | Yes      |
@@ -363,7 +365,9 @@ CommandQueue& BeginTrace(Trace &trace);
 /**
  * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
  * This trace can later be instantiated via InstantiateTrace on a device command queue, and executed via EnqueueTrace on the same device command queue.
+ *
  * Return value: void
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | trace        | Trace in which to end the capture                                      | Trace &                       |                                    | Yes      |
@@ -371,19 +375,23 @@ CommandQueue& BeginTrace(Trace &trace);
 void EndTrace(Trace &trace);
 
 /**
-* Instantiates a trace on a device command queue, triggering the staging of traced commands and data to the device.
-* Staging is a blocking operation and must be completed before the trace can be enqueued. A unique trace instance id is returned
-* Return value: uint32_t
-* | Argument     | Description                                                             | Type                          | Valid Range                        | Required |
-* |--------------|-------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
-* | trace        | The trace object to instantiate                                         | Trace &                       |                                    | Yes      |
-* | cq           | The device command queue on which to instantiate the trace              | CommandQueue &                |                                    | Yes      |
+ * Instantiates a trace on a device command queue, triggering the staging of traced commands and data to the device.
+ * Staging is a blocking operation and must be completed before the trace can be enqueued. A unique trace instance id is returned
+ *
+ * Return value: uint32_t
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | trace        | The trace object to instantiate                                        | Trace &                       |                                    | Yes      |
+ * | cq           | The device command queue on which to instantiate the trace             | CommandQueue &                |                                    | Yes      |
 */
 uint32_t InstantiateTrace(Trace &trace, CommandQueue &cq);
 
 /**
  * Enqueues a trace of previously generated commands and data.
+ *
  * Return value: void
+ *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
