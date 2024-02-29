@@ -9,12 +9,12 @@
 // #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 // #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
 namespace device {
-using Device = tt::tt_metal::Device;
+using Device = ttnn::Device;
 
 // TODO : Circle back and update for Multi-Device
 inline std::vector<Device *> _devices;

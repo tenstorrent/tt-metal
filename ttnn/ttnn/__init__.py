@@ -43,8 +43,6 @@ from ttnn.types import (
     float32,
     MemoryConfig,
     MathFidelity,
-    WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -61,6 +59,9 @@ from ttnn.types import (
     CoreRange,
     Shape,
     Tensor,
+    DeviceComputeKernelConfig,
+    WormholeComputeKernelConfig,
+    GrayskullComputeKernelConfig,
 )
 
 from ttnn.device import Device, open_device, close_device, manage_device, synchronize_device, dump_device_memory_state

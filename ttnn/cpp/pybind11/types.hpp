@@ -33,6 +33,12 @@ void py_module(py::module& module) {
     module.attr("DRAM_MEMORY_CONFIG") = py::cast(DRAM_MEMORY_CONFIG);
     module.attr("L1_MEMORY_CONFIG") = py::cast(L1_MEMORY_CONFIG);
 
+    py::class_<ttnn::CoreGrid>(module, "CoreGrid")
+        .def(py::init<std::size_t, std::size_t>(), py::kw_only(), py::arg("x"), py::arg("y"))
+        .def_property_readonly("x", [](const ttnn::CoreGrid& self) { return self.x; })
+        .def_property_readonly("y", [](const ttnn::CoreGrid& self) { return self.y; })
+        .def_property_readonly("num_cores", [](const ttnn::CoreGrid& self) { return self.x * self.y; });
+
     auto PyShape = py::class_<ttnn::Shape>(module, "Shape");
     PyShape.def(py::init<tt::tt_metal::Shape>());
 
@@ -75,6 +81,7 @@ void py_module(py::module& module) {
         .def(py::init<tt::tt_metal::Tensor>())
         .def_property_readonly("value", [](const TensorWrapper& self) -> auto& { return self.value; })
         .def("__repr__", [](const TensorWrapper& self) { return self.value.write_to_string(); })
+        .def("__hash__", [](const TensorWrapper& self) { return tt::stl::hash::hash_object(self.value); })
         .def_property_readonly("shape", [](const TensorWrapper& self) { return py::cast(Shape{self.value.shape()}); })
         .def_property_readonly("dtype", [](const TensorWrapper& self) { return self.value.dtype(); })
         .def_property_readonly("layout", [](const TensorWrapper& self) { return self.value.layout(); })

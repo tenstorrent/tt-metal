@@ -235,12 +235,10 @@ def unsqueeze_to_4D(tensor):
 def squeeze(tensor, dim):
     if dim != 0:
         raise RuntimeError("Only dim=0 is supported for squeeze operation!")
-    if len(tensor.shape) == 1:
-        return tensor
-    if len(tensor.shape) > 4:
-        raise RuntimeError("Tensor cannot have more than 4 dimensions!")
     if tensor.shape[0] != 1:
         return tensor
+    if len(tensor.shape) == 1:
+        raise RuntimeError("Cannot squeeze a tensor of rank 1 because rank 0 is not supported by ttnn!")
     _, *shape = tensor.shape
     _, *full_shape = tensor.shape.with_tile_padding()
     return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))

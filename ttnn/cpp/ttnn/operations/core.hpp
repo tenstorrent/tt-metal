@@ -122,6 +122,30 @@ inline ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
     return ttnn::operations::core::reshape(tensor, tensor_shape_4D);
 }
 
+inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
+    auto shape = tensor.ttnn_shape();
+    if (shape.rank() != 4) {
+        TT_THROW("Tensor has to be of rank 4!");
+    }
+    if (rank < 1 or rank > 4) {
+        TT_THROW("Cannot use squeeze_from_4D to set the tensor to the rank of {}!", rank);
+    }
+
+    for (auto index = 0; index < 4 - rank; ++index) {
+        if (shape[index] != 1) {
+            TT_THROW("Cannot use squeeze_from_4D to set the tensor to the rank of {}!", rank);
+        }
+    }
+
+    switch (rank) {
+        case 1: return ttnn::operations::core::reshape(tensor, shape.to_rank<1>());
+        case 2: return ttnn::operations::core::reshape(tensor, shape.to_rank<2>());
+        case 3: return ttnn::operations::core::reshape(tensor, shape.to_rank<3>());
+        case 4: return tensor;
+        default: TT_THROW("Invalid choice!");
+    }
+}
+
 inline ttnn::Tensor from_device(const ttnn::Tensor& tensor) { return tensor.cpu(); }
 
 // TODO : @eyonland move these creation functions to creation.hpp
@@ -132,9 +156,8 @@ inline ttnn::Tensor full(
     const DataType data_type,
     const Layout layout,
     Device& device,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return tt::numpy::full(shape.with_tile_padding().value(), value, data_type, layout, &device, output_mem_config);
+    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
+    return tt::numpy::full(shape.with_tile_padding().value(), value, data_type, layout, &device, memory_config);
 }
 
 inline ttnn::Tensor zeros(
@@ -142,9 +165,8 @@ inline ttnn::Tensor zeros(
     const DataType data_type,
     const Layout layout,
     Device& device,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return full(shape, 0.0f, data_type, layout, device, output_mem_config);
+    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
+    return full(shape, 0.0f, data_type, layout, device, memory_config);
 }
 
 inline ttnn::Tensor ones(
@@ -152,9 +174,8 @@ inline ttnn::Tensor ones(
     const DataType data_type,
     const Layout layout,
     Device& device,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return full(shape, 1.0f, data_type, layout, device, output_mem_config);
+    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
+    return full(shape, 1.0f, data_type, layout, device, memory_config);
 }
 
 }  // namespace core
@@ -163,8 +184,9 @@ inline ttnn::Tensor ones(
 using operations::core::from_device;
 using operations::core::full;
 using operations::core::ones;
+using operations::core::zeros;
 using operations::core::reshape;
 using operations::core::unsqueeze_to_4D;
-using operations::core::zeros;
+using operations::core::squeeze_from_4D;
 
 }  // namespace ttnn
