@@ -64,7 +64,9 @@ class transformer_2d_model:
         parameters.proj_in.weight, parameters.proj_in.bias = permute_conv_parameters(
             parameters.proj_in.weight, parameters.proj_in.bias
         )
-
+        self.batch_size = batch_size
+        self.input_height = input_height
+        self.input_width = input_width
         parameters.proj_in.bias = torch.reshape(parameters.proj_in.bias, (1, 1, 1, parameters.proj_in.bias.shape[-1]))
         tt_weight_tensor = ttnn.from_torch(parameters.proj_in.weight, ttnn.float32)
         tt_bias_tensor = ttnn.from_torch(parameters.proj_in.bias, ttnn.float32)
@@ -186,7 +188,12 @@ class transformer_2d_model:
             )
             norm_type = "ada_norm"
 
-        batch, _, height, width = hidden_states.shape
+        nhw = hidden_states.shape[2]
+        assert nhw == self.batch_size * self.input_height * self.input_width
+        batch = self.batch_size
+        height = self.input_height
+        width = self.input_width
+        # breakpoint()
         encoder_hidden_states = pad_encoder_hidden_states(self.device, encoder_hidden_states, height * width)
         hidden_states = pre_process_input(self.device, hidden_states)
         # sample in l1 interelaved and tiled and nhwc

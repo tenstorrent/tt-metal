@@ -58,6 +58,7 @@ def pad_encoder_hidden_states(device, tensor, required_sequence_length):
     if sequence_length < required_sequence_length:
         assert (required_sequence_length % batch_size) == 0
         sequence_length = required_sequence_length
+        breakpoint()
         tensor = ttnn.Tensor(
             fallback_ops.pad(
                 tensor.value,
@@ -66,6 +67,8 @@ def pad_encoder_hidden_states(device, tensor, required_sequence_length):
                 output_on_device=False,
             )
         )
+        # TODO: change above code to below
+        # tensor = ttnn.pad(tensor, (0, 0, 0, sequence_length - tensor.shape[2]), 0)
     # tensor = ttnn.Tensor(
     #     fallback_ops.reshape(
     #         tensor.value,
@@ -77,6 +80,7 @@ def pad_encoder_hidden_states(device, tensor, required_sequence_length):
     #         output_on_device=False,
     #     )
     # )
+    # breakpoint()
     tensor = ttnn.to_device(tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
     return tensor
