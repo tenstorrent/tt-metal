@@ -40,7 +40,16 @@ config_override = {
 
 
 class downsample_2d:
-    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
+    def __init__(
+        self,
+        device,
+        parameters,
+        reader_patterns_cache,
+        batch_size,
+        input_height,
+        input_width,
+        compute_kernel_config=None,
+    ):
         self.device = device
         self.parameters = parameters
         parameters.conv.weight, parameters.conv.bias = permute_conv_parameters(
@@ -77,6 +86,7 @@ class downsample_2d:
             conv_blocking_and_parallelization_config_override=conv_config_override,
             use_shallow_conv_variant=False,
             enable_auto_formatting=True,
+            compute_kernel_config=compute_kernel_config,
         )
 
         self.output_height = self.conv.output_height

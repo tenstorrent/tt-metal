@@ -171,7 +171,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     return {cb_sharded_act, cb_output};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, Tensor &output) {
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, Tensor &output, DeviceComputeKernelConfig compute_kernel_config) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -183,6 +183,56 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
+
+    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : DataFormat::Float16_b;
+    DataFormat tilized_act_df = out_df;
+
+    log_debug("act_df: {}", act_df);
+    log_debug("weight_df: {}", weight_df);
+    log_debug("out_df: {}", out_df);
+    log_debug("bias_df: {}", bias_df);
+
+
+    // compute kernel config
+    MathFidelity math_fidelity;
+    bool math_approx_mode;
+    bool fp32_dest_acc_en;
+    bool packer_l1_acc;
+
+    std::visit([&](auto&& compute_kernel_config) {
+        using T = std::decay_t<decltype(compute_kernel_config)>;
+        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = false;
+            packer_l1_acc = false;
+        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            math_fidelity = compute_kernel_config.math_fidelity;
+            math_approx_mode = compute_kernel_config.math_approx_mode;
+            fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+            packer_l1_acc = compute_kernel_config.packer_l1_acc;
+        } else {
+            TT_FATAL("arch not supported");
+        }
+
+    }, compute_kernel_config);
+
+    if (fp32_dest_acc_en and (out_subblock_h_ntiles * out_subblock_w_ntiles > 4)) {
+        if (out_subblock_w_ntiles >= 4) {
+            out_subblock_h_ntiles = 1;
+            out_subblock_w_ntiles = find_max_block_size(out_subblock_w_ntiles, 4);
+        } else {
+            while (out_subblock_h_ntiles * out_subblock_w_ntiles > 4) {
+                uint32_t div = find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles-1);
+                out_subblock_h_ntiles = find_max_block_size(out_subblock_h_ntiles, div);
+            }
+        }
+    }
     //assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
     TT_ASSERT(out_block_h_ntiles >= act_block_h_ntiles, "Output block height (in # of tiles) should be greater than or equal to activation block height (in # of tiles)");
 
@@ -326,12 +376,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {{0, 0}, {0, 0}};
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : DataFormat::Float16_b;
-    DataFormat tilized_act_df = out_df;
-
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
 
@@ -400,7 +444,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     // For debug
     {
-        log_debug(tt::LogOp, "conv_act_size_c: {}", conv_act_size_c);
+        log_debug(tt::LogOp, "multi_core_optimized_conv_sharded_v2_");
         log_debug(tt::LogOp, "conv_act_size_h: {}", conv_act_size_h);
         log_debug(tt::LogOp, "conv_act_size_w: {}", conv_act_size_w);
         log_debug(tt::LogOp, "act_matrix_height: {}", act_matrix_height);
@@ -438,6 +482,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         log_debug(tt::LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
         log_debug(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
         log_debug(tt::LogOp, "num_groups: {}", num_groups);
+        log_debug("math_fidelity: {}", math_fidelity);
+        log_debug("math_approx_mode: {}", math_approx_mode);
+        log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+        log_debug("packer_l1_acc: {}", packer_l1_acc);
     }
 
     uint32_t window_outer;
@@ -818,6 +866,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         all_active_cores,
         ComputeConfig{
             .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
             .defines = compute_defines});
 

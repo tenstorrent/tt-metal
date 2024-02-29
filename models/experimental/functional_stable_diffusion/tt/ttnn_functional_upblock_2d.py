@@ -31,6 +31,7 @@ def upblock_2d(
     temb=None,
     upsample_size=None,
     reader_patterns_cache=None,
+    compute_kernel_config=None,
 ):
     for i in range(num_layers):
         res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
@@ -60,6 +61,7 @@ def upblock_2d(
             parameters=parameters.resnets[i],
             device=device,
             reader_patterns_cache=reader_patterns_cache,
+            compute_kernel_config=compute_kernel_config,
         )
 
     if add_upsample:

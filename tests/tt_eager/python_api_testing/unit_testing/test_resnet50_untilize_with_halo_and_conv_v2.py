@@ -753,7 +753,8 @@ def test_resnet50_conv(
         if activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B and (K == 256 or K == 512):
             pytest.xfail("PCC of output baseline is slightly lower than with new conv. DEBUG!")
         else:
-            eq = torch.equal(out_result_baseline, out_result)
-            assert eq, "Output should be identical to old conv!"
-            assert passing_pcc == passing_pcc_baseline, "Output pcc should be identical to old conv pcc!"
+            ## NOTE: the "old conv" is too old now. We get better PCC with current version.
+            # eq = torch.equal(out_result_baseline, out_result)
+            # assert eq, "Output should be identical to old conv!"
+            assert passing_pcc >= passing_pcc_baseline, "Output pcc should be same or better than old conv pcc!"
             logger.info(f"Output pcc passes and matches old conv pcc")
