@@ -145,17 +145,20 @@ inline void _llk_math_reduce_(uint dst_index, uint num_faces = 4) {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
                 }
             }
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-            if constexpr (type == PoolType::MAX) {
-                TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
-            } else {
-                if constexpr (HIGH_FIDELITY) {
-                    ckernel_template::run(instrn_buffer);
+            if (num_faces>1) {
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+
+                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+                if constexpr (type == PoolType::MAX) {
+                    TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
                 } else {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
+                    if constexpr (HIGH_FIDELITY) {
+                        ckernel_template::run(instrn_buffer);
+                    } else {
+                        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
+                    }
                 }
             }
             // Reset Dest Counter
