@@ -44,6 +44,10 @@ struct CommandHeader {
     uint32_t sharded_buffer_num_cores = 0;
     uint32_t new_issue_queue_size = 0;
     uint32_t new_completion_queue_size = 0;
+    uint16_t is_event_sync = 0;
+    uint8_t event_sync_core_x = 0;
+    uint8_t event_sync_core_y = 0;
+    uint32_t event_sync_event_id = 0;
 };
 
 static_assert((offsetof(CommandHeader, event) % 32) == 0);
@@ -139,6 +143,11 @@ class DeviceCommand {
     void set_producer_router_transfer_num_pages(const uint32_t producer_router_transfer_num_pages);
 
     void set_consumer_router_transfer_num_pages(const uint32_t consumer_router_transfer_num_pages);
+
+    void set_is_event_sync(const uint16_t is_event_sync);
+    void set_event_sync_core_x(const uint8_t event_sync_core_x);
+    void set_event_sync_core_y(const uint8_t event_sync_core_y);
+    void set_event_sync_event_id(const uint32_t event_sync_event_id);
 
     uint32_t get_issue_data_size() const;
 

@@ -5,4 +5,7 @@ CommandQueue
   EnqueueWriteBuffer
   EnqueueReadBuffer
   EnqueueProgram
+  EnqueueQueueRecordEvent
+  EnqueueQueueWaitForEvent
+  EventSynchronize
   Finish

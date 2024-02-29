@@ -244,8 +244,6 @@ inline void log_operation(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {}
 #endif
 
-bool is_logging_enabled();
-
 std::vector<Tensor> run(
     const HostOperation& operation,
     const std::vector<Tensor>& input_tensors

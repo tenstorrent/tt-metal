@@ -93,15 +93,27 @@ class Tensor {
 
         bool is_allocated() const;
 
+        bool is_contiguous() const {
+            if (this->layout_ == tt::tt_metal::Layout::ROW_MAJOR) {
+                return this->shape_ == this->shape_.without_padding();
+            } else {
+                return false;
+            }
+        }
+
         // TODO(arakhmati): clean up the methods below
         Buffer *buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
         DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->storage_).buffer; }
 
         Device *device() const {
-            auto buffer = this->buffer();
-            if (buffer == nullptr)
-                TT_THROW("Cannot get the device from a tensor without an allocated buffer");
-            return buffer->device();
+            if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
+                auto buffer = this->buffer();
+                if (buffer == nullptr)
+                    TT_THROW("Cannot get the device from a tensor without an allocated buffer");
+                return buffer->device();
+            } else {
+                TT_THROW("Cannot get the device from a tensor with host storage");
+            }
         }
         const MemoryConfig memory_config() const {
             return std::visit(

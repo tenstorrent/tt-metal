@@ -53,6 +53,7 @@ void kernel_main() {
         bool is_sharded = (bool) (header->buffer_type == (uint32_t)DeviceCommand::BufferType::SHARDED);
         uint32_t sharded_buffer_num_cores = header->sharded_buffer_num_cores;
         uint32_t wrap = header->wrap;
+        bool is_event_sync = header->is_event_sync;
 
         db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE, db_buf_switch);
@@ -74,6 +75,8 @@ void kernel_main() {
                 producer_noc_encoding,
                 producer_consumer_transfer_num_pages);
             wait_for_program_completion(num_workers);
+        } else if (is_event_sync) {
+            wait_for_event(header->event_sync_event_id, header->event_sync_core_x, header->event_sync_core_y);
         } else {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
             write_buffers(
@@ -92,6 +95,7 @@ void kernel_main() {
         }
 
         completion_queue_push_back<completion_queue_start_addr, host_completion_queue_write_ptr_addr>(completion_data_size);
+        record_last_completed_event(header->event);
 
         // notify producer that it has completed a command
         noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);

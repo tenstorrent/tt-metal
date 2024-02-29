@@ -18,7 +18,7 @@ namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t mm_partials_cb_id, uint32_t out_subblock_num_tiles, uint32_t out_subblock_w, uint32_t out_subblock_h, uint32_t in0_block_w) {
     // Reconfigure input
-    copy_tile_matmul_partials_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
     tile_regs_acquire();
 
@@ -216,13 +216,10 @@ void MAIN {
         #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
             PACK((  pack_reconfig_data_format(out_cb_id) ));
         #endif
-        #ifdef ARCH_GRAYSKULL
-            add_bcast_rows_init_short_post_matmul();
-        #else
-            add_bcast_rows_init_short();
-        #endif
-        // reconfigure unpacker df for src B
+
         unpack_reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
+        add_bcast_rows_init_short();
+        // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
@@ -268,11 +265,6 @@ void MAIN {
         if constexpr(batch > 1) {
             // reconfigure init for matmul
             mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
-            #ifdef ARCH_GRAYSKULL
-                // reconfigure packer's dest registers to Col Major
-                PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>()  ));
-                PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
-            #endif
             // reconfigure unpacker df for src B
             unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
         }

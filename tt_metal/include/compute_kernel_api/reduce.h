@@ -33,7 +33,7 @@ ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t 
     PACK(( llk_pack_init() ));
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
+    PACK(( llk_pack_dest_init<SYNC, false>() ));
 }
 
 ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {

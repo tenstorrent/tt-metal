@@ -11,6 +11,7 @@
 #include "common/core_coord.h"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/event/event.hpp"
 
 /** @file */
 
@@ -397,15 +398,35 @@ void EnqueueTrace(Trace& trace, bool blocking);
  * */
 void DumpDeviceProfileResults(Device *device, const Program &program);
 
-// namespace experimental
-// {
-//     struct Event{
-//         uint32_t id;
-//         uint32_t cq_id;
-//     };
+/**
+ * Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user.
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * | event        | An event that will be populated by this function, and inserted in CQ   | Event &                       |                                    | Yes      |
+ */
+void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
 
-//     void RecordEvent (Event & e);
-// }
+/**
+ * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
+ * |              | and waits for the event to complete.                                   |                               |                                    |          |
+ * | event        | The event object that this CQ will wait on for completion.             | Event &                       |                                    | Yes      |
+ */
+void EnqueueQueueWaitForEvent(CommandQueue& cq, Event &event);
+
+/**
+ * Blocking function for host to synchronize (wait) on an event completion on device.
+ * Return value: void
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | event        | The event object that host will wait on for completion.                | Event &                       |                                    | Yes      |
+ */
+void EventSynchronize(Event &event);
 
 }  // namespace tt_metal
 

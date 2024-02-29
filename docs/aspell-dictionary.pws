@@ -57,10 +57,13 @@ ENDL
 ETH
 EltwiseUnary
 EnqueueProgram
+EnqueueQueueRecordEvent
+EnqueueQueueWaitForEvent
 EnqueueReadBuffer
 EnqueueWriteBuffer
 Enum
 Enums
+EventSynchronize
 FW
 FileCopyrightText
 GGGG

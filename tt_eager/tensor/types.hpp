@@ -357,7 +357,19 @@ struct RankedShape {
         return RankedShape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
     }
 
-    bool operator==(const RankedShape<Rank> &other) const { return this->value == other.value; }
+    const auto volume() const {
+        auto volume = 1;
+        for (auto index = 0; index < Rank; index++) {
+            volume *= this->value[index];
+        }
+        return volume;
+    }
+
+    bool operator==(const RankedShape<Rank> &other) const {
+        const auto shape_a = this->value;
+        const auto shape_b = other.value;
+        return (shape_a == shape_b and shape_a.without_padding() == shape_b.without_padding());
+    }
 
     template <std::size_t OtherRank>
     bool operator==(const RankedShape<OtherRank> &other) const {
@@ -456,27 +468,31 @@ struct Shape {
         return std::visit([](const auto &shape) -> const auto & { return shape.value; }, this->ranked_shape);
     }
 
+    const auto volume() const {
+        return std::visit([](const auto &shape) -> const auto { return shape.volume(); }, this->ranked_shape);
+    }
+
     template <std::size_t NewRank>
     const Shape to_rank() const {
         return std::visit(
-            []<std::size_t Rank>(const RankedShape<Rank> &shape) {
+            []<std::size_t Rank>(const RankedShape<Rank> &shape) -> Shape {
                 if constexpr (Rank == NewRank) {
                     return Shape(shape);
-                } else {
-                    auto num_missing_dims = NewRank - Rank;
-
-                    std::array<uint32_t, NewRank> new_shape{};
-                    std::array<uint32_t, NewRank> new_padded_shape{};
-
-                    new_shape.fill(1);
-                    new_padded_shape.fill(1);
-
-                    for (auto index = 0; index < Rank; index++) {
-                        new_shape[index + num_missing_dims] = shape[index];
-                        new_padded_shape[index + num_missing_dims] = shape.with_tile_padding()[index];
-                    }
-                    return Shape(RankedShape<NewRank>(new_shape, new_padded_shape));
+                } else if constexpr (Rank > NewRank) {
+                    TT_THROW("Cannot reduce rank");
                 }
+                auto num_missing_dims = NewRank - Rank;
+                std::array<uint32_t, NewRank> new_shape{};
+                std::array<uint32_t, NewRank> new_padded_shape{};
+
+                new_shape.fill(1);
+                new_padded_shape.fill(1);
+
+                for (auto index = 0; index < Rank; index++) {
+                    new_shape[index + num_missing_dims] = shape[index];
+                    new_padded_shape[index + num_missing_dims] = shape.with_tile_padding()[index];
+                }
+                return Shape(RankedShape<NewRank>(new_shape, new_padded_shape));
             },
             this->ranked_shape);
     }
