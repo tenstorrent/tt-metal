@@ -137,17 +137,17 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile=false) {
+inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    const uint32_t outerloop = narrow_tile ? 1 : 2;
+    const uint32_t outerloop = narrow_tile ? 1 : ((num_faces>2) ? num_faces/2 : ((num_faces>1) ? 2 : 1));
     constexpr uint32_t innerloop = 1;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
     tmp.program(instrn_buffer);
 }
 
-inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const std::uint32_t num_faces = 4) {
 
     const std::uint32_t operand_id = get_operand_id(operandA); // Use operandA to get operand_id tile dims must be the same for both operands
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -172,7 +172,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    llk_unpack_tilizeA_B_mop_config(narrow_tile);
+    llk_unpack_tilizeA_B_mop_config(narrow_tile, num_faces);
 }
 
 inline void llk_unpack_tilizeA_B(
@@ -181,7 +181,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim,
-    std::uint32_t num_faces) {
+    std::uint32_t num_faces = 4) {
 
     std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
@@ -251,7 +251,7 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
     std::uint32_t tile_idx_b,
-    std::uint32_t num_faces) {
+    std::uint32_t num_faces = 4) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
