@@ -39,6 +39,7 @@ class TTPyMaxPool(TTPyOp):
         pad_val=0xF7FF,
         parallel_config_override=None,
         output_mem_config=None,
+        deallocate_activation=True,
     ):
         if parallel_config_override is None:
             parallel_config_override = {}
@@ -110,6 +111,8 @@ class TTPyMaxPool(TTPyOp):
             pad_val=self.pad_val,
             is_out_tiled=False,
         )
+
+        self.deallocate_activation = deallocate_activation
 
     # override abstract methods from base class TTPyOp
     def set_op_configs(self, sliding_window_op_params_hash, reader_patterns_cache):
@@ -202,7 +205,9 @@ class TTPyMaxPool(TTPyOp):
         def max_pool_(activation):
             act_mem_config = activation.memory_config()
             haloed_act = self.untilize_with_halo(activation)
-            activation.deallocate()
+
+            if self.deallocate_activation:
+                activation.deallocate()
             output = ttl.tensor.max_pool2d_v2(
                 haloed_act,
                 reader_indices,
@@ -268,7 +273,9 @@ class TTPyMaxPool(TTPyOp):
             self.shard_layout,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
-        act_reshaped.deallocate()
+
+        if self.deallocate_activation:
+            act_reshaped.deallocate()
         return act_sharded
 
     def copy_output_from_device(self, output_d: ttl.tensor.Tensor):
