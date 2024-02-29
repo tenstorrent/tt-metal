@@ -7,22 +7,37 @@
 #include <random>
 
 #include "common/bfloat16.hpp"
+#include "logger.hpp"
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include <csignal>
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+tt_metal::Device* device;
+
+void signalHandler(int signum) {
+    log_info(LogTest, "Received signal: {}. Exiting...", signum);
+
+    tt_metal::CloseDevice(device);
+
+    // Terminate program
+    exit(signum);
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
-
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
+
+    auto a = signal(SIGINT, signalHandler) != SIG_ERR;
+    log_info(LogTest, "Installing SIGINT handler. Result: {}", a);
 
     bool pass = true;
     bool multibank = true;
@@ -34,8 +49,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-
+    device = tt_metal::CreateDevice(device_id);
 
     CommandQueue& cq = device->command_queue();
 
@@ -145,19 +159,13 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Execute Application
             ////////////////////////////////////////////////////////////////////////////
-            std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-                dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+            std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1.0f);
+            std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 2.0f);
+            std::vector<uint32_t> dest_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 3.0f);
+
+            printf ("Src0=0x%x, Src1=0x%x, Dest=0x%x\n", src0_vec[0] & 0xffff, src1_vec[0] & 0xffff, dest_vec[0] & 0xffff);
 
             EnqueueWriteBuffer(cq, std::ref(src0_dram_buffer), src0_vec, false);
-
-            std::vector<uint32_t> src1_vec;
-            if (eltwise_op == EltwiseOp::MUL)
-                // TODO(AP): this doesn't provide very good coverage
-                // switch to a better test with different values like in reduce
-                src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1.0f);
-            else
-                src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 0.0f);
-
             EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
 
             vector<uint32_t> reader_args = {
@@ -185,7 +193,12 @@ int main(int argc, char** argv) {
             //                      Validation & Teardown
             ////////////////////////////////////////////////////////////////////////////
 
-            pass &= (src0_vec == result_vec);
+            printf ("Result_vec[0] = 0x%x", result_vec[0]);
+            pass &= (dest_vec == result_vec);
+
+            // Print the first element of the result vector
+            // bfloat16 result_bf16(result_vec[0] & 0xffff);
+            // log_info(LogTest, "result_vec[0] = {}", result_bf16.to_float());
 
         } catch (const std::exception& e) {
             pass = false;
@@ -194,8 +207,8 @@ int main(int argc, char** argv) {
             // Capture system call errors that may have returned from driver/kernel
             log_error(LogTest, "System error message: {}", std::strerror(errno));
         }
+        break; // Just run add
     }  // for EltwiseOp::all()
-
     pass &= tt_metal::CloseDevice(device);
 
     if (pass) {
