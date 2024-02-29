@@ -8,24 +8,11 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, get_weight_cache_path
-import time
-from loguru import logger
+from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, tt_all_gather_torch
 
 
 class TtLlamaModel_optimized(nn.Module):
-    def __init__(
-        self,
-        devices,
-        state_dict,
-        base_url,
-        n_layers,
-        model_config,
-        configuration,
-        batch,
-        n_layers_per_group=None,
-        cache_path=None,
-    ):
+    def __init__(self, devices, state_dict, base_url, n_layers, model_config, configuration, batch, emulated=False):
         super().__init__()
 
         self.state_dict = state_dict
@@ -40,6 +27,13 @@ class TtLlamaModel_optimized(nn.Module):
         self.n_kv_heads = configuration.n_kv_heads
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
+
+        self.emulated = emulated
+
+        emb_str = "tok_embeddings.weight"
+        norm_str = "norm.weight"
+        lm_head_str = "output.weight"
+
         self.norm_eps = configuration.norm_eps
         self.vocab_size = configuration.vocab_size
 
@@ -66,9 +60,7 @@ class TtLlamaModel_optimized(nn.Module):
                 model_config,
                 configuration,
                 batch,
-                load_weights=not self.do_reload,
-                cache_path=cache_path,
-                kv_cache_dir=kv_unique_dir,
+                emulated=emulated,
             )
             for i in range(n_layers)
         ]
@@ -253,13 +245,15 @@ class TtLlamaModel_optimized(nn.Module):
             xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
 
         ## Gather fractured layers output
-        # xs = tt_all_gather_torch(xs, dim=-1)
-        xs = tt_lib.tensor.all_gather(
-            xs,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
-        )
+        if self.emulated:
+            xs = tt_all_gather_torch(xs, dim=-1)
+        else:
+            xs = tt_lib.tensor.all_gather(
+                xs,
+                dim=3,
+                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            )
 
         ## Duplicate layernorm
         norm_out_replicated = []
