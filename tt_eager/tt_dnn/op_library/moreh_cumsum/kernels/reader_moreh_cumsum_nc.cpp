@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "dataflow_api.h"
-#include "tt_eager/tt_dnn/op_library/moreh_cumsum/kernels/utils.hpp"
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 inline uint32_t get_read_tile_id(uint32_t tile_id, uint32_t dim, uint32_t CHtWt, uint32_t HtWt) {
     return (dim == 0 ) ? (tile_id) : (tile_id / HtWt * CHtWt) + (tile_id % HtWt);

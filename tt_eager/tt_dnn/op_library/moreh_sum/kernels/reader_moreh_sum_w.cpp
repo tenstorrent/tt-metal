@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-
-#include "dataflow_api.h"
-#include "tt_eager/tt_dnn/op_library/moreh_sum/kernels/utils.hpp"
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
