@@ -18,10 +18,13 @@ class UNet:
     ) -> None:
         self.c1 = parameters.c1
         self.c1_2 = parameters.c1_2
+        self.p1 = parameters.p1
         self.c2 = parameters.c2
         self.c2_2 = parameters.c2_2
+        self.p2 = parameters.p2
         self.c3 = parameters.c3
         self.c3_2 = parameters.c3_2
+        self.p3 = parameters.p3
         self.c4 = parameters.c4
         self.c4_2 = parameters.c4_2
         self.bnc = parameters.bnc
@@ -50,41 +53,21 @@ class UNet:
         output_tensor = self.c1(input_tensor)
         output_tensor = self.c1_2(output_tensor)
         save_c1_2_out = output_tensor
-        output_tensor = self.c1_2.copy_output_from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
-        output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
+        save_c1_2_out = ttnn.to_layout(save_c1_2_out, layout=ttnn.TILE_LAYOUT)
+        output_tensor = self.p1(output_tensor)
 
-        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
-        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
-        output_tensor = self.c2.copy_input_to_device(output_tensor)
         output_tensor = self.c2(output_tensor)
         output_tensor = self.c2_2(output_tensor)
         save_c2_2_out = output_tensor
-        output_tensor = self.c2_2.copy_output_from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+        save_c2_2_out = ttnn.to_layout(save_c2_2_out, layout=ttnn.TILE_LAYOUT)
+        output_tensor = self.p2(output_tensor)
 
-        output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
-
-        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
-        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
-        output_tensor = self.c3.copy_input_to_device(output_tensor)
         output_tensor = self.c3(output_tensor)
         output_tensor = self.c3_2(output_tensor)
         save_c3_2_out = output_tensor
-        output_tensor = self.c3_2.copy_output_from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+        save_c3_2_out = ttnn.to_layout(save_c3_2_out, layout=ttnn.TILE_LAYOUT)
+        output_tensor = self.p3(output_tensor)
 
-        output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
-
-        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
-        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
-        output_tensor = self.c4.copy_input_to_device(output_tensor)
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
         save_c4_2_out = output_tensor
