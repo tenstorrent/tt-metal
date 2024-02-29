@@ -9,7 +9,6 @@ import pytest
 from loguru import logger
 
 from models.demos.llama2_70b.reference.llama import Llama
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 from transformers.generation.utils import top_k_top_p_filtering
 from models.demos.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 from models.demos.llama2_70b.tt.model_config import (
@@ -269,17 +268,36 @@ def construct_arg(**kwargs):
     return Args(**kwargs)
 
 
+@pytest.mark.parametrize("num_layers", (1, 2, 4, 8, 10, 20, None))
 @pytest.mark.parametrize(
-    "implementation, ckpt_dir, tokenizer_path, skip_model_load, max_batch_size, num_layers, max_seq_len",
+    "implementation, ckpt_dir, tokenizer_path, skip_model_load, max_batch_size, max_seq_len, emulated",
     [
         (
-            "meta",
-            "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/",
-            "/proj_sw/user_dev/llama-data/tokenizer.model",
+            "tt",
+            "/home/llama-data-repacked-2/llama-2-70b/",
+            "/home/llama-data/tokenizer.model",
             False,
             32,
-            2,
             4096,
+            False,
+        ),
+        (
+            "meta",
+            "/home/llama-data-repacked-2/llama-2-70b/",
+            "/home/llama-data/tokenizer.model",
+            False,
+            32,
+            4096,
+            False,
+        ),
+        (
+            "meta",
+            "/home/llama-data/llama-2-7b/llama-2-7b/",
+            "/home/llama-data/tokenizer.model",
+            False,
+            32,
+            4096,
+            False,
         ),
         (
             "tt",
@@ -287,8 +305,17 @@ def construct_arg(**kwargs):
             "/proj_sw/user_dev/llama-data/tokenizer.model",
             False,
             32,
-            2,
             4096,
+            True,
+        ),
+        (
+            "meta",
+            "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/",
+            "/proj_sw/user_dev/llama-data/tokenizer.model",
+            False,
+            32,
+            4096,
+            True,
         ),
         (
             "meta",
@@ -296,22 +323,23 @@ def construct_arg(**kwargs):
             "/proj_sw/user_dev/llama-data/tokenizer.model",
             False,
             32,
-            None,
             4096,
+            True,
         ),
     ],
-    ids=["meta-70b-2l", "tt-70b-2l", "meta-7b"],
+    ids=["tt-70b", "meta-70b", "meta-7b", "tt-70b-emulated", "meta-70b-emulated", "meta-7b-emulated"],
 )
 @pytest.mark.parametrize(
     "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
     [
+        (100, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
         (100, "models/demos/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
     ],
-    ids=["default-generation"],
+    ids=["greedy", "sampling"],
 )
 @pytest.mark.parametrize(
-    "n_devices, emulated",
-    ((4, True),),
+    "n_devices",
+    ((4),),
 )
 def test_LlamaModel_demo(
     # model args
