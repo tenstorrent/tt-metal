@@ -7,7 +7,7 @@ on:
   workflow_call:
 
 jobs:
-  unit-and-sweep:
+  tt-eager-unit-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -36,13 +36,34 @@ jobs:
         run: make build
       - name: Build tt-metal CPP tests
         run: make tests
-      - name: Run pre/post regression tests - unit tests
+      - name: fallback-ops tests
         timeout-minutes: 120
         run: |
           source build/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_python_unit_tests.sh
+          ./tests/scripts/run_python_unit_test_fallback_ops.sh
+      - name: backward-ops tests
+        timeout-minutes: 120
+        run: |
+          source build/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_python_unit_test_backward_ops.sh
+      - name: loss-ops tests
+        timeout-minutes: 120
+        run: |
+          source build/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_python_unit_test_loss_ops.sh
+      - name: misc tests
+        timeout-minutes: 120
+        run: |
+          source build/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_python_unit_test_misc.sh
 
   model-and-cpp:
     strategy:

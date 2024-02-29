@@ -8,7 +8,10 @@ if [[ -z "$TT_METAL_HOME" ]]; then
 fi
 
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
-    env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -name 'test_*.py' -a ! -name 'test_untilize_with_halo_and_max_pool.py') -vvv
+    ./run_python_unit_test_backward_ops.sh
+    ./run_python_unit_test_fallback_ops.sh
+    ./run_python_unit_test_loss_ops.sh
+    ./run_python_unit_test_misc_ops.sh
 else
     # Need to remove move for time being since failing
     env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv
