@@ -291,7 +291,6 @@ def bert(
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
-        dtype=ttnn.bfloat8_b,
     )
     ttnn.deallocate(embeddings)
 

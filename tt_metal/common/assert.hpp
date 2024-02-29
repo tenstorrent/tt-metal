@@ -100,7 +100,7 @@ inline void tt_assert_message(std::ostream& os) {}
 
 template <typename T, typename... Ts>
 void tt_assert_message(std::ostream& os, T const& t, Ts const&... ts) {
-    os << fmt::format("{}", t) << std::endl;
+    os << t << std::endl;
     tt_assert_message(os, ts...);
 }
 

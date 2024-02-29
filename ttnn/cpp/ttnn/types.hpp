@@ -4,15 +4,16 @@
 
 #pragma once
 
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/types.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace ttnn {
 namespace types {
 
 using Device = tt::tt_metal::Device;
 
-constexpr auto TILE_SIZE = 32;
+static constexpr auto ROW_MAJOR_LAYOUT = tt::tt_metal::Layout::ROW_MAJOR;
+static constexpr auto TILE_LAYOUT = tt::tt_metal::Layout::TILE;
 
 using tt::tt_metal::DataType;
 static constexpr auto uint16 = DataType::UINT16;
@@ -31,31 +32,7 @@ static const auto L1_BLOCK_SHARDED_MEMORY_CONFIG = MemoryConfig{TensorMemoryLayo
 static const auto L1_HEIGHT_SHARDED_MEMORY_CONFIG = MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};
 static const auto L1_WIDTH_SHARDED_MEMORY_CONFIG = MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
 
-using tt::tt_metal::Layout;
-static constexpr auto ROW_MAJOR_LAYOUT = Layout::ROW_MAJOR;
-static constexpr auto TILE_LAYOUT = Layout::TILE;
-
-using tt::tt_metal::StorageType;
-static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
-
-// Tensor wrapper class for hiding the internal implementation from python
-struct TensorWrapper {
-    ttnn::Tensor value;
-};
-
-struct TensorSchema {
-    const std::size_t min_rank;
-    const std::size_t max_rank;
-    const std::set<DataType> dtypes;
-    const std::set<Layout> layouts;
-    const bool can_be_on_device;
-    const bool can_be_on_cpu;
-    const bool can_be_a_scalar;
-    const bool is_optional;
-};
-
-}
+}  // namespace types
 
 using namespace types;
-
 }  // namespace ttnn

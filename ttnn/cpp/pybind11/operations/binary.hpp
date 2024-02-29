@@ -8,7 +8,6 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/binary.hpp"
-#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
@@ -19,13 +18,9 @@ namespace binary {
 void py_module(py::module& module) {
     module.def(
         "add",
-        [](const ttnn::TensorWrapper& input_tensor_a,
-           const float scalar,
-           const tt::tt_metal::MemoryConfig& memory_config,
-           std::optional<DataType> dtype) {
-            return TensorWrapper{
-                ttnn::operations::binary::add(input_tensor_a.value, scalar, memory_config, dtype)};
-        },
+        static_cast<ttnn::Tensor (*)(
+            const ttnn::Tensor&, const ttnn::Tensor&, const tt::tt_metal::MemoryConfig&, std::optional<DataType>)>(
+            &ttnn::operations::binary::add),
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
         py::kw_only(),
@@ -34,13 +29,9 @@ void py_module(py::module& module) {
 
     module.def(
         "add",
-        [](const ttnn::TensorWrapper& input_tensor_a,
-           const ttnn::TensorWrapper& input_tensor_b,
-           const tt::tt_metal::MemoryConfig& memory_config,
-           std::optional<DataType> dtype) {
-            return TensorWrapper{
-                ttnn::operations::binary::add(input_tensor_a.value, input_tensor_b.value, memory_config, dtype)};
-        },
+        static_cast<ttnn::Tensor (*)(
+            const ttnn::Tensor&, const float, const tt::tt_metal::MemoryConfig&, std::optional<DataType>)>(
+            &ttnn::operations::binary::add),
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
         py::kw_only(),
