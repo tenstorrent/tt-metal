@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
+#include "ckernel_debug.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "risc_attribs.h"
 
@@ -644,4 +645,29 @@ ALWI void silu_tile(uint32_t idst) {
 ALWI void silu_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_silu_init<APPROX>() ));
 }
+
+ALWI void dbg_halt() {
+    UNPACK (dbg_thread_halt<UnpackThreadId>());
+    MATH (dbg_thread_halt<MathThreadId>());
+    PACK (dbg_thread_halt<PackThreadId>());
+}
+
+ALWI void dbg_unhalt() {
+    PACK (dbg_thread_unhalt<PackThreadId>());
+    UNPACK (dbg_thread_unhalt<UnpackThreadId>());
+    MATH (dbg_thread_unhalt<MathThreadId>());
+}
+
+ALWI void dbg_thread_dump_srca_row(int row_addr, uint32_t *rd_data) {
+    MATH (( dbg_get_array_row(dbg_array_id::SRCA, row_addr, rd_data)));
+}
+
+ALWI void dbg_thread_dump_srcb_row(int row_addr, uint32_t *rd_data) {
+    MATH (( dbg_get_array_row(dbg_array_id::SRCB, row_addr, rd_data)));
+}
+
+ALWI void dbg_thread_dump_dest_acc_row(int row_addr, uint32_t *rd_data) {
+    MATH (( dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
+}
+
 } // namespace ckernel
