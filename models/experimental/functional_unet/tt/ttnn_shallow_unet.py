@@ -11,6 +11,29 @@ import tt_lib.fallback_ops
 from loguru import logger
 
 
+def unet_reshard(
+    ttnn_tensor,
+    sharded_memory_config,
+    use_reshard=True,
+    interleaved_memory_config=ttnn.L1_MEMORY_CONFIG,
+    dtype=None,
+):
+    if use_reshard:
+        return ttnn.to_memory_config(
+            ttnn_tensor,
+            memory_config=sharded_memory_config,
+        )
+    else:
+        ttl_tensor = ttnn_tensor.value
+        ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
+        ttl_tensor = ttl.tensor.interleaved_to_sharded(
+            ttl_tensor,
+            sharded_memory_config,
+            dtype,
+        )
+        return ttnn.Tensor(ttl_tensor)
+
+
 class UNet:
     def __init__(
         self,
@@ -27,6 +50,7 @@ class UNet:
         self.p3 = parameters.p3
         self.c4 = parameters.c4
         self.c4_2 = parameters.c4_2
+        self.p4 = parameters.p4
         self.bnc = parameters.bnc
         self.bnc_2 = parameters.bnc_2
         self.c5 = parameters.c5
@@ -52,34 +76,28 @@ class UNet:
 
         output_tensor = self.c1(input_tensor)
         output_tensor = self.c1_2(output_tensor)
-        save_c1_2_out = output_tensor
-        save_c1_2_out = ttnn.to_layout(save_c1_2_out, layout=ttnn.TILE_LAYOUT)
+        save_c1_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
         output_tensor = self.p1(output_tensor)
 
+        output_tensor = unet_reshard(output_tensor, self.c2.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.c2(output_tensor)
         output_tensor = self.c2_2(output_tensor)
-        save_c2_2_out = output_tensor
-        save_c2_2_out = ttnn.to_layout(save_c2_2_out, layout=ttnn.TILE_LAYOUT)
+        save_c2_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
         output_tensor = self.p2(output_tensor)
 
+        output_tensor = unet_reshard(output_tensor, self.c3.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.c3(output_tensor)
         output_tensor = self.c3_2(output_tensor)
-        save_c3_2_out = output_tensor
-        save_c3_2_out = ttnn.to_layout(save_c3_2_out, layout=ttnn.TILE_LAYOUT)
+        save_c3_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
         output_tensor = self.p3(output_tensor)
 
+        output_tensor = unet_reshard(output_tensor, self.c4.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
-        save_c4_2_out = output_tensor
-        output_tensor = self.c4_2.copy_output_from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        output_tensor = output_tensor.to(torch_input_tensor.dtype)
+        save_c4_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
+        output_tensor = self.p4(output_tensor)
 
-        output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
-        output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
-        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
-        output_tensor = self.bnc.copy_input_to_device(output_tensor)
+        output_tensor = unet_reshard(output_tensor, self.bnc.conv.input_sharded_memory_config, use_reshard=False)
         output_tensor = self.bnc(output_tensor)
         output_tensor = self.bnc_2(output_tensor)
 
@@ -88,12 +106,16 @@ class UNet:
         output_tensor = ttnn.reshape(output_tensor, (1, 132, 10, 64))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 5280, 64))
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
+        output_tensor = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.L1_MEMORY_CONFIG))
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         output_tensor = ttnn.concat([output_tensor, save_c4_2_out], dim=3)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(output_tensor, (2, 132, 20, 96))
-        output_tensor = self.c5.copy_input_to_device(output_tensor)
+        output_tensor = ttnn.Tensor(
+            ttl.tensor.interleaved_to_sharded(
+                output_tensor.value,
+                self.c5.conv.input_sharded_memory_config,
+            )
+        )
         output_tensor = self.c5(output_tensor)
         output_tensor = self.c5_2(output_tensor)
         output_tensor = self.c5_3(output_tensor)
@@ -102,12 +124,16 @@ class UNet:
         output_tensor = ttnn.reshape(output_tensor, (1, 264, 20, 32))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 21120, 32))
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
+        output_tensor = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.L1_MEMORY_CONFIG))
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         output_tensor = ttnn.concat([output_tensor, save_c3_2_out], dim=3)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(output_tensor, (2, 264, 40, 64))
-        output_tensor = self.c6.copy_input_to_device(output_tensor)
+        output_tensor = ttnn.Tensor(
+            ttl.tensor.interleaved_to_sharded(
+                output_tensor.value,
+                self.c6.conv.input_sharded_memory_config,
+            )
+        )
         output_tensor = self.c6(output_tensor)
         output_tensor = self.c6_2(output_tensor)
         output_tensor = self.c6_3(output_tensor)
@@ -116,12 +142,17 @@ class UNet:
         output_tensor = ttnn.reshape(output_tensor, (1, 528, 40, 32))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 84480, 32))
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
+        output_tensor = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.L1_MEMORY_CONFIG))
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         output_tensor = ttnn.concat([output_tensor, save_c2_2_out], dim=3)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(output_tensor, (2, 528, 80, 48))
-        output_tensor = self.c7.copy_input_to_device(output_tensor)
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+        output_tensor = ttnn.Tensor(
+            ttl.tensor.interleaved_to_sharded(
+                output_tensor.value,
+                self.c7.conv.input_sharded_memory_config,
+            )
+        )
         output_tensor = self.c7(output_tensor)
         output_tensor = self.c7_2(output_tensor)
         output_tensor = self.c7_3(output_tensor)
@@ -130,14 +161,16 @@ class UNet:
         output_tensor = ttnn.reshape(output_tensor, (1, 1056, 80, 16))
         output_tensor = ttnn.upsample(output_tensor, 2)
         output_tensor = ttnn.reshape(output_tensor, (1, 1, 160 * 1056 * 2, 16))
-        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
+        output_tensor = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.L1_MEMORY_CONFIG))
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         output_tensor = ttnn.concat([output_tensor, save_c1_2_out], dim=3)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(output_tensor, (2, 1056, 160, 32))
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        output_tensor = self.c8.copy_input_to_device(output_tensor)
+        output_tensor = ttnn.Tensor(
+            ttl.tensor.interleaved_to_sharded(
+                output_tensor.value,
+                self.c8.conv.input_sharded_memory_config,
+            )
+        )
         output_tensor = self.c8(output_tensor)
         output_tensor = self.c8_2(output_tensor)
         output_tensor = self.c8_3(output_tensor)
