@@ -103,6 +103,7 @@ from ttnn.operations.core import (
     unsqueeze_to_4D,
     squeeze,
     clone,
+    as_tensor,
 )
 
 from ttnn.operations.matmul import (

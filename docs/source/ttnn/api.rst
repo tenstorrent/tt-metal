@@ -18,6 +18,7 @@ Tensor
 .. toctree::
    :maxdepth: 1
 
+   ttnn/as_tensor
    ttnn/from_torch
    ttnn/to_torch
    ttnn/to_device

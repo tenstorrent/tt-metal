@@ -436,7 +436,7 @@ def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -482,7 +482,7 @@ def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs)
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -928,7 +928,7 @@ def _dump_tensor_validate_input_tensors(operation_name, _, tensor, *args, **kwar
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -944,6 +944,80 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         ttl.tensor.dump_tensor(str(file_name), ttl_tensor)
 
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.dump_tensor")(file_name, tensor)
+
+
+def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):
+    import torch
+
+    ranks = (1, 2, 3, 4, 5, 6, 7, 8)
+    if len(tensor.shape) not in ranks:
+        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
+    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64, torch.float16)
+    if tensor.dtype not in dtypes:
+        raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
+    # if not tensor.is_contiguous():
+    #     raise RuntimeError(f"{operation_name}: ttnn.Tensor must be contiguous")
+
+
+@ttnn.register_operation(name="ttnn.as_tensor", validate_input_tensors=_as_tensor_validate_input_tensors)
+def as_tensor(
+    tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
+    dtype: Optional[ttnn.DataType] = None,
+    *,
+    layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
+    device: Optional[ttnn.Device] = None,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
+    cache_file_name: Optional[Union[str, pathlib.Path]] = None,
+) -> ttnn.Tensor:
+    """
+    as_tensor(tensor: Union[torch.Tensor], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cache_file_name: Optional[str | pathlib.Path] = None) -> ttnn.Tensor
+
+    Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
+
+    Args:
+        * :attr:`tensor`: the torch.Tensor
+        * :attr:`dtype`: the optional `ttnn` data type.
+        * :attr:`layout`: the optional `ttnn` layout.
+        * :attr:`device`: the optional `ttnn` device.
+        * :attr:`memory_config`: the optional `ttnn` memory configuration.
+        * :attr:`cache_file_name`: the optional cache file name.
+
+    Example::
+
+        >>> tensor = ttnn.as_tensor(torch.randn((2,3)), dtype=ttnn.bfloat16)
+        >>> print(tensor)
+        Tensor([ [1.375, -1.30469, -0.714844],
+            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
+    """
+
+    dtype_name = dtype.name if dtype is not None else "None"
+    layout_name = layout.name if layout is not None else "None"
+    if cache_file_name is None:
+        return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    else:
+
+        def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
+            tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
+            logger.info(
+                f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
+            )
+            pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
+            ttnn.dump_tensor(cache_file_name, tensor)
+            return tensor
+
+        cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.bin"
+        try:
+            tensor = ttnn.load_tensor(cache_file_name)
+            if tuple(tensor.shape) != tuple(tensor.shape):
+                logger.warning(
+                    f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
+                )
+                tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
+            logger.info(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+        except (FileNotFoundError, RuntimeError):
+            tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
+        tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
+        return tensor
 
 
 __all__ = []
