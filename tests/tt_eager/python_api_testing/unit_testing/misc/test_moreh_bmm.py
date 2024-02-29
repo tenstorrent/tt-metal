@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.unit_testing.test_moreh_matmul import get_tensors
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_moreh_matmul import get_tensors
 from models.utility_functions import comp_allclose_and_pcc
 
 
