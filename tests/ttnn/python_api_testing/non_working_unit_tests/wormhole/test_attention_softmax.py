@@ -35,8 +35,8 @@ def run_softmax_tests(
     try:
         # get ref result
         ref_value = pytorch_ops.attention_softmax(x, y, scalar=scalar)
-        x = ttnn_ops.torch_to_ttnn(x, device, dlayout[0], in_mem_config, dtype[0])
-        y = ttnn_ops.torch_to_ttnn(y, device, dlayout[0], in_mem_config, dtype[0])
+        x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config, dtype[0])
+        y = ttnn_ops.setup_ttnn_tensor(y, device, dlayout[0], in_mem_config, dtype[0])
 
         tt_result = ttnn.transformer.attention_softmax(input_tensor=x, attention_mask=y, head_size=scalar)
 
