@@ -74,3 +74,36 @@ def test_logical_xor(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_xlogy(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.xlogy, torch.xlogy, 1e-6, 1e6)
+
+
+def run_elt_binary_test_min_max(device, h, w, ttnn_function, torch_function, low, high, pcc=0.9999):
+    torch.manual_seed(0)
+    low = low
+    high = high
+    torch_input_tensor_a = torch_random((h, w), low, high, dtype=torch.bfloat16)
+    torch.manual_seed(42)
+    torch_input_tensor_b = torch_random((h, w), low, high, dtype=torch.bfloat16)
+
+    torch_output_tensor = torch_function(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_maximum(device, h, w):
+    run_elt_binary_test_min_max(device, h, w, ttnn.maximum, torch.maximum, -100, 100)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_minimum(device, h, w):
+    run_elt_binary_test_min_max(device, h, w, ttnn.minimum, torch.minimum, -100, 100)

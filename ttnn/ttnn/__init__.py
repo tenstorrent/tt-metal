@@ -138,6 +138,9 @@ from ttnn.operations.creation import (
 from ttnn.operations.reduction import (
     std,
     var,
+    max,
+    min,
+    sum,
 )
 
 from ttnn.operations.losses import (
@@ -196,6 +199,8 @@ from ttnn.operations.binary import (
     add_and_apply_activation_,
     nextafter,
     polyval,
+    maximum,
+    minimum,
 )
 
 from ttnn.operations.ternary import (
