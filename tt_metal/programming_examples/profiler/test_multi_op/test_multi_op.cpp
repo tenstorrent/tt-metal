@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 
 using namespace tt;
 
@@ -51,8 +52,12 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        constexpr int host_loop_count = 10;
-        RunCustomCycle(device, host_loop_count);
+        // Run 1
+        RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
+        tt_metal::detail::DumpDeviceProfileResults(device);
+
+        // Run 2
+        RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
         tt_metal::detail::DumpDeviceProfileResults(device);
 
         pass &= tt_metal::CloseDevice(device);

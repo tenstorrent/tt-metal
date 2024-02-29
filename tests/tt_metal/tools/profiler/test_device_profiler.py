@@ -54,9 +54,11 @@ def get_function_name():
 
 
 def test_multi_op():
+    OP_COUNT = 1100
+    RUN_COUNT = 2
     REF_COUNT_DICT = {
-        "grayskull": [1080, 880],
-        "wormhole_b0": [720, 640, 560],
+        "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
+        "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -95,9 +97,16 @@ def test_custom_cycle_count():
 
 
 def test_full_buffer():
+    OP_COUNT = 25
+    RISC_COUNT = 5
+    ZONE_COUNT = 125
     REF_COUNT_DICT = {
-        "grayskull": [67500, 55000],  # [108, 88](compute cores) x 5(riscs) x 125(buffer size in marker pairs)
-        "wormhole_b0": [45000, 40000, 35000],  # [72,64,56](compute cores) x 5(riscs) x 125(buffer size in marker pairs)
+        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
+        "wormhole_b0": [
+            72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+            64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+            56 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+        ],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")

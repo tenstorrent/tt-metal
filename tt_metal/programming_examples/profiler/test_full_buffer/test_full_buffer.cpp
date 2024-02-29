@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 
 using namespace tt;
 
@@ -38,7 +39,10 @@ void RunCustomCycle(tt_metal::Device *device, int loop_count, bool fast_dispatch
 
     if (fast_dispatch)
     {
-        EnqueueProgram(device->command_queue(), program, false);
+        for (int i = 0; i < PROFILER_OP_SUPPORT_COUNT * PROFILER_L1_GUARANTEED_MARKER_COUNT / loop_count; i++)
+        {
+            EnqueueProgram(device->command_queue(), program, false);
+        }
     }
     else
     {
