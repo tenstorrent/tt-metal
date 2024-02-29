@@ -487,7 +487,7 @@ class HWCommandQueue {
     friend void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
     friend void FinishImpl(CommandQueue & cq);
-    friend void EnqueueQueueRecordEvent(CommandQueue& cq, Event &event);
+    friend void EnqueueRecordEvent(CommandQueue& cq, Event &event);
     friend class Trace;
 };
 

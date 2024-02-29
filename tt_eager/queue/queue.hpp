@@ -26,8 +26,8 @@ void EnqueueDeviceToHostTransfer(
     const std::optional<std::size_t> transfer_size = std::nullopt,
     size_t src_offset = 0);
 
-void EnqueueQueueRecordEvent(CommandQueue&, Event&);
-void EnqueueQueueWaitForEvent(CommandQueue&, Event&);
+void EnqueueRecordEvent(CommandQueue&, Event&);
+void EnqueueWaitForEvent(CommandQueue&, Event&);
 void EventSynchronize(Event&);
 void QueueSynchronize(CommandQueue&);
 
