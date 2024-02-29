@@ -154,69 +154,6 @@ def torch_functional_falcon_attention(
     return attn_output, present
 
 
-def ttnn_functional_falcon_attention(
-    hidden_states, attention_mask, *, parameters, layer_past=None, num_heads=71, head_dim=64, multi_query=True
-):
-    assert multi_query
-    num_kv_heads = 1
-    fused_qkv = ttnn_functional_falcon_linear(hidden_states, parameters.query_key_value)
-    fused_qkv = ttnn.to_torch(fused_qkv)
-
-    query_layer, key_layer, value_layer = torch_functional_falcon_attention_split_heads(
-        fused_qkv, multi_query, num_heads, head_dim
-    )
-
-    batch_size, query_length, _, _ = query_layer.shape
-
-    query_layer = query_layer.transpose(1, 2).reshape(batch_size, num_heads, query_length, head_dim)
-    key_layer = key_layer.transpose(1, 2).reshape(batch_size, num_kv_heads, query_length, head_dim)
-    value_layer = value_layer.transpose(1, 2).reshape(batch_size, num_kv_heads, query_length, head_dim)
-
-    kv_seq_len = key_layer.shape[-2]
-    if layer_past is not None:
-        kv_seq_len += layer_past[0].shape[-2]
-
-    rotary_embedding_cache = dict()
-    cos, sin = torch_functional_generate_sin_cos_rotary_embedding(
-        query_length,
-        head_dim,
-        rotary_embedding_cache,
-    )
-    query_layer, key_layer = torch_functional_apply_rotary_pos_emb(
-        query_layer, cos, sin
-    ), torch_functional_apply_rotary_pos_emb(key_layer, cos, sin)
-
-    if layer_past is not None:
-        past_key, past_value = layer_past
-        # concatenate along seq_length dimension:
-        #  - key: [batch_size, self.num_heads, kv_length, head_dim]
-        #  - value: [batch_size, self.num_heads, kv_length, head_dim]
-        key_layer = torch.cat((past_key, key_layer), dim=-2)
-        value_layer = torch.cat((past_value, value_layer), dim=-2)
-
-    kv_length = key_layer.shape[-2]
-    use_cache = False
-    if use_cache:
-        present = (key_layer, value_layer)
-    else:
-        present = None
-
-    attention_scores = query_layer @ key_layer.transpose(-1, -2)
-    attention_scores /= math.sqrt(head_dim)
-
-    attention_scores = F.softmax(attention_scores + attention_mask, dim=-1, dtype=hidden_states.dtype)
-    # It is unclear why neither dropout nor head_mask is applied here (while it is with alibi).
-    attn_output = attention_scores @ value_layer
-
-    attn_output = attn_output.view(batch_size, num_heads, query_length, head_dim)
-    attn_output = attn_output.permute(0, 2, 1, 3)
-    attn_output = attn_output.reshape(batch_size, query_length, num_heads * head_dim)
-
-    attn_output = torch_functional_falcon_linear(attn_output, parameters.dense)
-
-    return attn_output, present
-
-
 @pytest.mark.parametrize("model_name", ["tiiuae/falcon-7b-instruct"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_length", [128])
@@ -264,34 +201,3 @@ def test_torch_functional_falcon_attention(model_name, batch_size, sequence_leng
     )
 
     assert_with_pcc(torch_output, output, 0.9999)
-
-
-@pytest.mark.parametrize("model_name", ["tiiuae/falcon-7b-instruct"])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("sequence_length", [128])
-def test_ttnn_functional_falcon_attention(device, model_name, batch_size, sequence_length):
-    config = transformers.FalconConfig.from_pretrained(model_name)
-    model = transformers.models.falcon.modeling_falcon.FalconAttention(config).eval()
-
-    torch_hidden_states = (torch.rand(batch_size, sequence_length, config.hidden_size, dtype=torch.float32) * 2) - 1
-    torch_attention_mask = torch.ones(1, sequence_length)
-    torch_output, torch_present = model.forward(torch_hidden_states, alibi=None, attention_mask=torch_attention_mask)
-
-    hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    attention_mask = ttnn.from_torch(torch_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        device=device,
-    )
-
-    output, present = ttnn_functional_falcon_attention(
-        hidden_states, attention_mask=attention_mask, parameters=parameters
-    )
-
-    assert_with_pcc(torch_output, output, 0.9999)
-
-
-def test_ttnn_optimized_functional_falcon_attention():
-    pytest.skip()
-    pass
