@@ -1183,6 +1183,30 @@ std::vector<Tensor> digamma_bw(const Tensor& grad, const Tensor& input, const Me
     return operation::decorate_as_composite(__func__, _digamma_bw)(grad, input, output_mem_config);
 }
 
+std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float M_PI_180 = M_PI/180;
+    Tensor grad_result = mul_unary(grad, M_PI_180, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> deg2rad_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _deg2rad_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _rad2deg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float M_180_PI = 180/M_PI;
+    Tensor grad_result = mul_unary(grad, M_180_PI, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> rad2deg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _rad2deg_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
