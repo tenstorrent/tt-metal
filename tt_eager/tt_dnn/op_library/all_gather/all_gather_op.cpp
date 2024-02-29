@@ -10,7 +10,6 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 
 #include "eth_l1_address_map.h"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace tt {
 
@@ -73,9 +72,6 @@ std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const u
 
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
-    // Temporary changes to allow multi-device ops to work with op profiler
-    // Should be removed with new profiler + software queue changes
-    tt:tt_metal::operation::skip_profile = getDeviceProfilerState();
     std::vector<AllGather> ops;
     ops.reserve(input_tensors.size());
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
@@ -83,32 +79,6 @@ std::vector<Tensor> all_gather(const std::vector<Tensor>& input_tensors, const u
         chip_id_t sender_device_id = input_tensors[i == 0 ? input_tensors.size() - 1 : i - 1].device()->id();
         ops.emplace_back(AllGather{dim, num_links, static_cast<uint32_t>(input_tensors.size()), i, receiver_device_id, sender_device_id, output_mem_config});
         output_tensors.push_back(operation::run(ops[i], {input_tensors[i]}).at(0));
-    }
-    if (tt::tt_metal::operation::skip_profile) {
-        for (uint32_t i = 0; i < input_tensors.size(); ++i) {
-            const auto& operation = ops[i];
-            const std::vector<Tensor> inputs = {input_tensors[i]};
-            const std::vector<Tensor> outputs = {output_tensors[i]};
-            const auto& program = operation::skipped_programs.at(input_tensors[i].device()->id());
-
-            tt::tt_metal::operation::ProfilerInfo profiler_info = {.preferred_name = "tt::tt_metal::AllGather", .parallelization_strategy = std::nullopt};
-            auto profile_scope = op_profiler::OpProfileScope(profiler_info.preferred_name.value(), op_profiler::OpType::tt_dnn_device);
-            auto do_profile = op_profiler::get_profiler_flag();
-            if (do_profile) {
-                if (profiler_info.preferred_name.has_value()) {
-                    op_profiler::set_preferred_name(profiler_info.preferred_name.value());
-                }
-                if (profiler_info.parallelization_strategy.has_value()) {
-                    op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
-                }
-                op_profiler::append_kernel_info(program);
-                op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
-            }
-            op_profiler::dump_device_profiler_results(input_tensors[i].device(), program);
-            op_profiler::append_all_tensor_io_data(inputs, {}, outputs);
-        }
-        tt::tt_metal::operation::skip_profile = false;
-        operation::skipped_programs.clear();
     }
     return output_tensors;
 }
