@@ -79,12 +79,19 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
 
 std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &inputs) const {
     const auto& input = inputs.at(0);
-    if (this->out_mem_config_.is_sharded()) {
-        Shape output_shape = this->compute_output_shapes(inputs).at(0);
+    if (out_mem_config_.is_sharded()) {
+        Shape output_shape = compute_output_shapes(inputs).at(0);
         uint32_t nbatch = in_n_;
-        uint32_t out_hw = this->out_h_ * this->out_w_;
+        uint32_t out_hw = out_h_ * out_w_;
         uint32_t out_nhw = out_hw * nbatch;
-        uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
+        uint32_t ncores = 1;
+        if (input.shard_spec().has_value() && input.shard_spec().value().halo) {
+            ncores = input.shard_spec().value().num_cores();
+        } else {
+            ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
+        }
+        // uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
+        // uint32_t ncores = input.shard_spec().value().num_cores();
         uint32_t out_nhw_per_core = out_nhw / ncores;
         CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.shape()[-1]};

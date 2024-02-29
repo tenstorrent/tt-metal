@@ -930,7 +930,9 @@ class TTPyCompositeConv(TTPyOp):
         interleaved_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
         )
-        assert conv_input.shape() == self.input_tensor_shape
+        assert (
+            conv_input.shape() == self.input_tensor_shape
+        ), f"conv_input.shape()={conv_input.shape()} != {self.input_tensor_shape}"
         # Reshape 4d to 2d
         conv_input = conv_input.reshape(
             1,
