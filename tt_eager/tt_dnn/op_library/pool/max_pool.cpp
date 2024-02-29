@@ -63,12 +63,13 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.dtype()));
     uint32_t out_hw = out_h * out_w;
     uint32_t out_hw_padded = round_up(out_hw, constants::TILE_HEIGHT);
+    uint32_t out_nhw = in_n_ * out_hw;
 
     // {N, 1, H * W, C}
-    const auto out_dims = std::vector<uint32_t>({in_n_, 1, out_hw_padded, out_c_padded});
+    const auto out_dims = std::vector<uint32_t>({1, 1, out_nhw, out_c_padded});
     const auto padding = Padding({{0, 0},
                                   {0, 0},
-                                  {0, out_hw_padded - out_hw},
+                                  {0, 0},
                                   {0, out_c_padded - out_c}},
                                  Padding::PadValue::NegativeInfinity);
 
@@ -90,6 +91,7 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
         } else {
             ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
         }
+        log_debug(LogOp, "ncores: {}, shard_size: {}", ncores, input.shard_spec().value().shape);
         // uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
         // uint32_t ncores = input.shard_spec().value().num_cores();
         uint32_t out_nhw_per_core = out_nhw / ncores;

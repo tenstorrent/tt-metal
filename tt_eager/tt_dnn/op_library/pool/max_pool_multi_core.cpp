@@ -651,7 +651,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     uint32_t indices_nbytes = datum_size(indices_df);
 
     uint32_t nbatch = in_n;
-    TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
+    // TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);

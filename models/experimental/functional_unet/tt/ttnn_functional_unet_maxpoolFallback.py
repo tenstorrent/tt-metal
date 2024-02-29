@@ -96,11 +96,12 @@ class UNet:
         output_tensor = self.c3_2(output_tensor)
         save_c3_2_out = output_tensor
         save_c3_2_out = ttnn.to_layout(save_c3_2_out, layout=ttnn.TILE_LAYOUT)
+
         output_tensor = self.p3(output_tensor)
 
         output_tensor = unet_reshard(
-            output_tensor, self.c4.get_expected_memory_config(output_tensor.shape)
-        )  # , use_reshard=False)
+            output_tensor, self.c4.get_expected_memory_config(output_tensor.shape), use_reshard=False
+        )
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
         save_c4_2_out = output_tensor
