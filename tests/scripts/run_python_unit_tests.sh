@@ -12,6 +12,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     ./run_python_unit_test_fallback_ops.sh
     ./run_python_unit_test_loss_ops.sh
     ./run_python_unit_test_misc_ops.sh
+    ./run_python_unit_test_moreh.sh
 else
     # Need to remove move for time being since failing
     env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv

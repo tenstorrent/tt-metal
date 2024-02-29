@@ -64,6 +64,13 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_misc.sh
+      - name: moreh tests
+        timeout-minutes: 120
+        run: |
+          source build/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_python_unit_test_moreh.sh
 
   model-and-cpp:
     strategy:
