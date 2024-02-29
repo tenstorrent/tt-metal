@@ -988,6 +988,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.digamma_bw
 
+.. autofunction:: tt_lib.tensor.deg2rad_bw
+
+.. autofunction:: tt_lib.tensor.rad2deg_bw
+
 Loss Functions
 ==============
 
