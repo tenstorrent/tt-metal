@@ -129,7 +129,8 @@ def get_model_config(model_config_str, num_devices=4, all_gather=True):
         "ALL_GATHER_NUM_LINKS": 1,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/llama2_70b/datasets/"),
         "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
