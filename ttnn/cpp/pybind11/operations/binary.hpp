@@ -23,7 +23,7 @@ void py_module(py::module& module) {
            const float scalar,
            const tt::tt_metal::MemoryConfig& memory_config,
            std::optional<DataType> dtype) {
-            return TensorWrapper{
+            return ttnn::TensorWrapper{
                 ttnn::operations::binary::add(input_tensor_a.value, scalar, memory_config, dtype)};
         },
         py::arg("input_tensor_a"),
@@ -38,7 +38,7 @@ void py_module(py::module& module) {
            const ttnn::TensorWrapper& input_tensor_b,
            const tt::tt_metal::MemoryConfig& memory_config,
            std::optional<DataType> dtype) {
-            return TensorWrapper{
+            return ttnn::TensorWrapper{
                 ttnn::operations::binary::add(input_tensor_a.value, input_tensor_b.value, memory_config, dtype)};
         },
         py::arg("input_tensor_a"),
