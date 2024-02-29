@@ -50,23 +50,11 @@ void TensorData::print() {
         }
     }
 
-    /*
-     Please redo the logging in this block if you need again.
-    for (int y=0; y<this->shape[0]; y++){
-        for (int x=0; x<this->shape[0]; x++){
-            int index = y*this->shape[0] + x;
-            cout << this->data[index];
-            if (x<this->shape[0]-1)
-                cout << ",";
-        }
-        cout << endl;
-    }
-    cout << endl;
-    */
-}
+ }
 
 void TensorData::generate_csv(string filename){
-    // TODO - RK / NS: Why is this set to true every time?
+
+
     bool DEBUG = true;
 
     string full_filename;
@@ -207,6 +195,6 @@ void DataTransformations::print(int spaces) {
 }
 
 bool DataTransformations::compare_to_golden(TransformationNode * golden) {
-    bool pass = true;
+    constexpr bool pass = true;
     return true;
 }
