@@ -224,6 +224,9 @@ def register_operation(*, name, validate_input_tensors=None, torch_function=None
             def call_wrapper(*function_args, **function_kwargs):
                 try:
                     return function(*function_args, **function_kwargs)
+                except NotImplementedError:
+                    logger.warning(f"{name}: falling back to torch due to NotImplementedError")
+                    return fallback(*function_args, **function_kwargs)
                 except Exception as e:
                     exception_message = "\n".join(str(e).split("\n")[:3])
                     logger.warning(f"{name}: falling back to torch due to {exception_message}")

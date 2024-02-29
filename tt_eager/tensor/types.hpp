@@ -366,8 +366,9 @@ struct RankedShape {
     }
 
     bool operator==(const RankedShape<Rank> &other) const {
-        const auto shape_a = this->value;
-        const auto shape_b = other.value;
+        const auto &shape_a = this->value;
+        const auto &shape_b = other.value;
+        // tt::tt_metal::Shape comparison doesn't take padding into account
         return (shape_a == shape_b and shape_a.without_padding() == shape_b.without_padding());
     }
 
@@ -458,6 +459,11 @@ struct Shape {
             [](const auto &shape, const auto &other) -> bool { return shape == other; },
             this->ranked_shape,
             other.ranked_shape);
+    }
+
+    template <std::size_t Rank>
+    bool operator==(const std::array<std::uint32_t, Rank> &other) const {
+        return Shape{this->value().without_padding()} == Shape{other};
     }
 
     const auto &operator[](std::int64_t index) const {

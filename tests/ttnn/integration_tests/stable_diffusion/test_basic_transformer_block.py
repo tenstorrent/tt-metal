@@ -58,7 +58,6 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
-    state_dict = model.state_dict()
     config = model.config
     basic_transformer = pipe.unet.down_blocks[index].attentions[1].transformer_blocks[0]
 
@@ -146,7 +145,6 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
-    state_dict = model.state_dict()
     config = model.config
     basic_transformer = pipe.unet.up_blocks[index].attentions[1].transformer_blocks[0]
 
