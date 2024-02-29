@@ -1,5 +1,5 @@
 test-list:
-  - ttnn-eltwise-lgamma:
+  - ttnn-eltwise-logit:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -7,18 +7,16 @@ test-list:
         num-shapes: 1
         num-samples: 128
         args-sampling-strategy: "all"
-      env:
-        # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
         args:
-          low: 0.1
-          high: 1000
+          low: 0
+          high: 0.99
         dtype: bfloat16
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
-      output-file: eltwise_lgamma_sweep.csv
+      args-gen: gen_logit_args
+      output-file: eltwise_logit_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]

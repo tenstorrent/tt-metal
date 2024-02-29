@@ -160,6 +160,13 @@ def prelu(x, *args, **kwargs):
     return result
 
 
+def ttnn_prelu(x, *args, **kwargs):
+    weight = kwargs.pop("scalar")
+    t_weight = torch.ones([1], dtype=x.dtype) * weight
+    result = torch.nn.functional.prelu(x, t_weight)
+    return result
+
+
 def softsign(x, *args, **kwargs):
     result = torch.nn.functional.softsign(x)
     return result
