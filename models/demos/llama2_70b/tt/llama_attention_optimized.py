@@ -1,23 +1,36 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
+import os
 import torch
 from loguru import logger
 
 import math
 import tt_lib
-from models.utility_functions import torch2tt_tensor, nearest_32
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     precompute_freqs as tt_precompute_freqs,
     freqs_to_rotation_matrix,
     gather_rotary_emb as tt_gather_rotary_emb,
+    get_weight_cache_path,
 )
 
 
 class TtLlamaAttention_optimized(torch.nn.Module):
-    def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration, emulated=False):
+    def __init__(
+        self,
+        devices,
+        state_dict,
+        base_url,
+        layer_num,
+        model_config,
+        configuration,
+        emulated=False,
+        load_weights=True,
+        cache_path=None,
+        kv_cache_dir=None,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -42,68 +55,23 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
 
-        layer_name = f"{base_url}.{layer_num}"
+        self.layer_name = f"{base_url}.{layer_num}"
 
-        wq_str = f"{layer_name}.attention.wq.weight"
-        wk_str = f"{layer_name}.attention.wk.weight"
-        wv_str = f"{layer_name}.attention.wv.weight"
-        wo_str = f"{layer_name}.attention.wo.weight"
+        if load_weights:
+            self.load_weights()
+            self.init_kv_cache()
 
-        self.qkv_list = []
-        self.wo_list = []
+        self.cache_path = cache_path
+        self.kv_cache_dir = kv_cache_dir
+        self.k_cache_stem = f"{self.layer_name}.attention.k_cache"
+        self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
+
+    def init_kv_cache(self):
+        """
+        Generates empty KV cache and pushed to device memory
+        """
         self.layer_past_list = []
-
         for i in range(self.num_devices):
-            ### Fused QKV Weights
-            # Chunk weights
-            wq_chunks = torch.chunk(self.state_dict[wq_str], self.n_heads, dim=0)
-            wk_chunks = torch.chunk(self.state_dict[wk_str], self.n_kv_heads, dim=0)
-            wv_chunks = torch.chunk(self.state_dict[wv_str], self.n_kv_heads, dim=0)
-
-            # Select chunks for the current device
-            wq_selected = torch.cat(wq_chunks[i * self.n_local_heads : (i + 1) * self.n_local_heads], dim=0)
-            wk_selected = torch.cat(wk_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
-            wv_selected = torch.cat(wv_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
-
-            # Transpose the selected chunks
-            wq = torch.transpose(wq_selected, -2, -1)
-            wk = torch.transpose(wk_selected, -2, -1)
-            wv = torch.transpose(wv_selected, -2, -1)
-
-            # Create interleaved qkv list
-            n_repeat = self.n_heads // self.n_kv_heads
-            qkv_interleaved = [
-                [
-                    wq[..., i * n_repeat * self.head_dim : (i + 1) * n_repeat * self.head_dim],
-                    wk[..., i * self.head_dim : (i + 1) * self.head_dim],
-                    wv[..., i * self.head_dim : (i + 1) * self.head_dim],
-                ]
-                for i in range(self.n_local_kv_heads)
-            ]
-            qkv_interleaved = [item for sublist in qkv_interleaved for item in sublist]
-
-            # Concatenate Q, K, V for the current device
-            qkv = torch.cat(qkv_interleaved, dim=-1)
-
-            # Append the processed tensor to the list, assuming torch2tt_tensor is a defined method
-            self.qkv_list.append(
-                torch2tt_tensor(
-                    qkv,
-                    self.devices[i],
-                    tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
-                ),
-            )
-
-            ### WO Weights and KV Cache
-            wo = torch2tt_tensor(
-                torch.transpose(
-                    torch.chunk(self.state_dict[wo_str], self.num_devices)[i],
-                    -2,
-                    -1,
-                ),
-                self.devices[i],
-            )
             cache_k = torch.zeros(
                 (
                     self.max_batch_size,
@@ -124,8 +92,172 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             layer_past = [torch2tt_tensor(lp, self.devices[i]) for lp in layer_past]
 
             # add to the list
-            self.wo_list.append(wo)
             self.layer_past_list.append(layer_past)
+
+    def save_state(self):
+        # Save KV cache
+        assert self.cache_path is not None, "Cache path is not defined"
+
+        # Best way to do this?
+        # torch2tt_tensor, then tt2torch_tensor with Device None, then dump_tensor?
+
+        for i in range(self.num_devices):
+            k_cache_path = self.cache_path / self.kv_cache_dir / f"{self.k_cache_stem}_{i}_{self.num_devices}.bin"
+            v_cache_path = self.cache_path / self.kv_cache_dir / f"{self.v_cache_stem}_{i}_{self.num_devices}.bin"
+
+            # Does this deallocate from device?
+            # TODO: Replace with tensor.cpu()?
+            k_cache = tt2torch_tensor(self.layer_past_list[i][0])
+            v_cache = tt2torch_tensor(self.layer_past_list[i][1])
+
+            k_cache_tt = torch2tt_tensor(
+                k_cache,
+                None,
+                tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
+                tt_dtype=self.model_config["DEFAULT_DTYPE"],
+            )
+
+            v_cache_tt = torch2tt_tensor(
+                v_cache,
+                None,
+                tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
+                tt_dtype=self.model_config["DEFAULT_DTYPE"],
+            )
+
+            tt_lib.tensor.dump_tensor(str(k_cache_path), k_cache_tt)
+            tt_lib.tensor.dump_tensor(str(v_cache_path), v_cache_tt)
+
+            # TODO: Will this throw if already dellocated?
+            self.layer_past_list[i][0].deallocate()
+            self.layer_past_list[i][1].deallocate()
+
+        del self.layer_past_list
+
+    def load_state(self):
+        # Load KV cache
+        assert self.cache_path is not None, "Cache path is not defined"
+        assert not hasattr(self, "layer_past_list"), "layer_past_list is already an attribute of this object"
+
+        self.layer_past_list = []
+
+        for i in range(self.num_devices):
+            k_cache_path = self.cache_path / self.kv_cache_dir / f"{self.k_cache_stem}_{i}_{self.num_devices}.bin"
+            v_cache_path = self.cache_path / self.kv_cache_dir / f"{self.v_cache_stem}_{i}_{self.num_devices}.bin"
+
+            if not k_cache_path.exists():
+                assert i == 0, "If KV cache doesn't exist, lookup must fail on device 0"
+                logger.warning(f"KV cache not found at {k_cache_path}. Initializing empty KV cache")
+                self.init_kv_cache()
+                return
+
+            k_cache = tt_lib.tensor.load_tensor(str(k_cache_path)).to(
+                self.devices[i], self.model_config["DEFAULT_MEMCFG"]
+            )
+            v_cache = tt_lib.tensor.load_tensor(str(v_cache_path)).to(
+                self.devices[i], self.model_config["DEFAULT_MEMCFG"]
+            )
+
+            layer_past = [k_cache, v_cache]
+
+            # add to the list
+            self.layer_past_list.append(layer_past)
+
+    def free_weights(self):
+        # Free weights
+        for i in range(self.num_devices):
+            self.qkv_list[i].deallocate(True)
+            self.wo_list[i].deallocate(True)
+        del self.qkv_list
+        del self.wo_list
+
+    def load_weights(self):
+        assert not hasattr(self, "qkv_list"), "qkv_list is already an attribute of this object"
+        assert not hasattr(self, "wo_list"), "wo_list is already an attribute of this object"
+        # Load weights
+        wqkv_cache_str = f"{self.layer_name}.attention.wqkv_fused.weight"
+        wq_str = f"{self.layer_name}.attention.wq.weight"
+        wk_str = f"{self.layer_name}.attention.wk.weight"
+        wv_str = f"{self.layer_name}.attention.wv.weight"
+        wo_str = f"{self.layer_name}.attention.wo.weight"
+
+        self.qkv_list = []
+        self.wo_list = []
+
+        test_cache_path = get_weight_cache_path(self.cache_path, wo_str, self.num_devices - 1, self.num_devices)
+        if test_cache_path.exists():
+            logger.info(f"Loading {self.layer_name} ATTN weights from cache")
+            for i in range(self.num_devices):
+                tensor_cache_path = get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)
+                self.qkv_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"]
+                    )
+                )
+
+                tensor_cache_path = get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)
+                self.wo_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["DEFAULT_MEMCFG"]
+                    )
+                )
+        else:
+            w0_chunks = torch.chunk(torch.transpose(self.state_dict[wo_str], -1, -2), self.num_devices, dim=-1)
+
+            for i in range(self.num_devices):
+                ### Fused QKV Weights
+                # Chunk weights
+                wq_chunks = torch.chunk(self.state_dict[wq_str], self.n_heads, dim=0)
+                wk_chunks = torch.chunk(self.state_dict[wk_str], self.n_kv_heads, dim=0)
+                wv_chunks = torch.chunk(self.state_dict[wv_str], self.n_kv_heads, dim=0)
+
+                # Select chunks for the current device
+                wq_selected = torch.cat(wq_chunks[i * self.n_local_heads : (i + 1) * self.n_local_heads], dim=0)
+                wk_selected = torch.cat(wk_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
+                wv_selected = torch.cat(wv_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
+
+                # Transpose the selected chunks
+                wq = torch.transpose(wq_selected, -2, -1)
+                wk = torch.transpose(wk_selected, -2, -1)
+                wv = torch.transpose(wv_selected, -2, -1)
+
+                # Create interleaved qkv list
+                n_repeat = self.n_heads // self.n_kv_heads
+                qkv_interleaved = [
+                    [
+                        wq[..., i * n_repeat * self.head_dim : (i + 1) * n_repeat * self.head_dim],
+                        wk[..., i * self.head_dim : (i + 1) * self.head_dim],
+                        wv[..., i * self.head_dim : (i + 1) * self.head_dim],
+                    ]
+                    for i in range(self.n_local_kv_heads)
+                ]
+                qkv_interleaved = [item for sublist in qkv_interleaved for item in sublist]
+
+                # Concatenate Q, K, V for the current device
+                qkv = torch.cat(qkv_interleaved, dim=-1)
+
+                qkv_host = torch2tt_tensor(
+                    qkv,
+                    None,
+                    tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+                    tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
+                )
+                self.qkv_list.append(qkv_host.to(self.devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"]))
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)), qkv_host
+                )
+
+                ### WO Weights
+
+                wo_host = torch2tt_tensor(
+                    w0_chunks[i],
+                    None,
+                    tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
+                    tt_dtype=self.model_config["DEFAULT_DTYPE"],
+                )
+                self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DEFAULT_MEMCFG"]))
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)), wo_host
+                )
 
     def get_rotation_mat(self, dhead, end, start_pos, seqlen, batch):
         cos, sin = tt_precompute_freqs(dhead, end)

@@ -8,11 +8,24 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb
+from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, get_weight_cache_path
+import time
+from loguru import logger
 
 
 class TtLlamaModel_optimized(nn.Module):
-    def __init__(self, devices, state_dict, base_url, n_layers, model_config, configuration, batch):
+    def __init__(
+        self,
+        devices,
+        state_dict,
+        base_url,
+        n_layers,
+        model_config,
+        configuration,
+        batch,
+        n_layers_per_group=None,
+        cache_path=None,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -27,26 +40,23 @@ class TtLlamaModel_optimized(nn.Module):
         self.n_kv_heads = configuration.n_kv_heads
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
-
-        emb_str = "tok_embeddings.weight"
-        norm_str = "norm.weight"
-        lm_head_str = "output.weight"
-
         self.norm_eps = configuration.norm_eps
+        self.vocab_size = configuration.vocab_size
 
-        self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, self.hidden_size)
-        self.tok_embeddings.weight = torch.nn.Parameter(self.state_dict[emb_str])
+        self.n_layers = n_layers
+        self.n_layers_per_group = n_layers_per_group if n_layers_per_group else n_layers
+        assert self.n_layers % self.n_layers_per_group == 0, "n_layers must be divisible by n_layers_per_group"
+        self.num_layer_groups = self.n_layers // self.n_layers_per_group
 
-        self.norm_list = []
-        for i in range(self.num_devices):
-            output_norm = tt_lib.tensor.Tensor(
-                # Expand to size of input since we decomped norm
-                self.state_dict[norm_str].reshape([1, 1, -1, 32]),
-                self.model_config["LN_F_WEIGHTS_DTYPE"],
-            ).to(devices[i], self.model_config["LN_F_WEIGHTS_MEMCFG"])
+        # If n_layers_per_group is not equal to n_layers, we need to reload weights
+        self.do_reload = self.n_layers_per_group != self.n_layers
 
-            self.norm_list.append(output_norm)
-
+        # Need unique directory for each run's KV cache... unix time
+        self.cache_path = cache_path
+        kv_unique_dir = str(int(time.time()))
+        kv_cache_path = cache_path / kv_unique_dir
+        # Ensure kv_cache_path exists
+        kv_cache_path.mkdir(parents=True, exist_ok=True)
         self.layers = [
             TtLlamaDecoder_optimized(
                 devices,
@@ -56,25 +66,90 @@ class TtLlamaModel_optimized(nn.Module):
                 model_config,
                 configuration,
                 batch,
+                load_weights=not self.do_reload,
+                cache_path=cache_path,
+                kv_cache_dir=kv_unique_dir,
             )
             for i in range(n_layers)
         ]
 
-        self.lm_head_list = []
-        H = 8 * 1024
-        PADDED_VOCAB = 32 * 1024
-        padded_lm_head = torch.zeros(H, PADDED_VOCAB)
-        padded_lm_head[:, : configuration.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
-        for i in range(self.num_devices):
-            lm_head = torch2tt_tensor(
-                torch.chunk(padded_lm_head, self.num_devices, -1)[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
-            )
-            self.lm_head_list.append(lm_head)
-
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+
+        emb_str = "tok_embeddings.weight"
+        self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, self.hidden_size)
+        self.tok_embeddings.weight = torch.nn.Parameter(self.state_dict[emb_str])
+        self.load_weights()
+
+    def load_weights(self):
+        norm_str = "norm.weight"
+        lm_head_str = "output.weight"
+
+        self.norm_list = []
+        self.lm_head_list = []
+
+        test_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, self.num_devices - 1, self.num_devices)
+        if test_cache_path.exists():
+            logger.info(f"Loading MODEL weights from cache")
+            for i in range(self.num_devices):
+                tensor_cache_path = get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)
+                self.norm_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["LN_F_WEIGHTS_MEMCFG"]
+                    )
+                )
+
+                tensor_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)
+                self.lm_head_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"]
+                    )
+                )
+        else:
+            H = 8 * 1024
+            PADDED_VOCAB = 32 * 1024
+            padded_lm_head = torch.zeros(H, PADDED_VOCAB)
+            padded_lm_head[:, : self.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
+            padded_lm_head_chunks = torch.chunk(padded_lm_head, self.num_devices, -1)
+
+            for i in range(self.num_devices):
+                output_norm_host = tt_lib.tensor.Tensor(
+                    # Expand to size of input since we decomped norm
+                    self.state_dict[norm_str].reshape([1, 1, -1, 32]),
+                    self.model_config["LN_F_WEIGHTS_DTYPE"],
+                )
+                self.norm_list.append(output_norm_host.to(self.devices[i], self.model_config["LN_F_WEIGHTS_MEMCFG"]))
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)),
+                    output_norm_host,
+                )
+
+                lm_head_host = torch2tt_tensor(
+                    padded_lm_head_chunks[i],
+                    None,
+                    tt_memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
+                    tt_dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
+                )
+                self.lm_head_list.append(
+                    lm_head_host.to(self.devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
+                )
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)),
+                    lm_head_host,
+                )
+
+    def free_layers(self, start_layer, end_layer):
+        # Save layer for each layer in layer_group
+        if self.do_reload:
+            logger.info(f"Freeing layers[{start_layer}:{end_layer}]")
+            for layer in self.layers[start_layer:end_layer]:
+                layer.free_layer()
+
+    def load_layers(self, start_layer, end_layer):
+        # Load layer for each layer in layer_group
+        if self.do_reload:
+            logger.info(f"Loading layers[{start_layer}:{end_layer}]")
+            for layer in self.layers[start_layer:end_layer]:
+                layer.load_layer()
 
     def prepare_inputs(self, inp_ids, start_pos):
         """
@@ -160,8 +235,18 @@ class TtLlamaModel_optimized(nn.Module):
         attn_masks: list,
     ) -> tt_lib.tensor.Tensor:
         ### Run all layers
-        for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
+        for i in range(self.num_layer_groups):
+            start_layer = i * self.n_layers_per_group
+            end_layer = start_layer + self.n_layers_per_group
+
+            # Prologue: Load weights and KV cache
+            self.load_layers(start_layer, end_layer)
+
+            for layer in self.layers[start_layer:end_layer]:
+                xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
+
+            # Epilogue: Save KV cache to disk and free weights
+            self.free_layers(start_layer, end_layer)
 
         # Convert decoder_output to interleaved
         for i in range(self.num_devices):

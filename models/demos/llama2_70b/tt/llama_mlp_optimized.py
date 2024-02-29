@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import torch
 from torch import nn
 import tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.demos.llama2_70b.tt.llama_common import tt_all_gather_torch, get_weight_cache_path
 
 
 class TtLlamaMLP_optimized(nn.Module):
@@ -20,6 +21,8 @@ class TtLlamaMLP_optimized(nn.Module):
         hidden_size: int,
         model_config,
         emulated=False,
+        load_weights=True,
+        cache_path=None,
     ):
         super().__init__()
 
@@ -29,71 +32,115 @@ class TtLlamaMLP_optimized(nn.Module):
         self.hidden_size = hidden_size
         self.model_config = model_config
         self.emulated = emulated
+        self.cache_path = cache_path
 
-        layer_name = f"{base_url}.{layer_num}"
+        self.layer_name = f"{base_url}.{layer_num}"
 
-        w1_str = f"{layer_name}.feed_forward.w1.weight"
-        w2_str = f"{layer_name}.feed_forward.w2.weight"
-        w3_str = f"{layer_name}.feed_forward.w3.weight"
+        if load_weights:
+            self.load_weights()
+
+    def free_weights(self):
+        # Free weights
+        for i in range(self.num_devices):
+            self.w1_list[i].deallocate(True)
+            self.w3_list[i].deallocate(True)
+            self.w2_list[i].deallocate(True)
+        del self.w1_list
+        del self.w3_list
+        del self.w2_list
+
+    def load_weights(self):
+        assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"
+        assert not hasattr(self, "w3_list"), "w3_list is already an attribute of this object"
+        assert not hasattr(self, "w2_list"), "w2_list is already an attribute of this object"
+
+        w1_str = f"{self.layer_name}.feed_forward.w1.weight"
+        w2_str = f"{self.layer_name}.feed_forward.w2.weight"
+        w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
         self.w1_list = []
         self.w3_list = []
         self.w2_list = []
 
-        H = 8 * 1024
-        PADDED_H4 = 32 * 1024
-        H4 = 28 * 1024
-        padded_w1 = torch.zeros(H, PADDED_H4)
-        padded_w3 = torch.zeros(H, PADDED_H4)
-        padded_w2 = torch.zeros(PADDED_H4, H)
-        padded_w1[:, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-        padded_w3[:, :H4] = self.state_dict[w3_str].transpose(-2, -1)
-        padded_w2[:H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+        # Test if the all weights have been cached
+        test_cache_path = get_weight_cache_path(self.cache_path, w3_str, self.num_devices - 1, self.num_devices)
+        if test_cache_path.exists():
+            logger.info(f"Loading {self.layer_name} MLP weights from cache")
+            for i in range(self.num_devices):
+                tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
+                self.w1_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["FF1_MM_WEIGHTS_MEMCFG"]
+                    )
+                )
 
-        for i in range(self.num_devices):
-            w1 = torch2tt_tensor(
-                torch.chunk(
-                    padded_w1,
-                    self.num_devices,
-                    dim=-1,
-                )[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["FF1_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FF1_MM_WEIGHTS_DTYPE"],
-            )
-            w3 = torch2tt_tensor(
-                torch.chunk(
-                    padded_w3,
-                    self.num_devices,
-                    dim=-1,
-                )[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["FF2_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FF2_MM_WEIGHTS_DTYPE"],
-            )
-            w2 = torch2tt_tensor(
-                torch.chunk(
-                    padded_w2,
-                    self.num_devices,
-                    dim=-1,
-                )[i],
-                self.devices[i],
-                tt_memory_config=self.model_config["FF3_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=self.model_config["FF3_MM_WEIGHTS_DTYPE"],
-            )
+                tensor_cache_path = get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)
+                self.w2_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["FF2_MM_WEIGHTS_MEMCFG"]
+                    )
+                )
 
-            self.w1_list.append(w1)
-            self.w3_list.append(w3)
-            self.w2_list.append(w2)
+                tensor_cache_path = get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)
+                self.w3_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["FF3_MM_WEIGHTS_MEMCFG"]
+                    )
+                )
+        else:
+            # Do padding
+            H = 8 * 1024
+            PADDED_H4 = 32 * 1024
+            H4 = 28 * 1024
+            padded_w1 = torch.zeros(H, PADDED_H4)
+            padded_w2 = torch.zeros(PADDED_H4, H)
+            padded_w3 = torch.zeros(H, PADDED_H4)
+            padded_w1[:, :H4] = self.state_dict[w1_str].transpose(-2, -1)
+            padded_w2[:H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+            padded_w3[:, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+
+            padded_w1_chunks = torch.chunk(padded_w1, self.num_devices, dim=-1)
+            padded_w2_chunks = torch.chunk(padded_w2, self.num_devices, dim=-1)
+            padded_w3_chunks = torch.chunk(padded_w3, self.num_devices, dim=-1)
+
+            for i in range(self.num_devices):
+                w1_host = torch2tt_tensor(
+                    padded_w1_chunks[i],
+                    None,
+                    tt_memory_config=self.model_config["FF1_MM_WEIGHTS_MEMCFG"],
+                    tt_dtype=self.model_config["FF1_MM_WEIGHTS_DTYPE"],
+                )
+                self.w1_list.append(w1_host.to(self.devices[i], self.model_config["FF1_MM_WEIGHTS_MEMCFG"]))
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)),
+                    w1_host,
+                )
+
+                w2_host = torch2tt_tensor(
+                    padded_w2_chunks[i],
+                    None,
+                    tt_memory_config=self.model_config["FF2_MM_WEIGHTS_MEMCFG"],
+                    tt_dtype=self.model_config["FF2_MM_WEIGHTS_DTYPE"],
+                )
+                self.w2_list.append(w2_host.to(self.devices[i], self.model_config["FF2_MM_WEIGHTS_MEMCFG"]))
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)),
+                    w2_host,
+                )
+
+                w3_host = torch2tt_tensor(
+                    padded_w3_chunks[i],
+                    None,
+                    tt_memory_config=self.model_config["FF3_MM_WEIGHTS_MEMCFG"],
+                    tt_dtype=self.model_config["FF3_MM_WEIGHTS_DTYPE"],
+                )
+                self.w3_list.append(w3_host.to(self.devices[i], self.model_config["FF3_MM_WEIGHTS_MEMCFG"]))
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)),
+                    w3_host,
+                )
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        # FOR BRINGUP! Inputs are interleaved so shard them
-        # x_sharded = [
-        #     tt_lib.tensor.interleaved_to_sharded(t, sharded_mem_config=self.model_config["PADDED_LN_MLP_OUTPUT_MEMCFG"])
-        #     for t in x
-        # ]
-        # x = x_sharded
-
         hidden_states = []
 
         for i in range(len(x)):
@@ -136,7 +183,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
-        # hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
+
         # Put AllGather results in L1
         for i in range(len(hidden_states)):
             hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
@@ -152,11 +199,5 @@ class TtLlamaMLP_optimized(nn.Module):
                 output_dtype=self.model_config["FF2_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
-
-        # FOR BRINGUP! Outputs are sharded. Interleave them
-        # hidden_states = [
-        #     tt_lib.tensor.sharded_to_interleaved(t, output_mem_config=self.model_config["DEFAULT_MEMCFG"])
-        #     for t in hidden_states
-        # ]
 
         return hidden_states

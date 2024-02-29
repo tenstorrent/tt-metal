@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import torch
 from torch import nn
 import tt_lib
@@ -9,12 +10,29 @@ import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 from models.demos.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.demos.llama2_70b.tt.llama_common import tt_all_gather, tt_all_gather_torch
-import time
+from models.demos.llama2_70b.tt.llama_common import (
+    tt_all_gather_torch,
+    generate_rot_emb,
+    gather_rotary_emb,
+    get_weight_cache_path,
+)
 
 
 class TtLlamaDecoder_optimized:
-    def __init__(self, devices, state_dict, base_url, layer_num, model_config, configuration, batch, emulated=False):
+    def __init__(
+        self,
+        devices,
+        state_dict,
+        base_url,
+        layer_num,
+        model_config,
+        configuration,
+        batch,
+        emulated=False,
+        load_weights=True,
+        cache_path=None,
+        kv_cache_dir=None,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -28,33 +46,22 @@ class TtLlamaDecoder_optimized:
         self.model_config = model_config
         self.emulated = emulated
 
-        layer_name = f"{base_url}.{layer_num}"
-
-        attn_norm_str = f"{layer_name}.attention_norm.weight"
-        ffn_norm_str = f"{layer_name}.ffn_norm.weight"
+        self.layer_name = f"{base_url}.{layer_num}"
 
         self.norm_eps = configuration.norm_eps
-
-        self.attn_norm_list = []
-        self.ffn_norm_list = []
-        for i in range(self.num_devices):
-            attn_norm = tt_lib.tensor.Tensor(
-                # Expand to size of input since we decomped norm
-                self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]),
-                self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
-            ).to(devices[i], self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
-
-            ffn_norm = tt_lib.tensor.Tensor(
-                # Expand to size of input since we decomped norm
-                self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32]),
-                self.model_config["LN_MLP_WEIGHTS_DTYPE"],
-            ).to(devices[i], self.model_config["LN_MLP_WEIGHTS_MEMCFG"])
-
-            self.attn_norm_list.append(attn_norm)
-            self.ffn_norm_list.append(ffn_norm)
+        self.cache_path = cache_path
 
         self.attention = TtLlamaAttention_optimized(
-            devices, state_dict, base_url, layer_num, model_config, configuration, emulated=emulated
+            devices,
+            state_dict,
+            base_url,
+            layer_num,
+            model_config,
+            configuration,
+            emulated=emulated,
+            load_weights=load_weights,
+            cache_path=cache_path,
+            kv_cache_dir=kv_cache_dir,
         )
 
         self.mlp = TtLlamaMLP_optimized(
@@ -65,8 +72,95 @@ class TtLlamaDecoder_optimized:
             self.hidden_size,
             model_config,
             emulated=emulated,
+            load_weights=load_weights,
+            cache_path=cache_path,
         )
         self.rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+
+        if load_weights:
+            self.load_weights()
+
+    def load_weights(self):
+        """
+        Loads weights that this layer is responsible for.
+        Doesn't touch the weights of the submodules.
+        """
+        assert not hasattr(self, "attn_norm_list"), "attn_norm_list is already an attribute of this object"
+        assert not hasattr(self, "ffn_norm_list"), "ffn_norm_list is already an attribute of this object"
+        attn_norm_str = f"{self.layer_name}.attention_norm.weight"
+        ffn_norm_str = f"{self.layer_name}.ffn_norm.weight"
+
+        self.attn_norm_list = []
+        self.ffn_norm_list = []
+
+        # TODO: Weight caching!
+        test_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, self.num_devices - 1, self.num_devices)
+        if test_cache_path.exists():
+            logger.info(f"Loading {self.layer_name} DECODER weights from cache")
+
+            for i in range(self.num_devices):
+                tensor_cache_path = get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)
+                self.attn_norm_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["LN_ATTN_WEIGHTS_MEMCFG"]
+                    )
+                )
+
+                tensor_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)
+                self.ffn_norm_list.append(
+                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        self.devices[i], self.model_config["LN_MLP_WEIGHTS_MEMCFG"]
+                    )
+                )
+        else:
+            for i in range(self.num_devices):
+                attn_norm_host = tt_lib.tensor.Tensor(
+                    # Expand to size of input since we decomped norm
+                    self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]),
+                    self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
+                )
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)), attn_norm_host
+                )
+                self.attn_norm_list.append(
+                    attn_norm_host.to(self.devices[i], self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
+                )
+
+                ffn_norm_host = tt_lib.tensor.Tensor(
+                    # Expand to size of input since we decomped norm
+                    self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32]),
+                    self.model_config["LN_MLP_WEIGHTS_DTYPE"],
+                )
+                tt_lib.tensor.dump_tensor(
+                    str(get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)), ffn_norm_host
+                )
+                self.ffn_norm_list.append(ffn_norm_host.to(self.devices[i], self.model_config["LN_MLP_WEIGHTS_MEMCFG"]))
+
+    def free_weights(self):
+        for i in range(self.num_devices):
+            self.attn_norm_list[i].deallocate()
+            self.ffn_norm_list[i].deallocate()
+        del self.attn_norm_list
+        del self.ffn_norm_list
+
+    def free_layer(self):
+        # All epilogue logic
+        self.attention.save_state()
+        self.attention.free_weights()
+        self.mlp.free_weights()
+
+        # Free this layer's weights (RMS norms)
+        self.free_weights()
+
+    def load_layer(self):
+        # All weight loading logic
+        ## Load weights
+        self.attention.load_weights()
+        self.attention.load_state()
+        self.mlp.load_weights()
+
+        # Load this layer's weights (RMS norms)
+        self.load_weights()
 
     def prepare_inputs(self, x, start_pos):
         # Only called by decoder tests
