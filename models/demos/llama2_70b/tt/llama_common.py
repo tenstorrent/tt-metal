@@ -4,6 +4,10 @@ import tt_lib
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 
+def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices):
+    return base_cache_path / f"{tensor_str}_{device_idx}_{num_devices}.bin"
+
+
 def rms_decomp(x, norm_weight, eps):
     squared = tt_lib.tensor.pow(x, 2)
     # mean_squared = tt_lib.tensor.mean(squared, )
