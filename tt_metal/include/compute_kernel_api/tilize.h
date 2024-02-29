@@ -40,11 +40,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 /**
  * Initialize the tilize operation. To be called once at beginning of a kernel.
  */
-ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb = 16)
+ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb = 16, uint32_t num_faces = 4)
 {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler) ));
-    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1_scaler, block) ));
+    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1_scaler, block, num_faces) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<SYNC>() ));
