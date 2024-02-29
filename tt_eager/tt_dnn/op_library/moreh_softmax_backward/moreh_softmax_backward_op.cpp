@@ -35,9 +35,8 @@ void MorehSoftmaxBackward::validate_with_output_tensors(const std::vector<Tensor
     // validate parameters
     TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
 
-    if(output_tensors.empty() && output_tensors.at(0).has_value()) {
+    if(output_tensors.empty() || !output_tensors.at(0).has_value()){
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
-        TT_ASSERT(input_tensors.size() == 3, "Must have 3 input tensors");
         return;
     }
     TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
