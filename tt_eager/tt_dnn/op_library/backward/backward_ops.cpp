@@ -1207,6 +1207,17 @@ std::vector<Tensor> rad2deg_bw(const Tensor& grad, const Tensor& input, const Me
     return operation::decorate_as_composite(__func__, _rad2deg_bw)(grad, input, output_mem_config);
 }
 
+std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = mul(neg(grad, output_mem_config), recip(square(input, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> reciprocal_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _reciprocal_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
