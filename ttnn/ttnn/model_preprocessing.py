@@ -370,18 +370,19 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: ParameterDict) 
             raise RuntimeError(f"Unsupported type: {type(value)}")
 
 
-def move_to_device(parameters, device):
-    for name, value in list(parameters.items()):
-        if isinstance(value, ParameterDict):
-            parameters[name] = move_to_device(value, device)
-        elif isinstance(value, ParameterList):
-            for index, element in enumerate(value):
-                parameters[name][index] = move_to_device(element, device)
-        elif isinstance(value, ttnn.Tensor):
-            parameters[name] = ttnn.to_device(value, device)
-        else:
-            parameters[name] = value
-    return parameters
+def move_to_device(object, device):
+    if isinstance(object, ParameterDict):
+        for name, value in list(object.items()):
+            object[name] = move_to_device(value, device)
+        return object
+    elif isinstance(object, ParameterList):
+        for index, element in enumerate(object):
+            object[index] = move_to_device(element, device)
+        return object
+    elif isinstance(object, ttnn.Tensor):
+        return ttnn.to_device(object, device)
+    else:
+        return object
 
 
 def git_hash():
@@ -521,7 +522,7 @@ def preprocess_model(
     custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]] = None,
     device: Optional[ttnn.Device] = None,
     prefix: str = "",
-    run_model: Optional[Callable],
+    run_model: Optional[Callable] = None,
     reader_patterns_cache: Optional[dict] = None,
 ) -> ParameterDict:
     """
@@ -546,7 +547,17 @@ def preprocess_model(
         reader_patterns_cache = {}
 
     if model_name is None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
-        logger.warning("ttnn: model cache can be enabled using TTNN_ENABLE_MODEL_CACHE=True")
+        logger.warning(
+            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_ENABLE_MODEL_CACHE=True"
+        )
+
+    elif model_name is None and ttnn.TTNN_ENABLE_MODEL_CACHE:
+        logger.warning(
+            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters]"
+        )
+
+    elif model_name is not None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
+        logger.warning("ttnn: model cache can be enabled by setting env variable TTNN_ENABLE_MODEL_CACHE=True")
 
     if convert_to_ttnn is None:
 
