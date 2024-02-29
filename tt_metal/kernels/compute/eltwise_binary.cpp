@@ -5,12 +5,15 @@
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api.h"
+#include "debug/dprint.h"  // required in all kernels using DPRINT
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 namespace NAMESPACE {
+
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
@@ -30,6 +33,8 @@ void MAIN {
         constexpr auto cb_inp1 = cb_in1;
     #endif
     constexpr auto cb_out0 =  tt::CB::c_out0;
+
+    int num_dbg_regs_to_print = 1;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
@@ -122,19 +127,36 @@ void MAIN {
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
-
-            #ifdef SFPU_OP_INIT_0
-            SFPU_OP_INIT_0
-            SFPU_OP_FUNC_0
-            #endif
-
-            #ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
-            #endif
         }
+
+        if (num_dbg_regs_to_print > 0) {
+            dbg_halt();
+            MATH({
+                uint32_t rd_data[8];
+                dbg_thread_dump_srca_row(0, rd_data);
+                for (int j = 0; j < 8; j++) {
+                    DPRINT_MATH(DPRINT << "Src A row " << j << " = 0x" << HEX() << rd_data[j] << ENDL());
+                }
+
+                dbg_thread_dump_srcb_row(0, rd_data);
+                for (int j = 0; j < 8; j++) {
+                    DPRINT_MATH(DPRINT << "Src B row " << j << " = 0x" << HEX() << rd_data[j] << ENDL());
+                }
+
+                dbg_thread_dump_dest_acc_row(0, rd_data);
+                for (int j = 0; j < 8; j++) {
+                    DPRINT_MATH(DPRINT << "Dest row " << j << " = 0x" << HEX() << rd_data[j] << ENDL());
+                }
+                })
+            dbg_unhalt();
+            num_dbg_regs_to_print--;
+        }
+
         tile_regs_commit();
 
         tile_regs_wait();
+
+
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             pack_tile(i, cb_out0);
