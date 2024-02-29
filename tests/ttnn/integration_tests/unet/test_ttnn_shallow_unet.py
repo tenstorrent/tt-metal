@@ -63,9 +63,9 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c2_2["conv_blocking_and_parallelization_config_override"] = None
 
         ttnn_module_args.c3["math_fidelity"] = ttnn.MathFidelity.LoFi
-        ttnn_module_args.c3["use_shallow_conv_variant"] = True
+        ttnn_module_args.c3["use_shallow_conv_variant"] = False
         ttnn_module_args.c3_2["math_fidelity"] = ttnn.MathFidelity.LoFi
-        ttnn_module_args.c3_2["use_shallow_conv_variant"] = True
+        ttnn_module_args.c3_2["use_shallow_conv_variant"] = False
         ttnn_module_args.c3["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c3_2["dtype"] = ttnn.bfloat8_b
         ttnn_module_args.c3["weights_dtype"] = ttnn.bfloat8_b
@@ -265,8 +265,15 @@ def custom_preprocessor(model, name, ttnn_module_args):
             "grid_size": (c3_parallel_config.grid_size.x, c3_parallel_config.grid_size.y),
             "num_cores_nhw": c3_parallel_config.num_cores_nhw,
         }
-        parameters["c4"] = preprocess_conv2d(conv4_weight, conv4_bias, ttnn_module_args.c4)
+        parameters["c4"], c4_parallel_config = preprocess_conv2d(
+            conv4_weight, conv4_bias, ttnn_module_args.c4, return_parallel_config=True
+        )
         parameters["c4_2"] = preprocess_conv2d(conv4_2_weight, conv4_2_bias, ttnn_module_args.c4_2)
+        parameters["p4"] = {}
+        ttnn_module_args.p4["parallel_config_override"] = {
+            "grid_size": (c4_parallel_config.grid_size.x, c4_parallel_config.grid_size.y),
+            "num_cores_nhw": c4_parallel_config.num_cores_nhw,
+        }
         parameters["bnc"] = preprocess_conv2d(convbn_weight, convbn_bias, ttnn_module_args.bnc)
         parameters["bnc_2"] = preprocess_conv2d(convbn_2_weight, convbn_2_bias, ttnn_module_args.bnc_2)
         parameters["c5"] = preprocess_conv2d(conv5_weight, conv5_bias, ttnn_module_args.c5)
