@@ -1451,7 +1451,7 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
         // Tiled output shape is padded shape. Padded to tile shape.
         auto shape_w = conv_output_h*conv_output_w;
         auto shape_c = output_channels;
-        auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
+        auto padded_shape_w = round_up(shape_w, 1);
         auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
         auto output_padding = Padding({{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Any);
         auto output_tensor_shape = Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding);

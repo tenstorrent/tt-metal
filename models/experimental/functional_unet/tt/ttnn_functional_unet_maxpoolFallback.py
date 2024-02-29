@@ -105,20 +105,11 @@ class UNet:
         output_tensor = self.c4(output_tensor)
         output_tensor = self.c4_2(output_tensor)
         save_c4_2_out = output_tensor
+        output_tensor = self.p4(output_tensor)
 
-        if False:
-            output_tensor = self.p4(output_tensor)
-        else:
-            output_tensor = self.c4_2.copy_output_from_device(output_tensor)
-            output_tensor = ttnn.to_torch(output_tensor)
-            output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-            output_tensor = output_tensor.to(torch_input_tensor.dtype)
-
-            output_tensor = torch.nn.functional.max_pool2d(output_tensor, kernel_size=2, stride=2)
-            output_tensor = torch.permute(output_tensor, (0, 2, 3, 1))
-            output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat16)
-            output_tensor = self.bnc.copy_input_to_device(output_tensor)
-
+        output_tensor = unet_reshard(
+            output_tensor, self.bnc.get_expected_memory_config(output_tensor.shape), use_reshard=False
+        )
         output_tensor = self.bnc(output_tensor)
         output_tensor = self.bnc_2(output_tensor)
 

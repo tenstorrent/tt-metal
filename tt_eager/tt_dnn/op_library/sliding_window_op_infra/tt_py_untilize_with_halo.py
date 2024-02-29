@@ -19,6 +19,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
 import tt_lib as ttl
 import torch
 import struct
+import math
 
 
 class TTPyUntilizeWithHalo(TTPyOp):
@@ -77,7 +78,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             * self.sliding_window_op_params.input_h
             * self.sliding_window_op_params.input_w
         ), f"{shape} {self.sliding_window_op_params}"
-        assert (shape[0] * shape[1] * shape[2]) % self.sliding_window_op_params.num_cores_nhw == 0
+        # assert (shape[0] * shape[1] * shape[2]) % self.sliding_window_op_params.num_cores_nhw == 0
         block_sharding = self.sliding_window_op_params.num_cores_nhw == self.sliding_window_op_params.num_cores_w
         logical_grid_y = self.sliding_window_op_params.num_cores_h if block_sharding else 1
         assert shape[3] % logical_grid_y == 0
@@ -86,7 +87,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             self.sliding_window_op_params.num_cores_nhw,
         )
         shard_shape = [
-            (shape[0] * shape[1] * shape[2]) // self.sliding_window_op_params.num_cores_nhw,
+            math.ceil((shape[0] * shape[1] * shape[2]) / self.sliding_window_op_params.num_cores_nhw),
             shape[3] // logical_grid_y,
         ]
         shard_orientation = (

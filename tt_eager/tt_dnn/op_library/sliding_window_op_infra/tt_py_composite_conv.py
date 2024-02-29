@@ -554,6 +554,7 @@ class TTPyCompositeConv(TTPyOp):
             )
 
     def get_expected_memory_config(self, shape: list):
+        shape = [self.conv_output_shape[0], 1, self.conv_output_shape[1] * self.conv_output_shape[2], shape[3]]
         return (
             None if self.use_matmul_for_1x1_conv else self.tt_py_untilize_with_halo_op.get_expected_memory_config(shape)
         )
