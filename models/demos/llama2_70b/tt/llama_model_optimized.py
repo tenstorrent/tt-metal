@@ -12,7 +12,20 @@ from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rot
 
 
 class TtLlamaModel_optimized(nn.Module):
-    def __init__(self, devices, state_dict, base_url, n_layers, model_config, configuration, batch, emulated=False):
+    def __init__(
+        self,
+        devices,
+        state_dict,
+        base_url,
+        n_layers,
+        model_config,
+        configuration,
+        batch,
+        emulated=False,
+        n_layers_per_group=None,
+        cache_path=None,
+        start_layer_idx=0,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -56,7 +69,7 @@ class TtLlamaModel_optimized(nn.Module):
                 devices,
                 state_dict,
                 base_url,
-                i,
+                start_layer_idx + i,
                 model_config,
                 configuration,
                 batch,

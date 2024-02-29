@@ -27,6 +27,7 @@ class ModelArgs:
 
     max_batch_size: int = 32
     max_seq_len: int = 2048
+    start_layer_idx: int = 0
 
 
 class RMSNorm(torch.nn.Module):
@@ -441,6 +442,9 @@ class Transformer(nn.Module):
 
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
+            if params.start_layer_idx:
+                # Allow loading from layer N onwards
+                layer_id += params.start_layer_idx
             self.layers.append(TransformerBlock(layer_id, params))
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
