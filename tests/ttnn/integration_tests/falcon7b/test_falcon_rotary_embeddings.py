@@ -12,7 +12,6 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import comp_pcc, divup
-import tt_lib as ttl
 import ttnn
 
 torch.manual_seed(0)
@@ -25,7 +24,7 @@ def torch_functional_rotate_half(x):
 
 
 def ttnn_functional_rotate_half(x):
-    return ttnn.ttl.tensor.rotate_half(x)
+    return ttnn.experimental.tensor.rotate_half(x)
 
 
 def torch_functional_apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
@@ -99,7 +98,7 @@ def test_ttnn_functional_apply_rotary_embeddings(
     device_cost = ttnn.from_torch(cos_cached, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     device_sint = ttnn.from_torch(sin_cached, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    device_output = ttnn.ttl.tensor.rotary_embedding(device_input, device_cost, device_sint)
+    device_output = ttnn.experimental.tensor.rotary_embedding(device_input, device_cost, device_sint)
     torch_device_output = ttnn.to_torch(device_output)
 
     p, o = comp_pcc(pt_out, torch_device_output)
