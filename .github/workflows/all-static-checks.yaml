@@ -37,17 +37,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Install clang-format
         run: sudo apt-get install -y clang-format
       - name: Fetch merge target
-        if: ${{ github.ref != 'refs/heads/main' }}
+        if: ${{ github.event_name == 'pull_request' && github.ref != 'refs/heads/main' }}
         run: git fetch origin $GITHUB_BASE_REF --depth=1
       - name: Run formatter
-        if: ${{ github.ref != 'refs/heads/main' }}
+        if: ${{ github.event_name == 'pull_request' && github.ref != 'refs/heads/main' }}
         run: BASE_COMMIT_SHA=origin/$GITHUB_BASE_REF scripts/lint_clang_format.sh -m diff
       - name: Run formatter against previous commit (main only)
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: BASE_COMMIT_SHA=${{ github.event.before }} scripts/lint_clang_format.sh -m diff
   check-doc:
     runs-on: ubuntu-latest
