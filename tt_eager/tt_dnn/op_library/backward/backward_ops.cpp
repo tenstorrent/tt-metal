@@ -898,6 +898,32 @@ std::vector<Tensor> atanh_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _atanh_bw)(grad, input, output_mem_config);
 }
 
+// Asin
+// result: grad * (-self * self + 1).rsqrt()
+std::vector<Tensor> _asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = mul(grad, rsqrt(add1(neg(square(grad, output_mem_config), output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> asin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _asin_bw)(grad, input, output_mem_config);
+}
+
+// Asinh
+// result: grad * (self * self + 1).rsqrt()
+std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = mul(grad, rsqrt(add1(square(input, output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _asinh_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
