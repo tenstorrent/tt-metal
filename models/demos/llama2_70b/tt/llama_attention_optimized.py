@@ -57,14 +57,14 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
         self.layer_name = f"{base_url}.{layer_num}"
 
-        if load_weights:
-            self.load_weights()
-            self.init_kv_cache()
-
         self.cache_path = cache_path
         self.kv_cache_dir = kv_cache_dir
         self.k_cache_stem = f"{self.layer_name}.attention.k_cache"
         self.v_cache_stem = f"{self.layer_name}.attention.v_cache"
+
+        if load_weights:
+            self.load_weights()
+            self.init_kv_cache()
 
     def init_kv_cache(self):
         """
@@ -252,7 +252,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                     w0_chunks[i],
                     None,
                     tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
-                    tt_dtype=self.model_config["DEFAULT_DTYPE"],
+                    tt_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
                 )
                 self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DEFAULT_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(

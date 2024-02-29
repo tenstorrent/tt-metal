@@ -43,14 +43,17 @@ SPECIAL_TAGS = [B_INST, E_INST, "<<SYS>>", "<</SYS>>"]
 UNSAFE_ERROR = "Error: special tags are not allowed as part of the prompt."
 
 
-def load_chunked_checkpoints(checkpoints, n_layers):
+def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     checkpoint = {}
+
     print(f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
         # Layer range is in the file name, like layers_start-end.pth
         layer_range = ckpt.stem.split("_")[1]
         start_layer, end_layer = map(int, layer_range.split("-"))
-        if start_layer > n_layers:
+        if start_layer > n_layers + start_layer_idx:
+            continue
+        if end_layer < start_layer_idx:
             continue
 
         loaded_ckpt = torch.load(ckpt, map_location="cpu")
@@ -100,6 +103,7 @@ class Llama:
         seed: int = 1,
         skip_model_load=False,
         n_layers=None,
+        start_layer_idx=0,
     ) -> "Llama":
         """
         Build a Llama instance by initializing and loading a pre-trained model.
@@ -134,6 +138,7 @@ class Llama:
 
         if n_layers is not None:
             params["n_layers"] = n_layers
+            params["start_layer_idx"] = start_layer_idx
         else:
             n_layers = params["n_layers"]
 
@@ -144,7 +149,7 @@ class Llama:
 
             is_chunked = "layers_" in str(checkpoints[0])
             if is_chunked:
-                checkpoint = load_chunked_checkpoints(checkpoints, n_layers)
+                checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
             else:
                 checkpoint = load_sharded_checkpionts(checkpoints, n_layers)
 

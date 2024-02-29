@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import torch
 import pytest
 from loguru import logger
@@ -51,31 +52,69 @@ def run_cache_model(
         tokenizer_path = "/home/llama-data/tokenizer.model"
 
     max_seq_len = 4096
-    hugging_face_reference_model = Llama.build(
-        ckpt_dir,
-        tokenizer_path,
-        max_seq_len=max_seq_len,
-        max_batch_size=batch,
-        n_layers=n_layers,
-        skip_model_load=False,
-    ).model
-    hugging_face_reference_model.eval()
-    state_dict = hugging_face_reference_model.state_dict()
-    print(state_dict.keys())
 
-    torch.manual_seed(0)
-    base_url = "layers"
-    configuration = hugging_face_reference_model.params
-    n_heads = configuration.n_heads
-    n_kv_heads = configuration.n_kv_heads
-    hidden_dim = configuration.dim
-    head_dim = hidden_dim // n_heads
+    layer_group_size = 4
+    n_layers = 80
 
-    CACHE_PATH = Path("/home/llama-data-cache/weights-cache")
-    # TT model -------------------------------------------------------------
-    tt_model = TtLlamaModel_optimized(
-        devices, state_dict, base_url, n_layers, model_config, configuration, batch, cache_path=CACHE_PATH
-    )
+    for start_layer_idx in range(0, n_layers, layer_group_size):
+        hugging_face_reference_model = Llama.build(
+            ckpt_dir,
+            tokenizer_path,
+            max_seq_len=max_seq_len,
+            max_batch_size=batch,
+            n_layers=layer_group_size,
+            skip_model_load=False,
+            start_layer_idx=start_layer_idx,
+        ).model
+        hugging_face_reference_model.eval()
+        state_dict = hugging_face_reference_model.state_dict()
+        print(state_dict.keys())
+
+        new_state_dict = {
+            ".".join([k.split(".")[0], str(start_layer_idx + int(k.split(".")[1]))] + k.split(".")[2:])
+            if "layers" in k
+            else k: v
+            for k, v in state_dict.items()
+        }
+
+        print(new_state_dict.keys())
+
+        torch.manual_seed(0)
+        base_url = "layers"
+        configuration = hugging_face_reference_model.params
+        n_heads = configuration.n_heads
+        n_kv_heads = configuration.n_kv_heads
+        hidden_dim = configuration.dim
+        head_dim = hidden_dim // n_heads
+
+        CACHE_PATH = Path("/home/llama-data-cache/weights-cache")
+        # TT model -------------------------------------------------------------
+        # Create TT model which caches weights as it inits
+        tt_model = TtLlamaModel_optimized(
+            devices,
+            new_state_dict,
+            base_url,
+            layer_group_size,
+            model_config,
+            configuration,
+            batch,
+            cache_path=CACHE_PATH,
+            emulated=emulated,
+            start_layer_idx=start_layer_idx,
+        )
+
+        for device in devices:
+            tt_lib.device.Synchronize(device)
+
+        # Free up all space on device
+        tt_model.free_layers(start_layer_idx, layer_group_size)
+
+        del hugging_face_reference_model
+        del state_dict
+        del new_state_dict
+        del tt_model
+
+        gc.collect()
 
 
 @pytest.mark.parametrize(
