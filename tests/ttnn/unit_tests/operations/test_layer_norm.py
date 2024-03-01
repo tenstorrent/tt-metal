@@ -12,7 +12,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_layer_norm(device, h, w):
@@ -30,7 +29,6 @@ def test_layer_norm(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_layer_norm_with_weight_and_bias(device, h, w):
@@ -56,7 +54,6 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
@@ -83,7 +80,6 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [2])
 @pytest.mark.parametrize("w", [512])
 def test_layer_norm_with_tile_layout(device, h, w):

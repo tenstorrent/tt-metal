@@ -13,7 +13,6 @@ from models.utility_functions import skip_for_wormhole_b0
 from models.utility_functions import torch_random
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -35,7 +34,6 @@ def test_softmax(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
-@skip_for_wormhole_b0()
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)
@@ -49,7 +47,6 @@ def test_softmax_with_3D(device):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
-@skip_for_wormhole_b0()
 def test_softmax_with_padded_tile_layout(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 2, 2), -10, 10, dtype=torch.bfloat16)
@@ -66,7 +63,6 @@ def test_softmax_with_padded_tile_layout(device):
 
 
 @pytest.mark.skip(reason="#4629: softmax pcc at 0.948 when comparing to torch")
-@skip_for_wormhole_b0()
 def test_specific_tensor_combination(device):
     current_dir = os.path.dirname(os.path.realpath(__file__))
     tensor_file = os.path.join(current_dir, "softmax_weights.pt")
