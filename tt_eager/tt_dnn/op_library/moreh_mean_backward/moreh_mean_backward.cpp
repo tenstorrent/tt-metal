@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
     if (ht_need_bcast) num_dim *= input_grad_origin_h;
     if (wt_need_bcast) num_dim *= input_grad_origin_w;
 
-    log_info(LogOp, "num_dim {}", num_dim);
+    log_debug(LogOp, "num_dim {}", num_dim);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup

@@ -105,11 +105,11 @@ int main(int argc, char** argv) {
     bool pass = true;
 
     pass &= test_calculate_line_segment_overlap_in_1d();
-    printf("test_calculate_line_segment_overlap_in_1d - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_calculate_line_segment_overlap_in_1d - {}", pass);
 
     pass &= test_calculate_nd_tensor_overlap();
-    printf("test_calculate_nd_tensor_overlap - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_calculate_nd_tensor_overlap - {}", pass);
 
-    if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
-    else cout << "TESTS FAILED\n\n\n" << endl;
+    if (pass == true) tt::log_debug(tt::LogDTX, "TESTS PASSED");
+    else tt::log_error(tt::LogDTX, "TESTS FAILED");
 }

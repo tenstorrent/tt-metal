@@ -103,7 +103,7 @@ def test_moreh_clip_grad_norm(
         pass_total_norm, out_total_norm = comp_allclose_and_pcc(
             actual_total_norm.double(), expected_total_norm.double(), rtol=rtol, atol=atol
         )
-        logger.info(f"total_norm's {out_total_norm}")
+        logger.debug(f"total_norm's {out_total_norm}")
         assert pass_total_norm
 
         # Check inputs
@@ -111,7 +111,7 @@ def test_moreh_clip_grad_norm(
             expected_input_i = cpu_inputs[i].grad.double()
             actual_input_i = to_cpu(npu_inputs[i], input_shapes[i]).double()
             pass_input_i, out_input_i = comp_allclose_and_pcc(expected_input_i, actual_input_i, rtol=rtol, atol=atol)
-            logger.info(f"inputs[{i}]-shape[{input_shapes[i]}]'s {out_input_i}")
+            logger.debug(f"inputs[{i}]-shape[{input_shapes[i]}]'s {out_input_i}")
             assert pass_input_i
 
 

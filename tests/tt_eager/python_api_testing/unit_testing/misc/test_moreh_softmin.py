@@ -47,7 +47,7 @@ def test_softmin_for_dim_hw(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -86,7 +86,7 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -127,7 +127,7 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -167,7 +167,7 @@ def test_softmin_for_dim_nc(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -215,7 +215,7 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -262,7 +262,7 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -317,7 +317,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 
@@ -373,7 +373,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
+    logger.debug(out)
     assert passing
 
 

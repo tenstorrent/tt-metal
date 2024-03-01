@@ -62,11 +62,9 @@ int main(int argc, char **argv) {
             address_map.push_back(transfer->dst_address*2);
             address_map.push_back(transfer->size*2);
         }
-        std::cout << "Address Map - " << std::endl;
+        tt::log_debug(tt::LogDTX, "Address Map - {}", address_map);
         for(auto i = 0; i < address_map.size(); i+=3) {
-            std::cout << "Source address - " << address_map[i];
-            std::cout << ", Destination address - " << address_map[i+1];
-            std::cout << ", Size to transfer in bytes - " << address_map[i+2] << std::endl;
+            tt::log_debug(tt::LogDTX, "Source address - {} , Destination address - {} , Size to transfer in bytes - {}", address_map[i], address_map[i+1], address_map[i+2]);
         }
         tt_metal::Program program = tt_metal::CreateProgram();
 

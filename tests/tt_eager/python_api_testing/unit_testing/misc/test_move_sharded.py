@@ -107,7 +107,7 @@ def run_move_op(shape, device):
     pyt_got_back_rm = tt_host_rm.to_torch()
 
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm, torch_tensor, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc

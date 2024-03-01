@@ -118,8 +118,8 @@ def test_moreh_mean_dims(input_shape, dims, use_randint, device):
     else:
         passing, output_pcc = comp_pcc(torch_output, tt_output_cpu, pcc=0.999)
 
-    logger.info(f"Out passing={passing}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing
 
@@ -196,7 +196,7 @@ def test_moreh_mean_backward(input_shape, dims, use_randint, device):
     else:
         passing, output_pcc = comp_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999)
 
-    logger.info(f"Out passing={passing}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing

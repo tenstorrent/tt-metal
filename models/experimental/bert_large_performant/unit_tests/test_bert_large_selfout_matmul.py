@@ -89,8 +89,8 @@ def run_bert_large_selfout_matmul_test(device, dtype, in0_mem_config, in1_mem_co
     if bias_mem_config is not None:
         ref_bmm = ref_bmm + BIAS
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 

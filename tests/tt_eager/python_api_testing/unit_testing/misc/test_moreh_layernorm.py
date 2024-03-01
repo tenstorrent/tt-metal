@@ -271,7 +271,7 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
     pass_output, out_output = comp_allclose_and_pcc(
         expected_output, actual_output, rtol=rtol, atol=atol, pcc=output_pcc
     )
-    logger.info(f"output's {out_output}")
+    logger.debug(f"output's {out_output}")
     assert pass_output
 
     # Set rtol and atol and pcc for mean and rstd
@@ -284,11 +284,11 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
 
     # Check mean and rstd
     pass_mean, out_mean = comp_allclose_and_pcc(expected_mean, actual_mean, rtol=rtol, atol=atol, pcc=mean_pcc)
-    logger.info(f"mean's {out_mean}")
+    logger.debug(f"mean's {out_mean}")
     assert pass_mean
 
     pass_rstd, out_rstd = comp_allclose_and_pcc(expected_rstd, actual_rstd, rtol=rtol, atol=atol, pcc=rstd_pcc)
-    logger.info(f"rstd's {out_rstd}")
+    logger.debug(f"rstd's {out_rstd}")
     assert pass_rstd
 
 
@@ -337,7 +337,7 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affi
 
     # Check input_grad
     pig, oig = comp_allclose_and_pcc(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol, pcc=pcc)
-    logger.info(f"input_grad's {oig}")
+    logger.debug(f"input_grad's {oig}")
     assert pig
 
     # I divide gamma_grad and beta_grad by (N * C * Ht * Wt), because the error of bf16 sum increases.
@@ -351,7 +351,7 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affi
         pgg, ogg = comp_allclose_and_pcc(
             expected_gamma_grad / numerator, actual_gamma_grad / numerator, rtol=rtol, atol=atol, pcc=pcc
         )
-        logger.info(f"gamma_grad's {ogg}")
+        logger.debug(f"gamma_grad's {ogg}")
         assert pgg
     else:
         assert actual_gamma_grad is None
@@ -361,7 +361,7 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affi
         pbg, obg = comp_allclose_and_pcc(
             expected_beta_grad / numerator, actual_beta_grad / numerator, rtol=rtol, atol=atol, pcc=pcc
         )
-        logger.info(f"beta_grad's {obg}")
+        logger.debug(f"beta_grad's {obg}")
         assert pbg
     else:
         assert actual_beta_grad is None
