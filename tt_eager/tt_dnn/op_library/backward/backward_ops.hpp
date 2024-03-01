@@ -155,6 +155,8 @@ std::vector<Tensor> acos_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> leaky_relu_bw(const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> hardtanh_bw(const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
