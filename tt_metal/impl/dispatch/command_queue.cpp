@@ -424,7 +424,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     command.set_num_pages(DeviceCommand::TransferType::GO_SIGNALS_MULTICAST, num_go_signal_multicast_pages);
     command.set_num_pages(DeviceCommand::TransferType::GO_SIGNALS_UNICAST, num_go_signal_unicast_pages);
     command.set_num_pages(total_num_pages);
-    // std::cout << "Total number of program pages " << total_num_pages << std::endl;
     command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
 
     command.set_issue_data_size(DeviceCommand::PROGRAM_PAGE_SIZE * num_host_data_pages);
@@ -504,8 +503,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
         command.set_router_cb_size(router_cb_size);
         command.set_router_transfer_num_pages(router_transfer_num_pages);
 
-        // std::cout << "Enqueue Program - router cb num pages: " << router_cb_num_pages << " router cb size " << router_cb_size << " router tx num pages " << router_transfer_num_pages << std::endl;
-
         push_and_pull_cb_num_pages = router_cb_num_pages * producer_consumer_multiple / 2 * 2;
     } else {
         uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false) / 2 * 2;
@@ -517,13 +514,10 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     command.set_pull_and_push_cb_size(push_and_pull_cb_size);
     command.set_pull_and_push_cb_num_pages(push_and_pull_cb_num_pages);
 
-    // std::cout << "Enqueue Program - push n pull cb size: " << push_and_pull_cb_size << " push n pull num pages " << push_and_pull_cb_num_pages << std::endl;
-
     // Should only ever be set if we are
     // enqueueing a program immediately
     // after writing it to a buffer
     if (this->stall) {
-        std::cout << "setting stall!" << std::endl;
         command.set_stall();
     }
 
@@ -1097,7 +1091,6 @@ void HWCommandQueue::read_completion_queue() {
                 uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
                 uint32_t read_toggle = this->manager.get_completion_queue_read_toggle(this->id);
                 tt::Cluster::instance().read_sysmem(&event, 4, read_ptr, mmio_device_id, channel);
-                // std::cout << "EVENT READBACK " << event << std::endl;
 
                 if (this->issued_completion_wraps.count(event)) {
                     this->manager.wrap_completion_queue_rd_ptr(this->id);
