@@ -994,6 +994,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.reciprocal_bw
 
+.. autofunction:: tt_lib.tensor.relu6_bw
+
 Loss Functions
 ==============
 
