@@ -916,8 +916,6 @@ std::vector<Tensor> asin_bw(const Tensor& grad, const Tensor& input, const Memor
 std::vector<Tensor> _asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = mul(grad, rsqrt(add1(square(input, output_mem_config), output_mem_config), true, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
 }
 std::vector<Tensor> asinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
 {
