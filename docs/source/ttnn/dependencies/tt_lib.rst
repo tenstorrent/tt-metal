@@ -996,6 +996,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.relu6_bw
 
+.. autofunction:: tt_lib.tensor.rpow_bw
+
 Loss Functions
 ==============
 
