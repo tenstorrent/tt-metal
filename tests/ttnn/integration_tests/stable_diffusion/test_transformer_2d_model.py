@@ -180,7 +180,7 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.randn(encoder_hidden_states)
 
-    load_from_disk = True
+    load_from_disk = False
     if not load_from_disk:
         pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
         unet = pipe.unet
