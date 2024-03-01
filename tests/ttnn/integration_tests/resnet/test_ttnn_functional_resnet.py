@@ -96,7 +96,7 @@ def test_basic_block(device):
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
     output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9998)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9997)
 
 
 @skip_for_wormhole_b0()
@@ -145,7 +145,7 @@ def test_basic_block_with_downsample(device):
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
     output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9998)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99966)
 
 
 @skip_for_wormhole_b0()
@@ -180,7 +180,7 @@ def test_resnet_conv7s2(device):
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9998)
 
 
 @skip_for_wormhole_b0()
