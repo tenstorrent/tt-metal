@@ -84,10 +84,16 @@ void issue_queue_wait_front() {
     uint32_t issue_write_ptr_and_toggle;
     uint32_t issue_write_ptr;
     uint32_t issue_write_toggle;
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
     do {
         issue_write_ptr_and_toggle = *get_cq_issue_write_ptr();
         issue_write_ptr = issue_write_ptr_and_toggle & 0x7fffffff;
         issue_write_toggle = issue_write_ptr_and_toggle >> 31;
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
     } while (cq_read_interface.issue_fifo_rd_ptr == issue_write_ptr and cq_read_interface.issue_fifo_rd_toggle == issue_write_toggle);
     DEBUG_STATUS('N', 'Q', 'D');
 }
