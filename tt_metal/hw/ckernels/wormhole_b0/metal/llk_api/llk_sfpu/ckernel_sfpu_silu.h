@@ -38,11 +38,5 @@ inline void calculate_silu()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void silu_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

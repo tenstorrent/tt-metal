@@ -29,11 +29,5 @@ inline void calculate_max()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void max_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

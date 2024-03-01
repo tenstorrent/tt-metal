@@ -23,7 +23,7 @@ inline void llk_math_eltwise_unary_sfpu_eqz(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_eqz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROXIMATE>();
 }
 
 //NEZ
@@ -37,7 +37,7 @@ inline void llk_math_eltwise_unary_sfpu_nez(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_nez_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::not_equal_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::not_equal_zero, APPROXIMATE>();
 }
 
 //LTZ
@@ -51,7 +51,7 @@ inline void llk_math_eltwise_unary_sfpu_ltz(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_ltz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_zero, APPROXIMATE>();
 }
 
 //GTZ
@@ -65,7 +65,7 @@ inline void llk_math_eltwise_unary_sfpu_gtz(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gtz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_zero, APPROXIMATE>();
 }
 
 //LEZ
@@ -79,7 +79,7 @@ inline void llk_math_eltwise_unary_sfpu_lez(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lez_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_equal_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_equal_zero, APPROXIMATE>();
 }
 
 //GEZ
@@ -93,7 +93,7 @@ inline void llk_math_eltwise_unary_sfpu_gez(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gez_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_equal_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_equal_zero, APPROXIMATE>();
 }
 
 }

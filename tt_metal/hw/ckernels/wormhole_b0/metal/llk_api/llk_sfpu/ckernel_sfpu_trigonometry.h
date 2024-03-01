@@ -220,21 +220,6 @@ inline void calculate_sfpu_trig() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void sine_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void cosine_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void tan_init() {
-    ;
-}
-
 #define POLYVAL6(coef5, coef4, coef3, coef2, coef1, coef0, t4)  (t4 * (t4 * (t4 * (t4 * (coef5 * t4 + coef4) + coef3) + coef2) + coef1) + coef0)
 
 template <bool APPROXIMATION_MODE>
@@ -341,16 +326,6 @@ inline void calculate_acos()
         dst_reg[0] = v;
         dst_reg++;
     }
-}
-
-template <bool APPROXIMATION_MODE>
-void asin_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void acos_init() {
-    ;
 }
 
 template <bool APPROXIMATION_MODE>

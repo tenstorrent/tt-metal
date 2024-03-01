@@ -15,7 +15,7 @@ namespace ckernel {
 //sine
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sine_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>(sfpu::sine_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -30,7 +30,7 @@ inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index) {
 //cosine
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_cosine_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>(sfpu::cosine_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -45,7 +45,7 @@ inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index) {
 //tangent
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_tan_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::tan, APPROXIMATE>(sfpu::tan_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::tan, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -60,7 +60,7 @@ inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index) {
 //asin
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_asin_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::asin, APPROXIMATE>(sfpu::asin_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::asin, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -74,7 +74,7 @@ inline void llk_math_eltwise_unary_sfpu_asin(uint dst_index, int vector_mode = (
 //acos
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_acos_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>(sfpu::acos_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>

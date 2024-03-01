@@ -28,11 +28,5 @@ inline void cast_fp32_to_fp16a()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void cast_fp32_to_fp16a_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel
