@@ -1459,6 +1459,12 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
     DEBUG_STATUS('N', 'S', 'I', 'D');
 }
 
+inline void RISC_POST_HEARTBEAT(uint32_t &heartbeat) {
+  volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+  heartbeat++;
+  ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
+}
+
 enum class BufferType: uint8_t {
     DRAM = 0,
     L1 = 1,

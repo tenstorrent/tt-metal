@@ -189,7 +189,7 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
  * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  */
-uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
+uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type=CoreType::WORKER);
 
 /**
 *  Allocates an interleaved DRAM or L1 buffer on device

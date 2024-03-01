@@ -103,6 +103,10 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
             range_max = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
             break;
+        case 6:
+            range_min = MEM_IERISC_FIRMWARE_BASE;
+            range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
+            break;
         default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
     }
 
@@ -144,19 +148,22 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    if (is_ethernet_core(core, chip)) {
+    if (is_ethernet_core(core, chip) && static_cast<bool>(msg->enable_erisc)) {
         tt::Cluster::instance().write_core(
             (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_ETH_MAILBOX_ADDRESS_HOST(launch));
-    } else {
-        tt::Cluster::instance().write_core(
-            (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
-    }
-
-    // Ethernet cores use a different address for starting the kernel
-    if (is_ethernet_core(core, chip) && static_cast<bool>(msg->enable_erisc)) {
+        // Active Ethernet cores use a different address for starting the kernel
         llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+    } else {
+        if (is_ethernet_core(core, chip)) {
+            tt::Cluster::instance().write_core(
+                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_IERISC_MAILBOX_ADDRESS_HOST(launch));
+        } else {
+            tt::Cluster::instance().write_core(
+                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+        }
     }
 }
+
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
     llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 }
@@ -231,6 +238,32 @@ void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
+void program_idle_erisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
+    // Options for handling idle erisc fw not starting at mem[0]:
+    // 1) Program the register for the start address out of reset
+    // 2) Encode a jump in crt0 for mem[0]
+    // 3) Write the jump to mem[0] here
+    // This does #3.  #1 may be best, #2 gets messy (elf files
+    // drop any section before .init, crt0 needs ifdefs, etc)
+    vector<uint32_t> jump_to_fw;
+    constexpr uint32_t jal_opcode = 0x6f;
+    constexpr uint32_t jal_max_offset = 0x0007ffff;
+    uint32_t opcode = jal_opcode;
+    assert(MEM_IERISC_FIRMWARE_BASE < jal_max_offset);
+    // See riscv spec for offset encoding below
+    uint32_t jal_offset_bit_20 = 0;
+    uint32_t jal_offset_bits_10_to_1 = (MEM_IERISC_FIRMWARE_BASE & 0x7fe) << 20;
+    uint32_t jal_offset_bit_11 = (MEM_IERISC_FIRMWARE_BASE & 0x800) << 9;
+    uint32_t jal_offset_bits_19_to_12 = (MEM_IERISC_FIRMWARE_BASE & 0xff000) << 0;
+    uint32_t jal_offset =
+        jal_offset_bit_20 |
+        jal_offset_bits_10_to_1 |
+        jal_offset_bit_11 |
+        jal_offset_bits_19_to_12;
+    jump_to_fw.push_back(jal_offset | opcode);
+    write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
+}
+
 bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
     assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
 
@@ -242,6 +275,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
         case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
         case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
         case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
+        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE; break;
     }
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
@@ -304,6 +338,29 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     }
 }
 
+static bool check_if_erisc_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
+    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+        constexpr int RUN_MAILBOX_BOGUS = 3;
+        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
+        // read a single uint32_t even though launch.run is smaller than that
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
+        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+        if (run != run_state && run != RUN_MSG_DONE) {
+            fprintf(
+                stderr,
+                "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
+                run,
+                run_state,
+                RUN_MSG_DONE);
+            TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+        }
+
+        return run == RUN_MSG_DONE;
+    };
+
+    return get_mailbox_is_done(GET_IERISC_MAILBOX_ADDRESS_HOST(launch.run));
+}
+
 void wait_until_cores_done(chip_id_t device_id,
                            int run_state,
                            std::unordered_set<CoreCoord>& not_done_phys_cores) {
@@ -324,6 +381,38 @@ void wait_until_cores_done(chip_id_t device_id,
             const auto &phys_core = *it;
 
             bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
+
+            if (is_done) {
+                log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());
+                it = not_done_phys_cores.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        loop_count++;
+    }
+}
+
+void wait_until_idle_eth_cores_done(chip_id_t device_id,
+                           int run_state,
+                           std::unordered_set<CoreCoord>& not_done_phys_cores) {
+
+    // poll the cores until the set of not done cores is empty
+    int loop_count = 1;
+    while (!not_done_phys_cores.empty()) {
+        // Print not-done cores
+        if (loop_count % 1000 == 0) {
+            string not_done_cores_str = "Not done phys cores: ";
+            for (const auto &core : not_done_phys_cores) {
+                not_done_cores_str += (core.str() + " ");
+            }
+            log_debug(tt::LogMetal, not_done_cores_str.c_str());
+        }
+
+        for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
+            const auto &phys_core = *it;
+
+            bool is_done = llrt::internal_::check_if_erisc_on_specified_core_done(device_id, phys_core, run_state);
 
             if (is_done) {
                 log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());

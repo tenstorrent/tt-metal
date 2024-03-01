@@ -56,6 +56,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
     this->device = device;
     this->event = event;
+    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
 const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_instruction(
@@ -132,17 +133,18 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
 
     // Commands are tunneled through ethernet to consumer tensix cores for remote fast dispatch
     bool route_through_ethernet = not device->is_mmio_capable();
+    bool dispatch_on_ethernet = this->dispatch_core_type == CoreType::ETH;
 
     uint32_t push_and_pull_cb_num_pages;
 
     if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
         if (route_through_ethernet) {
-            uint32_t router_data_buffer_size = get_cq_data_buffer_size(true);
+            uint32_t router_data_buffer_size = get_cq_data_buffer_size(true, false);
             uint32_t router_cb_num_pages = router_data_buffer_size / padded_page_size;
             uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
             TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in consumer buffer");
 
-            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_data_buffer_size;
+            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(dispatch_on_ethernet, true) / router_data_buffer_size;
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
@@ -151,7 +153,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
             push_and_pull_cb_num_pages = router_cb_num_pages * producer_consumer_multiple;
         } else {
             // pull and relay kernel reads in half of push_and_pull_cb_num_pages and writes are half the number of pages read
-            uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false);
+            uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(dispatch_on_ethernet, true);
             uint32_t num_pages_in_data_buffer = pull_and_push_data_buffer_size / padded_page_size;
             // make sure push_and_pull_cb_num_pages is multiple of 4 because we read half this number of pages and write a quarter of this number of pages
             push_and_pull_cb_num_pages = (num_pages_in_data_buffer / 4)* 4;
@@ -230,6 +232,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
         "Trying to write to an invalid buffer");
     this->device = device;
     this->event = event;
+    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
 const DeviceCommand EnqueueWriteInterleavedBufferCommand::create_buffer_transfer_instruction(
@@ -312,14 +315,15 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
         // Commands are tunneled through ethernet to consumer tensix cores for remote fast dispatch
         bool route_through_ethernet = not device->is_mmio_capable();
+        bool dispatch_on_eth = this->dispatch_core_type == CoreType::ETH;
         uint32_t push_and_pull_cb_num_pages;
         if (route_through_ethernet) {
-            uint32_t router_data_buffer_size = get_cq_data_buffer_size(true);
+            uint32_t router_data_buffer_size = get_cq_data_buffer_size(true, false);
             uint32_t router_cb_num_pages = router_data_buffer_size / padded_page_size;
             uint32_t router_cb_size = router_cb_num_pages * padded_page_size;
             TT_ASSERT(padded_page_size <= router_cb_size, "Page is too large to fit in consumer buffer");
 
-            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_data_buffer_size;
+            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(dispatch_on_eth, true) / router_data_buffer_size;
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
@@ -328,7 +332,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
             push_and_pull_cb_num_pages = router_cb_num_pages * producer_consumer_multiple;
         }
         else {
-            uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false);
+            uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(dispatch_on_eth, true);
             uint32_t num_pages_in_data_buffer = pull_and_push_data_buffer_size / padded_page_size;
             // make sure push_and_pull_cb_num_pages is multiple of 4 because we read half this number of pages and write a quarter of this number of pages
             push_and_pull_cb_num_pages = (num_pages_in_data_buffer / 4)* 4;
@@ -416,6 +420,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->device = device;
     this->trace = trace;
     this->event = event;
+    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
 }
 
 const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host_data_src) {
@@ -536,8 +541,9 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
         uint32_t push_and_pull_cb_num_pages;
         bool route_through_ethernet = not this->device->is_mmio_capable();
+        bool dispatch_on_eth = this->dispatch_core_type == CoreType::ETH;
         if (route_through_ethernet) {
-            uint32_t router_data_buffer_size = get_cq_data_buffer_size(true);
+            uint32_t router_data_buffer_size = get_cq_data_buffer_size(true, false);
             uint32_t router_cb_num_pages = router_data_buffer_size / DeviceCommand::PROGRAM_PAGE_SIZE;
 
             uint32_t router_transfer_num_pages = router_cb_num_pages / DeviceCommand::SYNC_NUM_PAGES;
@@ -545,7 +551,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 
             uint32_t router_cb_size = router_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
-            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(false) / router_data_buffer_size;
+            uint32_t producer_consumer_multiple = get_cq_data_buffer_size(dispatch_on_eth, true) / router_data_buffer_size;
 
             command.set_router_cb_num_pages(router_cb_num_pages);
             command.set_router_cb_size(router_cb_size);
@@ -553,7 +559,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 
             push_and_pull_cb_num_pages = router_cb_num_pages * producer_consumer_multiple / 2 * 2;
         } else {
-            uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(false) / 2 * 2;
+            uint32_t pull_and_push_data_buffer_size = get_cq_data_buffer_size(dispatch_on_eth, true) / 2 * 2;
             push_and_pull_cb_num_pages = pull_and_push_data_buffer_size / DeviceCommand::PROGRAM_PAGE_SIZE;
         }
 
@@ -562,7 +568,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
         command.set_pull_and_push_cb_size(push_and_pull_cb_size);
         command.set_pull_and_push_cb_num_pages(push_and_pull_cb_num_pages);
     } else {
-        const uint32_t producer_cb_num_pages = get_cq_data_buffer_size(false) / DeviceCommand::PROGRAM_PAGE_SIZE;
+        const uint32_t producer_cb_num_pages = get_cq_data_buffer_size(false, false) / DeviceCommand::PROGRAM_PAGE_SIZE;
         const uint32_t producer_cb_size = producer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
         bool cmd_consumer_on_ethernet = not device->is_mmio_capable();
@@ -744,6 +750,7 @@ void EnqueueRecordEventCommand::process() {
 EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
     uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event, const Event& sync_event):
     command_queue_id(command_queue_id), device(device), manager(manager), event(event), sync_event(sync_event) {
+        this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
         // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
         TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
             "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
@@ -764,7 +771,7 @@ const DeviceCommand EnqueueWaitForEventCommand::assemble_device_command(uint32_t
             this->sync_event.device->id(), this->device->id());
 
     auto &event_sync_hw_cq = this->sync_event.device->command_queue(this->sync_event.cq_id).hw_command_queue();
-    auto event_sync_core = this->sync_event.device->worker_core_from_logical_core(event_sync_hw_cq.completion_queue_writer_core);
+    auto event_sync_core = this->sync_event.device->physical_core_from_logical_core(event_sync_hw_cq.completion_queue_writer_core, dispatch_core_type);
 
     // Let dispatcher know this is sync event, and what core/event_id to sync on.
     command.set_is_event_sync(true);
@@ -961,12 +968,18 @@ void HWCommandQueue::enqueue_write_buffer(std::variant<std::reference_wrapper<Bu
     }, src);
 }
 
+CoreType HWCommandQueue::get_dispatch_core_type() {
+    return dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+}
+
 void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking) {
     ZoneScopedN("HWCommandQueue_write_buffer");
     // TODO(agrebenisan): Fix these asserts after implementing multi-core CQ
     // TODO (abhullar): Use eth mem l1 size when issue queue interface kernel is on ethernet core
+    bool dispatch_on_eth = get_dispatch_core_type() == CoreType::ETH;
+    uint32_t l1_size = dispatch_on_eth ? MEM_ETH_SIZE : MEM_L1_SIZE;
     TT_ASSERT(
-        buffer.page_size() < get_cq_data_buffer_size(false),
+        buffer.page_size() < l1_size - get_cq_data_buffer_size(dispatch_on_eth, true),
         "Buffer pages must fit within the command queue data section");
 
     if (buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or

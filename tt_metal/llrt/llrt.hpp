@@ -96,6 +96,8 @@ void write_circular_buffer_config_vector_to_core(
 
 void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
+void program_idle_erisc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
+
 bool test_load_write_read_risc_binary(
     ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);
 
@@ -108,6 +110,10 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
 namespace internal_ {
 
 void wait_until_cores_done(chip_id_t device_id,
+                           int run_state,
+                           std::unordered_set<CoreCoord>& not_done_phys_cores);
+
+void wait_until_idle_eth_cores_done(chip_id_t device_id,
                            int run_state,
                            std::unordered_set<CoreCoord>& not_done_phys_cores);
 

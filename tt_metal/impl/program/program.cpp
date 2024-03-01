@@ -187,9 +187,16 @@ KernelGroup::KernelGroup(
     }
 
     if (erisc_id) {
-        this->launch_msg.enable_erisc = true;
-        // Ethernet cores use the brisc kernel id field
-        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(erisc_id.value())->get_watcher_kernel_id();
+        const auto kernel = program.get_kernel(erisc_id.value());
+        const auto config = std::get<EthernetConfig>(kernel->config());
+        if (config.eth_mode != Eth::IDLE) {
+            //Its not a dispatch kernel meant for an idle core,
+            //then use ethernet app signaling.
+            //Idle ethernet core uses launch message/go signal.
+            this->launch_msg.enable_erisc = true;
+            // Ethernet cores use the brisc kernel id field
+            this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(erisc_id.value())->get_watcher_kernel_id();
+        }
     } else {
         this->launch_msg.enable_erisc = false;
     }
@@ -505,16 +512,16 @@ uint32_t Program::semaphore_address ( uint32_t sem_idx ) const {
     return semaphores_.at(sem_idx).address();
 }
 
-void Program::init_semaphores( const Device & device, const CoreCoord &logical_core ) const{
+void Program::init_semaphores( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const{
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(device.id(), device.worker_core_from_logical_core(logical_core), {semaphore.get().initial_value()}, semaphore.get().address());
+        llrt::write_hex_vec_to_core(device.id(), device.physical_core_from_logical_core(logical_core, core_type), {semaphore.get().initial_value()}, semaphore.get().address());
     }
 }
 
-void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value) {
+void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
-    semaphores_.emplace_back(Semaphore( crs, address, init_value));
+    semaphores_.emplace_back(Semaphore( crs, address, init_value, core_type));
 }
 
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
@@ -860,7 +867,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     // Step 4 (Multicast): Continue constructing pages for semaphore configs, only multicast/worker cores supported
     for (const Semaphore& semaphore : program.semaphores()) {
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
+            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
 
         src = update_program_page_transfers(
             src,

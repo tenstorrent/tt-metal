@@ -136,6 +136,9 @@ void kernel_main() {
 
     while (true) {
         if constexpr (read_from_issue_queue) {
+#if defined(COMPILE_FOR_IDLE_ERISC)
+            uint32_t heartbeat = 0;
+#endif
             // we will also need to poll the program event buffer
             while (not issue_queue_space_available()) {
                 if constexpr (pull_and_push_config == tt::PullAndPushConfig::LOCAL) {
@@ -143,6 +146,9 @@ void kernel_main() {
                         program_event_buffer.write_events<write_to_completion_queue>(); // write number of events in program event buffer
                     }
                 }
+#if defined(COMPILE_FOR_IDLE_ERISC)
+                RISC_POST_HEARTBEAT(heartbeat);
+#endif
             }
 
             uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
