@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-
+from typing import Optional, Dict
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upsample_2d import upsample2d
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_resnetblock2d import resnetBlock2D
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
@@ -57,6 +57,7 @@ def cross_attention_upblock2d(
     cross_attention_dim=1280,
     attn_num_head_channels=1,
     only_cross_attention: bool = False,
+    reader_patterns_cache: Optional[Dict] = None,
 ):
     for i in range(num_layers):
         res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
@@ -88,6 +89,7 @@ def cross_attention_upblock2d(
             pre_norm=resnet_pre_norm,
             non_linearity=resnet_act_fn,
             device=device,
+            reader_patterns_cache=reader_patterns_cache,
         )
         if not dual_cross_attention:
             hidden_states = transformer_2d_model(
@@ -110,11 +112,19 @@ def cross_attention_upblock2d(
                 device=device,
                 upcast_attention=upcast_attention,
                 cross_attention_dim=cross_attention_dim,
+                reader_patterns_cache=reader_patterns_cache,
             )
         else:
             assert False, "We do not support Dual Transformer2DModel"
 
     if add_upsample:
-        hidden_states = upsample2d(device, hidden_states, parameters.upsamplers[0], out_channels, out_channels)
+        hidden_states = upsample2d(
+            device,
+            hidden_states,
+            parameters.upsamplers[0],
+            out_channels,
+            out_channels,
+            reader_patterns_cache=reader_patterns_cache,
+        )
 
     return hidden_states

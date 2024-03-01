@@ -30,33 +30,32 @@ void MAIN {
 
     binary_op_init_common(tt::CB::c_in1, tt::CB::c_in2);
 
-    constexpr auto cb_dy = tt::CB::c_in0;        // output_grad(==dy)
-    constexpr auto cb_x = tt::CB::c_in1;         // input(==x)
-    constexpr auto cb_mean = tt::CB::c_in2;      // mean
-    constexpr auto cb_rstd = tt::CB::c_in3;      // rstd
-    constexpr auto cb_scaler = tt::CB::c_in4;    // scaler
-    constexpr auto cb_numel = tt::CB::c_in5;     // normalized_numel(==n)
-    constexpr auto cb_gamma = tt::CB::c_in6;     // gamma
-    constexpr auto cb_mask_h_w = tt::CB::c_in7;  // mask_h_w
+    constexpr auto cb_dy = tt::CB::c_in0;         // output_grad(==dy)
+    constexpr auto cb_x = tt::CB::c_in1;          // input(==x)
+    constexpr auto cb_mean = tt::CB::c_in2;       // mean
+    constexpr auto cb_rstd = tt::CB::c_in3;       // rstd
+    constexpr auto cb_scaler = tt::CB::c_in4;     // scaler
+    constexpr auto cb_n_recip_n = tt::CB::c_in5;  // n_recip_n
+    constexpr auto cb_gamma = tt::CB::c_in6;      // gamma
+    constexpr auto cb_mask_h_w = tt::CB::c_in7;   // mask_h_w
 
-    // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (1.0 / (n * rstd))
+    // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * ((1.0 / n) * rstd)
     constexpr auto cb_dx = tt::CB::c_out0;  // input_grad(==dx)
 
     // y = (x - mean) / rstd
-    constexpr auto cb_dycopy = tt::CB::c_intermed0;      // copy output_grad(==dycopy)
-    constexpr auto cb_y = tt::CB::c_intermed1;           // output(==y)
-    constexpr auto cb_dysum = tt::CB::c_intermed2;       // Sum[dy]
-    constexpr auto cb_ydysum = tt::CB::c_intermed3;      // Sum[y * dy]
-    constexpr auto cb_recip_rstd = tt::CB::c_intermed4;  // 1.0 / rstd
+    constexpr auto cb_dycopy = tt::CB::c_intermed0;  // copy output_grad(==dycopy)
+    constexpr auto cb_y = tt::CB::c_intermed1;       // output(==y)
+    constexpr auto cb_dysum = tt::CB::c_intermed2;   // Sum[dy]
+    constexpr auto cb_ydysum = tt::CB::c_intermed3;  // Sum[y * dy]
 
-    constexpr auto cb_tmp1 = tt::CB::c_intermed5;  // tmp1
-    constexpr auto cb_tmp2 = tt::CB::c_intermed6;  // tmp2
-    constexpr auto cb_tmp3 = tt::CB::c_intermed7;  // tmp3
+    constexpr auto cb_tmp1 = tt::CB::c_intermed4;  // tmp1
+    constexpr auto cb_tmp2 = tt::CB::c_intermed5;  // tmp2
+    constexpr auto cb_tmp3 = tt::CB::c_intermed6;  // tmp3
 
     constexpr uint32_t onetile = 1;
 
     cb_wait_front(cb_scaler, onetile);  // comes from the reader
-    cb_wait_front(cb_numel, onetile);   // comes from the reader
+    cb_wait_front(cb_n_recip_n, 2);     // comes from the reader
 
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
@@ -79,27 +78,10 @@ void MAIN {
         cb_wait_front(cb_mean, onetile);  // comes from the reader
         cb_wait_front(cb_rstd, onetile);  // comes from the reader
 
-        // Compute cb_recip_rstd
-        // 1.0 / rstd
-        ACQ();
-        cb_reserve_back(cb_recip_rstd, onetile);
-
-        copy_tile_init();
-        copy_tile(cb_rstd, 0, dst0);
-
-        recip_tile_init();
-        recip_tile(dst0);
-
-        pack_tile(dst0, cb_recip_rstd);
-
-        cb_push_back(cb_recip_rstd, onetile);
-        REL();
-
         // Compute cb_y
         // y = (x - mean) / rstd
         constexpr auto cb_dyadd = cb_tmp1;
         constexpr auto cb_ydyadd = cb_tmp2;
-        cb_wait_front(cb_recip_rstd, onetile);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute cb_xmm
             // x - mean
@@ -130,10 +112,10 @@ void MAIN {
 
             if (is_lastdim_layernorm) {
                 mul_bcast_cols_init_short();
-                mul_tiles_bcast_cols(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
             } else {
                 mul_tiles_bcast_scalar_init_short();
-                mul_tiles_bcast_scalar(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
             }
 
             if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
@@ -311,7 +293,6 @@ void MAIN {
                 REL();
             }
         }  // Wt loop
-        // We don't pop cb_recip_rstd here.
 
         // Compute cb_dysum
         // Sum[dy]
@@ -346,21 +327,18 @@ void MAIN {
         REL();
 
         // Compute cb_recip_nrstd
-        // 1.0 / (n * rstd) -> cb_tmp3
+        // (1.0 / n) * rstd -> cb_tmp3
         constexpr auto cb_recip_nrstd = cb_tmp3;
         ACQ();
         cb_reserve_back(cb_recip_nrstd, onetile);
 
         if (is_lastdim_layernorm) {
             mul_bcast_cols_init_short();
-            mul_tiles_bcast_cols(cb_numel, cb_rstd, 0, 0, dst0);
+            mul_tiles_bcast_cols(cb_n_recip_n, cb_rstd, 1, 0, dst0);
         } else {
             mul_tiles_bcast_scalar_init_short();
-            mul_tiles_bcast_scalar(cb_numel, cb_rstd, 0, 0, dst0);
+            mul_tiles_bcast_scalar(cb_n_recip_n, cb_rstd, 1, 0, dst0);
         }
-
-        recip_tile_init();
-        recip_tile(dst0);
 
         pack_tile(dst0, cb_recip_nrstd);
 
@@ -368,7 +346,7 @@ void MAIN {
         REL();
 
         // Compute cb_dx
-        // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (1.0 / (n * rstd))
+        // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * ((1.0 / n) * rstd)
         cb_wait_front(cb_dysum, onetile);
         cb_wait_front(cb_ydysum, onetile);
         cb_wait_front(cb_recip_nrstd, onetile);
@@ -457,7 +435,7 @@ void MAIN {
             cb_reserve_back(cb_ndy, onetile);
 
             mul_tiles_init();
-            mul_tiles(cb_numel, cb_dycopy, 0, 0, dst0);
+            mul_tiles(cb_n_recip_n, cb_dycopy, 0, 0, dst0);
 
             pack_tile(dst0, cb_ndy);
 
@@ -531,10 +509,10 @@ void MAIN {
 
             if (is_lastdim_layernorm) {
                 mul_bcast_cols_init_short();
-                mul_tiles_bcast_cols(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
             } else {
                 mul_tiles_bcast_scalar_init_short();
-                mul_tiles_bcast_scalar(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
             }
 
             pack_tile(dst0, cb_y);
@@ -583,7 +561,7 @@ void MAIN {
             REL();
 
             // Compute cb_dx
-            // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (1.0 / (n * rstd))
+            // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * ((1.0 / n) * rstd)
             ACQ();
             cb_wait_front(cb_tmp4, onetile);
             cb_reserve_back(cb_dx, onetile);
@@ -597,7 +575,6 @@ void MAIN {
             cb_push_back(cb_dx, onetile);
             REL();
         }  // Wt loop
-        cb_pop_front(cb_recip_rstd, onetile);
         cb_pop_front(cb_recip_nrstd, onetile);
         cb_pop_front(cb_dysum, onetile);
         cb_pop_front(cb_ydysum, onetile);
@@ -606,7 +583,7 @@ void MAIN {
         cb_pop_front(cb_rstd, onetile);
     }  // NCHt loop
     cb_pop_front(cb_scaler, onetile);
-    cb_pop_front(cb_numel, onetile);
+    cb_pop_front(cb_n_recip_n, 2);
 
     if (do_mask_h || do_mask_w) {
         cb_pop_front(cb_mask_h_w, 2);

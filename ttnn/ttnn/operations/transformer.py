@@ -33,36 +33,59 @@ def _split_query_key_value_and_split_heads_validate_input_tensors(
     )
 
 
-def _torch_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
+def _torch_split_query_key_value_and_split_heads(
+    input_tensor: ttnn.Tensor,
+    kv_input_tensor: Optional[ttnn.Tensor] = None,
+    *,
+    num_heads,
+    num_kv_heads=None,
+    transpose_key=True,
+    **_,
+):
     import torch
 
-    batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-    hidden_size = three_times_hidden_size // 3
-    head_size = hidden_size // num_heads
+    if kv_input_tensor is not None:
+        input_tensor = torch.cat([input_tensor, kv_input_tensor], dim=-1)
 
-    tensor = torch.reshape(input_tensor, (batch_size, sequence_size, 3, num_heads, head_size))
+    if num_kv_heads is None:
+        num_kv_heads = num_heads
+
+    batch_size, sequence_size, hidden_size = input_tensor.shape
+    # Subtract head sizes for key and value
+    head_size = (hidden_size) // (num_heads + num_kv_heads * 2)
+    tensor = torch.reshape(input_tensor, (batch_size, sequence_size, num_heads + num_kv_heads * 2, head_size))
     query, key, value = (
-        tensor[..., 0, :, :],
-        tensor[..., 1, :, :],
-        tensor[..., 2, :, :],
+        tensor[..., :num_heads, :],
+        tensor[..., num_heads : num_heads + num_kv_heads, :],
+        tensor[..., num_heads + num_kv_heads :, :],
     )
 
     query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+    key = torch.reshape(key, (batch_size, sequence_size, num_kv_heads, head_size))
+    value = torch.reshape(value, (batch_size, sequence_size, num_kv_heads, head_size))
+
     query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
-
-    key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
-    key = torch.permute(key, (0, 2, 3, 1)).contiguous().clone()
-
-    value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+    key = torch.permute(key, (0, 2, 1, 3)).contiguous().clone()
     value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
+    if transpose_key:
+        key = torch.permute(key, (0, 1, 3, 2)).contiguous().clone()
 
     return query, key, value
 
 
-def _fallback_split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, num_heads, **_):
+def _fallback_split_query_key_value_and_split_heads(
+    input_tensor: ttnn.Tensor,
+    kv_input_tensor: Optional[ttnn.Tensor] = None,
+    *,
+    num_heads,
+    num_kv_heads=None,
+    transpose_key=True,
+    **_,
+):
     input_tensor = ttnn.to_torch(input_tensor)
-
-    return _torch_split_query_key_value_and_split_heads(input_tensor, num_heads=num_heads)
+    return _torch_split_query_key_value_and_split_heads(
+        input_tensor, kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=transpose_key
+    )
 
 
 @ttnn.register_operation(
@@ -75,10 +98,12 @@ def split_query_key_value_and_split_heads(
     kv_input_tensor: Optional[ttnn.Tensor] = None,
     *,
     num_heads: int,
+    num_kv_heads: Optional[int] = None,
+    transpose_key: bool = True,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """
-    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, kv_input_tensor: Optional[ttnn.Tensor] = None, *, num_heads: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
+    split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, kv_input_tensor: Optional[ttnn.Tensor] = None, *, num_heads: int, num_kv_heads: Optional[int] = None, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
 
     Splits :attr:`input_tensor` of shape ``[batch_size, sequence_size, 3 * hidden_size]`` into 3 tensors (Query, Key, Value) of shape ``[batch_size, sequence_size, hidden_size]``.
     Then, reshapes and permutes the output tensors, to make them ready for computing attention scores.
@@ -90,41 +115,40 @@ def split_query_key_value_and_split_heads(
 
     .. code-block:: python
 
-        if kv_input_tensor is None:
-            batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
-            hidden_size = three_times_hidden_size // 3
-            head_size = hidden_size // num_heads
+        if kv_input_tensor is not None:
+            input_tensor = torch.cat([input_tensor, kv_input_tensor], dim=-1)
 
-            query, key, value = torch.split(input_tensor, [hidden_size, hidden_size, hidden_size], dim=-1)
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
 
-            query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
-            query = torch.permute(query, (0, 2, 1, 3))
+        batch_size, sequence_size, hidden_size = input_tensor.shape
+        # Subtract head sizes for key and value
+        head_size = (hidden_size) // (num_heads + num_kv_heads * 2)
+        tensor = torch.reshape(input_tensor, (batch_size, sequence_size, num_heads + num_kv_heads * 2, head_size))
+        query, key, value = (
+            tensor[..., :num_heads, :],
+            tensor[..., num_heads:num_heads + num_kv_heads, :],
+            tensor[..., num_heads + num_kv_heads:, :],
+        )
 
-            key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
-            key = torch.permute(key, (0, 2, 3, 1))
+        query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+        key = torch.reshape(key, (batch_size, sequence_size, num_kv_heads, head_size))
+        value = torch.reshape(value, (batch_size, sequence_size, num_kv_heads, head_size))
 
-            value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
-            value = torch.permute(value, (0, 2, 1, 3))
-        else:
-            batch_size, sequence_size, hidden_size = input_tensor.shape
-            head_size = hidden_size // num_heads
+        query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
+        key = torch.permute(key, (0, 2, 1, 3)).contiguous().clone()
+        value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
+        if transpose_key:
+            key = torch.permute(key, (0, 1, 3, 2)).contiguous().clone()
 
-            query = input_tensor
-            key, value = torch.split(kv_input_tensor, [hidden_size, hidden_size], dim=-1)
-
-            query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
-            query = torch.permute(query, (0, 2, 1, 3))
-
-            key = torch.reshape(key, (batch_size, sequence_size, num_heads, head_size))
-            key = torch.permute(key, (0, 2, 3, 1))
-
-            value = torch.reshape(value, (batch_size, sequence_size, num_heads, head_size))
-            value = torch.permute(value, (0, 2, 1, 3))
+        return query, key, value
 
     Args:
         * :attr:`input_tensor`: Input Tensor for Query, Key and Value. If :attr:`kv_input_tensor` is not None, then :attr:`input_tensor` is only used for Query.
         * :attr:`kv_input_tensor`: Input Tensor for Key and Value. If passed in, :attr:`input_tensor` has to be used only for Query.
         * :attr:`num_heads`: num heads to split into
+        * :attr:`num_kv_heads`: num heads of Key and num heads of Value. If not passed in, then :attr:`num_kv_heads` is set to :attr:`num_heads`
+        * :attr:`transpose_key`: Whether to transpose the Key tensor on the last two dimensions
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
@@ -138,6 +162,8 @@ def split_query_key_value_and_split_heads(
         raise RuntimeError("input_tensor must be on device!")
 
     if kv_input_tensor is not None:
+        if num_kv_heads is not None:
+            raise RuntimeError("num_kv_heads cannot be True when kv_input_tensor is passed in!")
         batch_size, sequence_size, hidden_size = input_tensor.shape
         _, sequence_size_padded, hidden_size_padded = input_tensor.shape.with_tile_padding()
         if kv_input_tensor.shape != (batch_size, sequence_size, hidden_size * 2):
@@ -151,6 +177,19 @@ def split_query_key_value_and_split_heads(
         hidden_size_padded = three_times_hidden_size_padded // 3
     head_size = hidden_size // num_heads
 
+    if num_kv_heads is not None:
+        if transpose_key is True:
+            raise RuntimeError("transpose_key cannot be True when num_kv_heads is passed in!")
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        query, key, value = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            input_tensor,
+            output_mem_config=memory_config,
+        )
+        return query, key, value
+
+    if not transpose_key:
+        raise RuntimeError("transpose_key must be True when num_kv_heads is not passed in!")
+
     if input_tensor.shape == (batch_size, 384, 1024 * 3) and 7 <= batch_size <= 9 and kv_input_tensor is None:
         input_tensor = ttnn.reshape(
             input_tensor,
@@ -160,15 +199,11 @@ def split_query_key_value_and_split_heads(
             ),
         )
 
-        ttl_input_tensor = input_tensor.value
-
-        query_key_value = ttl.operations.primary.transformers.split_query_key_value_and_split_heads(
-            ttl_input_tensor,
-            ttl_input_tensor.device().compute_with_storage_grid_size(),
+        query, key, value = ttnn.experimental.operations.primary.transformers.split_query_key_value_and_split_heads(
+            input_tensor,
+            input_tensor.device.compute_with_storage_grid_size(),
             memory_config,
         )
-        query_key_value = (ttnn.Tensor(ttl_tensor) for ttl_tensor in query_key_value)
-        query, key, value = query_key_value
         return query, key, value
     else:
         if kv_input_tensor is not None:
@@ -187,7 +222,6 @@ def split_query_key_value_and_split_heads(
                 [batch_size, 1, kv_sequence_size, hidden_size_padded * 2],
             )
             kv_input_tensor = ttnn.reshape(kv_input_tensor, desired_shape)
-            ttl_kv_input_tensor = kv_input_tensor.value
         else:
             input_tensor = ttnn.reshape(
                 input_tensor,
@@ -196,17 +230,13 @@ def split_query_key_value_and_split_heads(
                     [batch_size, 1, sequence_size_padded, three_times_hidden_size_padded],
                 ),
             )
-            ttl_kv_input_tensor = None
 
-        ttl_input_tensor = input_tensor.value
-
-        query_key_value = ttl.tensor.nlp_create_qkv_heads(
-            ttl_input_tensor,
-            ttl_kv_input_tensor,
+        query_key_value = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            input_tensor,
+            kv_input_tensor,
             num_heads=num_heads,
             output_mem_config=memory_config,
         )
-        query_key_value = (ttnn.Tensor(ttl_tensor) for ttl_tensor in query_key_value)
         query, key, value = query_key_value
 
         head_size = hidden_size // num_heads
@@ -279,7 +309,7 @@ def _attention_softmax_validate_input_tensors(operation_name, input_tensor, *arg
     )
     ttnn.validate_input_tensor(
         operation_name,
-        input_tensor,
+        attention_mask,
         ranks=(4,),
         dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
         layouts=(ttnn.TILE_LAYOUT,),
@@ -320,7 +350,11 @@ def attention_softmax(
 
     if attention_mask is not None:
         output_tensor = ttl.tensor.scale_mask_softmax(
-            input_tensor.value, scaler, attention_mask.value, output_mem_config=memory_config
+            input_tensor.value,
+            scaler,
+            attention_mask.value,
+            output_mem_config=memory_config,
+            program_config=program_config,
         )
         return ttnn.Tensor(output_tensor)
     else:
@@ -340,9 +374,12 @@ def attention_softmax_(
     *,
     head_size: Optional[int],
     attention_mask: Optional[ttnn.Tensor],
+    program_config: Optional[
+        ttl.operations.primary.transformers.SoftmaxProgramConfig
+    ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
 ) -> ttnn.Tensor:
     """
-    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor]) -> ttnn.Tensor
+    attention_softmax_(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig()) -> ttnn.Tensor
 
     In-Place divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
@@ -350,6 +387,8 @@ def attention_softmax_(
         * :attr:`input_tensor`: Input Tensor
         * :attr:`head_size`: Number of heads
         * :attr:`attention_mask`: Attention Mask
+        * :attr:`program_config`: Program Config of the output tensor
+
 
     """
     if len(input_tensor.shape) != 4:
@@ -365,7 +404,7 @@ def attention_softmax_(
 
     if attention_mask is not None:
         ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            input_tensor.value, scaler, attention_mask.value
+            input_tensor.value, scaler, attention_mask.value, program_config=program_config
         )
         return input_tensor
     else:
@@ -439,6 +478,59 @@ def concatenate_heads(
     )
 
     return output_tensor
+
+
+def _rotary_embedding_validate_input_tensors(operation_name, input_tensor, cos_cache, sin_cache, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        cos_cache,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        sin_cache,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.transformer.rotary_embedding",
+    validate_input_tensors=_rotary_embedding_validate_input_tensors,
+)
+def rotary_embedding(
+    input_tensor: ttnn.Tensor,
+    cos_cache: ttnn.Tensor,
+    sin_cache: ttnn.Tensor,
+    token_index: int,
+    memory_config: ttnn.MemoryConfig,
+) -> ttnn.Tensor:
+    """
+
+    rotary_embedding(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, token_index: int, memory_config: MemoryConfig) -> ttnn.Tensor
+
+    Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
+
+    """
+    return ttnn.experimental.tensor.rotary_embedding(
+        input_tensor, cos_cache, sin_cache, token_index, output_mem_config=memory_config
+    )
 
 
 __all__ = []

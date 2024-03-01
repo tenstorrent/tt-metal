@@ -33,8 +33,7 @@ inline void llk_unpack_tilize_mop_config() {
     _llk_unpack_tilize_mop_config_();
 }
 
-inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uint32_t ct_dim=0) {
-
+inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
 
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t src_format = (std::uint32_t)unpack_src_format[operand_id];
@@ -43,7 +42,7 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uin
     _llk_unpack_tilize_init_(src_format, dst_format, ct_dim);
 }
 
-inline void llk_unpack_tilize_uninit(const std::uint32_t operand=0, const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
+inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
     std::uint32_t input = get_operand_id(operand);
     unpack_config_u config = {0};
 
@@ -99,24 +98,17 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
     llk_unpack_tilizeA_B_hw_configure(&llk_unpack_tilizeA_B);
 }
 
-inline void llk_unpack_tilizeA_B_mop_config() {
+inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces) {
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        true,   // src B
-        false,  // halo - just used for 4 unpacks
-        unpack_srca,
-        0,
-        0,
-        0,
-        0,
-        unpack_srcb,
-        0);
+    constexpr uint32_t outerloop = 1;
+    const uint32_t innerloop = (num_faces>2) ? num_faces/2 : ((num_faces>1) ? 2 : 1);
+    ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
     tmp.program(instrn_buffer);
 }
 
-inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const uint32_t num_faces = 4) {
 
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t src_format_A = (std::uint32_t)unpack_src_format[operandA_id];
@@ -136,7 +128,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    llk_unpack_tilizeA_B_mop_config();
+    llk_unpack_tilizeA_B_mop_config(num_faces);
 }
 
 inline void llk_unpack_tilizeA_B(
@@ -144,7 +136,8 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t operandB,
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
-    std::uint32_t block_ct_dim) {
+    std::uint32_t block_ct_dim,
+    std::uint32_t num_faces = 4) {
 
     //Setup SrcA unpack
     std::uint32_t operandA_id = get_operand_id(operandA);
@@ -171,7 +164,8 @@ inline void llk_unpack_tilizeA_B(
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    for (std::uint32_t n = 0; n < 2; n++) {
+    const std::uint32_t num_loops = (num_faces>1) ? num_faces/2 : 1;
+    for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
         // Clear z/w start counters
@@ -193,7 +187,7 @@ inline void llk_unpack_tilizeA_B(
         }
 
         // Run MOP
-        mop_run(0, 2);
+        ckernel::ckernel_template::run(instrn_buffer);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -207,8 +201,9 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
-    std::uint32_t tile_idx_b) {
+    std::uint32_t tile_idx_b,
+    std::uint32_t num_faces = 4) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
+        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
 }

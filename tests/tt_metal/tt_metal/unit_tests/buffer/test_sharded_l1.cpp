@@ -61,30 +61,17 @@ namespace local_test_functions {
 bool l1_buffer_read_write(Device* device, const L1Config& test_config) {
     bool pass = true;
 
-
-    std::variant<BufferConfig, ShardedBufferConfig> config;
-
-    if (test_config.sharded) {
-        config = tt::tt_metal::ShardedBufferConfig{
-                    .device=device,
-                    .size = test_config.size_bytes,
-                    .page_size = test_config.page_size_bytes,
-                    .buffer_layout = test_config.buffer_layout,
-                    .shard_parameters = test_config.shard_spec()
-        };
-    }
-    else {
-        config = tt::tt_metal::BufferConfig{
-                    .device=device,
-                    .size = test_config.size_bytes,
-                    .page_size = test_config.page_size_bytes,
-                    .buffer_layout = test_config.buffer_layout
-        };
-
-    }
-
-    auto buffer = CreateBuffer(config);
-
+    auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                                            .device = device,
+                                            .size = test_config.size_bytes,
+                                            .page_size = test_config.page_size_bytes,
+                                            .buffer_layout = test_config.buffer_layout,
+                                            .shard_parameters = test_config.shard_spec()})
+                                      : CreateBuffer(tt::tt_metal::BufferConfig{
+                                            .device = device,
+                                            .size = test_config.size_bytes,
+                                            .page_size = test_config.page_size_bytes,
+                                            .buffer_layout = test_config.buffer_layout});
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, test_config.size_bytes / sizeof(uint32_t));
 

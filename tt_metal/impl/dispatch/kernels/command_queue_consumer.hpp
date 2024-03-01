@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 
 CQWriteInterface cq_write_interface;
@@ -43,6 +44,15 @@ FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_READ_PTR);
+}
+
+FORCE_INLINE volatile uint32_t* get_cq_completion_last_event() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_LAST_EVENT);
+}
+
+FORCE_INLINE volatile uint32_t* get_16b_scratch_l1() {
+    // 16B of space in L1 unused by dispatch core that can be used as scratch space for reads, etc.
+    return reinterpret_cast<volatile uint32_t*>(CQ_COMPLETION_16B_SCRATCH);
 }
 
 FORCE_INLINE
@@ -286,6 +296,20 @@ FORCE_INLINE void wait_for_program_completion(uint32_t num_workers) {
 
 
     DEBUG_STATUS('Q', 'D');
+}
+
+// Record last completed event ID in dedicated L1 space for future event syncs to rely on.
+FORCE_INLINE void record_last_completed_event(uint32_t event_id) {
+    volatile tt_l1_ptr uint32_t* last_event_id = get_cq_completion_last_event();
+    last_event_id[0] = event_id;
+}
+// Cross CQ sync by waiting for a given CQ to have completed up to a certain event id.
+FORCE_INLINE void wait_for_event(uint32_t event_id, uint32_t noc_x, uint32_t noc_y) {
+    uint64_t src_noc_addr = get_noc_addr(noc_x, noc_y, CQ_COMPLETION_LAST_EVENT);
+    do {
+        noc_async_read(src_noc_addr, CQ_COMPLETION_16B_SCRATCH, 4);
+        noc_async_read_barrier();
+    } while (*get_16b_scratch_l1() < event_id);
 }
 
 template <uint32_t host_finish_addr>

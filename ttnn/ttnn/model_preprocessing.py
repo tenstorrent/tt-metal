@@ -13,27 +13,26 @@ from ttnn.dot_access import make_dot_access_dict
 
 from loguru import logger
 import torch
-import torchtrail
 
 import ttnn
-from ttnn.tracer import trace
+from ttnn.tracer import trace, visualize
 
 
-def preprocess_linear_weight(weight, *, dtype):
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
     weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout)
     return weight
 
 
-def preprocess_linear_bias(bias, *, dtype):
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT):
     bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout)
     return bias
 
 
-def preprocess_layernorm_parameter(parameter, *, dtype):
+def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT):
     parameter = parameter.reshape((1, -1))
-    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=layout)
     return parameter
 
 
@@ -42,7 +41,7 @@ def preprocess_embedding_weight(weight, *, dtype):
     return weight
 
 
-def preprocess_conv2d(weight, bias, ttnn_module_args):
+def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=False):
     if ttnn_module_args is None:
         raise RuntimeError(f"torch.nn.Conv2d modules need run_model to be provided to preprocess_model_parameters")
 
@@ -62,7 +61,10 @@ def preprocess_conv2d(weight, bias, ttnn_module_args):
     parameters["weight"] = ttnn.Tensor(conv.conv.weight)
     if bias is not None:
         parameters["bias"] = ttnn.Tensor(conv.conv.bias)
-    return parameters
+    if return_parallel_config:
+        return parameters, conv.get_parallel_config()
+    else:
+        return parameters
 
 
 def fold_batch_norm2d_into_conv2d(conv, bn):
@@ -106,6 +108,9 @@ class ParameterList(list):
         file = io.StringIO()
         repr_parameters(file, self)
         return file.getvalue()
+
+    def __contains__(self, index: int) -> bool:
+        return index < len(self)
 
 
 class ParameterDict(dict):
@@ -156,8 +161,10 @@ def repr_parameters(file, parameters, indentation=""):
             file.write(",\n" if index < len(parameters) - 1 else "\n")
         file.write(indentation)
         file.write("]")
-    elif isinstance(parameters, (ttnn.Tensor, torch.Tensor)):
-        file.write(repr(parameters.shape))
+    elif isinstance(parameters, ttnn.Tensor):
+        file.write(f"ttnn.Tensor(shape={parameters.shape}, layout={parameters.layout}, dtype={parameters.dtype})")
+    elif isinstance(parameters, torch.Tensor):
+        file.write(f"torch.Tensor(shape={parameters.shape}, dtype={parameters.dtype})")
     elif isinstance(parameters, ModuleArgs):
         if not parameters:
             file.write("{}")
@@ -314,6 +321,9 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
 
         if path.is_dir():
             parameters = _load_parameters(path)
+            if all(str(key).isdigit() for key in parameters):
+                parameters = {int(key): value for key, value in parameters.items()}
+                parameters = ParameterList([parameters[index] for index in sorted(parameters.keys())])
             output[name] = parameters
         elif extension == ".bin":
             output[name] = ttnn.load_tensor(path)
@@ -360,18 +370,19 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: ParameterDict) 
             raise RuntimeError(f"Unsupported type: {type(value)}")
 
 
-def move_to_device(parameters, device):
-    for name, value in list(parameters.items()):
-        if isinstance(value, ParameterDict):
-            parameters[name] = move_to_device(value, device)
-        elif isinstance(value, ParameterList):
-            for index, element in enumerate(value):
-                parameters[name][index] = move_to_device(element, device)
-        elif isinstance(value, ttnn.Tensor):
-            parameters[name] = ttnn.to_device(value, device)
-        else:
-            parameters[name] = value
-    return parameters
+def move_to_device(object, device):
+    if isinstance(object, ParameterDict):
+        for name, value in list(object.items()):
+            object[name] = move_to_device(value, device)
+        return object
+    elif isinstance(object, ParameterList):
+        for index, element in enumerate(object):
+            object[index] = move_to_device(element, device)
+        return object
+    elif isinstance(object, ttnn.Tensor):
+        return ttnn.to_device(object, device)
+    else:
+        return object
 
 
 def git_hash():
@@ -410,12 +421,14 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
+    visualize(output, file_name=ttnn.TMP_DIR / "model_graph.svg")
+
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}
         for node in graph:
             attributes = graph.nodes[node]
             operation = attributes["operation"]
-            if isinstance(operation, torchtrail.tracer.TorchModule):
+            if isinstance(operation, ttnn.tracer.TorchModule):
                 *_, module_name = operation.module.torchtrail_name.split(".")
                 (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
                 input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
@@ -459,7 +472,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
 
         return make_dot_access_dict(ttnn_module_args, ignore_types=(ModuleArgs,))
 
-    ttnn_module_args = _infer_ttnn_module_args(torchtrail.get_graph(output))
+    ttnn_module_args = _infer_ttnn_module_args(ttnn.tracer.get_graph(output))
     return ttnn_module_args[""]
 
 
@@ -509,7 +522,7 @@ def preprocess_model(
     custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]] = None,
     device: Optional[ttnn.Device] = None,
     prefix: str = "",
-    run_model: Optional[Callable],
+    run_model: Optional[Callable] = None,
     reader_patterns_cache: Optional[dict] = None,
 ) -> ParameterDict:
     """
@@ -534,7 +547,17 @@ def preprocess_model(
         reader_patterns_cache = {}
 
     if model_name is None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
-        logger.warning("ttnn: model cache can be enabled using TTNN_ENABLE_MODEL_CACHE=True")
+        logger.warning(
+            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_ENABLE_MODEL_CACHE=True"
+        )
+
+    elif model_name is None and ttnn.TTNN_ENABLE_MODEL_CACHE:
+        logger.warning(
+            "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters]"
+        )
+
+    elif model_name is not None and not ttnn.TTNN_ENABLE_MODEL_CACHE:
+        logger.warning("ttnn: model cache can be enabled by setting env variable TTNN_ENABLE_MODEL_CACHE=True")
 
     if convert_to_ttnn is None:
 

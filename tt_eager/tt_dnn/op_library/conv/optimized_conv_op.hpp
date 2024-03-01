@@ -6,6 +6,7 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 
@@ -18,6 +19,7 @@ enum class OptimizedConvOpParallelizationStrategy {
 
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
+    uint32_t num_cores_nhw;
     uint32_t per_core_out_matrix_height_ntiles;
     uint32_t per_core_weight_matrix_width_ntiles;
     // std::size_t in0_block_w;
@@ -27,12 +29,17 @@ struct OptimizedConvParallelizationConfig {
     // std::size_t per_core_N;
 
     static constexpr auto attribute_names =
-        std::make_tuple("grid_size", "per_core_out_matrix_height_ntiles", "per_core_weight_matrix_width_ntiles");
+        std::make_tuple("grid_size", "num_cores_nhw", "per_core_out_matrix_height_ntiles", "per_core_weight_matrix_width_ntiles");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->grid_size),
+            std::cref(this->num_cores_nhw),
             std::cref(this->per_core_out_matrix_height_ntiles),
             std::cref(this->per_core_weight_matrix_width_ntiles));
+    }
+
+    CoreCoord get_grid_size() const {
+        return this->grid_size;
     }
 };
 
@@ -67,7 +74,7 @@ struct OptimizedConvBlockConfig {
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 
 struct OptimizedConv {
     OptimizedConvParallelizationConfig parallelization_config;
@@ -81,13 +88,15 @@ struct OptimizedConv {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     Shape input_tensor_shape; // For sharded input, input tensor shape is nonsense
+    bool use_shallow_conv_variant;
+    const DeviceComputeKernelConfig compute_kernel_config;
     OptimizedConv(const std::vector<int>&c_params,
         uint32_t output_channels, bool untile_out,
         bool has_bias, bool fuse_relu,
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         uint32_t e_padding_for_32B_alignment,
-        MemoryConfig output_mem_config, DataType output_dtype, Shape input_tensor_shape) :
+        MemoryConfig output_mem_config, DataType output_dtype, Shape input_tensor_shape, bool use_shallow_conv_variant, const DeviceComputeKernelConfig compute_kernel_config) :
             output_channels(output_channels),
             conv_params(c_params),
             untilize_out(untile_out),
@@ -97,7 +106,9 @@ struct OptimizedConv {
             parallelization_config(p_config),
             block_config(b_config),
             extra_padding_for_32B_alignment(e_padding_for_32B_alignment),
-            output_mem_config(output_mem_config), output_dtype(output_dtype), input_tensor_shape(input_tensor_shape) {}
+            output_mem_config(output_mem_config), output_dtype(output_dtype), input_tensor_shape(input_tensor_shape),
+            use_shallow_conv_variant(use_shallow_conv_variant),
+            compute_kernel_config(compute_kernel_config) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -116,7 +127,8 @@ struct OptimizedConv {
         "extra_padding_for_32B_alignment",
         "output_mem_config",
         "output_dtype",
-        "input_tensor_shape");
+        "input_tensor_shape",
+        "use_shallow_conv_variant");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -130,7 +142,8 @@ struct OptimizedConv {
             std::cref(this->extra_padding_for_32B_alignment),
             std::cref(this->output_mem_config),
             std::cref(this->output_dtype),
-            std::cref(this->input_tensor_shape));
+            std::cref(this->input_tensor_shape),
+            std::cref(this->use_shallow_conv_variant));
     }
 };
 
@@ -141,7 +154,9 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
     const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment=0,
     std::optional<MemoryConfig> output_mem_config = std::nullopt,
     std::optional<DataType> output_dtype=std::nullopt,
-    std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt
+    std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt,
+    bool use_shallow_conv_variant = false,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
 );
 
 }  // namespace tt_metal

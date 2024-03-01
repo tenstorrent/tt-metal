@@ -164,3 +164,28 @@ def test_arange(device, start, end, step):
     output_tensor = output_tensor[-1, -1, -1, :]
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [2, 1, 4, 4],  # 256x256
+        [2, 1280, 8, 8],
+        [2, 640, 16, 16],
+        [2, 1280, 8, 8],  # 512x512
+        [2, 1280, 16, 16],
+        [2, 1280, 16, 16],
+    ],
+)
+def test_empty(device, input_shapes):
+    torch_input_tensor = torch.rand((input_shapes), dtype=torch.bfloat16)
+    torch_output_tensor = torch.empty(torch_input_tensor.shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.empty(input_tensor.shape, device=device)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert list(torch_output_tensor.shape) == list(output_tensor.shape)

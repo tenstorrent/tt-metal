@@ -25,7 +25,7 @@ inline void tilize_activation(uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t
         }
     }
 
-    tilize_uninit();
+    tilize_uninit(in0_cb);
 
 }
 

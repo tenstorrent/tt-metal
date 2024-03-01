@@ -38,7 +38,7 @@ jobs:
   create-tag:
     needs: get-params
     if: ${{ fromJSON(needs.get-params.outputs.should-create-release) }}
-    uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
+    uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@v2.0.1
     with:
       fetch_depth: 0
       bump_each_commit: false
@@ -59,7 +59,7 @@ jobs:
       - name: Output changelog
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: changelog
           path: CHANGELOG.txt
@@ -100,13 +100,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Download eager Python packages
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download changelog
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: changelog
       - name: Assert wheels exist
@@ -115,7 +115,9 @@ jobs:
         # releases to allow for easier installing for Python users.
         run: ls -arhl metal_libs-*+*.whl
       - name: Release
-        uses: softprops/action-gh-release@v1
+        # A major release has not been tagged yet, so we need to do this to avoid
+        # Node 16 deprecation warning message
+        uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}

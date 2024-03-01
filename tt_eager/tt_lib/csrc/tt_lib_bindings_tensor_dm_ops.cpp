@@ -11,6 +11,7 @@
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_dnn/op_library/fold/fold_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
@@ -193,28 +194,16 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("untilize_with_halo_v2", &untilize_with_halo_v2,
+        m_tensor.def(
+            "untilize_with_halo_v2",
+            &untilize_with_halo_v2,
             py::arg("input_tensor").noconvert(),
-            py::arg("local_pad_start_and_size").noconvert(),
-            py::arg("ll_data_start_and_size").noconvert(),
-            py::arg("l_data_start_and_size").noconvert(),
-            py::arg("local_data_start_and_size").noconvert(),
-            py::arg("r_data_start_and_size").noconvert(),
-            py::arg("rr_data_start_and_size").noconvert(),
+            py::arg("padding_config").noconvert(),
+            py::arg("local_config").noconvert(),
+            py::arg("remote_config").noconvert(),
             py::arg("pad_val").noconvert(),
             py::arg("ncores_height").noconvert(),
             py::arg("max_out_nsticks_per_core").noconvert(),
-            py::arg("local_pad_nsegments_per_core"),
-            py::arg("ll_data_nsegments_per_core"),
-            py::arg("l_data_nsegments_per_core"),
-            py::arg("local_data_nsegments_per_core"),
-            py::arg("r_data_nsegments_per_core"),
-            py::arg("rr_data_nsegments_per_core"),
-            py::arg("local_data_src_start_offsets_per_core"),
-            py::arg("ll_data_src_start_offsets_per_core"),
-            py::arg("l_data_src_start_offsets_per_core"),
-            py::arg("r_data_src_start_offsets_per_core"),
-            py::arg("rr_data_src_start_offsets_per_core"),
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             R"doc(
                 Untilizes input tiled data to row major format and constructs halo'd output shards.
@@ -233,7 +222,9 @@ namespace tt::tt_metal::detail{
             )doc");
 
         m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
-            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("use_pack_untilize").noconvert() = true,
+            R"doc(
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
             Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
@@ -288,6 +279,22 @@ namespace tt::tt_metal::detail{
                 "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
                 "pad_value", "Value to pad input tensor", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("fold", &fold,
+            py::arg("input").noconvert(), py::arg("stride_h"), py::arg("stride_w"), R"doc(
+            Fold TT Tensor.
+
+            Input tensor must be on TT accelerator device, in ROW_MAJOR.
+
+            Output tensor will be on TT accelerator device, in ROW_MAJOR.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input tensor", "Tensor", "Tensor of shape [N, H, W, C]", "Yes"
+                "stride_h", "Stride along the H-dimension", "int", "", "Yes"
+                "stride_w", "Stride along the W-dimension", "int", "", "Yes"
         )doc");
 
         // *** broadcast and reduce ***
@@ -496,6 +503,10 @@ namespace tt::tt_metal::detail{
         m_tensor.def("sharded_to_interleaved", &sharded_to_interleaved,
             py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
+        );
+        m_tensor.def("reshard", &reshard,
+            py::arg("input"), py::arg("output_mem_config").noconvert(),
+            R"doc(Converts a tensor sharded one way to another way)doc"
         );
 
         // Multi-Device ops

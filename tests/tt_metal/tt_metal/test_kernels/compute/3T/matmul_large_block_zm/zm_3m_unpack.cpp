@@ -21,7 +21,7 @@ inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uin
             llk_pop_tiles(0,in0_block_w); // Pop the original untilized inputs
         }
     }
-    llk_unpack_tilize_uninit();
+    llk_unpack_tilize_uninit(0);
 }
 
 

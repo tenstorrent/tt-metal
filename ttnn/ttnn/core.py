@@ -70,7 +70,7 @@ def create_sharded_memory_config(
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
         raise RuntimeError("Invalid input shape")
 
-    if not isinstance(core_grid, (ttnn.CoreGrid, tuple, list)):
+    if not isinstance(core_grid, (ttnn.CoreGrid, tuple, list, ttnn.experimental.tensor.CoreRangeSet)):
         raise RuntimeError("Invalid core_grid type")
 
     if strategy == ShardStrategy.BLOCK:
@@ -113,6 +113,10 @@ def create_sharded_memory_config(
                 ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, core_grid[0].y), grid_coord_2),
             }
         )
+    elif isinstance(core_grid, ttnn.experimental.tensor.CoreRangeSet):
+        shard_grid = core_grid
+        if not use_height_and_width_as_shard_shape:
+            raise RuntimeError("height and width must be shard shape with CoreRangeSet")
     else:
         raise RuntimeError("Invalid core_grid type")
 

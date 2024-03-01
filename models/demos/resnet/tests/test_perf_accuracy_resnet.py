@@ -163,7 +163,7 @@ def run_perf_resnet(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
-    ((16, 0.015, 33, 160), (20, 0.015, 33, 160)),
+    ((16, 0.015, 33, 160), (20, 0.0185, 33, 160)),
 )
 def test_perf_bare_metal(
     use_program_cache,

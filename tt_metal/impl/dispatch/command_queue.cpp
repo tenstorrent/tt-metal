@@ -7,10 +7,10 @@
 #include <algorithm>  // for copy() and assign()
 #include <iterator>   // for back_inserter
 #include <memory>
+#include <string>
 
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
-#include "llrt/watcher.hpp"
 #include "logger.hpp"
 #include "noc/noc_parameters.h"
 #include "tt_metal/detail/program.hpp"
@@ -18,6 +18,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
@@ -537,7 +538,7 @@ void EnqueueProgramCommand::process() {
     this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
     this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
-    bool tracing = this->trace.has_value();
+    bool tracing = this->trace.has_value() and not this->trace->get().trace_complete;
     vector<uint32_t> trace_host_data;
     uint32_t start_addr = system_memory_temporary_storage_address;
     constexpr static uint32_t padding_alignment = 16;
@@ -564,6 +565,7 @@ void EnqueueProgramCommand::process() {
         start_addr + align(system_memory_temporary_storage_address - start_addr, DeviceCommand::PROGRAM_PAGE_SIZE);
 
     array<uint32_t, 4> cb_data;
+    TT_ASSERT(cb_data.size() * sizeof(uint32_t) <= padding_alignment, "cb_data size exceeds padding_alignment");
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         for (const auto buffer_index : cb->buffer_indices()) {
             cb_data = {
@@ -646,6 +648,71 @@ void EnqueueCompletionWrapCommand::process() {
     this->manager.cq_write(cmd.data(), wrap_packet_size_bytes, write_ptr);
     this->manager.wrap_next_completion_queue_wr_ptr(this->command_queue_id);
     this->manager.issue_queue_push_back(wrap_packet_size_bytes, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
+}
+
+
+EnqueueRecordEventCommand::EnqueueRecordEventCommand(
+    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event):
+    command_queue_id(command_queue_id), device(device), manager(manager), event(event) {
+}
+
+
+const DeviceCommand EnqueueRecordEventCommand::assemble_device_command(uint32_t) {
+    DeviceCommand command;
+    command.set_issue_data_size(0); // No extra data just CMD.
+    command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
+    command.set_event(this->event);
+    return command;
+}
+
+void EnqueueRecordEventCommand::process() {
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    const DeviceCommand cmd = this->assemble_device_command(0);
+    uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.issue_queue_push_back(cmd_size, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
+}
+
+EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
+    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager, uint32_t event, const Event& sync_event):
+    command_queue_id(command_queue_id), device(device), manager(manager), event(event), sync_event(sync_event) {
+        // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
+        TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
+            "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
+            event, command_queue_id);
+}
+
+const DeviceCommand EnqueueWaitForEventCommand::assemble_device_command(uint32_t) {
+    DeviceCommand command;
+    command.set_issue_data_size(0); // No extra data just CMD.
+    command.set_completion_data_size(align(EVENT_PADDED_SIZE, 32));
+    command.set_event(this->event);
+
+    // #5529 - Cross chip sync needs to be implemented. Currently, we only support sync on the same chip.
+    TT_ASSERT(this->sync_event.device == this->device,
+            "EnqueueWaitForEvent() cross-chip sync not yet supported. Sync event device: {} this device: {}",
+            this->sync_event.device->id(), this->device->id());
+
+    auto &event_sync_hw_cq = this->sync_event.device->command_queue(this->sync_event.cq_id).hw_command_queue();
+    auto event_sync_core = this->sync_event.device->worker_core_from_logical_core(event_sync_hw_cq.completion_queue_writer_core);
+
+    // Let dispatcher know this is sync event, and what core/event_id to sync on.
+    command.set_is_event_sync(true);
+    command.set_event_sync_core_x(event_sync_core.x);
+    command.set_event_sync_core_y(event_sync_core.y);
+    command.set_event_sync_event_id(this->sync_event.event_id);
+
+    return command;
+}
+
+void EnqueueWaitForEventCommand::process() {
+    uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
+    const DeviceCommand cmd = this->assemble_device_command(0);
+    uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    this->manager.issue_queue_reserve_back(cmd_size, this->command_queue_id);
+    this->manager.cq_write(cmd.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->manager.issue_queue_push_back(cmd_size, detail::LAZY_COMMAND_QUEUE_MODE, this->command_queue_id);
 }
 
 // HWCommandQueue section
@@ -904,6 +971,48 @@ void HWCommandQueue::enqueue_program(
     this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 }
 
+// Populate event struct for caller. This must not occur in enqueue_* function which is "too late" when async
+// queues are enabled, since top level API is non-blocking and enqueue_* runs on child thread.
+void HWCommandQueue::populate_record_event(std::reference_wrapper<Event> event) {
+    auto &event_ref = event.get();
+    event_ref.cq_id = this->id;
+    event_ref.event_id = this->manager.get_next_event(this->id);
+    event_ref.device = this->device;
+}
+
+void HWCommandQueue::enqueue_record_event(std::reference_wrapper<Event> event) {
+    ZoneScopedN("HWCommandQueue_enqueue_record_event");
+    uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    auto event_id = event.get().event_id; // Captured and incremented, already.
+
+    if ((this->manager.get_issue_queue_write_ptr(this->id)) + command_size >= this->manager.get_issue_queue_limit(this->id)) {
+        this->issue_wrap();
+    }
+
+    auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event_id);
+    this->enqueue_command(command, false);
+    this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
+}
+
+void HWCommandQueue::enqueue_wait_for_event(std::reference_wrapper<Event> event) {
+    ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
+
+    uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    if ((this->manager.get_issue_queue_write_ptr(this->id)) + command_size >= this->manager.get_issue_queue_limit(this->id)) {
+        this->issue_wrap();
+    }
+
+    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, this->manager.get_next_event(this->id), event.get());
+    this->enqueue_command(command, false);
+    this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
+}
+
+
+void HWCommandQueue::enqueue_trace() {
+    ZoneScopedN("HWCommandQueue_enqueue_trace");
+    TT_THROW("Not implemented");
+}
+
 void HWCommandQueue::copy_into_user_space(uint32_t event, uint32_t read_ptr, chip_id_t mmio_device_id, uint16_t channel) {
     const auto& [buffer_layout, page_size, padded_page_size, dev_page_to_host_page_mapping, dst, dst_offset, num_pages_read, cur_host_page_id] =
         this->issued_reads.at(event);
@@ -972,6 +1081,7 @@ void HWCommandQueue::read_completion_queue() {
                     }
                     this->manager.completion_queue_pop_front(align(EVENT_PADDED_SIZE, 32), this->id);
                 }
+                this->manager.set_last_completed_event(this->id, event);
             }
             this->num_completed_commands += num_events_to_read;
         } else if (this->exit_condition) {
@@ -989,11 +1099,12 @@ void HWCommandQueue::finish() {
             if (DPrintServerHangDetected()) {
                 this->exit_condition = true;
                 TT_THROW("Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-            } else if (tt::llrt::watcher_server_killed_due_to_error()) {
+            } else if (tt::watcher_server_killed_due_to_error()) {
                 this->exit_condition = true;
                 TT_THROW(
-                    "Command Queue could not finish: device hang due to illegal NoC transaction. See build/watcher.log "
-                    "for details.");
+                    "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
+                    tt::watcher_get_log_file_name()
+                );
             }
         }
     } else {
@@ -1015,35 +1126,45 @@ void HWCommandQueue::completion_wrap(uint32_t event) {
     this->enqueue_command(command, false);
 }
 
-Trace::Trace(HWCommandQueue& command_queue): command_queue(command_queue) {
-    this->trace_complete = false;
-    this->num_data_bytes = 0;
+Trace::Trace() : trace_complete(false), num_data_bytes(0) {
+    this->cq = std::make_unique<CommandQueue>(this);
 }
 
 void Trace::record(const TraceNode& trace_node) {
-    TT_ASSERT(not this->trace_complete, "Cannot record any more for a completed trace");
+    TT_FATAL(not this->trace_complete, "Cannot record any more for a completed trace");
     this->num_data_bytes += trace_node.num_data_bytes;
     this->history.push_back(trace_node);
 }
 
-void Trace::create_replay() {
-    // Reconstruct the hugepage from the command cache
-    SystemMemoryManager& manager = this->command_queue.manager;
-    const uint32_t command_queue_id = this->command_queue.id;
-    const bool lazy_push = true;
-    for (auto& [device_command, data, command_type, num_data_bytes] : this->history) {
-        uint32_t issue_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-        device_command.update_buffer_transfer_src(0, issue_write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
-        manager.cq_write(device_command.data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_write_ptr);
-        manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, lazy_push, command_queue_id);
-
-        uint32_t host_data_size = align(data.size() * sizeof(uint32_t), 16);
-        manager.cq_write(data.data(), host_data_size, manager.get_issue_queue_write_ptr(command_queue_id));
-        vector<uint32_t> read_back(host_data_size / sizeof(uint32_t), 0);
-        tt::Cluster::instance().read_sysmem(
-            read_back.data(), host_data_size, issue_write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, 0, 0);
-        manager.issue_queue_push_back(host_data_size, lazy_push, command_queue_id);
+void Trace::validate() {
+    for (const auto& cmd : this->queue().worker_queue) {
+        if (cmd.blocking.has_value()) {
+            TT_FATAL(cmd.blocking.value() == false, "Blocking commands are not supported in traces");
+        }
     }
+}
+
+uint32_t Trace::next_trace_id() {
+    static uint32_t global_trace_id = 0;
+    return global_trace_id++;
+}
+
+uint32_t Trace::instantiate(CommandQueue& cq) {
+    uint32_t trace_id = next_trace_id();
+    cq.trace_ptr = this;
+
+    // Stage the trace commands into device DRAM that the command queue will read from
+    // - flatten commands into tightly packed data structure
+    // - allocate the data into a DRAM interleaved buffer using 2KB page size
+    // - commit the DRAM buffer via an enqueue WB command
+    // - map the trace id to the DRAM buffer for later enqueue Trace
+
+    if (trace_instances.count(trace_id)) {
+        TT_THROW("Trace ID " + std::to_string(trace_id) + " already exists");
+    }
+
+    trace_instances.insert(trace_id);
+    return trace_id;
 }
 
 void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, vector<uint32_t>& dst, bool blocking){
@@ -1113,23 +1234,28 @@ void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrappe
     }, buffer);
 }
 
-void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
+void EnqueueProgram(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_ASSERT(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
+    if (cq.get_mode() != CommandQueue::CommandQueueMode::TRACE) {
+        TT_FATAL(cq.id() == 0, "EnqueueProgram only supported on first command queue on device for time being.");
+    }
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_PROGRAM,
         .blocking = blocking,
-        .program = program,
-        .trace = trace
+        .program = program
     });
 }
 
-void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking, std::optional<std::reference_wrapper<Trace>> trace) {
+void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking) {
     ZoneScoped;
-    std::visit ( [&cq, blocking, trace](auto&& program) {
+    std::visit ( [&cq, blocking](auto&& program) {
         ZoneScoped;
         using T = std::decay_t<decltype(program)>;
         Device * device = cq.device();
+        std::optional<std::reference_wrapper<Trace>> trace;
+        if (cq.trace()) {
+            trace = std::optional<std::reference_wrapper<Trace>>(*cq.trace());
+        }
         if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
             detail::CompileProgram(device, program);
             program.get().allocate_circular_buffers();
@@ -1144,6 +1270,54 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
     }, program);
 }
 
+void EnqueueRecordEvent(CommandQueue& cq, Event &event) {
+    TT_ASSERT(event.device == nullptr, "EnqueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event.event_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event.cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
+
+    detail::DispatchStateCheck(true);
+    cq.hw_command_queue().populate_record_event(event);
+    cq.run_command(CommandInterface{
+        .type = EnqueueCommandType::ENQUEUE_RECORD_EVENT,
+        .blocking = false,
+        .event = event,
+    });
+}
+
+void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event) {
+    cq.hw_command_queue().enqueue_record_event(event);
+}
+
+
+void EnqueueWaitForEvent(CommandQueue& cq, Event &event) {
+    TT_ASSERT(event.device != nullptr, "EnqueueRecordEvent expected to be given Event with initialized device ptr");
+    TT_ASSERT(event.event_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized event_id");
+    TT_ASSERT(event.cq_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized cq_id");
+    log_trace(tt::LogMetal, "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
+        event.device->id(), event.cq_id, event.event_id, cq.device()->id(), cq.id());
+
+    detail::DispatchStateCheck(true);
+    cq.run_command(CommandInterface{
+        .type = EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT,
+        .blocking = false,
+        .event = event,
+    });
+}
+
+void EnqueueWaitForEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event) {
+    cq.hw_command_queue().enqueue_wait_for_event(event);
+}
+
+
+void EventSynchronize(Event& event) {
+    detail::DispatchStateCheck(true);
+    log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event.device->id(), event.cq_id, event.event_id);
+
+    while (event.device->sysmem_manager().get_last_completed_event(event.cq_id) < event.event_id) {
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+}
+
 void Finish(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -1156,51 +1330,74 @@ void FinishImpl(CommandQueue& cq) {
     cq.hw_command_queue().finish();
 }
 
-
-Trace BeginTrace(CommandQueue& cq) {
-    // Resets the command queue state
-    return Trace(cq.hw_command_queue());
+CommandQueue& BeginTrace(Trace& trace) {
+    TT_ASSERT(not trace.trace_complete, "Already completed this trace");
+    TT_ASSERT(trace.queue().empty(), "Cannot begin trace on one that already captured commands");
+    return trace.queue();
 }
 
 void EndTrace(Trace& trace) {
     TT_ASSERT(not trace.trace_complete, "Already completed this trace");
-    SystemMemoryManager& manager = trace.command_queue.manager;
-    const uint32_t command_queue_id = trace.command_queue.id;
-    TT_FATAL(
-        trace.num_data_bytes + trace.history.size() * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND <=
-            manager.get_issue_queue_limit(command_queue_id),
-        "Trace does not fit in issue queue");
     trace.trace_complete = true;
-    manager.set_issue_queue_size(
-        command_queue_id, trace.num_data_bytes + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * trace.history.size());
-    trace.create_replay();
-    manager.reset(trace.command_queue.id);
+    trace.validate();
 }
 
-void EnqueueTrace(Trace& trace, bool blocking) {
-    // Run the trace
-    HWCommandQueue& command_queue = trace.command_queue;
-    uint32_t trace_size = trace.history.size() * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + trace.num_data_bytes;
-    command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
-    command_queue.manager.issue_queue_push_back(trace_size, false, command_queue.id);
+uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
+    detail::DispatchStateCheck(true);
+    TT_ASSERT(cq.trace() == nullptr, "Multiple traces on a CQ is not supported yet");
+    uint32_t trace_id = trace.instantiate(cq);
+    return trace_id;
+}
 
-    // This will block because the wr toggles will be different between the host and the device
-    if (blocking) {
-        command_queue.manager.issue_queue_reserve_back(trace_size, command_queue.id);
+void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+    detail::DispatchStateCheck(true);
+    TT_ASSERT(cq.trace(), "A trace has not been instantiated on this command queue yet!");
+    if (cq.trace()->trace_instances.count(trace_id) == 0) {
+        TT_THROW("Trace instance " + std::to_string(trace_id) + " does not exist");
+    }
+    cq.run_command(CommandInterface{
+        .type = EnqueueCommandType::ENQUEUE_TRACE,
+        .blocking = blocking
+    });
+}
+
+void EnqueueTraceImpl(CommandQueue& cq) {
+    // STUB: Run the trace in eager mode for now
+    auto& tq = cq.trace()->queue();
+    for (const auto& cmd : tq.worker_queue) {
+        cq.run_command_impl(cmd);
     }
 }
 
-CommandQueue::CommandQueue(Device* device, uint32_t id) : device_ptr(device), cq_id(id) {
+CommandQueue::CommandQueue(Device* device, uint32_t id, CommandQueueMode mode) :
+    device_ptr(device),
+    trace_ptr(nullptr),
+    cq_id(id),
+    mode(mode),
+    worker_state(CommandQueueState::IDLE) {
     if (this->async_mode()) {
         this->start_worker();
     }
+}
+
+CommandQueue::CommandQueue(Trace* trace) :
+    device_ptr(nullptr),
+    trace_ptr(trace),
+    cq_id(-1),
+    mode(CommandQueueMode::TRACE),
+    worker_state(CommandQueueState::IDLE) {
+    TT_ASSERT(this->trace_ptr, "A valid trace must be provided for a trace mode queue");
 }
 
 CommandQueue::~CommandQueue() {
     if (this->async_mode()) {
         this->stop_worker();
     }
-    TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", this->cq_id);
+    if (this->trace_mode()) {
+        TT_ASSERT(this->trace()->trace_complete, "Trace capture must be complete before desctruction");
+    } else {
+        TT_ASSERT(this->worker_queue.empty(), "CQ{} worker queue must be empty on destruction", this->cq_id);
+    }
 }
 
 HWCommandQueue& CommandQueue::hw_command_queue() {
@@ -1209,11 +1406,11 @@ HWCommandQueue& CommandQueue::hw_command_queue() {
 
 void CommandQueue::wait_until_empty() {
     log_trace(LogDispatch, "CQ{} WFI start", this->cq_id);
-    // Insert a flush token to push all prior commands to completion
-    // Necessary to avoid implementing a peek and pop on the lock-free queue
-    this->worker_queue.push(CommandInterface{
-        .type = EnqueueCommandType::FLUSH
-    });
+    if (this->async_mode()) {
+        // Insert a flush token to push all prior commands to completion
+        // Necessary to avoid implementing a peek and pop on the lock-free queue
+        this->worker_queue.push(CommandInterface{.type = EnqueueCommandType::FLUSH});
+    }
     while (true) {
         if (this->worker_queue.empty()) {
             break;
@@ -1224,10 +1421,11 @@ void CommandQueue::wait_until_empty() {
 }
 
 void CommandQueue::set_mode(const CommandQueueMode& mode_) {
+    TT_ASSERT(not this->trace_mode(), "Cannot change mode of a trace command queue, copy to a non-trace command queue instead!");
     this->mode = mode_;
     if (this->async_mode()) {
         this->start_worker();
-    } else if (passthrough_mode()) {
+    } else {
         this->wait_until_empty();
         this->stop_worker();
     }
@@ -1268,10 +1466,11 @@ void CommandQueue::run_worker() {
 }
 
 void CommandQueue::run_command(const CommandInterface& command) {
-    log_trace(LogDispatch, "CQ{} received {} in {} mode", this->cq_id, command.type, this->async_mode() ? "ASYNC" : "PASSTHROUGH");
-    if (this->async_mode()) {
+    log_trace(LogDispatch, "CQ{} received {} in {} mode", this->cq_id, command.type, this->mode);
+    if (not this->passthrough_mode()) {
         this->worker_queue.push(command);
         if (command.blocking.has_value() and *command.blocking == true) {
+            TT_ASSERT(not this->trace_mode(), "Blocking commands cannot be traced!");
             this->wait_until_empty();
         }
     } else {
@@ -1297,7 +1496,18 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         case EnqueueCommandType::ENQUEUE_PROGRAM:
             TT_ASSERT(command.program.has_value(), "Must provide a program!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueProgramImpl(*this, command.program.value(), command.blocking.value(), command.trace);
+            EnqueueProgramImpl(*this, command.program.value(), command.blocking.value());
+            break;
+        case EnqueueCommandType::ENQUEUE_TRACE:
+            EnqueueTraceImpl(*this);
+            break;
+        case EnqueueCommandType::ENQUEUE_RECORD_EVENT:
+            TT_ASSERT(command.event.has_value(), "Must provide an event!");
+            EnqueueRecordEventImpl(*this, *command.event);
+            break;
+        case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT:
+            TT_ASSERT(command.event.has_value(), "Must provide an event!");
+            EnqueueWaitForEventImpl(*this, *command.event);
             break;
         case EnqueueCommandType::FINISH:
             FinishImpl(*this);
@@ -1318,8 +1528,22 @@ std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER: os << "ENQUEUE_READ_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_WRITE_BUFFER: os << "ENQUEUE_WRITE_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_PROGRAM: os << "ENQUEUE_PROGRAM"; break;
+        case EnqueueCommandType::ENQUEUE_TRACE: os << "ENQUEUE_TRACE"; break;
+        case EnqueueCommandType::ENQUEUE_RECORD_EVENT: os << "ENQUEUE_RECORD_EVENT"; break;
+        case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT: os << "ENQUEUE_WAIT_FOR_EVENT"; break;
         case EnqueueCommandType::FINISH: os << "FINISH"; break;
-        default: tt::log_fatal("Invalid command type!");
+        case EnqueueCommandType::FLUSH: os << "FLUSH"; break;
+        default: TT_THROW("Invalid command type!");
+    }
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, CommandQueue::CommandQueueMode const& type) {
+    switch (type) {
+        case CommandQueue::CommandQueueMode::PASSTHROUGH: os << "PASSTHROUGH"; break;
+        case CommandQueue::CommandQueueMode::ASYNC: os << "ASYNC"; break;
+        case CommandQueue::CommandQueueMode::TRACE: os << "TRACE"; break;
+        default: TT_THROW("Invalid CommandQueueMode type!");
     }
     return os;
 }

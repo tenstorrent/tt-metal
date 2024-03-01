@@ -151,7 +151,6 @@ class TtFalconModelShared(torch.nn.Module):
             )
 
             attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
-            attention_mask_bool[:, :, :, -1] = True
 
             num_max_tokens = nearest_32(
                 kv_cache_len + 1

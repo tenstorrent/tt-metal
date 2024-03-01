@@ -86,6 +86,8 @@ inline __attribute__((always_inline)) constexpr static std::int32_t GET_L1_TILE_
         case ((uint8_t)DataFormat::Float16_b): return ((2048 >> 4));
         case ((uint8_t)DataFormat::Float16): return ((2048 >> 4));
 
+        case ((uint8_t)DataFormat::UInt16): return ((2048 >> 4));
+
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b): return ((1024 >> 4) + (64 >> 4));
 
@@ -102,9 +104,15 @@ inline __attribute__((always_inline)) constexpr static std::int32_t GET_L1_TILE_
 
 inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::Float32): return (index << 12);
+        case ((uint8_t)DataFormat::UInt16):
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (index << 11);
+        case ((uint8_t)DataFormat::Float32): return (index << 12);
+        case ((uint8_t)DataFormat::Bfp2):
+        case ((uint8_t)DataFormat::Bfp2_b): return ((index << 8) + (index << 6));
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp4_b): return ((index << 9) + (index << 6));
+        case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b):
         // Keep default as Bfp8?
         default: return ((index << 10) + (index << 6));
@@ -859,7 +867,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
  * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
  * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
  */
-FORCE_INLINE
+inline
 void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size) {
     /*
         Read requests - use static VC
@@ -1123,7 +1131,7 @@ FORCE_INLINE void noc_async_read_tile(
  * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | DOX-TODO(insert a reference  to what constitutes valid coords) | True     |
  * | size              | Size of data transfer in bytes | uint32_t | 0..1MB                                                    | True     |
  */
-FORCE_INLINE
+inline
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size) {
     DEBUG_STATUS('N', 'A', 'W', 'W');
     DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr, size);
@@ -1157,7 +1165,7 @@ uint32_t eth_get_semaphore(uint32_t semaphore_id) {
     return eth_l1_mem::address_map::SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
 }
 
-FORCE_INLINE
+inline
 void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr) {
     DEBUG_STATUS('N', 'S', 'S', 'W');
     DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr, 4);
@@ -1206,7 +1214,7 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
  * | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
  * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
  */
-FORCE_INLINE
+inline
 void noc_async_write_multicast(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
@@ -1248,7 +1256,7 @@ void noc_async_write_multicast(
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | num_dests              | Number of destinations that the multicast source is targetting | uint32_t | 0..119                                                    | True     |
  */
-FORCE_INLINE
+inline
 void noc_semaphore_set_multicast(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false) {
     DEBUG_STATUS('N', 'S', 'M', 'W');
@@ -1267,12 +1275,32 @@ void noc_semaphore_set_multicast(
     DEBUG_STATUS('N', 'S', 'M', 'D');
 }
 
-FORCE_INLINE
+inline
+void noc_semaphore_set_multicast_loopback_src(
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false) {
+    DEBUG_STATUS('N', 'S', 'M', 'W');
+    DEBUG_SANITIZE_NOC_MULTI_ADDR(dst_noc_addr_multicast, 4);
+    DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, 4);
+    ncrisc_noc_fast_write_any_len_loopback_src(
+        noc_index,
+        NCRISC_WR_REG_CMD_BUF,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        4 /*size in bytes*/,
+        NOC_MULTICAST_WRITE_VC,
+        true,
+        linked,
+        num_dests);
+    DEBUG_STATUS('N', 'S', 'M', 'D');
+}
+
+inline
 void noc_async_write_multicast_loopback_src(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t size,
-    std::uint32_t num_dests) {
+    std::uint32_t num_dests,
+    bool linked = false) {
     DEBUG_STATUS('N', 'M', 'L', 'W');
     DEBUG_SANITIZE_NOC_MULTI_ADDR(dst_noc_addr_multicast, size);
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
@@ -1284,7 +1312,7 @@ void noc_async_write_multicast_loopback_src(
         size,
         NOC_MULTICAST_WRITE_VC,
         true,
-        false,
+        linked,
         num_dests);
     DEBUG_STATUS('N', 'M', 'L', 'D');
 }
@@ -1387,7 +1415,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
-FORCE_INLINE
+inline
 void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
@@ -1395,94 +1423,8 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
   */
     DEBUG_STATUS('N', 'S', 'I', 'W');
     DEBUG_SANITIZE_NOC_ADDR(addr, 4);
-    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, addr, incr, 31 /*wrap*/, false /*linked*/);
+    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, addr, NOC_UNICAST_WRITE_VC, incr, 31 /*wrap*/, false /*linked*/);
     DEBUG_STATUS('N', 'S', 'I', 'D');
-}
-
-// optimized NOC transfer APIs
-inline void noc_fast_read(uint32_t src_addr, uint32_t dest_addr) {
-    DEBUG_STATUS('N', 'F', 'R', 'W');
-    DEBUG_SANITIZE_NOC_ADDR((uint64_t)(src_addr) |
-                            (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32,
-                            NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-    DEBUG_SANITIZE_WORKER_ADDR(dest_addr, NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    DEBUG_STATUS('N', 'F', 'R', 'D');
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-}
-
-inline void noc_fast_read_set_src_xy(uint64_t src_addr) {
-    DEBUG_STATUS('N', 'F', 'R', 'W');
-    DEBUG_SANITIZE_NOC_ADDR(src_addr, NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    DEBUG_STATUS('N', 'F', 'R', 'D');
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_addr >> 32);
-}
-
-inline void noc_fast_read_set_len(uint32_t len_bytes) {
-    DEBUG_STATUS('N', 'R', 'L', 'W');
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    DEBUG_STATUS('N', 'R', 'L', 'D');
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, len_bytes);
-}
-
-inline void noc_fast_read_inc_num_issued(uint32_t num_issued) {
-    // while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    noc_reads_num_issued[noc_index] += num_issued;
-}
-
-// a fast write that assumes a single-dest (ie unicast)
-inline void noc_fast_write(uint32_t src_addr, uint64_t dest_addr) {
-    DEBUG_STATUS('N', 'F', 'W', 'W');
-    DEBUG_SANITIZE_NOC_ADDR(dest_addr |
-                            (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID) << 32,
-                            NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
-    DEBUG_SANITIZE_WORKER_ADDR(dest_addr, NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-    DEBUG_STATUS('N', 'F', 'W', 'D');
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-}
-
-inline void noc_fast_write_set_cmd_field(uint32_t vc, bool mcast, bool linked) {
-    DEBUG_STATUS('N', 'W', 'S', 'W');
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-    DEBUG_STATUS('N', 'W', 'S', 'D');
-
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             (linked ? NOC_CMD_VC_LINKED : 0x0) |
-                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) | NOC_CMD_RESP_MARKED;
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CTRL, noc_cmd_field);
-}
-
-inline void noc_fast_write_set_dst_xy(uint64_t dest_addr) {
-    DEBUG_STATUS('N', 'W', 'X', 'W');
-    DEBUG_SANITIZE_NOC_ADDR(dest_addr, NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-    DEBUG_STATUS('N', 'W', 'X', 'D');
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, dest_addr >> 32);
-}
-
-inline void noc_fast_write_set_len(uint32_t len_bytes) {
-    DEBUG_STATUS('N', 'W', 'L', 'W');
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-    DEBUG_STATUS('N', 'W', 'L', 'D');
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE, len_bytes);
-}
-
-inline void noc_fast_write_inc_num_dests(uint32_t num_issued) {
-    // while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-    noc_nonposted_writes_num_issued[noc_index] += num_issued;
-    noc_nonposted_writes_acked[noc_index] += num_issued;
 }
 
 enum class BufferType: uint8_t {

@@ -22,10 +22,10 @@
 * LLK PACK
 *************************************************************************/
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false>
 inline void llk_pack_mop_config(const uint32_t output) {
     constexpr bool write_tile_header = false;
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>();
+    _llk_pack_mop_config_<untilize, zero_output, DstTileFaceLayout::RowMajor, write_tile_header>();
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/>
@@ -69,13 +69,13 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
     constexpr bool write_tile_header = false;
 
-    _llk_pack_init_<untilize, zero_output, FaceLayout, write_tile_header>();
+    _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, write_tile_header>();
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -116,12 +116,15 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 *************************************************************************/
 
 template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize_init() {
-    _llk_pack_untilize_init_<block_ct_dim>();
+inline void llk_pack_untilize_init(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+    _llk_pack_untilize_init_<block_ct_dim>(
+        face_r_dim,
+        num_faces
+    );
 }
 
-template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
+template <std::uint32_t block_ct_dim = 8, bool pack_dense = false>
+inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
 
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
@@ -130,10 +133,13 @@ inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
 
         _llk_pack_untilize_<block_ct_dim>(
             pack_tile_addr,
-            pack_dst_format[output_id]
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces
         );
 
-        pack_tile_addr += block_ct_dim*(std::uint32_t)(GET_L1_TILE_SIZE<true>(pack_dst_format[output_id]));
+        pack_tile_addr += block_ct_dim*(pack_dense ? (std::uint32_t)SCALE_DATUM_SIZE(pack_dst_format[output_id], num_faces*face_r_dim*FACE_C_DIM) :
+                                                    (std::uint32_t)(GET_L1_TILE_SIZE<true>(pack_dst_format[output_id])));
     }
 }
 
@@ -155,14 +161,14 @@ inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en>();
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
+template <DstSync Dst, bool untilize = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
-    _llk_init_packer_dest_offset_registers_<Dst, FaceLayout, untilize>();
+    _llk_init_packer_dest_offset_registers_<Dst, DstTileFaceLayout::RowMajor, untilize>();
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
+template <DstSync Dst, bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
-    _llk_pack_dest_init_<Dst, FaceLayout, untilize, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<Dst, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math=true, bool mail2pack=true>
@@ -183,17 +189,17 @@ inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
     _llk_pack_debug_dump_seek_(offset);
 }
 
-template <bool is_fp32_dest_acc_en = false /*unused*/, bool is_tile_dim_reconfig_en = false /*unused*/, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /*unused*/>
+template <bool is_fp32_dest_acc_en = false /*unused*/, bool is_tile_dim_reconfig_en = false /*unused*/>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     std::uint32_t output_id = get_output_id(new_output);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor>(
         pack_dst_format[output_id],
         cb_interface[output_id].fifo_page_size
     );
 }
 
-template <bool is_fp32_dest_acc_en = false /*unused*/, bool is_tile_dim_reconfig_en = false /*unused*/, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /*unused*/>
+template <bool is_fp32_dest_acc_en = false /*unused*/, bool is_tile_dim_reconfig_en = false /*unused*/>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -201,7 +207,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     if((pack_dst_format[old_output_id] != pack_dst_format[new_output_id])
        && (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid)
        && (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout>(new_output);
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(new_output);
     }
 }
 

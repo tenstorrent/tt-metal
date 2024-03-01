@@ -46,25 +46,62 @@ def tensor_slice(input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisTyp
 
 
 @convert_tt_tensors_wrapper
-def reshape(input: ttl_tensor.Tensor, N: int, C: int, H: int, W: int) -> ttl_tensor.Tensor:
+def reshape(
+    input: ttl_tensor.Tensor,
+    N: int,
+    C: int,
+    H: int,
+    W: int,
+    output_layout: Optional[ttl_tensor.Layout] = ttl_tensor.Layout.TILE,
+    output_on_device: Optional[bool] = True,
+) -> ttl_tensor.Tensor:
     """
     Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
 
-    +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | Argument   | Description                                   | Data type   | Valid range     | Required |
-    +============+===============================================+=============+=================+==========+
-    | input      | Input tensor                                  | Tensor      |                 | Yes      |
-    +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | N          | Size of the first dimension of output tensor  | int         |                 | Yes      |
-    +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | C          | Size of the second dimension of output tensor | int         |                 | Yes      |
-    +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | H          | Size of the third dimension of output tensor  | int         |                 | Yes      |
-    +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | W          | Size of the fourth dimension of output tensor | int         |                 | Yes      |
-    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument         | Description                                   | Data type   | Valid range     | Required |
+    +==================+===============================================+=============+=================+==========+
+    | input            | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | N                | Size of the first dimension of output tensor  | int         |                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | C                | Size of the second dimension of output tensor | int         |                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | H                | Size of the third dimension of output tensor  | int         |                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | W                | Size of the fourth dimension of output tensor | int         |                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | output_layout    | Output layout                                 | Layout      | default is TILE | No       |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | output_on_device | Output on device                              | bool        | default is True | No       |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.reshape(input, (N, C, H, W))
+
+
+@convert_tt_tensors_wrapper
+def permute(
+    input: ttl_tensor.Tensor,
+    dims: Tuple[int],
+    output_layout: Optional[ttl_tensor.Layout] = ttl_tensor.Layout.TILE,
+    output_on_device: Optional[bool] = True,
+) -> ttl_tensor.Tensor:
+    """
+    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
+
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument         | Description                                   | Data type   | Valid range     | Required |
+    +==================+===============================================+=============+=================+==========+
+    | input            | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | dims             | Desired ordering of dimensions                | Tuple of int|                 | Yes      |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | output_layout    | Output layout                                 | Layout      | default is TILE | No       |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    | output_on_device | Output on device                              | bool        | default is True | No       |
+    +------------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.permute(input, dims)
 
 
 @convert_tt_tensors_wrapper
@@ -224,6 +261,8 @@ def pad(
     pad: Tuple[int],
     mode: str = "constant",
     value: Optional[int] = None,
+    output_layout: Optional[ttl_tensor.Layout] = ttl_tensor.Layout.TILE,
+    output_on_device: Optional[bool] = True,
 ) -> ttl_tensor.Tensor:
     r"""
     Pads tensor.
@@ -244,6 +283,10 @@ def pad(
     | mode             | Padding mode                                              | string           | `constant`, `reflect`, `replicate`, or `circular` (default is `constant`) | No       |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     | value            | Fill value for `constant` padding                         | int              | default is 0                                                              | No       |
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | output_layout    | Output layout                                             | Layout           | default is TILE                                                           | No       |
+    +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
+    | output_on_device | Output on device                                          | bool             | default is True                                                           | No       |
     +------------------+-----------------------------------------------------------+------------------+---------------------------------------------------------------------------+----------+
     """
     return torch.nn.functional.pad(input, pad, mode, value)

@@ -13,14 +13,14 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "llrt/watcher.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
 Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines) :
-    watcher_kernel_id_(llrt::watcher_register_kernel(kernel_path_file_name)),
+    watcher_kernel_id_(watcher_register_kernel(kernel_path_file_name)),
     kernel_path_file_name_(kernel_path_file_name),
     core_range_set_(core_range_set),
     binary_size16_(0),
@@ -124,7 +124,8 @@ std::string DataMovementKernel::config_hash() const {
     return fmt::format("{}", magic_enum::enum_name(this->config_.noc));
 }
 
-std::string EthernetKernel::config_hash() const { return fmt::format("{}", magic_enum::enum_name(this->config_.noc)); }
+// Add "eth_" to the hash to differentiate between erisc and brisc.
+std::string EthernetKernel::config_hash() const { return fmt::format("eth_{}", magic_enum::enum_name(this->config_.noc)); }
 
 std::string ComputeKernel::config_hash() const {
     return fmt::format("{}_{}_{}", magic_enum::enum_name(this->config_.math_fidelity), this->config_.fp32_dest_acc_en, this->config_.math_approx_mode);

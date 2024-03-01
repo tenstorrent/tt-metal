@@ -34,6 +34,7 @@
 #include "type_caster.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_lib_bindings_tensor.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt::tt_metal{
 
@@ -268,15 +269,10 @@ void TensorModule(py::module &m_tensor) {
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet",  R"doc(
         Class defining a set of CoreRanges required for sharding)doc"
     );
-    pyCoreRangeSet
-        .def(
-            py::init<>(
-                [](const std::set<CoreRange> &core_ranges ) {
-                    return CoreRangeSet(core_ranges);
-                }
-            )
-        );
-
+    pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+        .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
+            return fmt::format("{}", core_range_set);
+        });
 
     auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
@@ -325,6 +321,24 @@ void TensorModule(py::module &m_tensor) {
 
     auto py_borrowed_buffer_for_bfloat16_t = py::class_<borrowed_buffer::Buffer<bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
+
+    py::class_<GrayskullComputeKernelConfig>(m_tensor, "GrayskullComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true
+        );
+
+    py::class_<WormholeComputeKernelConfig>(m_tensor, "WormholeComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool, bool, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true,
+            py::arg("fp32_dest_acc_en") = false,
+            py::arg("packer_l1_acc") = false
+        );
 
     detail::bind_unary_op(m_tensor, "mean_hw", tt::tt_metal::mean_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
     detail::bind_unary_op(m_tensor, "global_mean", tt::tt_metal::global_mean, R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");
@@ -377,15 +391,21 @@ void TensorModule(py::module &m_tensor) {
 
     py::class_<OptimizedConvParallelizationConfig>(m_tensor, "OptimizedConvParallelizationConfig")
         .def(
-            py::init<CoreCoord, uint32_t, uint32_t>(),
+            py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("grid_size"),
+            py::arg("num_cores_nhw"),
             py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_weight_matrix_width_ntiles").noconvert()
-        )
+            py::arg("per_core_weight_matrix_width_ntiles").noconvert())
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
-        .def_property_readonly("per_core_out_matrix_height_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_weight_matrix_width_ntiles; });
+        .def_property_readonly(
+            "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
+        .def_property_readonly(
+            "per_core_out_matrix_height_ntiles",
+            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
+        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
+            return c.per_core_weight_matrix_width_ntiles;
+        });
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
@@ -411,7 +431,8 @@ void TensorModule(py::module &m_tensor) {
                  py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("conv_reader_indices").noconvert() = std::nullopt,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert() = 0,
-                 py::arg("output_mem_config").noconvert() = std::nullopt, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("input_tensor_shape").noconvert() = std::nullopt, R"doc(
+                 py::arg("output_mem_config").noconvert() = std::nullopt, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("input_tensor_shape").noconvert() = std::nullopt,
+                 py::arg("use_shallow_conv_variant").noconvert() = false, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 

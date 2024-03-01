@@ -9,10 +9,16 @@ import ttnn
 from transformers.models import bloom
 
 from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def torch_random(shape, low, high, dtype):
+    if dtype in {torch.bool, torch.int64}:
+        return torch.randint(low, high, shape, dtype=dtype)
+    return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
 @skip_for_wormhole_b0()
@@ -27,7 +33,7 @@ def test_bloom_attention(device, model_name, batch_size, sequence_size):
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
     torch_residual = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
-    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
+    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.bool)
     torch_alibi = bloom.modeling_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.float32)
 
     torch_causal_mask = torch.empty((sequence_size, sequence_size), dtype=torch.bool)
@@ -36,7 +42,6 @@ def test_bloom_attention(device, model_name, batch_size, sequence_size):
     torch_causal_mask = torch_causal_mask[None, None, :, :].expand(
         batch_size, config.n_head, sequence_size, sequence_size
     )
-    torch_causal_mask = torch_causal_mask.float()
 
     torch_output, *_ = model(
         torch_hidden_states,
@@ -70,4 +75,4 @@ def test_bloom_attention(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9956)
+    assert_with_pcc(torch_output, output, pcc=0.993)

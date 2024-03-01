@@ -38,6 +38,16 @@ def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     return pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
+def check_with_pcc_without_tensor_printout(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    if expected_pytorch_result.shape != actual_pytorch_result.shape:
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+        )
+    pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    return pcc_passed, pcc_message
+
+
 def set_slow_dispatch_mode(set_var):
     prev_value = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
 

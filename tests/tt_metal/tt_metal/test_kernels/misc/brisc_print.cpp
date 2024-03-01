@@ -22,7 +22,8 @@ void kernel_main() {
 
     DPRINT_DATA0(
         DPRINT << "Test Debug Print: Data0" << ENDL();
-        print_test_data();
+        print_test_data_basic_types();
+        print_test_data_modifiers();
         // Let the next core (PACK) know to start printing.
         DPRINT << RAISE{1};
     );

@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import ttnn
+import torch
+from typing import Optional
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_resnetblock2d import resnetBlock2D
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_downsample_2d import downsample_2d
 
@@ -25,6 +27,9 @@ def downblock2d(
     add_downsample=False,
     downsample_padding=1,
     parameters=None,
+    reader_patterns_cache: Optional[dict] = None,
+    dtype: Optional[ttnn.DataType] = None,
+    compute_kernel_config=None,
 ):
     output_states = ()
     for i in range(num_layers):
@@ -45,6 +50,8 @@ def downblock2d(
             eps=resnet_eps,
             up=False,
             down=False,
+            dtype=dtype,
+            reader_patterns_cache=reader_patterns_cache,
         )
 
         hidden_states = resnet
@@ -61,6 +68,9 @@ def downblock2d(
                 name="op",
                 parameters=parameters.downsamplers[0],
                 device=device,
+                dtype=dtype,
+                reader_patterns_cache=reader_patterns_cache,
+                compute_kernel_config=compute_kernel_config,
             )
         ]
 

@@ -12,9 +12,13 @@ Table of Contents
       * [Setting logger level](#setting-logger-level)
       * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
       * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
-   * [Running tests on tt-metal](#running-tests-on-tt-metal)
-      * [Running pre/post-commit regressions](#running-prepost-commit-regressions)
+   * [Tests in tt-metal](#running-tests-on-tt-metal)
+      * [Running post-commit regressions](#running-post-commit-regressions)
+      * [Adding post-commit tests](#adding-post-commit-tests)
       * [Running model performance tests](#running-model-performance-tests)
+      * [Running C++ Integration Tests (Legacy)](#running-c-integration-tests-legacy)
+      * [Running Googlegtest (gtest) C++ tests](#running-googletest-gtest-c-tests)
+      * [Running Python integration tests](#running-python-integration-tests)
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
       * [File structure and formats](#file-structure-and-formats)
@@ -151,16 +155,21 @@ the built Python dev environment stored at `build/python_env/`.
 To delete absolutely everything including the Python environment, use `make
 nuke`.
 
-## Running tests on tt-metal
+## Tests in tt-metal
 
-Ensure you're in a developer environment with necessary environment variables
+Ensure you're in a developer Python environment with necessary environment variables
 set as documentating in the [developing section](#developing-tt-metal).
 
 This includes the environment variables, Python dev environment etc.
 
-### Running pre/post-commit regressions
+All developers are responsible for ensuring that post-commit regressions pass
+upon any submission to the project. We will cover how to run these regressions
+both locally and on CI. Failure to ensure these tests pass will constitute a
+major regression and will likely mean reverting your commits.
 
-You must run regressions before you commit something.
+### Running post-commit regressions
+
+You must run post-commit regressions before you commit something.
 
 These regressions will also run after every pushed commit to the GitHub repo.
 
@@ -178,6 +187,17 @@ commit.
 pytest tests/python_api_testing/unit_testing/ -vvv
 pytest tests/python_api_testing/sweep_tests/pytests/ -vvv
 ```
+
+If you would like to run the post-commit tests on GitHub Actions, please refer
+to [using CI for development](#using-cicd-for-development).
+
+### Adding post-commit tests
+
+Make sure to add post-commit tests in the at the lowest two levels of the tests
+directory to make sure tests are executed on the workflows.
+
+New shell scripts added above the lowest two levels may not be executed on the
+post-commit workflows!
 
 ### Running model performance tests
 
@@ -197,6 +217,64 @@ If you are using a machine with bare metal machine specs, please use
 ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_bare_metal
 ```
 
+### Running C++ Integration Tests (Legacy)
+
+We have a legacy suite of C++ integration tests that are built like standalone
+executables. This section goes over how to generally run such tests if there's
+a specific one you'd like to run.
+
+1. Build the API integration tests using the make command,
+```
+make tests
+```
+2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
+
+### Running Googletest (gtest) C++ tests
+
+The new fangled way we run our tests is with Googletest. The way we generally
+structure our tests with this framework is to bundle it into a single
+executable.
+
+You can use `--gtest_filter_test` to filter out the specific test you'd like.
+For example, to build and run the `CommonFixture.DRAMLoopbackSingleCore` on
+fast dispatch, you can
+
+1. Build the unit tests:
+   ```
+   make tests
+   ```
+2. Run the test:
+   ```
+   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommonFixture.DRAMLoopbackSingleCore"
+   ```
+
+On slow dispatch, to run another specific test, the equivalent would be:
+
+1. Build the unit tests as you would above.
+2. Run with the slow dispatch mode:
+   ```
+   export TT_METAL_SLOW_DISPATCH_MODE=1
+   ./build/test/tt_metal/unit_tests/fast_dispatch --gtest_filter_test="BasicFixture.TestL1BuffersAllocatedTopDown"
+   ```
+
+We have split our tests into the two dispatch modes for less pollution of state
+between the two. We would like to eventually enable switching between the two
+modes easily.
+
+### Running Python integration tests
+
+We use pytest to run our Python-based tests. This is the general procedure for
+running such tests.
+
+1. Run the specific test point with pytest tool, e.g.
+   ```
+   $ pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
+   ```
+2. If you have any issues with import paths for python libraries include the following environment variable,
+   ```
+   $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}
+   ```
+
 ## Debugging tips
 
 - To print within a kernel the following must be added:
@@ -207,10 +285,16 @@ If you are using a machine with bare metal machine specs, please use
   - In the kernel: `#include "debug/dprint.h"`
   - To print in the kernel : `DPRINT << <variable to print> << ENDL();`
 - To use GDB to debug the C++ python binding itself:
-  - Build with debug symbols `make build config=debug`
+  - Build with debug symbols `make build CONFIG=debug`
   - Ensure the python file you wish to debug, is standalone and has a main function
   - Run `gdb --args python <python file> `
   - You can add breakpoints for future loaded libraries
+- To log the compile time arguments passed with `-D` during the kernel build phase:
+  - Run with Watcher enabled. Please refer to the [Watcher documentation](docs/source/tools/watcher.rst)
+  - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
+- To examine the compile time arguments of a kernel:
+  - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
+  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`
 
 ## Contribution standards
 
@@ -271,8 +355,10 @@ If you are using a machine with bare metal machine specs, please use
 
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
-  "[post-commit] Run all post-commit workflows", clicking "Run workflow",
+  on the link to [all post-commit workflows](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
+
+  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
 
   You can see the status of your CI run by clicking on the specific run you
   dispatched.

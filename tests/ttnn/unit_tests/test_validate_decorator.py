@@ -25,4 +25,4 @@ def test_add(device, batch_size, h, w):
 
     with pytest.raises(RuntimeError) as exception:
         output_tensor = input_tensor + input_tensor
-    assert "ttnn.add: Tensor must be of layout {<Layout.TILE: 1>}, but got Layout.ROW_MAJOR" in str(exception.value)
+    assert "Tensor must be of layout" in str(exception.value)

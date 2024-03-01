@@ -24,6 +24,40 @@ def _torch_pad(input_tensor: ttnn.Tensor, padding, value):
     return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
 
 
+def _fallback_pad(input_tensor: ttnn.Tensor, padding, value):
+    if len(padding) != len(input_tensor.shape):
+        raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
+
+    for start, end in padding:
+        if start < 0 or end < 0:
+            raise RuntimeError("ttnn.pad: padding must be non-negative")
+
+    pad_start = tuple(start for start, _ in padding)
+    *_, pad_start_height, pad_start_width = pad_start
+    if input_tensor.layout == ttnn.TILE_LAYOUT:
+        if pad_start_height % ttnn.TILE_SIZE != 0 or pad_start_width % ttnn.TILE_SIZE != 0:
+            raise RuntimeError(
+                "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
+            )
+
+    pad_end = tuple(end for _, end in padding)
+    *_, pad_end_height, pad_end_width = pad_end
+    if input_tensor.layout == ttnn.TILE_LAYOUT:
+        if pad_end_height % ttnn.TILE_SIZE != 0 or pad_end_width % ttnn.TILE_SIZE != 0:
+            raise RuntimeError(
+                "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
+            )
+
+    output_tensor = _torch_pad(input_tensor, padding, value)
+    output_tensor = ttnn.from_torch(
+        output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
+    )
+
+    # Padding always turn the intended shape to the shape with tile padding. For simplicity of the operation
+    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.shape.with_tile_padding())
+    return output_tensor
+
+
 def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,
@@ -40,11 +74,18 @@ def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     name="ttnn.pad",
     validate_input_tensors=_pad_validate_input_tensors,
     torch_function=_torch_pad,
+    fallback=_fallback_pad,
 )
-def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float]) -> ttnn.Tensor:
+def pad(
+    input_tensor: ttnn.Tensor,
+    padding: Tuple[Tuple[int, int], ...],
+    value: Union[int, float],
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     r"""
 
-    pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float]) -> ttnn.Tensor
+    pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
     Pad tensor with constant value.
 
@@ -54,13 +95,54 @@ def pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: 
         * :attr:`input_tensor`: input tensor
         * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
         * :attr:`value`: value to pad with
+        * :attr:`memory_config`: the memory configuration to use for the operation
 
     """
+    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+        raise RuntimeError(
+            "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error"
+        )
 
-    output_tensor = _torch_pad(input_tensor, padding, value)
-    output_tensor = ttnn.from_torch(
-        output_tensor, dtype=input_tensor.dtype, device=input_tensor.device, layout=input_tensor.layout
+    original_rank = len(input_tensor.shape)
+    if len(padding) != original_rank:
+        raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
+
+    for start, end in padding:
+        if start < 0 or end < 0:
+            raise RuntimeError("ttnn.pad: padding must be non-negative")
+
+    if original_rank < 4:
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        padding = tuple((0, 0) for _ in range(4 - original_rank)) + padding
+
+    input_shape_with_tile_padding = input_tensor.shape.with_tile_padding()
+
+    pad_start = tuple(start for start, _ in padding)
+    if sum(pad_start) != 0:
+        raise RuntimeError("ttnn.pad: padding start must be 0 currently")
+
+    pad_end = tuple(end for _, end in padding)
+    *_, pad_end_height, pad_end_width = pad_end
+    if input_tensor.layout == ttnn.TILE_LAYOUT:
+        if pad_end_height % ttnn.TILE_SIZE != 0 or pad_end_width % ttnn.TILE_SIZE != 0:
+            raise RuntimeError(
+                "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
+            )
+
+    padded_shape = tuple(dim + end for dim, end in zip(input_shape_with_tile_padding, pad_end))
+
+    ttl_input_tensor = input_tensor.value
+    ttl_output_tensor = ttl.tensor.pad(
+        ttl_input_tensor, padded_shape, pad_start, value, output_mem_config=memory_config, use_multicore=True
     )
+
+    output_tensor = ttnn.Tensor(ttl_output_tensor)
+    while len(output_tensor.shape) > original_rank:
+        output_tensor = ttnn.squeeze(output_tensor, dim=0)
+
+    # Padding always turn the intended shape to the shape with tile padding. For simplicity of the operation
+    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.shape.with_tile_padding())
+
     return output_tensor
 
 
@@ -410,6 +492,81 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
         output_tensor = ttl.tensor.decorate_external_operation(
             torch_repeat_interleave, function_name="torch_repeat_interleave"
         )(input_tensor, repeats, dim=dim)
+        return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
+
+
+def _torch_repeat(tensor, shape, **_):
+    import torch
+
+    return ttnn.to_torch(tensor).repeat(shape[0], shape[1], shape[2], shape[3])
+
+
+def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=True,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.repeat",
+    validate_input_tensors=_repeat_validate_input_tensors,
+    torch_function=_torch_repeat,
+)
+def repeat(
+    input_tensor: ttnn.Tensor,
+    shape: ttnn.Shape,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    repeat(input_tensor: ttnn.Tensor, shape : ttnn.Shape) -> ttnn.Tensor
+
+    Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+
+    Args:
+        * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
+        * :attr:`shape`: The number of repetitions for each element.
+
+    Example::
+
+        >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2,)), device)
+        >>> print(tensor)
+        tensor([[1, 2],
+        [1, 2],
+        [3, 4],
+        [3, 4]])
+
+    """
+
+    if not isinstance(shape, ttnn.Shape):
+        raise RuntimeError("ttnn: Expected shape to be a ttnn.Shape")
+
+    dtype = input_tensor.dtype
+    device = input_tensor.device
+    layout = input_tensor.layout
+    rank = len(input_tensor.shape)
+    if dtype == ttnn.bfloat16 and rank == 4:
+        ttl_input_tensor = input_tensor.value
+        output_tensor = ttnn.Tensor(ttl.tensor.repeat(ttl_input_tensor, shape))
+        *batch, _, _ = output_tensor.shape
+        *_, h, w = input_tensor.shape
+        *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
+
+        output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
+        return output_tensor
+    else:
+
+        def torch_repeat(tensor, shape):
+            return _torch_repeat(tensor, shape)
+
+        output_tensor = ttl.tensor.decorate_external_operation(torch_repeat, function_name="torch_repeat")(
+            input_tensor, shape
+        )
         return ttnn.from_torch(output_tensor, device=device, dtype=dtype, layout=layout)
 
 

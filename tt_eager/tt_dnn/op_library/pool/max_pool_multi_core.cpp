@@ -419,6 +419,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     auto reader_config = ReaderDataMovementConfig(reader_ct_args);
     std::string reader_kernel_fname;
     if (input.memory_config().is_sharded()) {
+        // sharded, without halo
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded.cpp");
     } else {
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
@@ -460,6 +461,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             out_nhw_per_core,
                                             out_nhw_per_core,
                                             out_nhw_per_core / nblocks,     // loop count with blocks
+                                            input_shape[3],
                                             };
     auto compute_ct_args_cliff = compute_ct_args;
     auto reduce_op = ReduceOpMath::MAX;
@@ -660,9 +662,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
-    uint32_t out_nelems = nblocks;  // TODO [AS]: Remove hard coding after identifying optimal param val
-                                    // Also ensure the calculated ncores is good
-    uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
+    if (input_shape[3] < constants::TILE_WIDTH) {
+        TT_FATAL(constants::TILE_WIDTH % input_shape[3] == 0);
+        nblocks = constants::TILE_WIDTH / input_shape[3];
+    }
+    uint32_t out_w_loop_count = ceil((float) out_w / nblocks);
 
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = in_hw * nbatch;
@@ -723,9 +727,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
     // reader output == input to tilize
     uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
-    uint32_t in_cb_npages = multi_buffering_factor * out_nelems;
+    uint32_t in_cb_page_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
+    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
+    uint32_t in_cb_npages = multi_buffering_factor * nblocks;
     CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
 		.set_page_size(in_cb_id, in_cb_pagesize);
     auto in_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
@@ -733,7 +737,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
-    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
+    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * nblocks;
     CircularBufferConfig in_tiled_cb_config = CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
 		.set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
     auto in_tiled_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
@@ -741,7 +745,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
     uint32_t out_cb_pagesize = tile_size(out_df);
-    uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
+    uint32_t out_cb_npages = out_ntiles_c * nblocks * multi_buffering_factor;    // there is just one row of channels after reduction
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
@@ -780,20 +784,19 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         log_debug(LogOp, "pad_w: {}", pad_w);
         log_debug(LogOp, "out_h: {}", out_h);
         log_debug(LogOp, "out_w: {}", out_w);
-        log_debug(LogOp, "out_hw: {}", output_shape[2]);
+        log_debug(LogOp, "out_w_loop_count: {}", out_w_loop_count);
+        log_debug(LogOp, "out_hw: {}", out_hw);
+        log_debug(LogOp, "out_hw_padded: {}", out_hw);
         log_debug(LogOp, "out_c: {}", output_shape[3]);
-        log_debug(LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(LogOp, "out_nbytes_c: {}", out_nbytes_c);
         log_debug(LogOp, "in_h: {}", in_h);
         log_debug(LogOp, "in_w: {}", in_w);
         log_debug(LogOp, "in_hw_padded: {}", in_hw);
         log_debug(LogOp, "in_c: {}", input_shape[3]);
-        log_debug(LogOp, "out_hw_padded: {}", out_hw);
+        log_debug(LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(LogOp, "out_ntiles_hw: {}", out_ntiles_hw);
         log_debug(LogOp, "out_ntiles_c: {}", out_ntiles_c);
-        log_debug(LogOp, "out_nelems: {}", out_nelems);
-        log_debug(LogOp, "out_w_loop_count: {}", out_w_loop_count);
-        log_debug(LogOp, "out_hw: {}", out_hw);
+        log_debug(LogOp, "nblocks: {}", nblocks);
         log_debug(LogOp, "ncores: {}", ncores);
         log_debug(LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
         log_debug(LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
@@ -820,7 +823,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             in_nbytes_c,
                                             in_nbytes_c_log2,
                                             in_w,
-                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5,    // TODO: generalize num rows to fill in in_cb
+                                            input_shape[3] < constants::TILE_WIDTH ? in_cb_page_padded * multi_buffering_factor : in_cb_page_padded * in_cb_npages / constants::TILE_WIDTH,
+                                            input_shape[3],
+                                            nblocks,
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
@@ -844,6 +849,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             out_nhw_per_core,
                                             0,          // core_offset_out_row_id (set later)
                                             out_nhw_per_core / nblocks,
+                                            output_shape[3],
                                             };
     auto writer_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
@@ -866,12 +872,13 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                             out_w,
                                             (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
                                             (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
-                                            out_nelems,
+                                            nblocks,
                                             out_w_loop_count,
                                             nbatch,
                                             out_nhw_per_core,
                                             out_nhw_per_core,
                                             out_nhw_per_core / nblocks,     // loop count with blocks
+                                            input_shape[3],
                                             };
     auto compute_ct_args_cliff = compute_ct_args;
     auto reduce_op = ReduceOpMath::MAX;

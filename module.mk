@@ -2,7 +2,6 @@ CONFIG ?= assert
 ENABLE_PROFILER ?= 0
 ENABLE_TRACY ?= 0
 ENABLE_CODE_TIMERS ?= 0
-TTNN_ENABLE_LOGGING ?= 0
 # TODO: enable OUT to be per config (this impacts all scripts that run tests)
 # OUT ?= build_$(DEVICE_RUNNER)_$(CONFIG)
 OUT ?= $(TT_METAL_HOME)/build
@@ -80,7 +79,7 @@ CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
 
-LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) \
+LDFLAGS ?= $(CONFIG_LDFLAGS) -L$(LIBDIR) \
 	-ldl \
 	-lz \
 	-lboost_thread \
@@ -90,6 +89,10 @@ LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBD
 	-lpthread \
 	-latomic \
 	-lhwloc
+ifdef TT_METAL_ENV_IS_DEV
+LDFLAGS += \
+	-Wl,-rpath,$(PREFIX)/lib
+endif
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
@@ -113,9 +116,6 @@ set_up_kernels/clean:
 
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
-endif
-ifeq ($(TTNN_ENABLE_LOGGING), 1)
-CFLAGS += -DTTNN_ENABLE_LOGGING
 endif
 
 ifeq ($(ENABLE_TRACY), 1)
@@ -145,8 +145,8 @@ include $(UMD_HOME)/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/tt_eager/module.mk
-include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/ttnn/module.mk
+include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/tests/module.mk
 
 # only include these modules if we're in development

@@ -96,14 +96,15 @@ void kernel_main() {
                 uint64_t in0_multicast_data_addr = in0_multicast_data_noc | l1_write_addr_in0;
 
                 // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_async_write_multicast_loopback_src(local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores + 1);
+                noc_async_write_multicast_loopback_src(local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores+1, true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                 // We should also multicast the flag to destinations
                 // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+                // noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+                noc_semaphore_set_multicast_loopback_src(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores+1, false);
                 local_read_addr += in0_block_size_bytes;
                 // Write barrier needed since we mcast to self, and also needed to finish sending mcast flag before we modify locally
                 noc_async_write_barrier();

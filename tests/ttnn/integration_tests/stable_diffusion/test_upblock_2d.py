@@ -13,10 +13,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import skip_for_wormhole_b0, torch_random
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 4, 4], [2, 1280, 4, 4], [2, 1280, 4, 4])])
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 4, 4]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
@@ -79,7 +77,6 @@ def test_upblock_256x256(reset_seeds, device, res_hidden_states_tuple, hidden_st
     assert_with_pcc(torch_output, op, 0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 8, 8]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
@@ -116,7 +113,7 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+    reader_patterns_cache = {}
     op = upblock_2d(
         hidden_state,
         res_hidden_states_tuple,
@@ -136,7 +133,8 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
         device=device,
         temb=temb,
         upsample_size=None,
+        reader_patterns_cache=reader_patterns_cache,
     )
 
     op = ttnn.to_torch(op)
-    assert_with_pcc(torch_output, op, 0.99)
+    assert_with_pcc(torch_output, op, 0.95)

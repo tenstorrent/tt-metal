@@ -43,6 +43,8 @@ class Conv2d:
         use_shallow_conv_variant: bool = False,
         enable_auto_formatting: bool = False,
         deallocate_activation: bool = False,
+        padded_input_channels: Optional[int] = None,
+        compute_kernel_config: Union[ttnn.GrayskullComputeKernelConfig, ttnn.WormholeComputeKernelConfig] = None,
     ):
         assert (
             padding_mode == "zeros"
@@ -113,7 +115,16 @@ class Conv2d:
             use_shallow_conv_variant=use_shallow_conv_variant,
             enable_auto_formatting=enable_auto_formatting,
             deallocate_activation=deallocate_activation,
+            padded_input_channels=padded_input_channels,
+            compute_kernel_config=compute_kernel_config,
         )
+        self.batch_size = batch_size
+        self.input_height = input_height
+        self.input_width = input_width
+        self.output_height = (input_height + (2 * pad_h) - dilation_h * (window_h - 1) - 1) // stride_h + 1
+        self.output_width = (input_width + (2 * pad_w) - dilation_w * (window_w - 1) - 1) // stride_w + 1
+        self.in_channels = in_channels
+        self.out_channels = out_channels
 
     @ttnn.register_operation(name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: True)
     def __call__(self, activation: ttnn.Tensor):
@@ -130,6 +141,9 @@ class Conv2d:
     )
     def copy_output_from_device(self, output: ttnn.Tensor):
         return ttnn.Tensor(self.conv.copy_output_from_device(output.value))
+
+    def get_parallel_config(self):
+        return self.conv.get_parallel_config()
 
 
 __all__ = []

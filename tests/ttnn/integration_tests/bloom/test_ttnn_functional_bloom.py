@@ -9,10 +9,16 @@ import ttnn
 from transformers.models import bloom
 
 from models.experimental.functional_bloom.tt import ttnn_functional_bloom
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def torch_random(shape, low, high, dtype):
+    if dtype in {torch.bool, torch.int64}:
+        return torch.randint(low, high, shape, dtype=dtype)
+    return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
 @skip_for_wormhole_b0()
@@ -27,7 +33,7 @@ def test_bloom_attention(device, model_name, batch_size, sequence_size):
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
     torch_residual = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
-    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
+    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.bool)
     torch_alibi = bloom.modeling_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.float32)
 
     torch_output, *_ = model(
@@ -104,7 +110,7 @@ def test_bloom_block(device, model_name, batch_size, sequence_size):
     model = bloom.modeling_bloom.BloomBlock(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
-    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
+    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.bool)
     torch_alibi = bloom.modeling_bloom.build_alibi_tensor(torch_attention_mask, config.n_head, dtype=torch.float32)
 
     torch_output, *_ = model(
@@ -148,7 +154,7 @@ def test_bloom(device, model_name, batch_size, sequence_size):
     model = bloom.modeling_bloom.BloomModel.from_pretrained(model_name, config=config).eval()
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
-    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
+    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.bool)
     torch_output = model(input_ids=torch_input_ids, attention_mask=torch_attention_mask).last_hidden_state
 
     parameters = preprocess_model_parameters(
@@ -188,7 +194,7 @@ def test_bloom_for_question_answering(device, model_name, batch_size, sequence_s
     model = bloom.modeling_bloom.BloomForQuestionAnswering.from_pretrained(model_name, config=config).eval()
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
-    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.int64)
+    torch_attention_mask = torch_random((batch_size, sequence_size), 0, 2, dtype=torch.bool)
     torch_output = model(input_ids=torch_input_ids, attention_mask=torch_attention_mask)
 
     parameters = preprocess_model_parameters(

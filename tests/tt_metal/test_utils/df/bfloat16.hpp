@@ -29,7 +29,7 @@ class bfloat16 {
     // create from float: no rounding, just truncate
     bfloat16(float float_num) {
         uint32_t uint32_data;
-        TT_FATAL(sizeof float_num == sizeof uint32_data, "Can only support 32bit fp");
+        static_assert(sizeof(float) == sizeof(uint32_t), "Can only support 32bit fp");
         uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
         // just move upper 16 to lower 16 (truncate)
         uint32_data = (uint32_data >> 16);

@@ -27,16 +27,3 @@ void replicate(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t 
     dest_addr += chunk_size_bytes;
   }
 }
-
-void replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate) {
-  const uint32_t REPLICATE_VC = 0;
-  for (uint32_t j = 0; j < times_to_replicate; j++) {
-    while (!noc_cmd_buf_ready_l1(noc_id, NCRISC_WR_CMD_BUF));
-    ncrisc_noc_fast_write_l1(noc_id, NCRISC_WR_CMD_BUF,
-                          src_addr,
-                          dest_addr,
-                          chunk_size_bytes,
-                          REPLICATE_VC, false, false, 1);
-    dest_addr += chunk_size_bytes;
-  }
-}

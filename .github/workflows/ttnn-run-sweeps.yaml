@@ -32,7 +32,7 @@ jobs:
       - name: Assert that csvs exist in expected ttnn results folder
         run: ls -hal tests/ttnn/sweep_tests/results/*.csv
       - name: Upload ttnn sweep reports csvs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ttnn-sweeps-report-csv-${{ matrix.arch }}
           path: tests/ttnn/sweep_tests/results/*.csv

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union, Optional
+from typing import List, Union, Optional
 
 import sys
 
@@ -88,53 +88,21 @@ def _is_scalar(value):
     return isinstance(value, (int, float, complex))
 
 
-def _add_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        can_be_a_scalar=True,
-    )
-
-
 def _torch_add(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    input_shape_a = input_tensor_a.shape
-    slices = [slice(0, dim) for dim in input_shape_a]
-    input_tensor_a = ttnn.from_device(input_tensor_a)
-    input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.ROW_MAJOR_LAYOUT)
     input_tensor_a = ttnn.to_torch(input_tensor_a)
-    input_tensor_a = input_tensor_a[slices]
-
     if not _is_scalar(input_tensor_b):
-        input_shape_b = input_tensor_b.shape
-        slices = [slice(0, dim) for dim in input_shape_b]
-        input_tensor_b = ttnn.from_device(input_tensor_b)
-        input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.ROW_MAJOR_LAYOUT)
         input_tensor_b = ttnn.to_torch(input_tensor_b)
-        input_tensor_b = input_tensor_b[slices]
 
     return input_tensor_a + input_tensor_b
 
 
-@ttnn.register_operation(name="ttnn.add", validate_input_tensors=_add_validate_input_tensors, torch_function=_torch_add)
+@ttnn.register_operation(name="ttnn.add", torch_function=_torch_add, is_cpp_function=True)
 def add(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: Union[ttnn.Tensor, int, float],
     *,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
 ) -> ttnn.Tensor:
     r"""
     add(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
@@ -162,10 +130,7 @@ def add(
         ttnn.Tensor([ 1, 3], dtype=bfloat16 )
 
     """
-    input_tensor_a = input_tensor_a.value
-    input_tensor_b = input_tensor_b.value if isinstance(input_tensor_b, ttnn.Tensor) else input_tensor_b
-    output = ttnn._ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config)
-    return ttnn.Tensor(output)
+    return ttnn._ttnn.operations.binary.add(input_tensor_a, input_tensor_b, memory_config=memory_config, dtype=dtype)
 
 
 def _sub_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -621,6 +586,8 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
             "logical_or": torch.logical_or,
             "logical_xor": torch.logical_xor,
             "xlogy": torch.xlogy,
+            "maximum": torch.maximum,
+            "minimum": torch.minimum,
         }
         input_shape_a = input_tensor_a.shape
         slices = [slice(0, dim) for dim in input_shape_a]
@@ -728,10 +695,149 @@ TTL_BINARY_ELTWISE_FUNCTIONS = [
     ("logical_or", ttl.tensor.logical_or, "logical OR (input_a || input_b)"),
     ("logical_xor", ttl.tensor.logical_xor, "logical XOR (input_a ^ input_b) "),
     ("xlogy", ttl.tensor.xlogy, "xlogy (input_a * log( input_b ))"),
+    ("maximum", ttl.tensor.max, "maximum "),
+    ("minimum", ttl.tensor.min, "minimum "),
 ]
 
 
 for elt_binary_function_name, ttl_elt_binary_function, op_name in TTL_BINARY_ELTWISE_FUNCTIONS:
     register_ttl_elt_binary_function(elt_binary_function_name, ttl_elt_binary_function, op_name)
+
+
+def _nextafter_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+        can_be_a_scalar=False,
+    )
+
+
+def _torch_nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
+    import torch
+
+    input_tensor_a = ttnn.to_torch(input_tensor_a)
+    input_tensor_b = ttnn.to_torch(input_tensor_b)
+
+    return torch.nextafter(input_tensor_a, input_tensor_b)
+
+
+@ttnn.register_operation(
+    name="ttnn.nextafter",
+    validate_input_tensors=_nextafter_validate_input_tensors,
+    torch_function=_torch_nextafter,
+)
+def nextafter(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+) -> ttnn.Tensor:
+    r"""
+    nextafter(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+    Returns the next floating-point value after input_a towards input_b of the input tensors input_a and input_b.
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i , \mathrm{{input\_tensor\_b}}_i
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b`
+
+    Keyword args:
+        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
+        :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+
+
+    """
+
+    output = ttnn.experimental.tensor.nextafter(
+        input_tensor_a,
+        input_tensor_b,
+        output_mem_config=memory_config,
+    )
+    return output
+
+
+def torch_polyval(input_tensor, coeff):
+    curVal = 0
+    for curValIndex in range(len(coeff) - 1):
+        curVal = (curVal + coeff[curValIndex]) * input_tensor[0]
+    return curVal + coeff[len(coeff) - 1]
+
+
+def _polyval_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(4,),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+def _torch_polyval(input_tensor: ttnn.Tensor, coeff: List[float], **_):
+    import torch
+
+    input_tensor = ttnn.to_torch(input_tensor)
+
+    return torch_polyval(input_tensor, coeff)
+
+
+@ttnn.register_operation(
+    name="ttnn.polyval",
+    validate_input_tensors=_polyval_validate_input_tensors,
+    torch_function=_torch_polyval,
+)
+def polyval(
+    input_tensor: ttnn.Tensor,
+    coeff: List[float],
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    dtype: Optional[ttnn.DataType] = None,
+) -> ttnn.Tensor:
+    r"""
+    polyval(input_tensor_a: ttnn.Tensor, coeff: List[float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+    Returns tensor with the polyval of all of elements of the input tensor input with coefficients coeffs.
+
+    .. math::
+        \mathrm{{input\_tensor\_a}}_i , \mathrm{{coeff}}_i
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`coeff`
+
+    Keyword args:
+        :attr:`memory_config`
+        :attr:`dtype`
+
+
+    """
+
+    output = ttnn.experimental.tensor.polyval(
+        input_tensor,
+        coeff,
+        output_mem_config=memory_config,
+    )
+    return output
+
 
 __all__ = []

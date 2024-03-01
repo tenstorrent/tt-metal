@@ -8,11 +8,11 @@ import tt_lib
 import torch
 import torch.nn as nn
 import math
-from loguru import logger
 from models.demos.resnet.utils import fold_bn_to_conv_weights_bias
-from models.utility_functions import tt2torch_tensor
+from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from tt_lib.utils import pad_weight
 
+from models.utility_functions import is_grayskull
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
@@ -27,12 +27,11 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
     SlidingWindowOpParamsWithParallelConfig,
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 from models.utility_functions import (
     _nearest_32,
-    pad_and_fold_conv_activation_for_unity_stride,
     pad_and_fold_conv_filters_for_unity_stride,
+    pad_and_fold_conv_activation_for_unity_stride,
 )
 
 hardcoded_matmul_config_linear = {
@@ -107,6 +106,19 @@ def ResnetLinear(
         matmul_config = hardcoded_matmul_config_linear[batch_size]
 
     def linear_(act):
+        if is_grayskull():
+            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         ## this uses the systolic 1d matmul with bias fused
         if matmul_config is None:
             output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
@@ -118,7 +130,7 @@ def ResnetLinear(
                 program_config=matmul_config,
                 output_mem_config=output_mem_config,
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
-                math_fidelity=model_config["MATH_FIDELITY"],
+                compute_kernel_config=compute_kernel_config,
             )
         return output
 
@@ -1089,6 +1101,19 @@ class Bottleneck:
         assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv[batch_size]
         matmul_config = hardcoded_matmul_config_conv[batch_size][(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
+        if is_grayskull():
+            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         self.conv1 = resnet50_1x1_conv_as_matmul(
             conv1_weight.reshape(-1).tolist(),
             self.conv1_params,
@@ -1099,7 +1124,7 @@ class Bottleneck:
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
             output_dtype=model_config["ACTIVATIONS_DTYPE"],
-            math_fidelity=model_config["MATH_FIDELITY"],
+            compute_kernel_config=compute_kernel_config,
         )
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
@@ -1191,6 +1216,7 @@ class Bottleneck:
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
                 move_utwh_output=move_utwh_output,
+                deallocate_activation=True,
             )
         else:
             self.conv2 = resnet50_optimized_conv(
@@ -1227,6 +1253,19 @@ class Bottleneck:
         matmul_config = hardcoded_matmul_config_conv[batch_size][
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
         ]
+        if is_grayskull():
+            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+            )
+        else:
+            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                math_fidelity=model_config["MATH_FIDELITY"],
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         self.conv3 = resnet50_1x1_conv_as_matmul(
             conv3_weight.reshape(-1).tolist(),
@@ -1237,7 +1276,7 @@ class Bottleneck:
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
             output_dtype=model_config["ACTIVATIONS_DTYPE"],
-            math_fidelity=model_config["MATH_FIDELITY"],
+            compute_kernel_config=compute_kernel_config,
         )
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
@@ -1415,6 +1454,19 @@ class ResNet(nn.Module):
 
         self.first_conv_num_cores_nhw = 98
         if sharded:
+            self.shard_grid = tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(11, 7),
+                    ),
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 8),
+                        tt_lib.tensor.CoreCoord(1, 8),
+                    ),
+                }
+            )
+
             self.folded_conv1_params = [self.inplanes, 16, 4, 4, 1, 1, 0, 0, 1, groups]
             first_conv_output_padded_nhw_size = _nearest_y(112 * 112 * batch_size, 98 * 32)
             first_conv_output_channels = 64
@@ -1500,6 +1552,8 @@ class ResNet(nn.Module):
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 math_fidelity=model_config["MATH_FIDELITY"],
                 use_shallow_conv_variant=True,
+                deallocate_activation=True,
+                padded_input_channels=16,
             )
             self.first_conv_op_params = sliding_window_op_params
         else:
@@ -1779,6 +1833,19 @@ class ResNet(nn.Module):
                 matmul_config = hardcoded_matmul_config_conv[batch_size][
                     (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
+                if is_grayskull():
+                    compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                    )
+                else:
+                    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=False,
+                        packer_l1_acc=False,
+                    )
+
                 self.downsample_conv_on_tt = resnet50_1x1_conv_as_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
@@ -1788,7 +1855,7 @@ class ResNet(nn.Module):
                     output_mem_config=self.ds_conv_output_memory_config,
                     weights_dtype=model_config["WEIGHTS_DTYPE"],
                     output_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    math_fidelity=model_config["MATH_FIDELITY"],
+                    compute_kernel_config=compute_kernel_config,
                 )
             elif use_downsample_op_and_mm_for_conv1x1_s2:
                 assert (
@@ -1802,6 +1869,19 @@ class ResNet(nn.Module):
                 assert stride == 2
                 downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
                 # logger.info("Calling ds op and matmul op, input shape - ", layer_input_shape)
+                if is_grayskull():
+                    compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                    )
+                else:
+                    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                        math_fidelity=model_config["MATH_FIDELITY"],
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=False,
+                        packer_l1_acc=False,
+                    )
+
                 self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
@@ -1812,7 +1892,7 @@ class ResNet(nn.Module):
                     self.ds_conv_output_memory_config,
                     weights_dtype=model_config["WEIGHTS_DTYPE"],
                     output_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    math_fidelity=model_config["MATH_FIDELITY"],
+                    compute_kernel_config=compute_kernel_config,
                 )
             else:
                 assert (
@@ -1917,18 +1997,35 @@ class ResNet(nn.Module):
 
     def preprocessing(self, x: torch.Tensor) -> tt_lib.tensor:
         if self.sharded:
-            x = pad_and_fold_conv_activation_for_unity_stride(x, 3, 3, 2, 2)
+            # NCWH -> NWHC
             x = torch.permute(x, (0, 2, 3, 1))
-            x = x.reshape(
-                1,
-                1,
-                x.shape[0] * x.shape[1] * x.shape[2],
-                x.shape[3],
-            )
-            input_size_to_shard_evenly = _nearest_y(x.shape[2], self.first_conv_num_cores_nhw * 32)
-            x = torch.nn.functional.pad(x, (0, 0, 0, input_size_to_shard_evenly - x.shape[2], 0, 0))
 
-            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+            # pad to 230x230x4
+            C = _nearest_y(x.shape[3], 4)
+            x = torch.nn.functional.pad(x, (0, C - x.shape[3], 3, 3, 3, 3))
+
+            # fold for unity stride on device
+            x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+            x = tt_lib.tensor.fold(x, 2, 2)
+
+            # reshape to (1, 1, NHW, C) and pad the NHW dim for sharding
+            x = x.reshape(1, 1, -1, x.shape()[-1])
+
+            _, _, NHW, C = x.shape()
+            input_size_to_shard_evenly = _nearest_y(NHW, self.first_conv_num_cores_nhw * 32)
+            padded_shape = [1, 1, input_size_to_shard_evenly, C]
+            x = tt_lib.tensor.pad(x, padded_shape, [0, 0, 0, 0], 0)
+
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x,
+                self.shard_grid,
+                [
+                    x.shape()[2] // self.first_conv_num_cores_nhw,
+                    x.shape()[3],
+                ],
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            )
         else:
             extra_padding_for_32B_alignment = 25
             x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
@@ -1937,36 +2034,7 @@ class ResNet(nn.Module):
         return x
 
     def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
-        if self.sharded:
-            untilize_with_halo_input_shard_height = (int)(x.shape()[2] / self.first_conv_num_cores_nhw)
-
-            shard_grid = tt_lib.tensor.CoreRangeSet(
-                {
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 0),
-                        tt_lib.tensor.CoreCoord(11, 7),
-                    ),
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 8),
-                        tt_lib.tensor.CoreCoord(1, 8),
-                    ),
-                }
-            )
-            shard_spec = tt_lib.tensor.ShardSpec(
-                shard_grid,
-                [
-                    untilize_with_halo_input_shard_height,
-                    x.shape()[3],
-                ],
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            )
-            mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
-            )
-            x = x.to(self.device, mem_config)
-
-        else:
+        if not self.sharded:
             original_A_cl_host_shape = x.shape()
             x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
 

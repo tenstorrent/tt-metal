@@ -98,7 +98,7 @@ def pretty_print_model_config(model_config):
     print_str = []
     for key, val in model_config.items():
         if key.endswith("MEMCFG"):
-            print_str.append(f"{key}: {val.buffer_type}")
+            print_str.append(f"{key}: {val.memory_layout, val.buffer_type}")
 
         elif key.endswith("DTYPE") or key.endswith("BOOL"):
             print_str.append(f"{key}: {val}")

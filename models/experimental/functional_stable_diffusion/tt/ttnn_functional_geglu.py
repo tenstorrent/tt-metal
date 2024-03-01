@@ -7,6 +7,7 @@ import ttnn
 
 def geglu(config, hidden_states, parameters):
     output = ttnn.matmul(hidden_states, parameters.proj.weight)
+
     output = ttnn.add(output, parameters.proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     hidden_states, gate = ttnn.split(output, split_size=output.shape[-1] // 2, dim=-1)

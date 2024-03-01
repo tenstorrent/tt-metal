@@ -2,8 +2,6 @@ name: "[post-commit] models - Run perf regressions on models and output report"
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
   schedule:
     - cron: "0 2 * * *"
   workflow_call:
@@ -22,6 +20,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
+      CONFIG: ci
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -50,7 +49,7 @@ jobs:
           ls -hal $PERF_REPORT_FILENAME
           echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"

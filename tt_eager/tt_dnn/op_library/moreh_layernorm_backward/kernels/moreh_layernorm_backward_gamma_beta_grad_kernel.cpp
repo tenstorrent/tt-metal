@@ -40,13 +40,12 @@ void MAIN {
     constexpr auto cb_dbeta = tt::CB::c_out1;  // beta_grad(==dbeta)
 
     // y = (x - mean) / rstd
-    constexpr auto cb_y = tt::CB::c_intermed0;           // output(==y)
-    constexpr auto cb_ydy = tt::CB::c_intermed1;         // y * dy
-    constexpr auto cb_dyadd = tt::CB::c_intermed2;       // Add[dy]
-    constexpr auto cb_ydyadd = tt::CB::c_intermed3;      // Add[y * dy]
-    constexpr auto cb_xmm = tt::CB::c_intermed4;         // x - mean
-    constexpr auto cb_recip_rstd = tt::CB::c_intermed5;  // 1.0 / rstd
-    constexpr auto cb_dycopy = tt::CB::c_intermed6;      // dycopy
+    constexpr auto cb_y = tt::CB::c_intermed0;       // output(==y)
+    constexpr auto cb_ydy = tt::CB::c_intermed1;     // y * dy
+    constexpr auto cb_dyadd = tt::CB::c_intermed2;   // Add[dy]
+    constexpr auto cb_ydyadd = tt::CB::c_intermed3;  // Add[y * dy]
+    constexpr auto cb_xmm = tt::CB::c_intermed4;     // x - mean
+    constexpr auto cb_dycopy = tt::CB::c_intermed5;  // dycopy
 
     constexpr uint32_t onetile = 1;
 
@@ -189,43 +188,25 @@ void MAIN {
                 cb_push_back(cb_xmm, onetile);
                 REL();
 
-                // Compute cb_recip_rstd
-                // 1.0 / rstd
-                ACQ();
-                cb_wait_front(cb_rstd, onetile);  // comes from the reader
-                cb_reserve_back(cb_recip_rstd, onetile);
-
-                copy_tile_init();
-                copy_tile(cb_rstd, 0, dst0);
-
-                recip_tile_init();
-                recip_tile(dst0);
-
-                pack_tile(dst0, cb_recip_rstd);
-
-                cb_pop_front(cb_rstd, onetile);
-                cb_push_back(cb_recip_rstd, onetile);
-                REL();
-
                 // Compute cb_y
                 // (x - mean) / rstd
                 ACQ();
                 cb_wait_front(cb_xmm, onetile);
-                cb_wait_front(cb_recip_rstd, onetile);
+                cb_wait_front(cb_rstd, onetile);  // comes from the reader
                 cb_reserve_back(cb_y, onetile);
 
                 if (is_lastdim_layernorm) {
                     mul_bcast_cols_init_short();
-                    mul_tiles_bcast_cols(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                    mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
                 } else {
                     mul_tiles_bcast_scalar_init_short();
-                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                    mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
                 }
 
                 pack_tile(dst0, cb_y);
 
                 cb_pop_front(cb_xmm, onetile);
-                cb_pop_front(cb_recip_rstd, onetile);
+                cb_pop_front(cb_rstd, onetile);
                 cb_push_back(cb_y, onetile);
                 REL();
 

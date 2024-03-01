@@ -11,5 +11,5 @@
 
 void kernel_main() {
     DPRINT << WAIT{1};
-    print_test_data();
+    print_test_data_modifiers();
 }

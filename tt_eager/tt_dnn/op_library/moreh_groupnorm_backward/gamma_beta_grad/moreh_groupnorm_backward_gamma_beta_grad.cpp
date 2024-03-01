@@ -78,7 +78,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
+    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
 
     const auto
         [num_cores_to_be_used,
@@ -111,8 +111,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
     const uint32_t im2_t = 1;  // Add[dy]
     const uint32_t im3_t = 1;  // Add[y * dy]
     const uint32_t im4_t = 1;  // x - mean
-    const uint32_t im5_t = 1;  // 1.0 / rstd
-    const uint32_t im6_t = 1;  // dycopy
+    const uint32_t im5_t = 1;  // dycopy
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
 
@@ -135,8 +134,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_gamma_beta_grad_impl(
             {CB::c_intermed2, im2_t},  // Add[dy]
             {CB::c_intermed3, im3_t},  // Add[y * dy]
             {CB::c_intermed4, im4_t},  // x - mean
-            {CB::c_intermed5, im5_t},  // 1.0 / rstd
-            {CB::c_intermed6, im6_t},  // dycopy
+            {CB::c_intermed5, im5_t},  // dycopy
         });
 
     ////////////////////////////////////////////////////////////////////////////

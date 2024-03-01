@@ -16,6 +16,8 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tools/profiler/profiler_state.hpp"
+#include "jit_build/kernel_args.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace std;
 using namespace tt;
@@ -392,7 +394,6 @@ void JitBuildEthernet::pre_compile(const string& kernel_in_path, const string& o
     copy_kernel(kernel_in_path, op_out_path);
 }
 
-
 void JitBuildState::compile_one(const string& log_file,
                                 const string& out_dir,
                                 const JitBuildSettings *settings,
@@ -424,23 +425,28 @@ void JitBuildState::compile_one(const string& log_file,
     cmd += "-c -o " + obj + " " + src;
 
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+
+    if (tt::llrt::OptionsG.get_watcher_enabled() && settings) {
+        log_kernel_defines_and_args(env_.get_out_kernel_root_path(), settings->get_full_kernel_name(), defines_, defines);
+    }
+
     if (!tt::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "compiile", cmd, log_file);
+        build_failure(this->target_name_, "compile", cmd, log_file);
     }
 }
 
-void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings *settings) const
-{
-    // Compile each of the srcs to an obj in parallel
-    std::vector<std::thread> threads;
-    threads.resize(this->srcs_.size());;
-    for (int i = 0; i < this->srcs_.size(); i++) {
-        threads[i] = thread(&JitBuildState::compile_one, &*this,
-                            ref(log_file), ref(out_dir), settings, ref(this->srcs_[i]), ref(this->objs_[i]));
+void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
+    tt::utils::ThreadManager manager;
+
+    for (size_t i = 0; i < this->srcs_.size(); ++i) {
+        manager.start([this, &log_file, &out_dir, settings, i]() {
+            this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
+        });
     }
 
-    for (auto& th: threads) {
-        th.join();
+    manager.join_and_rethrow();
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
 }
 
@@ -583,52 +589,38 @@ void jit_build(const JitBuildState& build,
     build.build(settings);
 }
 
-void jit_build_set(const JitBuildStateSet& build_set,
-                   const JitBuildSettings *settings,
-                   const string& kernel_in_path)
-{
-    ZoneScoped;
+void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
+    tt::utils::ThreadManager manager;
 
-    std::vector<std::thread> threads;
-    threads.resize(build_set.size());
-    for (int i = 0; i < build_set.size(); i++) {
-        const JitBuildState& build = *(build_set[i]);
-        std::function<void()> lambda = [&build, &kernel_in_path, &settings] () {
+    for (size_t i = 0; i < build_set.size(); ++i) {
+        // Capture the necessary objects by reference
+        auto& build = build_set[i];
+        manager.start([build, settings, &kernel_in_path]() {
             if (settings != nullptr) {
-                build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
+                build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
-            build.build(settings);
-        };
-        threads[i] = thread(lambda);
+            build->build(settings);
+        });
     }
 
-    for (auto& th: threads) {
-        th.join();
-    }
+    manager.join_and_rethrow();
 }
 
-void jit_build_subset(const JitBuildStateSubset& build_subset,
-                      const JitBuildSettings *settings,
-                      const string& kernel_in_path)
-{
-    ZoneScoped;
+void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings, const string& kernel_in_path) {
+    tt::utils::ThreadManager manager;
 
-    std::vector<std::thread> threads;
-    threads.resize(build_subset.size);
-    for (int i = 0; i < build_subset.size; i++) {
-        const JitBuildState& build = *(build_subset.build_ptr[i]);
-        std::function<void()> lambda = [&build, &kernel_in_path, &settings] () {
+    for (size_t i = 0; i < build_subset.size; ++i) {
+        // Capture the necessary objects by reference
+        auto& build = build_subset.build_ptr[i];
+        manager.start([build, settings, &kernel_in_path]() {
             if (settings != nullptr) {
-                build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
+                build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
             }
-            build.build(settings);
-        };
-        threads[i] = thread(lambda);
+            build->build(settings);
+        });
     }
 
-    for (auto& th: threads) {
-        th.join();
-    }
+    manager.join_and_rethrow();
 }
 
 } // namespace tt_metal

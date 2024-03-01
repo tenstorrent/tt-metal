@@ -32,7 +32,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb = 16)
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
+    PACK(( llk_pack_dest_init<SyncHalf, false>() ));
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<>(0, true) ));

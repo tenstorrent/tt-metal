@@ -17,9 +17,7 @@ import models.experimental.bloom.tt.bloom_attention as bloom_attention
 
 
 def run_bloom_attention_test(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     block = 2
@@ -28,12 +26,8 @@ def run_bloom_attention_test(device):
     base_address = f"transformer.h.{block}.self_attention"
     hidden_size = config.hidden_size
 
-    tt_bloom_attention = bloom_attention.TtBloomAttention(
-        config, state_dict, base_address, device
-    )
-    pt_bloom_attention = hugging_bloom_reference_model.transformer.h[
-        block
-    ].self_attention
+    tt_bloom_attention = bloom_attention.TtBloomAttention(config, state_dict, base_address, device)
+    pt_bloom_attention = hugging_bloom_reference_model.transformer.h[block].self_attention
 
     # Prepare input
     torch.manual_seed(0)
@@ -42,19 +36,14 @@ def run_bloom_attention_test(device):
     hidden_states = ((torch.rand(1, seq_len, hidden_size) * 2) - 1) / hidden_size
     residual = ((torch.rand(1, seq_len, hidden_size) * 2) - 1) / hidden_size
     alibi = ((torch.rand(config.n_head, seq_len, seq_len) * 2) - 1) / seq_len
-    attention_mask = torch.randint(0, 2, (1, 1, seq_len, seq_len))
-
-    pt_out = pt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)[
-        0
-    ]
+    attention_mask = torch.randint(0, 2, (1, 1, seq_len, seq_len)).type(torch.bool)
+    pt_out = pt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)[0]
 
     tt_hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
     tt_residual = bloom_utils.torch2tt_tensor(residual, device)
     tt_alibi = bloom_utils.torch2tt_tensor(alibi, device)
 
-    tt_out = tt_bloom_attention.forward(
-        device, tt_hidden_states, tt_residual, tt_alibi, attention_mask
-    )[0]
+    tt_out = tt_bloom_attention.forward(device, tt_hidden_states, tt_residual, tt_alibi, attention_mask)[0]
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
     pt_out_unsqueezed = pt_out.unsqueeze(0)

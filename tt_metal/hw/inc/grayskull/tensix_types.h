@@ -238,8 +238,8 @@ enum class DataFormat : std::uint8_t
   Bfp4_b    = 7,
   Bfp2_b    = 15,
   Lf8       = 10,
-  UInt16    = 12,
   Int8      = 14,
+  UInt16    = 9,
   UInt32    = 8,
   Tf32      = 0xff,
   Invalid   = 0xff

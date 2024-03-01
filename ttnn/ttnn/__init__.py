@@ -5,13 +5,15 @@
 import os
 import pathlib
 
+from loguru import logger
+
 TTNN_CACHE_PATH = pathlib.Path().home() / ".cache" / "ttnn"
 MODEL_CACHE_PATH = TTNN_CACHE_PATH / "models"
 TMP_DIR = pathlib.Path("/") / "tmp" / "ttnn"
 
 
 def get_bool_env_var(name, default):
-    variable = os.environ.get("TTNN_ENABLE_MODEL_CACHE", f"{default}")
+    variable = os.environ.get(name, f"{default}")
     if variable == "True":
         return True
     elif variable == "False":
@@ -21,11 +23,15 @@ def get_bool_env_var(name, default):
 
 
 TTNN_ENABLE_MODEL_CACHE = get_bool_env_var("TTNN_ENABLE_MODEL_CACHE", "False")
+if TTNN_ENABLE_MODEL_CACHE:
+    logger.info(f"ttnn: model cache was enabled")
+
+TTNN_ENABLE_FAST_RUNTIME_MODE = get_bool_env_var("TTNN_ENABLE_FAST_RUNTIME_MODE", "False")
+if TTNN_ENABLE_FAST_RUNTIME_MODE:
+    logger.info(f"ttnn: fast runtime mode was enabled")
 
 import tt_lib as _tt_lib
 import ttnn._ttnn
-
-from ttnn._ttnn import TTNN_ENABLE_LOGGING
 
 from ttnn.types import (
     TILE_SIZE,
@@ -37,8 +43,13 @@ from ttnn.types import (
     float32,
     MemoryConfig,
     MathFidelity,
+    WormholeComputeKernelConfig,
+    GrayskullComputeKernelConfig,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
+    L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
     Layout,
@@ -52,7 +63,7 @@ from ttnn.types import (
     Tensor,
 )
 
-from ttnn.device import Device, open_device, close_device, manage_device
+from ttnn.device import Device, open_device, close_device, manage_device, synchronize_device, dump_device_memory_state
 
 from ttnn.core import (
     has_storage_type_of,
@@ -77,6 +88,7 @@ import ttnn.experimental
 
 from ttnn.program_cache import (
     enable_program_cache,
+    disable_and_clear_program_cache,
 )
 
 from ttnn.operations.core import (
@@ -93,6 +105,8 @@ from ttnn.operations.core import (
     dump_tensor,
     unsqueeze_to_4D,
     squeeze,
+    clone,
+    as_tensor,
 )
 
 from ttnn.operations.matmul import (
@@ -112,6 +126,7 @@ from ttnn.operations.others import (
 
 from ttnn.operations.creation import (
     arange,
+    empty,
     full,
     full_like,
     ones,
@@ -123,6 +138,9 @@ from ttnn.operations.creation import (
 from ttnn.operations.reduction import (
     std,
     var,
+    max,
+    min,
+    sum,
 )
 
 from ttnn.operations.losses import (
@@ -136,6 +154,7 @@ from ttnn.operations.data_movement import (
     permute,
     split,
     repeat_interleave,
+    repeat,
 )
 
 from ttnn.operations.unary import (
@@ -159,7 +178,6 @@ from ttnn.operations.unary import (
     atanh,
     logical_not,
     logit,
-    clone,
     signbit,
 )
 
@@ -179,6 +197,10 @@ from ttnn.operations.binary import (
     xlogy,
     add_and_apply_activation,
     add_and_apply_activation_,
+    nextafter,
+    polyval,
+    maximum,
+    minimum,
 )
 
 from ttnn.operations.ternary import (
@@ -273,6 +295,7 @@ from ttnn.operations.normalization import (
 )
 
 from ttnn.operations import transformer
+from ttnn.operations import kv_cache
 from ttnn.operations.conv2d import Conv2d
 from ttnn.operations.maxpool2d import (
     MaxPool2d,

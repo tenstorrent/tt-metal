@@ -11,11 +11,9 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_at
     cross_attention as ttnn_cross_attention,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, has_encoder_hidden_states",
@@ -131,7 +129,6 @@ def test_cross_attention_256x256(device, model_name, N, C, H, W, index, has_enco
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, has_encoder_hidden_states",
