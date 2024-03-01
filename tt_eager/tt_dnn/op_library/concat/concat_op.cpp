@@ -53,7 +53,8 @@ void Concat::validate(const std::vector<Tensor> &input_tensors) const {
         }
     }
     if(shard_first) {
-        TT_FATAL(dim == 2, "Only width concat on sharded tensors");
+        TT_FATAL(dim == 3, "Only width concat on sharded tensors");
+        TT_FATAL(this->output_mem_config.is_sharded(), "output must be sharded if input is sharded");
     }
 }
 
@@ -69,6 +70,7 @@ std::vector<tt::tt_metal::Shape> Concat::compute_output_shapes(const std::vector
 
 std::vector<Tensor> Concat::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const Tensor &ref_in_tensor = input_tensors.at(0);
+
 
     if(this->output_mem_config.is_sharded()) {
         return {create_sharded_device_tensor(
@@ -102,15 +104,6 @@ Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim, const Memory
     }
     uint32_t ref_rank = input_tensors[0].shape().rank();
     uint32_t normalized_dim =  input_tensors[0].shape().get_normalized_index(dim);
-//    if (normalized_dim == ref_rank - 1) {
-//        for (const auto& input_tensor : input_tensors) {
-//            TT_FATAL(input_tensor.shape()[dim] % TILE_WIDTH == 0);
-//        }
-//    } else if (normalized_dim == ref_rank - 2) {
-//        for (const auto& input_tensor : input_tensors) {
-//            TT_FATAL(input_tensor.shape()[dim] % TILE_HEIGHT == 0);
-//        }
-//    }
 
     if(input_tensors[0].is_sharded()) {
         return operation::run(Concat{normalized_dim, output_mem_config}, {input_tensors}).at(0);

@@ -11,13 +11,12 @@
 // Expects n provided src_addr, src_noc_x, src_noc_y, and cb_id_in
 void kernel_main() {
 
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-
     const uint32_t num_tensors = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles  = get_arg_val<uint32_t>(1);
     const uint32_t start_tensor = get_arg_val<uint32_t>(2);
     const uint32_t start_tensor_id = get_arg_val<uint32_t>(3);
 
+    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     // ublocks size defined in tiles
     uint32_t ublock_size_tiles = 1;
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in);
