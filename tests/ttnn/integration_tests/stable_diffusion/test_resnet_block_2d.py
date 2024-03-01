@@ -173,12 +173,12 @@ def test_resnet_block_2d_512x512(
     torch_output = resnet(input, temb.squeeze(0).squeeze(0))
     reader_patterns_cache = {}
     resnet_block = resnetBlock2D(
-        device, parameters, reader_patterns_cache, batch_size, input_height, input_width, group_norm_on_device=False
+        device, parameters, reader_patterns_cache, batch_size, input_height, input_width, group_norm_on_device=True
     )
 
     input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
     # input = ttnn.to_memory_config(input, resnet_block.conv1s[0].conv.input_sharded_memory_config)
 
@@ -217,4 +217,5 @@ def test_resnet_block_2d_512x512(
         ),
     )
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+
     assert_with_pcc(torch_output, ttnn_output, pcc=0.98)
