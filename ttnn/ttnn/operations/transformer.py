@@ -161,12 +161,28 @@ def split_query_key_value_and_split_heads(
     if not ttnn.has_storage_type_of(input_tensor, ttnn.DEVICE_STORAGE_TYPE):
         raise RuntimeError("input_tensor must be on device!")
 
+    if num_kv_heads is not None:
+        # Currently only work for Falcon7B
+        if kv_input_tensor is not None:
+            raise RuntimeError("num_kv_heads cannot be True when kv_input_tensor is passed in!")
+        if transpose_key is True:
+            raise RuntimeError("transpose_key cannot be True when num_kv_heads is passed in!")
+        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+        query, key, value = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            input_tensor,
+            output_mem_config=memory_config,
+        )
+        return query, key, value
+
+    if not transpose_key:
+        raise RuntimeError("transpose_key must be True when num_kv_heads is not passed in!")
+
     if kv_input_tensor is not None:
         if num_kv_heads is not None:
             raise RuntimeError("num_kv_heads cannot be True when kv_input_tensor is passed in!")
         batch_size, sequence_size, hidden_size = input_tensor.shape
         _, sequence_size_padded, hidden_size_padded = input_tensor.shape.with_tile_padding()
-        if kv_input_tensor.shape.with_tile_padding() != (batch_size, sequence_size, hidden_size * 2):
+        if kv_input_tensor.shape.with_tile_padding() != (batch_size, sequence_size, hidden_size_padded * 2):
             raise RuntimeError(
                 "kv_input_tensor must be of shape (batch_size, sequence_size, hidden_size * 2) when input_tensor is of shape (batch_size, sequence_size, hidden_size)"
             )
@@ -239,12 +255,12 @@ def split_query_key_value_and_split_heads(
         )
         query, key, value = query_key_value
 
-        head_size = hidden_size // num_heads
+        head_size_padded = query.shape.with_tile_padding()[-1]
         query = ttnn.reshape(
             query,
             ttnn.Shape(
                 [batch_size, num_heads, sequence_size, head_size],
-                [batch_size, num_heads, sequence_size_padded, head_size],
+                [batch_size, num_heads, sequence_size_padded, head_size_padded],
             ),
         )
         key = ttnn.reshape(
@@ -254,7 +270,7 @@ def split_query_key_value_and_split_heads(
                 [
                     batch_size,
                     num_heads,
-                    head_size,
+                    head_size_padded,
                     sequence_size_padded,
                 ],
             ),
@@ -263,7 +279,7 @@ def split_query_key_value_and_split_heads(
             value,
             ttnn.Shape(
                 [batch_size, num_heads, sequence_size, head_size],
-                [batch_size, num_heads, sequence_size_padded, head_size],
+                [batch_size, num_heads, sequence_size_padded, head_size_padded],
             ),
         )
 

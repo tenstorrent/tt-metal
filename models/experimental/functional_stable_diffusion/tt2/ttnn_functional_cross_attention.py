@@ -146,13 +146,13 @@ class cross_attention:
                 dtype=ttnn.bfloat16,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
             )
-            del hidden_states
+            ttnn.deallocate(hidden_states)
             query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
                 qkv_out,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 num_heads=heads,
             )
-            del qkv_out
+            ttnn.deallocate(qkv_out)
             # if query.shape[2] == 4096:
             #     query = ttnn.reallocate(query)
             #     key = ttnn.reallocate(key)
