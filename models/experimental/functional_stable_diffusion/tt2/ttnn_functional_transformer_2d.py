@@ -189,7 +189,8 @@ class transformer_2d_model:
             norm_type = "ada_norm"
 
         nhw = hidden_states.shape[2]
-        assert nhw == self.batch_size * self.input_height * self.input_width
+        if hidden_states.shape[0] == 1:
+            assert nhw == self.batch_size * self.input_height * self.input_width
         batch = self.batch_size
         height = self.input_height
         width = self.input_width
