@@ -183,19 +183,9 @@ def test_generate_all_configs_and_references(
     # Generate and validate the final untilize with halo configs here
     logger.info("Generate untilize with halo kernel configs")
     (
-        local_data,
-        local_pad,
-        ll_data,
-        l_data,
-        r_data,
-        rr_data,
-        src_start_idx,
-        local_data_nsegments_per_core,
-        local_pad_nsegments_per_core,
-        ll_data_nsegments_per_core,
-        l_data_nsegments_per_core,
-        r_data_nsegments_per_core,
-        rr_data_nsegments_per_core,
+        padding_config,
+        local_config,
+        remote_config,
         max_out_nsticks_per_core,
     ) = generate_untilize_with_halo_kernel_configs(tensor_metadata, req_conv_input_shard_start_end)
 
@@ -204,19 +194,9 @@ def test_generate_all_configs_and_references(
         golden_untilize_with_halo_output_shards,
         untilize_with_halo_input_shards,
         req_conv_input_shard_start_end,
-        local_data,
-        local_pad,
-        ll_data,
-        l_data,
-        r_data,
-        rr_data,
-        src_start_idx,
-        local_data_nsegments_per_core,
-        local_pad_nsegments_per_core,
-        ll_data_nsegments_per_core,
-        l_data_nsegments_per_core,
-        r_data_nsegments_per_core,
-        rr_data_nsegments_per_core,
+        padding_config,
+        local_config,
+        remote_config,
         max_out_nsticks_per_core,
     )
 

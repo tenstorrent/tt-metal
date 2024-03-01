@@ -7,7 +7,7 @@ import torch
 
 import tt_lib as ttl
 
-from models.utility_functions import skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import skip_for_wormhole_b0, torch2tt_tensor, tt2torch_tensor
 
 
 def fold_torch(input_tensor, stride_h, stride_w):
@@ -30,6 +30,7 @@ def fold_torch(input_tensor, stride_h, stride_w):
         ((10, 6, 8, 32), 3, 1),
         ((10, 6, 8, 32), 1, 2),
         ((10, 6, 8, 32), 1, 1),
+        ((1, 6, 6, 4), 2, 2),
     ],
 )
 def test_fold(act_shape, stride_h, stride_w, device):
@@ -42,11 +43,9 @@ def test_fold(act_shape, stride_h, stride_w, device):
         torch_input,
         device,
         ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED),
     )
 
     tt_out = ttl.tensor.fold(tt_input, stride_h, stride_w)
-    tt_out = tt_out.cpu()
-    actual = tt_out.to_torch()
+    actual = tt2torch_tensor(tt_out)
 
     torch.testing.assert_allclose(actual, expected)

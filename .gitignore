@@ -77,12 +77,6 @@ venv/
 # exclude pytorch binaries
 *.pt
 
-# exclude Tensor generated heatmaps (debug)
-*.png
-
-#exclude output debug files
-out*.txt
-
 # releases
 dist
 

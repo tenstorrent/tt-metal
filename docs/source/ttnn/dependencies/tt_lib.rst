@@ -944,6 +944,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.acos_bw
 
+.. autofunction:: tt_lib.tensor.leaky_relu_bw
+
 Loss Functions
 ==============
 

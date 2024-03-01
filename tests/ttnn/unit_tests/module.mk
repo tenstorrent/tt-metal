@@ -33,6 +33,5 @@ tests/ttnn/unit_tests_run: tests/ttnn/unit_tests
 
 .PRECIOUS: $(TESTDIR)/ttnn/unit_tests
 $(TESTDIR)/ttnn/unit_tests: $(TTNN_UNIT_TESTS_OBJS) $(TT_METAL_LIB) $(TT_DNN_LIB) $(TTNN_LIB)
-	$(info [${TTNN_UNIT_TESTS_OBJS}])
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(TTNN_UNIT_TESTS_LDFLAGS)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) -o $@ $^ $(TTNN_UNIT_TESTS_LDFLAGS)

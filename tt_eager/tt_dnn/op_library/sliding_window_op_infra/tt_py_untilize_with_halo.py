@@ -55,29 +55,14 @@ class TTPyUntilizeWithHalo(TTPyOp):
             )
 
         def utwh_(activation):
-            # print("sliding_window_op_params=", self.sliding_window_op_params)
             return ttl.tensor.untilize_with_halo_v2(
                 activation,
-                utwh_kernel_configs["local_pad_tensor"],
-                utwh_kernel_configs["ll_data_tensor"],
-                utwh_kernel_configs["l_data_tensor"],
-                utwh_kernel_configs["local_data_tensor"],
-                utwh_kernel_configs["r_data_tensor"],
-                utwh_kernel_configs["rr_data_tensor"],
+                utwh_kernel_configs["padding_config"],
+                utwh_kernel_configs["local_config"],
+                utwh_kernel_configs["remote_config"],
                 pad_val,
                 self.sliding_window_op_params.num_cores_nhw,
                 utwh_kernel_configs["max_out_nsticks_per_core"],
-                utwh_kernel_configs["local_pad_nsegments_per_core"],
-                utwh_kernel_configs["ll_data_nsegments_per_core"],
-                utwh_kernel_configs["l_data_nsegments_per_core"],
-                utwh_kernel_configs["local_data_nsegments_per_core"],
-                utwh_kernel_configs["r_data_nsegments_per_core"],
-                utwh_kernel_configs["rr_data_nsegments_per_core"],
-                utwh_kernel_configs["local_data_src_start_offsets_per_core"],
-                utwh_kernel_configs["ll_data_src_start_offsets_per_core"],
-                utwh_kernel_configs["l_data_src_start_offsets_per_core"],
-                utwh_kernel_configs["r_data_src_start_offsets_per_core"],
-                utwh_kernel_configs["rr_data_src_start_offsets_per_core"],
                 out_mem_config,
             )
 
@@ -147,122 +132,99 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 window_w,
             )
 
-            (
-                local_data,
-                local_pad,
-                ll_data,
-                l_data,
-                r_data,
-                rr_data,
-                src_start_idx,
-                local_data_nsegments_per_core,
-                local_pad_nsegments_per_core,
-                ll_data_nsegments_per_core,
-                l_data_nsegments_per_core,
-                r_data_nsegments_per_core,
-                rr_data_nsegments_per_core,
-                max_out_nsticks_per_core,
-            ) = generate_untilize_with_halo_kernel_configs(tensor_metadata, req_conv_input_shard_start_end)
-
-            assert len(local_data) == num_cores_nhw
-            # Flatten the configs per core and construct the sharded tensor
-            local_data = [item for sublist in local_data for item in sublist]
-            local_pad = [item for sublist in local_pad for item in sublist]
-            ll_data = [item for sublist in ll_data for item in sublist]
-            l_data = [item for sublist in l_data for item in sublist]
-            r_data = [item for sublist in r_data for item in sublist]
-            rr_data = [item for sublist in rr_data for item in sublist]
-
-            # TODO: move this data structure these to generate function to validate the final data structure
-            ll_data_src_start_offsets_per_core = [src_start_idx[core_id][0] for core_id in range(num_cores_nhw)]
-            l_data_src_start_offsets_per_core = [src_start_idx[core_id][1] for core_id in range(num_cores_nhw)]
-            local_data_src_start_offsets_per_core = [src_start_idx[core_id][2] for core_id in range(num_cores_nhw)]
-            r_data_src_start_offsets_per_core = [src_start_idx[core_id][3] for core_id in range(num_cores_nhw)]
-            # print(f'r_data_src_start_offset: {self.r_data_src_start_offsets_per_core}')
-            rr_data_src_start_offsets_per_core = [src_start_idx[core_id][4] for core_id in range(num_cores_nhw)]
-
             shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), num_cores_nhw)
-
-            def gen_config_tt_tensors_uint16(config_list_uint16: list, toprint=False):
-                config_size = len(config_list_uint16)
-                if config_size == 0:
-                    # return dummy tensor
-                    output = ttl.tensor.Tensor(
-                        [0, 0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR
+            block_sharding = shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            if not block_sharding:
+                assert num_cores_w == 12 or num_cores_w == 8
+                if num_cores_nhw >= num_cores_w:
+                    num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
+                    assert num_cores_h >= num_cores_height_excluding_remainder_last_row
+                    core_range_1 = ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
                     )
-                    if device is not None:
-                        output = output.to(device)
-                    return output
-                assert config_size % 2 == 0  ## each config is a tuple of (start, size)
-                assert config_size % num_cores_nhw == 0
-
-                shard_config_size = config_size // num_cores_nhw
-                config_shard_shape = [1, shard_config_size]
-
-                if shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
-                    config_list_uint16 *= num_cores_h
-                    config_size *= num_cores_h
-
-                config_tensor_shape = (
-                    1,
-                    1,
-                    1,
-                    config_size,
+                    num_cores_last = num_cores_nhw % num_cores_w
+                    if num_cores_last > 0:
+                        assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
+                        core_range_2 = ttl.tensor.CoreRange(
+                            ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
+                            ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
+                        )
+                        shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+                    else:
+                        assert num_cores_h == num_cores_height_excluding_remainder_last_row
+                        shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
+                else:
+                    core_range_1 = ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, 0),
+                        ttl.tensor.CoreCoord(num_cores_nhw - 1, 0),
+                    )
+                    shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
+            else:
+                core_range = ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
                 )
+                shard_grid = ttl.tensor.CoreRangeSet({core_range})
 
-                # print(f"config list size = {config_size}")
+            def gen_per_core_gather_data_uint16_tensor(config: list):
+                assert type(config) is list
+                if block_sharding:
+                    assert len(config) == num_cores_w, f"{len(config)} {num_cores_w}"
+                else:
+                    assert len(config) == num_cores_nhw, f"{len(config)} {num_cores_nhw}"
+                assert type(config[0]) is list
+                assert len(config[0]) > 0
 
-                torch_tensor = torch.tensor(config_list_uint16, dtype=torch.short).reshape(config_tensor_shape)
-                shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+                torch_tensor = torch.tensor(config, dtype=torch.short)
+                shard_shape = [1, torch_tensor.shape[-1]]
+
+                if block_sharding:
+                    torch_tensor = torch_tensor.repeat(1, num_cores_h)
+
+                torch_tensor = torch_tensor.unsqueeze(0).unsqueeze(0)
+
+                shard_orientation = (
+                    ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
+                )
                 shard_halo = False
-                shard_spec = ttl.tensor.ShardSpec(shard_grid, config_shard_shape, shard_orientation, shard_halo)
-                height_sharded_mem_config = ttl.tensor.MemoryConfig(
-                    ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+                shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+                mem_layout = (
+                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+                    if block_sharding
+                    else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
                 )
+                mem_config = ttl.tensor.MemoryConfig(mem_layout, ttl.tensor.BufferType.L1, shard_spec)
 
                 tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16)
-
-                tt_tensor = tt_tensor.to(device, height_sharded_mem_config) if device is not None else tt_tensor
-                # ttl.device.DumpDeviceMemoryState(device)
-
-                ## validate
-                tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(config_tensor_shape)
-                assert all(torch_tensor.reshape(-1) == tt_tensor_cpu.reshape(-1))
-
+                tt_tensor = tt_tensor.to(device, mem_config) if device is not None else tt_tensor
                 return tt_tensor
 
-            # print("gen local data config tt tensor")
-            local_data_tensor = gen_config_tt_tensors_uint16(local_data)
-            # print("gen local pad config tt tensor")
-            local_pad_tensor = gen_config_tt_tensors_uint16(local_pad)
-            # print("gen ll data config tt tensor")
-            ll_data_tensor = gen_config_tt_tensors_uint16(ll_data)
-            # print("gen l data config tt tensor")
-            l_data_tensor = gen_config_tt_tensors_uint16(l_data)
-            # print("gen r data config tt tensor")
-            r_data_tensor = gen_config_tt_tensors_uint16(r_data)
-            # print("gen rr data config tt tensor")
-            rr_data_tensor = gen_config_tt_tensors_uint16(rr_data)
+            def core_id_to_physical_coord(core_id):
+                if block_sharding:
+                    core_coord = ttl.tensor.CoreCoord(core_id, 0)
+                else:
+                    core_coord = ttl.tensor.CoreCoord(core_id % num_cores_w, core_id // num_cores_w)
+                worker_core = device.worker_core_from_logical_core(core_coord)
+                return (worker_core.x, worker_core.y)
+
+            (
+                padding_config,
+                local_config,
+                remote_config,
+                max_out_nsticks_per_core,
+            ) = generate_untilize_with_halo_kernel_configs(
+                tensor_metadata, req_conv_input_shard_start_end, core_id_to_physical_coord
+            )
+
+            padding_config_tensor = gen_per_core_gather_data_uint16_tensor(padding_config)
+            local_config_tensor = gen_per_core_gather_data_uint16_tensor(local_config)
+            remote_config_tensor = gen_per_core_gather_data_uint16_tensor(remote_config)
 
             halo_reader_patterns_cache[sliding_window_op_params_hash] = {
-                "local_pad_tensor": local_pad_tensor,
-                "local_data_tensor": local_data_tensor,
-                "ll_data_tensor": ll_data_tensor,
-                "l_data_tensor": l_data_tensor,
-                "r_data_tensor": r_data_tensor,
-                "rr_data_tensor": rr_data_tensor,
                 "max_out_nsticks_per_core": max_out_nsticks_per_core,
-                "local_pad_nsegments_per_core": local_pad_nsegments_per_core,
-                "local_data_nsegments_per_core": local_data_nsegments_per_core,
-                "ll_data_nsegments_per_core": ll_data_nsegments_per_core,
-                "l_data_nsegments_per_core": l_data_nsegments_per_core,
-                "r_data_nsegments_per_core": r_data_nsegments_per_core,
-                "rr_data_nsegments_per_core": rr_data_nsegments_per_core,
-                "local_data_src_start_offsets_per_core": local_data_src_start_offsets_per_core,
-                "ll_data_src_start_offsets_per_core": ll_data_src_start_offsets_per_core,
-                "l_data_src_start_offsets_per_core": l_data_src_start_offsets_per_core,
-                "r_data_src_start_offsets_per_core": r_data_src_start_offsets_per_core,
-                "rr_data_src_start_offsets_per_core": rr_data_src_start_offsets_per_core,
+                "padding_config": padding_config_tensor,
+                "local_config": local_config_tensor,
+                "remote_config": remote_config_tensor,
             }
 
         return

@@ -985,6 +985,19 @@ std::vector<Tensor> acos_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _acos_bw)(grad, input, output_mem_config);
 }
 
+// Leaky_Relu
+// result: torch.where(self > 0, grad_output, grad_output * negative_slope)
+std::vector<Tensor> _leaky_relu_bw(const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = where(gtz(input, output_mem_config), grad, mul_unary(grad, negative_slope, output_mem_config), output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> leaky_relu_bw(const Tensor& grad, const Tensor& input, float negative_slope, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _leaky_relu_bw)(grad, input, negative_slope, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt

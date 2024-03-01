@@ -194,28 +194,16 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("untilize_with_halo_v2", &untilize_with_halo_v2,
+        m_tensor.def(
+            "untilize_with_halo_v2",
+            &untilize_with_halo_v2,
             py::arg("input_tensor").noconvert(),
-            py::arg("local_pad_start_and_size").noconvert(),
-            py::arg("ll_data_start_and_size").noconvert(),
-            py::arg("l_data_start_and_size").noconvert(),
-            py::arg("local_data_start_and_size").noconvert(),
-            py::arg("r_data_start_and_size").noconvert(),
-            py::arg("rr_data_start_and_size").noconvert(),
+            py::arg("padding_config").noconvert(),
+            py::arg("local_config").noconvert(),
+            py::arg("remote_config").noconvert(),
             py::arg("pad_val").noconvert(),
             py::arg("ncores_height").noconvert(),
             py::arg("max_out_nsticks_per_core").noconvert(),
-            py::arg("local_pad_nsegments_per_core"),
-            py::arg("ll_data_nsegments_per_core"),
-            py::arg("l_data_nsegments_per_core"),
-            py::arg("local_data_nsegments_per_core"),
-            py::arg("r_data_nsegments_per_core"),
-            py::arg("rr_data_nsegments_per_core"),
-            py::arg("local_data_src_start_offsets_per_core"),
-            py::arg("ll_data_src_start_offsets_per_core"),
-            py::arg("l_data_src_start_offsets_per_core"),
-            py::arg("r_data_src_start_offsets_per_core"),
-            py::arg("rr_data_src_start_offsets_per_core"),
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             R"doc(
                 Untilizes input tiled data to row major format and constructs halo'd output shards.
