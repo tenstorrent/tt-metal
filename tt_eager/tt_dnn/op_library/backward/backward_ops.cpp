@@ -1046,6 +1046,23 @@ std::vector<Tensor> sinh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _sinh_bw)(grad, input, output_mem_config);
 }
 
+// Celu
+// result: torch.where((input > 0), grad, grad * torch.exp(input / alpha))
+std::vector<Tensor> _celu_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor div_result = mul(input, recip(full_like(input, alpha, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor exp_result = exp(div_result, output_mem_config);
+    Tensor grad_result = where(gt(input, zeros_like( input, output_mem_config), std::nullopt, output_mem_config),
+                        grad, mul(grad, exp_result, std::nullopt, output_mem_config), output_mem_config);
+
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> celu_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _celu_bw)(grad, input, alpha, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
