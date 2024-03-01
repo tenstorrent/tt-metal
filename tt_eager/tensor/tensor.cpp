@@ -244,7 +244,7 @@ std::vector<uint32_t> Tensor::host_page_ordering(){
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
     for(int page_id = 0; page_id <num_pages ; page_id++){
-        ret_vec.push_back(buffer()->get_mapped_page_id(page_id));
+        ret_vec.push_back(buffer()->get_dev_to_host_mapped_page_id(page_id));
     }
     return ret_vec;
 }
@@ -302,7 +302,7 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, bool pad_to_same_shard_size) {
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.shard_spec.has_value());
@@ -341,12 +341,25 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     std::array<uint32_t,2> tensor2d_size = {shape[0]*shape[1] * shape[2]/page_shape[0],
                                                 shape[3]/page_shape[1]
                                             };
-
     ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-    uint32_t shard_size = shard_shape[0] * shard_shape[1] * element_size;
-    if(layout == Layout::TILE)
-        shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
-    uint32_t packed_size_in_bytes = shard_size * num_cores;
+    uint32_t packed_size_in_bytes;
+
+    // Investigate if this padding is correct for other shard orientations
+    // Falcon40B was showing that this didn't work for Width Sharding
+    // Currently need this as interleaved_to_sharded needs this padding
+    // #6029: looks at either updating interleaved_to_sharded s.t we can remove this padding, or update padding for other shard orientations
+    if(pad_to_same_shard_size){
+        uint32_t shard_size;
+        if(layout == Layout::TILE)
+            shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
+        else{
+            shard_size = shard_shape[0] * shard_shape[1] * element_size;
+        }
+        packed_size_in_bytes = shard_size * num_cores;
+    }
+    else {
+        packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+    }
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
                                                             data_type, layout, memory_config,
                                                             std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
