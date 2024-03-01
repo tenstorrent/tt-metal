@@ -203,9 +203,6 @@ class transformer_2d_model:
         # residual in DRAM
         residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
         if ttnn.get_memory_config(hidden_states) != self.proj_in.conv.input_sharded_memory_config:
-            breakpoint()
-            # TODO: after performant reshard is checked in. no need to convert to interleaved first
-            # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
 
         hidden_states = ttnn.to_layout(
@@ -267,7 +264,6 @@ class transformer_2d_model:
         if is_input_continuous:
             if not use_linear_projection:
                 hidden_states = self.proj_out(hidden_states)
-                breakpoint()
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
                 hidden_states = ttnn.reshape(hidden_states, (1, 1, batch * height * width, inner_dim))
                 hidden_states = ttnn.to_memory_config(

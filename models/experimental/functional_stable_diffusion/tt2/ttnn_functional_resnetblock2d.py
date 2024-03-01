@@ -152,7 +152,7 @@ class resnetBlock2D:
                     use_shallow_conv_variant=False,
                     compute_kernel_config=compute_kernel_config,
                     enable_auto_formatting=(conv1_split_chunks > 1) or not group_norm_on_device,
-                    reallocate_halo_output=True,
+                    # reallocate_halo_output=True,
                 )
             )
 
@@ -237,8 +237,8 @@ class resnetBlock2D:
             compute_kernel_config=compute_kernel_config,
         )
         if use_in_shortcut:
-            if self.conv2.conv.output_sharded_memory_config != self.conv_shortcut.conv.output_sharded_memory_config:
-                breakpoint()
+            # if self.conv2.conv.output_sharded_memory_config != self.conv_shortcut.conv.output_sharded_memory_config:
+            # breakpoint()
             assert self.conv2.conv.output_sharded_memory_config == self.conv_shortcut.conv.output_sharded_memory_config
             self.expected_input_sharded_memory_config = self.conv_shortcut.conv.input_sharded_memory_config
             self.first_group_norm_grid_size = self.conv_shortcut.conv.grid_size
@@ -474,9 +474,9 @@ class resnetBlock2D:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         output_tensor = ttnn.add(input_tensor, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_sc_recip = ttnn.to_device(output_sc_recip, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        breakpoint()
+        # breakpoint()
         output_tensor = ttnn.mul(output_tensor, output_sc_recip, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        breakpoint()
+        # breakpoint()
         ttnn.deallocate(input_tensor)
         ttnn.deallocate(hidden_states)
         return output_tensor
