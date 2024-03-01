@@ -22,7 +22,6 @@ def rms_norm(hidden_states, weight, *, epsilon=1e-6):
     return weight * hidden_states
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 384])
 @pytest.mark.parametrize("w", [64, 1024])

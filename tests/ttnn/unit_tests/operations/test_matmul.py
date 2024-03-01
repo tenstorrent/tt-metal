@@ -210,7 +210,6 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
 def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid(device):
     torch.manual_seed(0)
 
@@ -363,7 +362,6 @@ def test_sharded_matmul(
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 8])
 def test_matmul_with_core_grid(device, batch_size):
     torch.manual_seed(0)

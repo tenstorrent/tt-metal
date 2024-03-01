@@ -12,7 +12,6 @@ from models.utility_functions import skip_for_wormhole_b0
 from models.utility_functions import torch_random
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])

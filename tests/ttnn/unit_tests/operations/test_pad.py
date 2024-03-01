@@ -12,7 +12,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
@@ -36,7 +35,6 @@ def test_pad(device, h, w, padding, torch_padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
@@ -64,7 +62,6 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((1, 64), (0, 96)), ((0, 64), (0, 43)), ((32, 64), (64, 96))])
