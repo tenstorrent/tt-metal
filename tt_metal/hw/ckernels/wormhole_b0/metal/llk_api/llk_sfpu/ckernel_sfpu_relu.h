@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "sfpi.h"
+#include "ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
