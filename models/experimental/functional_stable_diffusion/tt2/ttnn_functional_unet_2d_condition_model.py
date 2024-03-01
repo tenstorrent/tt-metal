@@ -227,7 +227,7 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={"act_block_h": 64},
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
+            # enable_auto_formatting=True,
             deallocate_activation=True,
             compute_kernel_config=conv_compute_kernel_config,
         )
@@ -354,6 +354,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
+            print(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
@@ -407,6 +408,7 @@ class UNet2DConditionModel:
             down_block_res_samples += res_samples
 
         # 4.mid
+        print("Mid block")
         sample = self.mid_block(
             hidden_states=sample,
             temb=emb,
@@ -436,6 +438,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
+            print(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
             prev_output_channel = output_channel
@@ -515,16 +518,18 @@ class UNet2DConditionModel:
             bias=self.parameters.conv_norm_out.bias,
         )
         sample = ttnn.silu(sample)
-
-        sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            self.device,
-            self.conv_out,
-            sample,
-            self.conv_out.batch_size,
-            self.conv_out.input_height,
-            self.conv_out.input_width,
-            self.conv_out.out_channels,
-        )
+        if ttnn.get_memory_config(hidden_states) != self.conv_out.conv.input_sharded_memory_config:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.conv_out.conv.input_sharded_memory_config)
+        sample = self.conv_out(sample)
+        # sample = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+        #     self.device,
+        #     self.conv_out,
+        #     sample,
+        #     self.conv_out.batch_size,
+        #     self.conv_out.input_height,
+        #     self.conv_out.input_width,
+        #     self.conv_out.out_channels,
+        # )
 
         # con_in completes
 

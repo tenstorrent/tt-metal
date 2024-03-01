@@ -72,7 +72,7 @@ class upsample2d:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override=conv_config_override,
             use_shallow_conv_variant=False,
-            enable_auto_formatting=True,
+            # enable_auto_formatting=True,
             deallocate_activation=True,
         )
         self.output_height = self.conv.output_height
@@ -80,15 +80,18 @@ class upsample2d:
 
     def __call__(self, input, in_channels, out_channels):
         tt_out = upsample_nearest2d(input, self.scale_factor)
-
-        tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-            self.device,
-            self.conv,
-            tt_out,
-            self.conv.batch_size,
-            self.conv.input_height,
-            self.conv.input_width,
-            self.conv.out_channels,
-        )
+        del input
+        if ttnn.get_memory_config(tt_out) != self.conv.conv.input_sharded_memory_config:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
+        tt_out = self.conv_out(tt_out)
+        # tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
+        #     self.device,
+        #     self.conv,
+        #     tt_out,
+        #     self.conv.batch_size,
+        #     self.conv.input_height,
+        #     self.conv.input_width,
+        #     self.conv.out_channels,
+        # )
 
         return tt_out
