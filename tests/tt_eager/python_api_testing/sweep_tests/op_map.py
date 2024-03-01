@@ -1111,6 +1111,58 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,
     },
+    "ttnn-eltwise-lgamma": {
+        "tt_lib_op": ttnn_ops.eltwise_lgamma,
+        "pytorch_op": pytorch_ops.lgamma,
+    },
+    "ttnn-eltwise-log": {
+        "tt_lib_op": ttnn_ops.eltwise_log,
+        "pytorch_op": pytorch_ops.log,
+    },
+    "ttnn-eltwise-log10": {
+        "tt_lib_op": ttnn_ops.eltwise_log10,
+        "pytorch_op": pytorch_ops.log10,
+    },
+    "ttnn-eltwise-log1p": {
+        "tt_lib_op": ttnn_ops.eltwise_log1p,
+        "pytorch_op": pytorch_ops.log1p,
+    },
+    "ttnn-eltwise-log2": {
+        "tt_lib_op": ttnn_ops.eltwise_log2,
+        "pytorch_op": pytorch_ops.log2,
+    },
+    "ttnn-eltwise-log_sigmoid": {
+        "tt_lib_op": ttnn_ops.eltwise_log_sigmoid,
+        "pytorch_op": pytorch_ops.log_sigmoid,
+    },
+    "ttnn-eltwise-logit": {
+        "tt_lib_op": ttnn_ops.eltwise_logit,
+        "pytorch_op": pytorch_ops.logit,
+    },
+    "ttnn-eltwise-mish": {
+        "tt_lib_op": ttnn_ops.eltwise_mish,
+        "pytorch_op": pytorch_ops.mish,
+    },
+    "ttnn-eltwise-multigammaln": {
+        "tt_lib_op": ttnn_ops.eltwise_multigammaln,
+        "pytorch_op": pytorch_ops.multigammaln,
+    },
+    "ttnn-eltwise-neg": {
+        "tt_lib_op": ttnn_ops.eltwise_neg,
+        "pytorch_op": pytorch_ops.neg,
+    },
+    "ttnn-eltwise-prelu": {
+        "tt_lib_op": ttnn_ops.eltwise_prelu,
+        "pytorch_op": pytorch_ops.ttnn_prelu,
+    },
+    "ttnn-eltwise-relu": {
+        "tt_lib_op": ttnn_ops.eltwise_relu,
+        "pytorch_op": pytorch_ops.relu,
+    },
+    "ttnn-eltwise-logical_not": {
+        "tt_lib_op": ttnn_ops.eltwise_logical_not,
+        "pytorch_op": pytorch_ops.logical_not,
+    },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
