@@ -6,7 +6,7 @@
 //  - 3 flavors: _hd (host and dram), _h (host only), _d (DRAM only)
 //  - fetches commands from host (if applicable), executes
 //  - uses HostQ for host handshaking, ComDatQ for commands (from host),
-//    ScratchBuf for out of band data (e.g., from DRAM)
+//    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
 #include "tt_metal/impl/dispatch/kernels/cq_cmds.hpp"
@@ -23,9 +23,8 @@ constexpr uint32_t host_q_size = get_compile_time_arg_val(7);
 constexpr uint32_t host_q_rd_ptr_addr = get_compile_time_arg_val(8);;
 constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(9);
 constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(10);
-constexpr uint32_t scratch_cb_base = get_compile_time_arg_val(11);
-constexpr uint32_t scratch_cb_size = get_compile_time_arg_val(12);
-
+constexpr uint32_t scratch_db_base = get_compile_time_arg_val(11);
+constexpr uint32_t scratch_db_size = get_compile_time_arg_val(12);
 
 constexpr uint32_t prefetch_noc_xy = uint32_t(NOC_XY_ENCODING(PREFETCH_NOC_X, PREFETCH_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
@@ -34,10 +33,19 @@ constexpr uint32_t dispatch_cb_end = dispatch_cb_base + (1 << dispatch_cb_log_pa
 constexpr uint32_t host_q_end = host_q_base + host_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
+constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
+constexpr uint32_t scratch_db_base0 = scratch_db_base;
+constexpr uint32_t scratch_db_base1 = scratch_db_base + scratch_db_half_size;
+
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t dispatch_data_ptr = dispatch_cb_base;
 
 static uint32_t host_q_log_minsize = 4;
+
+static uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
+
+static_assert((dispatch_cb_base & (dispatch_cb_page_size - 1)) == 0);
+
 
 FORCE_INLINE
 void dispatch_cb_acquire_pages(uint32_t n) {
@@ -116,14 +124,12 @@ static void get_cmds(uint32_t& fence, uint32_t& cmd_ptr) {
     static volatile tt_l1_ptr uint16_t* host_q_rd_ptr = (volatile tt_l1_ptr uint16_t*)host_q_base;
 
     if (fence < cmd_ptr) {
-        DPRINT << "wrap cmd ptr1\n";
+        DPRINT << "wrap cmd ptr1 " << fence << " " << cmd_ptr << ENDL();
         cmd_ptr = fence;
     }
 
     bool cmd_ready = (cmd_ptr != fence);
     uint32_t fetch_size = (uint32_t)*host_q_rd_ptr << host_q_log_minsize;
-    DPRINT << (uint32_t)host_q_rd_ptr_addr << ENDL();
-    DPRINT << (uint32_t)host_q_rd_ptr << ENDL();
 
     if (fetch_size != 0 && pending_read_size == 0) {
         DPRINT << "read1: " << (uint32_t)host_q_rd_ptr << " " << " " << fence << " " << fetch_size << ENDL();
@@ -221,6 +227,161 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr) {
     return cmd_ptr + cmd->relay_inline.stride;
 }
 
+// This version of inline sends inline data to the dispatcher but doesn't flush the page to the dispatcher
+// This is used to assemble dispatcher commands when data comes out of band, eg, reading from DRAM
+// That means this command is stateful, incorrect use will be...bad
+// This routine assumes we're sending a command header and that is less than a page
+static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr) {
+
+    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+
+    uint32_t length = sizeof(CQDispatchCmd);
+    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
+
+    // Assume the dispatch buffer is big relative to cmddat command size that we can
+    // grab what we need in one chunk
+    dispatch_cb_acquire_pages(1);
+    if (dispatch_data_ptr == dispatch_cb_end) {
+        dispatch_data_ptr = dispatch_cb_base;
+    }
+    noc_async_write(data_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), length);
+    dispatch_data_ptr += length;
+
+    DPRINT << "inline_noflush: " << length << " " << cmd->relay_inline.stride << ENDL();
+    return cmd_ptr + 2 * length;
+}
+
+// This fn prefetches data from DRAM memory and writes data to the dispatch core.
+// Reading from DRAM has the following characteristics:
+//  - latency is moderately high ~400 cycles on WH
+//  - DRAM bw is ~maximized when page size reaches 2K
+//  - for kernel dispatch, it is expected that page sizes will often be <2K
+//  - for buffer writing, page sizes will vary
+//  - writing to dispatcher works best with 4K pages (2K pages cover overhead, 4K gives flexibility)
+//  - writing a 4K page takes ~32*4=128 cycles
+//  - writing 4 4K pages is 512 cycles, close to parity w/ the latency of DRAM
+//  - to hide the latency (~12% overhead), assume we need to read ~32 pages=128K, double buffered
+//  - in other words, we'll never achieve high efficiency and always be (somewhat) latency bound
+// Algorithm does:
+//  - read a batch from DRAM
+//  - loop: read a batch from DRAM while sending to dispatcher
+//  - send a batch to dispatcher
+// The size of the first read should be based on latency.  With small page sizes
+// bandwidth will be low and we'll be DRAM bound (send to dispatcher is ~free).
+// With larger pages we'll get closer to a bandwidth match
+// The dispatch buffer is a ring buffer.
+uint32_t process_relay_dram_paged_cmd(uint32_t cmd_ptr) {
+
+    // This ensures that a previous cmd using the scratch buf has finished
+    noc_async_writes_flushed();
+
+    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t page_id = cmd->relay_dram_paged.start_page_id;
+    uint32_t base_addr = cmd->relay_dram_paged.base_addr;
+    uint32_t page_size = cmd->relay_dram_paged.page_size;
+    uint32_t pages = cmd->relay_dram_paged.pages;
+    uint32_t read_length = pages * page_size;
+    uint32_t write_length = pages * page_size;
+
+    InterleavedAddrGen<true> addr_gen;
+    addr_gen.bank_base_address = base_addr;
+    addr_gen.page_size = page_size;
+
+    // First step - read into DB0
+    uint32_t scratch_read_addr = scratch_db_top[0];
+    uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+    uint32_t amt_read = 0;
+    while (amt_to_read >= page_size) {
+        uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+        noc_async_read(noc_addr, scratch_read_addr, page_size); // XXXX can page_size be > 8192?
+        scratch_read_addr += page_size;
+        page_id++;
+        amt_to_read -= page_size;
+        amt_read += page_size;
+    }
+    noc_async_read_barrier();
+
+    // Second step - read into DB[x], write from DB[x], toggle x, iterate
+    // Writes are fast, reads are slow
+    uint32_t db_toggle = 0;
+    uint32_t scratch_write_addr;
+    read_length -= amt_read;
+    while (read_length != 0) {
+        // This ensures that writes from prior iteration are done
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_writes_flushed();
+
+        db_toggle ^= 1;
+        scratch_read_addr = scratch_db_top[db_toggle];
+        scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+
+        uint32_t amt_to_write = amt_read;
+        amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+        amt_read = 0;
+        while (amt_to_read >= page_size) {
+            uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS
+            noc_async_read(noc_addr, scratch_read_addr, page_size); // XXXX can page_size be > 8192?
+            scratch_read_addr += page_size;
+            page_id++;
+            amt_to_read -= page_size;
+            amt_read += page_size;
+        }
+
+        // Third step - write from DB
+        uint32_t npages = (amt_to_write + dispatch_cb_page_size - 1) / dispatch_cb_page_size;
+        // Grabbing all pages at once is ok if the size of the scratch_size < 3 * dispatch_cb_block_size
+        dispatch_cb_acquire_pages(npages);
+        uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
+
+        if (dispatch_data_ptr + amt_to_write > dispatch_cb_end) {  // wrap
+            uint32_t last_chunk_size = dispatch_cb_end - dispatch_data_ptr;
+            noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+            dispatch_data_ptr = dispatch_cb_base;
+            scratch_write_addr += last_chunk_size;
+            write_length -= last_chunk_size;
+            amt_to_write -= last_chunk_size;
+            noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
+        }
+
+        noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
+        dispatch_data_ptr += amt_to_write;
+
+        dispatch_cb_release_pages(npages);
+
+        read_length -= amt_read;
+        write_length -= amt_to_write;
+
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_read_barrier();
+    }
+
+    // Third step - write from DB
+    scratch_write_addr = scratch_db_top[db_toggle];
+    uint32_t amt_to_write = amt_read;
+    uint32_t npages = (amt_to_write + dispatch_cb_page_size + CQ_DISPATCH_CMD_SIZE - 1) / dispatch_cb_page_size;
+    if (npages > 1) {
+        dispatch_cb_acquire_pages(npages - 1);
+    }
+    uint64_t noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
+    if (dispatch_data_ptr + amt_to_write > dispatch_cb_end) {  // wrap
+        uint32_t last_chunk_size = dispatch_cb_end - dispatch_data_ptr;
+        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+        dispatch_data_ptr = dispatch_cb_base;
+        scratch_write_addr += last_chunk_size;
+        amt_to_write -= last_chunk_size;
+        noc_addr = get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr);
+    }
+
+    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
+    dispatch_data_ptr += amt_to_write;
+
+    uint32_t pad_to_page = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
+    dispatch_data_ptr += pad_to_page;
+
+    dispatch_cb_release_pages(npages);// yes, npages
+    return cmd_ptr + 2 * sizeof(CQPrefetchCmd);// XXXXX
+}
+
 void kernel_main() {
 
     uint32_t cmd_ptr = cmddat_q_base;
@@ -230,20 +391,24 @@ void kernel_main() {
 
     bool done = false;
     while (!done) {
-        DPRINT << "top: " << fence << " " << cmd_ptr << ENDL();
         get_cmds(fence, cmd_ptr);
-        DPRINT << "after: " << fence << " " << cmd_ptr << ENDL();
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
         switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_DRAM_PAGED:
-            DPRINT << "relay dram page" << ENDL();
+            DPRINT << "relay dram page: " << fence << " " << cmd_ptr << ENDL();
+            cmd_ptr = process_relay_dram_paged_cmd(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
             DPRINT << "inline" << ENDL();
             cmd_ptr = process_relay_inline_cmd(cmd_ptr);
+            break;
+
+        case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
+            DPRINT << "inline no flush" << ENDL();
+            cmd_ptr = process_relay_inline_noflush_cmd(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_WRAP:
@@ -268,6 +433,11 @@ void kernel_main() {
 
         default:
             DPRINT << "prefetcher invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << fence << " " << host_q_end << ENDL();
+            DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
             DEBUG_STATUS('!', 'C', 'M', 'D');
             while(1);
         }

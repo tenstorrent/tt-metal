@@ -18,7 +18,7 @@ constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
 // 764 to make this not divisible by 3 so we can test wrapping of dispatch buffer
 constexpr uint32_t DISPATCH_BUFFER_BLOCK_SIZE_PAGES = 764 * 1024 / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
 
-constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 100 * 1024;
+constexpr uint32_t DEFAULT_HUGEPAGE_BUFFER_SIZE = 256 * 1024;
 constexpr uint32_t DEFAULT_HOST_Q_ENTRIES = 128;
 constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
 constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 64 * 1024;
@@ -30,8 +30,9 @@ constexpr uint32_t HOST_Q_LOG_MINSIZE = 4;
 constexpr uint32_t PCIE_NOC_ALIGNMENT = 32;
 constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << HOST_Q_LOG_MINSIZE) > PCIE_NOC_ALIGNMENT) ? (1 << HOST_Q_LOG_MINSIZE) : PCIE_NOC_ALIGNMENT;
 
-
-static bool initialize_device_g = true;
+constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
+constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
+constexpr uint32_t DRAM_HACKED_BASE_ADDR = 1024 * 1024;  // don't interfere w/ fast dispatch storing our kernels...
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -51,6 +52,10 @@ uint32_t host_q_entries_g;
 uint32_t hugepage_buffer_size_g;
 uint32_t cmddat_q_size_g;
 uint32_t scratch_cb_size_g;
+uint32_t num_dram_banks_g;
+bool use_coherent_data_g;
+
+static bool initialize_device_g = true;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -66,6 +71,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -cs: max cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
         log_info(LogTest, "  -ss: max scratch cb size (default {})", DEFAULT_SCRATCH_CB_SIZE);
         log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
+        log_info(LogTest, "  -c: use coherent data as payload (default false)");
         exit(0);
     }
 
@@ -76,8 +82,15 @@ void init(int argc, char **argv) {
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
     scratch_cb_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_CB_SIZE);
     max_prefetch_command_size_g = test_args::get_command_option_uint32(input_args, "-mc", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
+    use_coherent_data_g = test_args::has_command_option(input_args, "-c");
 
     debug_g = test_args::has_command_option(input_args, "-d");
+}
+
+uint32_t round_cmd_size_up(uint32_t size) {
+    constexpr uint32_t align_mask = HUGEPAGE_ALIGNMENT - 1;
+
+    return (size + align_mask) & ~align_mask;
 }
 
 void add_bare_prefetcher_cmd(vector<uint32_t>& cmds,
@@ -89,10 +102,27 @@ void add_bare_prefetcher_cmd(vector<uint32_t>& cmds,
     }
 }
 
-uint32_t round_cmd_size_up(uint32_t size) {
-    constexpr uint32_t align_mask = HUGEPAGE_ALIGNMENT - 1;
+void add_prefetcher_dram_cmd(vector<uint32_t>& cmds,
+                             vector<uint16_t>& sizes,
+                             uint32_t start_page,
+                             uint32_t base_addr,
+                             uint32_t page_size,
+                             uint32_t pages) {
 
-    return (size + align_mask) & ~align_mask;
+    CQPrefetchCmd cmd;
+    cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_DRAM_PAGED;
+
+    cmd.relay_dram_paged.start_page_id = start_page;
+    cmd.relay_dram_paged.base_addr = base_addr;
+    cmd.relay_dram_paged.page_size = page_size;
+    cmd.relay_dram_paged.pages = pages;
+
+    add_bare_prefetcher_cmd(cmds, cmd);
+
+    uint32_t pad_size = round_cmd_size_up(sizeof(CQPrefetchCmd)) - sizeof(CQPrefetchCmd);
+    for (int i = 0; i < pad_size / sizeof(uint32_t); i++) {
+        cmds.push_back(0);
+    }
 }
 
 void add_prefetcher_cmd(vector<uint32_t>& cmds,
@@ -115,7 +145,12 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 
     uint32_t payload_length = payload.size() * sizeof(uint32_t);
     switch (id) {
+    case CQ_PREFETCH_CMD_RELAY_DRAM_PAGED:
+        TT_ASSERT(false);
+        break;
+
     case CQ_PREFETCH_CMD_RELAY_INLINE:
+    case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
         cmd.relay_inline.length = payload_length;
         cmd.relay_inline.stride = round_cmd_size_up(payload_length + sizeof(CQPrefetchCmd));
         break;
@@ -171,8 +206,63 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
     }
 }
 
+void add_dram_data_to_worker_data(const vector<uint32_t>& dram_data,
+                                  vector<uint32_t>& worker_data,
+                                  uint32_t start_page,
+                                  uint32_t base_addr,
+                                  uint32_t page_size,
+                                  uint32_t pages) {
+
+    uint32_t base_addr_words = base_addr / sizeof(uint32_t);
+    uint32_t page_size_words = page_size / sizeof(uint32_t);
+
+    TT_ASSERT(start_page < num_dram_banks_g);
+    uint32_t page = start_page;
+    for (uint32_t i = 0; i < pages; i++) {
+        uint32_t index = base_addr_words + page * DRAM_DATA_SIZE_WORDS;
+        for (uint32_t j = 0; j  < page_size_words; j++) {
+            worker_data.push_back(dram_data[index + j]);
+        }
+        page++;
+        if (page == num_dram_banks_g) {
+            base_addr_words += page_size_words;
+            page = 0;
+        }
+    }
+}
+
+void gen_dram_read_cmd(vector<uint32_t>& prefetch_cmds,
+                       vector<uint16_t>& cmd_sizes,
+                       const vector<uint32_t>& dram_data,
+                       vector<uint32_t>& worker_data,
+                       CoreCoord worker_core,
+                       uint32_t dst_addr,
+                       uint32_t start_page,
+                       uint32_t base_addr,
+                       uint32_t page_size,
+                       uint32_t pages) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    uint32_t worker_data_size = page_size * pages;
+    gen_bare_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, worker_data_size);
+
+    // XXXX update cmd_sizes to pull the 2 commands at once!!!
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
+
+    auto prior_end = prefetch_cmds.size();
+    add_prefetcher_dram_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages);
+    uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
+    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((new_size >> HOST_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    cmd_sizes.push_back(new_size >> HOST_Q_LOG_MINSIZE);
+
+    add_dram_data_to_worker_data(dram_data, worker_data, start_page, base_addr, page_size, pages);
+}
+
 void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
                          vector<uint16_t>& cmd_sizes,
+                         const vector<uint32_t>& dram_data,
                          vector<uint32_t>& worker_data,
                          CoreCoord worker_core,
                          uint32_t dst_addr) {
@@ -182,6 +272,7 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
 
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
 
+#if 0
     vector<uint32_t> rnd_payload;
     generate_random_payload(rnd_payload, 17);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
@@ -201,6 +292,23 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
     dispatch_cmds.resize(0);
     gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, 8448);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+#endif
+    // Read from dram, write to worker
+    // start_page, base addr, page_size, pages
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      0, 0, 32, num_dram_banks_g);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      0, 0, 32, num_dram_banks_g);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      4, 32, 64, num_dram_banks_g);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      0, 0, 128, 128);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      4, 32, 2048, num_dram_banks_g * 8);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      5, 32, 2048, num_dram_banks_g * 8 + 1);
+    gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
+                      3, 128, 6144, num_dram_banks_g * 8 + 7);
 }
 
 void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
@@ -313,6 +421,24 @@ void write_prefetcher_cmds(uint32_t iterations,
     }
 }
 
+void populate_dram(Device *device, vector<uint32_t>& dram_data)
+{
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    vector<CoreCoord> dram_cores = soc_d.get_dram_cores();
+    num_dram_banks_g = dram_cores.size();
+
+    for (uint32_t i = 0; i < DRAM_DATA_SIZE_WORDS * num_dram_banks_g; i++) {
+        uint32_t datum = (use_coherent_data_g) ? i : std::rand();
+        dram_data.push_back(datum);
+    }
+
+    uint32_t offset = 0;
+    for (auto core : dram_cores) {
+        tt::Cluster::instance().write_core((void *)&dram_data[offset], DRAM_DATA_SIZE_BYTES, tt_cxy_pair(device->id(), core), DRAM_HACKED_BASE_ADDR);
+        offset += DRAM_DATA_SIZE_WORDS;
+    }
+}
+
 int main(int argc, char **argv) {
     init(argc, argv);
 
@@ -373,8 +499,13 @@ int main(int argc, char **argv) {
         host_q_rd_ptr_addr_data.push_back(host_q_base + host_q_entries_g * sizeof(uint16_t));
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q_rd_ptr_addr_data, host_q_rd_ptr_addr);
         llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, host_q, host_q_base);
+
+        vector<uint32_t> dram_data;
+        populate_dram(device, dram_data);
+
         tt::Cluster::instance().l1_barrier(device->id());
-        gen_prefetcher_cmds(cmds, cmd_sizes, worker_data, phys_worker_core, l1_buf_base);
+        tt::Cluster::instance().dram_barrier(device->id());
+        gen_prefetcher_cmds(cmds, cmd_sizes, dram_data, worker_data, phys_worker_core, l1_buf_base);
         gen_terminate_cmds(terminate_cmds, terminate_sizes);
 
         std::map<string, string> defines = {
