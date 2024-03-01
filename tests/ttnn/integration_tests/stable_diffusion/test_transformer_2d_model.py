@@ -266,4 +266,4 @@ def test_transformer_2d_model_512x512(
 
     ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(ttnn_transformer), layout=ttnn.ROW_MAJOR_LAYOUT))
 
-    # assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
