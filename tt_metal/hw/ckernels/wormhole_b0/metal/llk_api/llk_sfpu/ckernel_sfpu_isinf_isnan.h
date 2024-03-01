@@ -124,30 +124,5 @@ inline void calculate_sfpu_isinf_isnan() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void isinf_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void isposinf_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void isneginf_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void isnan_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void isfinite_init() {
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

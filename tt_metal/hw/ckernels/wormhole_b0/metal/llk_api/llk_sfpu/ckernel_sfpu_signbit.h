@@ -32,11 +32,5 @@ inline void calculate_signbit()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void signbit_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

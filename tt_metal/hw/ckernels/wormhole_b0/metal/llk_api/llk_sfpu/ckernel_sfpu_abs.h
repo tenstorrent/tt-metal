@@ -25,11 +25,5 @@ inline void calculate_abs()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void abs_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

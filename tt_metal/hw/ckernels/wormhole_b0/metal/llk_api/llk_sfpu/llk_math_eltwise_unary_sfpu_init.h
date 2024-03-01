@@ -10,6 +10,12 @@
 namespace ckernel {
 
 template <SfpuType sfpu_op, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_init() {
+    eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init(void (*func)()) {
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
     func();
