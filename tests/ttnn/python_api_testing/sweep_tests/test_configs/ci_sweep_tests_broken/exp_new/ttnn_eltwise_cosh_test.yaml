@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-exp:
+  - ttnn-cosh:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -15,8 +15,8 @@ test-list:
         function: gen_rand
         dtype: bfloat16
         args:
-          low: -100
-          high: 100
+          low: -9
+          high: 9
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
@@ -25,4 +25,4 @@ test-list:
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_exp_sweep.csv
+      output-file: eltwise_cosh_sweep.csv
