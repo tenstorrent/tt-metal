@@ -247,12 +247,11 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
 
                 ### WO Weights
-
                 wo_host = torch2tt_tensor(
                     w0_chunks[i],
                     None,
                     tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
-                    tt_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                    tt_dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
                 )
                 self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DEFAULT_MEMCFG"]))
                 tt_lib.tensor.dump_tensor(

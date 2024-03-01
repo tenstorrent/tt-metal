@@ -5,6 +5,7 @@ import ttnn
 import copy
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
+from pathlib import Path
 
 
 class TtLlamaModelForGeneration:
@@ -25,9 +26,23 @@ class TtLlamaModelForGeneration:
         hidden_dim = configuration.dim
         head_dim = hidden_dim // n_heads
 
+        # Cache Weights setup
+        CACHE_PATH = Path("/home/llama-data-cache/weights-cache")
+        if n_layers == None:
+            n_layers = 80
+        n_layers_per_group = 8
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
-            devices, state_dict, base_url, n_layers, model_config, configuration, batch, emulated=emulated
+            devices,
+            state_dict,
+            base_url,
+            n_layers,
+            model_config,
+            configuration,
+            batch,
+            n_layers_per_group=n_layers_per_group,
+            emulated=emulated,
+            cache_path=CACHE_PATH,
         )
         self.params = configuration
         self.devices = devices
@@ -36,6 +51,7 @@ class TtLlamaModelForGeneration:
             tt_lib.device.Synchronize(device)
 
         del reference_model
+        del state_dict
 
     def forward(self, tokens: torch.Tensor, start_pos: int, *args, **kwargs):
         tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
