@@ -189,35 +189,42 @@ class TtLlamaDecoder_optimized:
 
         x_fractured = torch.chunk(x, self.num_devices, dim=-1)
         xs, rot_mats, attn_masks = [], [], []
+        # Put attn_mask on the device with the sharded config
+        attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = padded_layer_past_len
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
         for i in range(self.num_devices):
             device = self.devices[i]
-            # TODO: put input onto device sharded
             xs.append(
                 torch2tt_tensor(
                     x_fractured[i],
                     device,
-                    tt_layout=tt_lib.tensor.Layout.TILE,
-                    tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                     tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
             )
             rot_mats.append(
-                torch2tt_tensor(rot_mat.clone(), device, tt_memory_config=self.model_config["ROT_MAT_MEMCFG"])
+                torch2tt_tensor(
+                    rot_mat.clone(),
+                    device,
+                    tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
+                    tt_dtype=self.model_config["ROT_MAT_DTYPE"],
+                )
             )
-
-            # Put attn_mask on the device with the sharded config
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = padded_layer_past_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
             attn_masks.append(
                 torch2tt_tensor(
                     attn_mask.clone(),
                     device,
-                    tt_memory_config=attention_mask_memconfig,
                     tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
                 )
+            )
+        for i in range(self.num_devices):
+            xs[i] = tt_lib.tensor.interleaved_to_sharded(
+                xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            )
+            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                attn_masks[i], sharded_mem_config=attention_mask_memconfig
             )
         return (
             xs,
@@ -238,7 +245,7 @@ class TtLlamaDecoder_optimized:
         # Put xs back on DRAM and do allgather
         for i in range(self.num_devices):
             xs_replicated.append(
-                tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+                tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
             )
         ### Duplicate inputs for layernorm
         if self.emulated:
@@ -248,7 +255,7 @@ class TtLlamaDecoder_optimized:
                 xs_replicated,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         for i in range(self.num_devices):
@@ -291,7 +298,7 @@ class TtLlamaDecoder_optimized:
         for i in range(self.num_devices):
             # Put attn_resid back on DRAM
             attn_resid_replicated.append(
-                tt_lib.tensor.sharded_to_interleaved(output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+                tt_lib.tensor.sharded_to_interleaved(output[i], output_mem_config=self.model_config["L1_MEMCFG"])
             )
 
         ### Duplicate attention residual on all chips
@@ -302,7 +309,7 @@ class TtLlamaDecoder_optimized:
                 attn_resid_replicated,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         for i in range(self.num_devices):

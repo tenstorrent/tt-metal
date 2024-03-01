@@ -207,21 +207,30 @@ class TtLlamaModel_optimized(nn.Module):
                 torch2tt_tensor(
                     x_fractured[i],
                     device,
-                    tt_layout=tt_lib.tensor.Layout.TILE,
-                    tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                     tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
             )
             rot_mats.append(
-                torch2tt_tensor(rot_mat.clone(), device, tt_memory_config=self.model_config["ROT_MAT_MEMCFG"])
+                torch2tt_tensor(
+                    rot_mat.clone(),
+                    device,
+                    tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
+                    tt_dtype=self.model_config["ROT_MAT_DTYPE"],
+                )
             )
             attn_masks.append(
                 torch2tt_tensor(
                     attn_mask.clone(),
                     device,
-                    tt_memory_config=attention_mask_memconfig,
                     tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
                 )
+            )
+        for i in range(self.num_devices):
+            xs[i] = tt_lib.tensor.interleaved_to_sharded(
+                xs[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            )
+            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                attn_masks[i], sharded_mem_config=attention_mask_memconfig
             )
         return (
             xs,
@@ -253,7 +262,7 @@ class TtLlamaModel_optimized(nn.Module):
 
         # Convert decoder_output to interleaved
         for i in range(self.num_devices):
-            xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+            xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
 
         ## Gather fractured layers output
         if self.emulated:
@@ -263,7 +272,7 @@ class TtLlamaModel_optimized(nn.Module):
                 xs,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         ## Duplicate layernorm
@@ -288,7 +297,6 @@ class TtLlamaModel_optimized(nn.Module):
         ### Each device does an LM head fracture
         lm_head_out = []
         for i in range(self.num_devices):
-            # out = tt_lib.tensor.matmul(norm_out_replicated[i], self.lm_head_list[i])
             lm_head_out.append(
                 tt_lib.operations.primary.matmul_1d(
                     norm_out_replicated[i],

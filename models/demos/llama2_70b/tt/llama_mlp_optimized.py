@@ -170,7 +170,7 @@ class TtLlamaMLP_optimized(nn.Module):
         for i in range(len(hidden_states)):
             # Put w2_inputs in DRAM
             hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
-                hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                hidden_states[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
 
         if self.emulated:
@@ -180,13 +180,13 @@ class TtLlamaMLP_optimized(nn.Module):
                 hidden_states,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
-        # Put AllGather results in L1
+        # Put AllGather results in L1 Sharded
         for i in range(len(hidden_states)):
             hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
-                hidden_states[i], sharded_mem_config=self.model_config["PADDED_ALL_GATHER_OUTPUT_MEMCFG"]
+                hidden_states[i], sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
             )
 
         for i in range(len(hidden_states)):
