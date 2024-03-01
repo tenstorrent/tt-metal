@@ -141,8 +141,8 @@ include $(UMD_HOME)/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/tt_eager/module.mk
-include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/ttnn/module.mk
+include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/tests/module.mk
 
 # only include these modules if we're in development
