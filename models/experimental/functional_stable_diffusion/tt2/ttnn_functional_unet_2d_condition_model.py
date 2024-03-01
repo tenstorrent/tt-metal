@@ -150,7 +150,6 @@ class UNet2DConditionModel:
                     batch_size,
                     input_height,
                     input_width,
-                    group_norm_on_device=True if i == 0 else False,
                 )
             elif down_block_type == "DownBlock2D":
                 down_block = downblock2d(
@@ -382,13 +381,6 @@ class UNet2DConditionModel:
                     only_cross_attention=only_cross_attention[i],
                     upcast_attention=upcast_attention,
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    group_norm_sharded_config={
-                        "shard_strategy": self.conv_in.conv.input_shard_scheme,
-                        "shard_orientation": self.conv_in.conv.input_shard_orientation,
-                        "grid_size": self.conv_in.conv.grid_size,
-                    }
-                    if i == 0
-                    else None,
                 )
             elif down_block_type == "DownBlock2D":
                 sample, res_samples = down_block(
