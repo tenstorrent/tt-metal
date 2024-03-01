@@ -14,17 +14,7 @@
 //
 #pragma once
 
-#include "dev_msgs.h"
-
-// XXXX TODO(PGK): why why why do we not have this standardized
-enum debug_sanitize_which_riscv {
-    DebugSanitizeBrisc  = 0,
-    DebugSanitizeNCrisc = 1,
-    DebugSanitizeTrisc0 = 2,
-    DebugSanitizeTrisc1 = 3,
-    DebugSanitizeTrisc2 = 4,
-    DebugSanitizeErisc = 5,
-};
+#include "watcher_common.h"
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 
@@ -65,19 +55,6 @@ extern uint8_t noc_index;
                                     ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE) && \
                                     ((a % NOC_L1_ALIGNMENT_BYTES) == 0))
 
-inline uint32_t debug_sanitize_get_which_riscv()
-{
-#if defined(COMPILE_FOR_BRISC)
-    return DebugSanitizeBrisc;
-#elif defined(COMPILE_FOR_NCRISC)
-    return DebugSanitizeNCrisc;
-#elif defined(COMPILE_FOR_ERISC)
-    return DebugSanitizeErisc;
-#else
-    return DebugSanitizeTrisc0 + COMPILE_FOR_TRISC;
-#endif
-}
-
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index
@@ -88,7 +65,7 @@ inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32
     if (v[noc_index].invalid == DebugSanitizeNocInvalidOK) {
         v[noc_index].addr = a;
         v[noc_index].len = l;
-        v[noc_index].which = debug_sanitize_get_which_riscv();
+        v[noc_index].which = debug_get_which_riscv();
         v[noc_index].invalid = invalid;
     }
 

@@ -27,6 +27,7 @@ namespace watcher {
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
+constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8  = 0xda;
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
@@ -101,26 +102,45 @@ static void dump_l1_status(FILE *f, Device *device, CoreCoord core, const launch
     }
 }
 
-static const char * get_sanity_riscv_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type)
+static const char * get_riscv_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type)
 {
     switch (type) {
-    case DebugSanitizeBrisc:
+    case DebugBrisc:
         return "brisc";
-    case DebugSanitizeNCrisc:
+    case DebugNCrisc:
         return "ncrisc";
-    case DebugSanitizeErisc:
+    case DebugErisc:
         return "erisc";
-    case DebugSanitizeTrisc0:
+    case DebugTrisc0:
         return "trisc0";
-    case DebugSanitizeTrisc1:
+    case DebugTrisc1:
         return "trisc1";
-    case DebugSanitizeTrisc2:
+    case DebugTrisc2:
         return "trisc2";
     default:
         log_running_kernels(launch_msg);
         TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
+}
+
+static string get_kernel_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type)
+{
+    switch (type) {
+        case DebugBrisc:
+        case DebugErisc:
+            return kernel_names[launch_msg->brisc_watcher_kernel_id];
+        case DebugNCrisc:
+            return kernel_names[launch_msg->ncrisc_watcher_kernel_id];
+        case DebugTrisc0:
+        case DebugTrisc1:
+        case DebugTrisc2:
+            return kernel_names[launch_msg->triscs_watcher_kernel_id];
+        default:
+            log_running_kernels(launch_msg);
+            TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
+    }
+    return "";
 }
 
 static string get_debug_status(CoreCoord core, const launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
@@ -175,18 +195,18 @@ static void dump_noc_sanity_status(FILE *f,
         }
         break;
     case DebugSanitizeNocInvalidL1:
-        fprintf(f, "%s using noc%d reading L1[addr=0x%08lx,len=%d]\n", get_sanity_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
+        fprintf(f, "%s using noc%d reading L1[addr=0x%08lx,len=%d]\n", get_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
         fflush(f);
         log_running_kernels(launch_msg);
         log_warning("Watcher stopped the device due to bad NOC L1/reg address");
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d reading L1[addr=0x%08lx,len=%d]",
-                 core.str().c_str(), get_sanity_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
+                 core.str().c_str(), get_riscv_name(core, launch_msg, san->which), noc, san->addr, san->len);
         TT_THROW(buf);
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "%s using noc%d tried to access core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]\n",
-                get_sanity_riscv_name(core, launch_msg, san->which),
+                get_riscv_name(core, launch_msg, san->which),
                 noc,
                 NOC_UNICAST_ADDR_X(san->addr),
                 NOC_UNICAST_ADDR_Y(san->addr),
@@ -197,7 +217,7 @@ static void dump_noc_sanity_status(FILE *f,
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to accesss core (%02ld,%02ld) L1[addr=0x%08lx,len=%d]",
                  core.str().c_str(),
-                 get_sanity_riscv_name(core, launch_msg, san->which),
+                 get_riscv_name(core, launch_msg, san->which),
                  noc,
                  NOC_UNICAST_ADDR_X(san->addr),
                  NOC_UNICAST_ADDR_Y(san->addr),
@@ -206,7 +226,7 @@ static void dump_noc_sanity_status(FILE *f,
         break;
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "%s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]\n",
-                get_sanity_riscv_name(core, launch_msg, san->which),
+                get_riscv_name(core, launch_msg, san->which),
                 noc,
                 NOC_MCAST_ADDR_START_X(san->addr),
                 NOC_MCAST_ADDR_START_Y(san->addr),
@@ -219,7 +239,7 @@ static void dump_noc_sanity_status(FILE *f,
         log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: %s using noc%d tried to access core range (%02ld,%02ld)-(%02ld,%02ld) L1[addr=0x%08lx,len=%d]}",
                  core.str().c_str(),
-                 get_sanity_riscv_name(core, launch_msg, san->which),
+                 get_riscv_name(core, launch_msg, san->which),
                  noc,
                  NOC_MCAST_ADDR_START_X(san->addr),
                  NOC_MCAST_ADDR_START_Y(san->addr),
@@ -243,6 +263,58 @@ static void dump_noc_sanity_status(FILE *f,
 
     for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
         dump_noc_sanity_status(f, core, launch_msg, noc, &san[noc], debug_status);
+    }
+}
+
+static void dump_assert_status(
+    FILE *f,
+    CoreCoord core,
+    const launch_msg_t *launch_msg,
+    const debug_assert_msg_t *assert_status,
+    const debug_status_msg_t *debug_status
+) {
+    switch (assert_status->tripped) {
+        case DebugAssertTripped: {
+            // TODO: Get rid of this once #6098 is implemented.
+            std::string line_num_warning = "Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
+            fprintf(
+                f, "%s tripped assert on line %d. Current kernel: %s. %s",
+                get_riscv_name(core, launch_msg, assert_status->which),
+                assert_status->line_num,
+                get_kernel_name(core, launch_msg, assert_status->which).c_str(),
+                line_num_warning.c_str()
+            );
+            fflush(f);
+            log_running_kernels(launch_msg);
+            log_waypoint(core, launch_msg, debug_status);
+            log_info(LogLLRuntime, "Watcher stopped the device due to tripped assert.");
+            TT_THROW(
+                "Watcher detected an assert: core {}, riscv {}, line {}. Current kernel: {}. {}",
+                core.str(),
+                get_riscv_name(core, launch_msg, assert_status->which),
+                assert_status->line_num,
+                get_kernel_name(core, launch_msg, assert_status->which),
+                line_num_warning
+            );
+            break;
+        }
+        case DebugAssertOK:
+            if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
+                assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
+                TT_THROW(
+                    "Watcher unexpected assert state on core {}, reported OK but got risc {}, line {}.",
+                    assert_status->which,
+                    assert_status->line_num
+                );
+            }
+            break;
+        default:
+            log_running_kernels(launch_msg);
+            TT_THROW(
+                "Watcher unexpexted data corruption, noc assert state on core {} unknown failure code: {}.\n",
+                core.str(),
+                assert_status->tripped
+            );
     }
 }
 
@@ -414,6 +486,7 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, Device *d
         if (!is_eth_core)
             dump_l1_status(f, device, core,  &mbox_data->launch);
         dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
+        dump_assert_status(f, core, &mbox_data->launch, &mbox_data->assert_status, mbox_data->debug_status);
     }
 
     // Ethernet cores don't use the launch message/sync reg
@@ -547,6 +620,15 @@ void watcher_init(Device *device) {
         data[i].invalid = DebugSanitizeNocInvalidOK;
     }
 
+    // Initialize debug asserts to not tripped.
+    std::vector<uint32_t> debug_assert_init_val;
+    debug_assert_init_val.resize(sizeof(debug_assert_msg_t) / sizeof(uint32_t));
+    static_assert(sizeof(debug_assert_msg_t) % sizeof(uint32_t) == 0);
+    debug_assert_msg_t *assert_data = reinterpret_cast<debug_assert_msg_t *>(&(debug_assert_init_val[0]));
+    assert_data->line_num = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+    assert_data->tripped = DebugAssertOK;
+    assert_data->which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+
     // Initialize worker cores debug values
     CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -555,6 +637,7 @@ void watcher_init(Device *device) {
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(assert_status));
         }
     }
 
@@ -572,6 +655,12 @@ void watcher_init(Device *device) {
             physical_core,
             debug_sanity_init_val,
             GET_ETH_MAILBOX_ADDRESS_HOST(sanitize_noc)
+        );
+        tt::llrt::write_hex_vec_to_core(
+            device->id(),
+            physical_core,
+            debug_assert_init_val,
+            GET_ETH_MAILBOX_ADDRESS_HOST(assert_status)
         );
     }
 
