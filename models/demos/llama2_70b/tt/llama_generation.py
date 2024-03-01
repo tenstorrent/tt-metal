@@ -15,6 +15,9 @@ class TtLlamaModelForGeneration:
         if emulated:
             device = devices[0]
             devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
+            cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
+        else:
+            cache_path = model_config["DEFAULT_CACHE_PATH"]
 
         ## Get state dict
         reference_model.eval()
@@ -27,10 +30,15 @@ class TtLlamaModelForGeneration:
         head_dim = hidden_dim // n_heads
 
         # Cache Weights setup
-        CACHE_PATH = Path("/home/llama-data-cache/weights-cache-2")
         if n_layers == None:
             n_layers = 80
-        n_layers_per_group = 20
+
+        if n_layers >= 40:
+            n_layers_per_group = 20
+            assert n_layers % n_layers_per_group == 0
+        else:
+            n_layers_per_group = None
+
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
             devices,
@@ -42,7 +50,7 @@ class TtLlamaModelForGeneration:
             batch,
             n_layers_per_group=n_layers_per_group,
             emulated=emulated,
-            cache_path=CACHE_PATH,
+            cache_path=cache_path,
         )
         self.params = configuration
         self.devices = devices

@@ -298,32 +298,42 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
         assert attn_mask.size() == (seq_len, self.n_local_heads, batch, padded_layer_past_len)
         xs, rot_mats, attn_masks = [], [], []
+        # Put attn_mask on the device with the sharded config
+        attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = padded_layer_past_len
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
         for i in range(self.num_devices):
             device = self.devices[i]
             xs.append(
                 torch2tt_tensor(
                     x.clone(),
                     device,
-                    tt_layout=tt_lib.tensor.Layout.TILE,
-                    tt_memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
-                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                    tt_dtype=self.model_config["LN_ATTN_OUTPUT_DTYPE"],
                 )
             )
-            rot_mats.append(torch2tt_tensor(rot_mat.clone(), device))
-
-            # Put attn_mask on the device with the sharded config
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = padded_layer_past_len
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+            rot_mats.append(
+                torch2tt_tensor(
+                    rot_mat.clone(),
+                    device,
+                    tt_memory_config=self.model_config["ROT_MAT_MEMCFG"],  # TODO: Put on L1 instead of DRAM
+                    tt_dtype=self.model_config["ROT_MAT_DTYPE"],
+                )
+            )
             attn_masks.append(
                 torch2tt_tensor(
                     attn_mask.clone(),
                     device,
-                    tt_memory_config=attention_mask_memconfig,
                     tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
                 )
+            )
+        for i in range(self.num_devices):
+            xs[i] = tt_lib.tensor.interleaved_to_sharded(
+                xs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
+            )
+            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+                attn_masks[i], sharded_mem_config=attention_mask_memconfig
             )
         return (
             xs,
@@ -559,7 +569,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             )  # seqlen, 1, batch, hidden_size
         for i in range(len(attn_output)):
             attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
-                attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                attn_output[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
         # All gather input to dense
         if self.emulated:
@@ -569,7 +579,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         for i in range(len(attn_output)):

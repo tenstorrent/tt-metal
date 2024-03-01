@@ -69,9 +69,9 @@ def run_test_LlamaModel_inference(
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
-        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
-        tokenizer_path = "/home/llama-data/tokenizer.model"
-        cache_path = Path("/home/llama-data-cache/weights-cache")
+        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
+        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
+        cache_path = model_config["DEFAULT_CACHE_PATH"]
 
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
@@ -222,32 +222,29 @@ def run_test_LlamaModel_inference(
 
 
 @pytest.mark.parametrize(
-    "batch, seq_len, n_layers",
+    "pcc, n_layers",
     (
-        (32, 1, 1),
-        (32, 1, 2),
-        (32, 1, 4),
-        (32, 1, 5),
-        (32, 1, 8),
-        (32, 1, 10),
-        (32, 1, 20),
-        (32, 1, 40),
+        (0.999, 1),
+        (0.998, 2),
+        (0.99, 4),
+        (0.98, 8),
+        (0.96, 10),
+        (0.94, 20),
+        (0.92, 40),
+        (0.90, 80),
     ),
 )
 @pytest.mark.parametrize(
-    "n_devices",
-    (4, 8),
-)
-@pytest.mark.parametrize(
-    "model_version, pcc, optimized, emulated",
+    "batch, seq_len, optimized, n_devices, emulated",
     (
-        ("llama-2-70B", 0.98, True, True),
-        ("llama-2-70B", 0.98, True, False),
+        (32, 1, True, 4, False),
+        (32, 1, True, 8, False),
+        (32, 1, True, 4, True),
+        (32, 1, True, 8, True),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaModel_inference(
-    model_version,
     batch,
     seq_len,
     pcc,

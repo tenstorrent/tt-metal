@@ -32,7 +32,7 @@ def main(args):
         all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
 
         if args.output_at_end:
-            with open("demo_user_output.txt", "w") as f:  # Open a file for writing
+            with open("models/demos/llama2_70b/demo/data/demo_user_output.txt", "w") as f:  # Open a file for writing
                 for i, text in enumerate(all_text):
                     logger.info(f"user {i}: {text}")  # Log to wherever logger is configured to write
                     f.write(f"user {i}: {text}\n")  # Write to the file with a newline
