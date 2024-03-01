@@ -194,9 +194,9 @@ class transformer_2d_model:
         batch = self.batch_size
         height = self.input_height
         width = self.input_width
-        # breakpoint()
 
-        # hidden_states = pre_process_input(self.device, hidden_states)
+        if hidden_states.shape[0] == 2:
+            hidden_states = pre_process_input(self.device, hidden_states)
         # sample in l1 interelaved and tiled and nhwc
 
         residual = hidden_states
@@ -232,7 +232,7 @@ class transformer_2d_model:
 
         inner_dim = hidden_states.shape[-1]
         # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # hidden_states = ttnn.reshape(hidden_states, (1, batch, height * width, inner_dim))
+        hidden_states = ttnn.reshape(hidden_states, (1, batch, height * width, inner_dim))
 
         # hidden_states = ttnn.to_memory_config(
         #     hidden_states, ttnn.L1_MEMORY_CONFIG
