@@ -37,7 +37,6 @@ class PytorchLlamaMLPModel(torch.nn.Module):
 
 def run_test_LlamaMLP_inference(
     devices,
-    model_version,
     batch,
     seq_len,
     pcc,
@@ -53,9 +52,9 @@ def run_test_LlamaMLP_inference(
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
-        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
-        tokenizer_path = "/home/llama-data/tokenizer.model"
-        cache_path = Path("/home/llama-data-cache/weights-cache")
+        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
+        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
+        cache_path = model_config["DEFAULT_CACHE_PATH"]
 
     hugging_face_reference_model = Llama.build(
         ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=False
@@ -135,21 +134,20 @@ def run_test_LlamaMLP_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc, optimized, n_devices, emulated",
+    "batch, seq_len, pcc, optimized, n_devices, emulated",
     (
-        ("llama-2-70B", 32, 1, 0.98, False, 8, True),
-        ("llama-2-70B", 32, 1, 0.98, True, 8, True),
-        ("llama-2-70B", 32, 1, 0.98, False, 4, True),
-        ("llama-2-70B", 32, 1, 0.98, True, 4, True),
-        ("llama-2-70B", 32, 1, 0.98, False, 8, False),
-        ("llama-2-70B", 32, 1, 0.98, True, 8, False),
-        ("llama-2-70B", 32, 1, 0.98, False, 4, False),
-        ("llama-2-70B", 32, 1, 0.98, True, 4, False),
+        (32, 1, 0.9999, True, 4, False),
+        (32, 1, 0.9999, True, 8, False),
+        (32, 1, 0.9999, True, 4, True),
+        (32, 1, 0.9999, True, 8, True),
+        (32, 1, 0.9999, False, 4, False),
+        (32, 1, 0.9999, False, 8, False),
+        (32, 1, 0.9999, False, 4, True),
+        (32, 1, 0.9999, False, 8, True),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaMLP_inference(
-    model_version,
     batch,
     seq_len,
     pcc,
@@ -168,7 +166,6 @@ def test_LlamaMLP_inference(
 
     run_test_LlamaMLP_inference(
         pcie_devices[:n_devices],
-        model_version,
         batch,
         seq_len,
         pcc,

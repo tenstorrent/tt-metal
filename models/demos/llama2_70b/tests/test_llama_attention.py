@@ -88,9 +88,10 @@ def run_test_LlamaAttention_inference(
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
-        ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
-        tokenizer_path = "/home/llama-data/tokenizer.model"
-        cache_path = Path("/home/llama-data-cache/weights-cache")
+        ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
+        tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
+        cache_path = model_config["DEFAULT_CACHE_PATH"]
+
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
         ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
@@ -228,10 +229,10 @@ def run_test_LlamaAttention_inference(
 @pytest.mark.parametrize(
     "batch, seq_len, pcc, optimized, n_devices, emulated",
     (
-        (32, 1, 0.98, True, 4, False),
-        (32, 1, 0.98, True, 8, False),
-        (32, 1, 0.98, True, 4, True),
-        (32, 1, 0.98, True, 8, True),
+        (32, 1, 0.9998, True, 4, False),
+        (32, 1, 0.9998, True, 8, False),
+        (32, 1, 0.9998, True, 4, True),
+        (32, 1, 0.9998, True, 8, True),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
