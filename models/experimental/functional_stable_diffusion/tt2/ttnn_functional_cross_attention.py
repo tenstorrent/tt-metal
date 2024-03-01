@@ -109,7 +109,7 @@ class cross_attention:
             4096: attention_mask_4096,
         }
 
-        padding_shapes = [[2, 400, 640], [2, 928, 1280], [2, 160, 2560], [2, 32, 1280]]
+        padding_shapes = [[2, 4000, 640], [2, 928, 1280], [2, 160, 2560], [2, 32, 1280]]
         self.padded_tensors = {}
         for shape in padding_shapes:
             padding = torch.zeros(shape)
@@ -237,4 +237,4 @@ class cross_attention:
         if len(hidden_states.shape) == 3:
             hidden_states = unsqueeze_to_4D(hidden_states)
 
-        return ttnn.unsqueeze_to_4D(hidden_states)  # TODO: This wouldn't be needed if the input was 3D ...
+        return hidden_states

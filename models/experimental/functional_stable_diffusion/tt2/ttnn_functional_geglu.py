@@ -24,20 +24,16 @@ def split_linear_params(params):
     proj_weight, gate_weight = torch.split(weight, weight.shape[dim] // 2, dim=dim)
     proj_bias, gate_bias = torch.split(bias, bias.shape[dim] // 2, dim=dim)
 
-    proj_weight = ttnn.from_torch(proj_weight, ttnn.bfloat16)
-    proj_weight = ttnn.to_layout(proj_weight, layout=ttnn.TILE_LAYOUT)
+    proj_weight = ttnn.from_torch(proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     proj_weight = ttnn.to_device(proj_weight, device, memory_config=memory_config)
 
-    gate_weight = ttnn.from_torch(gate_weight, ttnn.bfloat16)
-    gate_weight = ttnn.to_layout(gate_weight, layout=ttnn.TILE_LAYOUT)
+    gate_weight = ttnn.from_torch(gate_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     gate_weight = ttnn.to_device(gate_weight, device, memory_config=memory_config)
 
-    proj_bias = ttnn.from_torch(proj_bias, ttnn.bfloat16)
-    proj_bias = ttnn.to_layout(proj_bias, layout=ttnn.TILE_LAYOUT)
+    proj_bias = ttnn.from_torch(proj_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     proj_bias = ttnn.to_device(proj_bias, device, memory_config=memory_config)
 
-    gate_bias = ttnn.from_torch(gate_bias, ttnn.bfloat16)
-    gate_bias = ttnn.to_layout(gate_bias, layout=ttnn.TILE_LAYOUT)
+    gate_bias = ttnn.from_torch(gate_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     gate_bias = ttnn.to_device(gate_bias, device, memory_config=memory_config)
 
     params.proj.proj_weight = proj_weight
@@ -62,16 +58,16 @@ class geglu:
             self.parameters.proj.proj_weight,
             bias=self.parameters.proj.proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=ttnn.bfloat8_b,
+            # core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         gate = ttnn.linear(
             hidden_states,
             self.parameters.proj.gate_weight,
             bias=self.parameters.proj.gate_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=ttnn.bfloat8_b,
+            # core_grid=ttnn.CoreGrid(y=8, x=8),
             activation="gelu",
         )
         return ttnn.mul(proj, gate)

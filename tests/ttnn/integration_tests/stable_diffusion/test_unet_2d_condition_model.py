@@ -115,13 +115,15 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     # setup pytorch model
     torch.manual_seed(0)
     model_name = "CompVis/stable-diffusion-v1-4"
-    load_from_disk = True
+    load_from_disk = False
     if not load_from_disk:
         pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
 
         model = pipe.unet
         model.eval()
         config = model.config
+        # torch.save(model, "unet.pt")
+        # torch.save(config, "unet_config.pt")
     else:
         model = torch.load("unet.pt")
         config = torch.load("unet_config.pt")
@@ -155,8 +157,10 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     ttnn_timestep = ttnn.to_layout(ttnn_timestep, ttnn.TILE_LAYOUT)
     ttnn_timestep = ttnn.to_device(ttnn_timestep, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    encoder_hidden_states = ttnn.from_torch(encoder_hidden_states, ttnn.bfloat16)
-    encoder_hidden_states = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
+    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 0, 0, 19))
+    encoder_hidden_states = ttnn.from_torch(
+        encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     reader_patterns_cache = {}
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)

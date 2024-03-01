@@ -148,3 +148,19 @@ def run_ttnn_conv_with_pre_and_post_tensor_formatting(
     tensor = ttnn_conv_op(tensor)
     tensor = post_process_output(device, tensor, batch_size, output_height, output_width, output_channels)
     return tensor
+
+
+def ttnn_to_torch(input):
+    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+    input = ttnn.from_device(input)
+    input = ttnn.to_torch(input)
+    return input
+
+
+def weight_to_bfp8(weight):
+    device = weight.device
+    memory_config = ttnn.get_memory_config(weight)
+    weight = ttnn_to_torch(weight)
+    weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.to_device(weight, device, memory_config=memory_config)
+    return weight
