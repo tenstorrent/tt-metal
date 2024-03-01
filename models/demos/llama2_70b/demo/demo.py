@@ -37,6 +37,8 @@ def main(args):
 
 
 def build_generator(args):
+    if args.num_layers is None:
+        args.num_layers = 1
     generator = Llama.build(
         ckpt_dir=args.ckpt_dir,
         tokenizer_path=args.tokenizer_path,
