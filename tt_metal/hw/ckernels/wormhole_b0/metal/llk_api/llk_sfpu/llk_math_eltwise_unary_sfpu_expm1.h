@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_expm1.h"
@@ -17,7 +16,6 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_expm1_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::expm1, APPROXIMATE>(sfpu::expm1_init<APPROXIMATE>);
 }
-
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_expm1(uint dst_index, int vector_mode = (int)VectorMode::RC) {

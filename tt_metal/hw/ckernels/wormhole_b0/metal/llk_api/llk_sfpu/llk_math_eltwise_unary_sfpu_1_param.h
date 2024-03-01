@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
+#include "llk_sfpu_types.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
