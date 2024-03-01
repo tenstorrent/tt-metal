@@ -9,6 +9,32 @@
 
 #pragma once
 
+// Prefetcher CMD ID enums
+enum CQPrefetchCmdId : uint8_t {
+    CQ_PREFETCH_CMD_ILLEGAL = 0,              // common error value
+    CQ_PREFETCH_CMD_RELAY_DRAM_PAGED = 1,     // relay banked/paged data from src_noc to dispatcher
+    CQ_PREFETCH_CMD_RELAY_INLINE = 2,         // relay (inline) data from CmdDatQ to dispatcher
+    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 3, // same as above, but doesn't flush the page to dispatcher
+    CQ_PREFETCH_CMD_WRAP = 4,                 // go to top of host pull buffer
+    CQ_PREFETCH_CMD_STALL = 5,                // drain pipe through dispatcher
+    CQ_PREFETCH_CMD_DEBUG = 6,                // log waypoint data to watcher
+    CQ_PREFETCH_CMD_TERMINATE = 7,            // quit
+};
+
+// Dispatcher CMD ID enums
+enum CQDispatchCmdId : uint8_t {
+    CQ_DISPATCH_CMD_ILLEGAL = 0,            // common error value
+    CQ_DISPATCH_CMD_WRITE = 1,              // write data from dispatcher to dst_noc
+    CQ_DISPATCH_CMD_WRITE_PAGED = 2,        // write banked/paged data from dispatcher to dst_noc
+    CQ_DISPATCH_CMD_WAIT = 3,               // wait until workers are done
+    CQ_DISPATCH_CMD_GO = 4,                 // send go message
+    CQ_DISPATCH_CMD_SINK = 5,               // act as a data sink (for testing)
+    CQ_DISPATCH_CMD_DEBUG = 6,              // log waypoint data to watcher
+    CQ_DISPATCH_CMD_TERMINATE = 7,          // quit
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Shared commands
 struct CQGenericDebugCmd {
     uint16_t key;                          // prefetcher/dispatcher all write to watcher
@@ -17,16 +43,7 @@ struct CQGenericDebugCmd {
     uint32_t stride;                       // stride to next command
 } __attribute__((packed));
 
-// Prefetcher CMD ID enums
-enum CQPrefetchCmdId : uint8_t {
-    CQ_PREFETCH_CMD_RELAY_DRAM_PAGED = 1,   // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_INLINE = 2,       // relay (inline) data from CmdDatQ to dispatcher
-    CQ_PREFETCH_CMD_WRAP = 3,               // go to top of host pull buffer
-    CQ_PREFETCH_CMD_STALL = 4,              // drain pipe through dispatcher
-    CQ_PREFETCH_CMD_DEBUG = 5,              // log waypoint data to watcher
-    CQ_PREFETCH_CMD_TERMINATE = 6,          // quit
-};
-
+//////////////////////////////////////////////////////////////////////////////
 
 // Prefetcher CMD structures
 struct CQPrefetchBaseCmd {
@@ -35,10 +52,11 @@ struct CQPrefetchBaseCmd {
 } __attribute__((packed));
 
 struct CQPrefetchRelayDramPagedCmd {
-    uint16_t pad;
-    uint32_t src_base_addr;
-    uint32_t src_page_size;
-    uint32_t length;
+    uint8_t pad;
+    uint8_t start_page_id;                    // 0..nDRAMs-1, first bank
+    uint32_t base_addr;
+    uint32_t page_size;
+    uint32_t pages;
 } __attribute__((packed));;
 
 struct CQPrefetchRelayInlineCmd {
@@ -56,27 +74,7 @@ struct CQPrefetchCmd {
     } __attribute__((packed));
 };
 
-
-// Prefetcher CMD flags
-// NOFLUSH tells prefetcher not to immediately send the data to the dispatcher
-//   useful for assembling dispatch commands from mulitiple sources
-constexpr uint32_t CQ_PREFETCH_CMD_FLAG_NOFLUSH = 0x1;
-
-
 //////////////////////////////////////////////////////////////////////////////
-
-
-// Dispatcher CMD ID enums
-enum CQDispatchCmdId : uint8_t {
-    CQ_DISPATCH_CMD_WRITE = 1,              // write data from dispatcher to dst_noc
-    CQ_DISPATCH_CMD_WRITE_PAGED = 2,        // write banked/paged data from dispatcher to dst_noc
-    CQ_DISPATCH_CMD_WAIT = 3,               // wait until workers are done
-    CQ_DISPATCH_CMD_GO = 4,                 // send go message
-    CQ_DISPATCH_CMD_SINK = 5,               // act as a data sink (for testing)
-    CQ_DISPATCH_CMD_DEBUG = 6,              // log waypoint data to watcher
-    CQ_DISPATCH_CMD_TERMINATE = 7,          // quit
-};
-
 
 // Dispatcher CMD structures
 struct CQDispatchBaseCmd {
