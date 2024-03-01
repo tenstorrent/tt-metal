@@ -78,7 +78,7 @@ def test_transformer_2d_model_256x256(
     transformer = pipe.unet.mid_block.attentions[0]
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
 
     if block == "up":
@@ -188,7 +188,7 @@ def test_transformer_2d_model_512x512(
         config = unet.config
 
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+            model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
         )
 
         if block == "up":
@@ -206,7 +206,10 @@ def test_transformer_2d_model_512x512(
         transformer = torch.load("transformer.pt")
         config = torch.load("config.pt")
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: transformer, custom_preprocessor=custom_preprocessor, device=device
+            model_name=model_name,
+            initialize_model=lambda: transformer,
+            custom_preprocessor=custom_preprocessor,
+            device=device,
         )
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
