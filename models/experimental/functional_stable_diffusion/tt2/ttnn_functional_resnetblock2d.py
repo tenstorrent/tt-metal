@@ -150,7 +150,6 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     conv_blocking_and_parallelization_config_override=conv1_config_override,
                     use_shallow_conv_variant=False,
-                    enable_auto_formatting=True,
                     compute_kernel_config=compute_kernel_config,
                     enable_auto_formatting=(conv1_split_chunks > 1) or not group_norm_on_device,
                     reallocate_halo_output=True,
