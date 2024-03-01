@@ -273,26 +273,6 @@ in our documentation.
 Note that example programs are only available through source installation at
 this time.
 
-### C++ Integration Tests
-
-1. Build the API integration tests using the make command,
-```
-make tests
-```
-2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
-
-### Python Integration Tests
-
-1. Initialize the Python virtual environment [see documentation](#Environment-setup)
-2. Run the specific test point with pytest tool, e.g.
-   ```
-   $ pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
-   ```
-3. If you have any issues with import paths for python libraries include the following environment variable,
-   ```
-   $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}
-   ```
-
 ## Documentation
 
 Please refer to our
@@ -300,7 +280,9 @@ Please refer to our
 
 ### Updating Documentation
 
-We use the spell-checker, *Aspell*, to ensure we don't sneak in some typos in our documentation. This is enforced by static-checks on github workflows as well. Your your OS package manager to install the Aspell program.
+We use the spell-checker, *Aspell*, to ensure we don't sneak in some typos in
+our documentation. This is enforced by static-checks on github workflows as
+well. Your your OS package manager to install the Aspell program.
 
 To check if your updated docs pass this check you can run,
 ```bash
@@ -328,6 +310,10 @@ However, we are not adequately staffed to review contributions in an expedient
 and manageable time frame at this time. In the meantime, please review the
 [contributor's guide](CONTRIBUTING.md) for more information about contribution
 standards.
+
+If you would like more information on running tests locally and CI, please
+refer to the relevant section in the the [contributor's guide](CONTRIBUTING.md)
+and read it in its entirety.
 
 ## Communication
 

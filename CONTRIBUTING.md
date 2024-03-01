@@ -14,7 +14,7 @@ Table of Contents
       * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
    * [Tests in tt-metal](#running-tests-on-tt-metal)
       * [Adding post-commit tests](#adding-post-commit-tests)
-      * [Running pre/post-commit regressions](#running-prepost-commit-regressions)
+      * [Running post-commit regressions](#running-post-commit-regressions)
       * [Running model performance tests](#running-model-performance-tests)
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
@@ -154,20 +154,18 @@ nuke`.
 
 ## Tests in tt-metal
 
-Ensure you're in a developer environment with necessary environment variables
+Ensure you're in a developer Python environment with necessary environment variables
 set as documentating in the [developing section](#developing-tt-metal).
 
 This includes the environment variables, Python dev environment etc.
 
-### Adding Post Commit Tests
+All developers are responsible for ensuring that post-commit regressions pass
+upon any submission to the project. We will cover how to run these regressions
+both locally and on CI.
 
-Make sure to add post-commit tests in the at the lowest two levels of the tests directory to make sure tests are executed on the workflows.
+### Running post-commit regressions
 
-New shell scripts added above the lowest two levels may not be executed on the post-commit workflows!
-
-### Running pre/post-commit regressions
-
-You must run regressions before you commit something.
+You must run post-commit regressions before you commit something.
 
 These regressions will also run after every pushed commit to the GitHub repo.
 
@@ -186,6 +184,17 @@ pytest tests/python_api_testing/unit_testing/ -vvv
 pytest tests/python_api_testing/sweep_tests/pytests/ -vvv
 ```
 
+If you would like to run the post-commit tests on GitHub Actions, please refer
+to [using CI for development](#using-cicd-for-development).
+
+### Adding post-commit tests
+
+Make sure to add post-commit tests in the at the lowest two levels of the tests
+directory to make sure tests are executed on the workflows.
+
+New shell scripts added above the lowest two levels may not be executed on the
+post-commit workflows!
+
 ### Running model performance tests
 
 After building the repo and activating the dev environment with the appropriate
@@ -203,6 +212,64 @@ If you are using a machine with bare metal machine specs, please use
 ```
 ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_bare_metal
 ```
+
+### Running C++ Integration Tests (Legacy)
+
+We have a legacy suite of C++ integration tests that are built like standalone
+executables. This section goes over how to generally run such tests if there's
+a specific one you'd like to run.
+
+1. Build the API integration tests using the make command,
+```
+make tests
+```
+2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
+
+### Running Googlegtest (gtest) C++ tests
+
+The new fangled way we run our tests is with Googletest. The way we generally
+structure our tests with this framework is to bundle it into a single
+executable.
+
+You can use `--gtest_filter_test` to filter out the specific test you'd like.
+For example, to build and run the `CommonFixture.DRAMLoopbackSingleCore` on
+fast dispatch, you can
+
+1. Build the unit tests:
+   ```
+   make tests
+   ```
+2. Run the test:
+   ```
+   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommonFixture.DRAMLoopbackSingleCore"
+   ```
+
+On slow dispatch, to run another specific test, the equivalent would be:
+
+1. Build the unit tests as you would above.
+2. Run with the slow dispatch mode:
+   ```
+   export TT_METAL_SLOW_DISPATCH_MODE=1
+   ./build/test/tt_metal/unit_tests/fast_dispatch --gtest_filter_test="BasicFixture.TestL1BuffersAllocatedTopDown"
+   ```
+
+We have split our tests into the two dispatch modes for less pollution of state
+between the two. We would like to eventually enable switching between the two
+modes easily.
+
+### Python Integration Tests
+
+We use pytest to run our Python-based tests. This is the general procedure for
+running such tests.
+
+1. Run the specific test point with pytest tool, e.g.
+   ```
+   $ pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
+   ```
+2. If you have any issues with import paths for python libraries include the following environment variable,
+   ```
+   $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}
+   ```
 
 ## Debugging tips
 
@@ -284,8 +351,10 @@ If you are using a machine with bare metal machine specs, please use
 
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
-  "[post-commit] Run all post-commit workflows", clicking "Run workflow",
+  on the link to [all post-commit workflows](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
+
+  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
 
   You can see the status of your CI run by clicking on the specific run you
   dispatched.
