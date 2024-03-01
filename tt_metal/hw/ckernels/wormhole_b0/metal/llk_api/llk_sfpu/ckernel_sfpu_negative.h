@@ -28,5 +28,11 @@ inline void calculate_negative()
     }
 }
 
+template <bool APPROXIMATION_MODE>
+inline void negative_init()
+{
+    ;
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

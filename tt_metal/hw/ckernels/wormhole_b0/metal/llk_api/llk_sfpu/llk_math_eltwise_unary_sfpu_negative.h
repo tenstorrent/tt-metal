@@ -4,8 +4,6 @@
 
 #pragma once
 
-
-#include "llk_math_eltwise_unary_sfpu_common_includes.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_negative.h"
@@ -16,7 +14,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_negative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::negative, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::negative, APPROXIMATE>(sfpu::negative_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
