@@ -250,6 +250,8 @@ class TtLlamaModel_optimized(nn.Module):
             for layer in self.layers[start_layer:end_layer]:
                 xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
 
+            logger.info(f"Finished layers[{start_layer}:{end_layer}]")
+
             # Epilogue: Save KV cache to disk and free weights
             self.free_layers(start_layer, end_layer)
 

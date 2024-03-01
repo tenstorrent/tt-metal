@@ -30,7 +30,7 @@ class TtLlamaModelForGeneration:
         CACHE_PATH = Path("/home/llama-data-cache/weights-cache")
         if n_layers == None:
             n_layers = 80
-        n_layers_per_group = 8
+        n_layers_per_group = 20
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
             devices,
