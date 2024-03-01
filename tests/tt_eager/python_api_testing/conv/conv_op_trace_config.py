@@ -136,8 +136,8 @@ def traced_conv_reference(pad_metadata, data_top_left_indices, conv_params, inpu
 
     # compare to pytorch
     passing_pcc, output_pcc = comp_equal(out_golden_pyt_tensor, output_pyt_tensor)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
     assert passing_pcc
 
     return

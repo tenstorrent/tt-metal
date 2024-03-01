@@ -49,8 +49,8 @@ def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, 
 
     ref_out = torch.transpose(A, -3, -2).reshape([batch, 1, 384, 1024])
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, 0.99)
-    logger.info(f"passing={passing_pcc}")
-    logger.info(f"output pcc={output_pcc}")
+    logger.debug(f"passing={passing_pcc}")
+    logger.debug(f"output pcc={output_pcc}")
     assert passing_pcc
 
 

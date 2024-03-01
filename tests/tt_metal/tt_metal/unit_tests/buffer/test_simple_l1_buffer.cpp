@@ -101,9 +101,9 @@ namespace tt::test::buffer::detail {
         writeL1Backdoor(device, core, input_local_address, inputs);
         tt_metal::detail::LaunchProgram(device, program);
         readL1Backdoor(device, core, input_local_address, byte_size, outputs);
-        tt::log_info("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
+        tt::log_debug("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
         readL1Backdoor(device, core, output_local_address, byte_size, outputs);
-        tt::log_info("inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
+        tt::log_debug("inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
         bool pass = (inputs == outputs);
         if (not pass) {
             tt::log_info("Mismatch at Core={}, phys_core={}, Packet Size(in Bytes)={}", core.str(), phys_core.str(), byte_size);

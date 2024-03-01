@@ -190,8 +190,6 @@ void test_bert() {
     using tt::tt_metal::Layout;
     using tt::tt_metal::Tensor;
 
-    tt::log_info(tt::LogTest, "Running {}", __func__);
-
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
@@ -232,7 +230,7 @@ void test_bert() {
     parameters.emplace("qa_head_bias", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
 
     auto run_bert = [&]() {
-        tt::log_info(tt::LogTest, "run_bert started");
+        tt::log_debug(tt::LogTest, "run_bert started");
         auto begin = std::chrono::steady_clock::now();
         auto hidden_states = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {batch_size, 1, sequence_size, hidden_size}, Layout::TILE).to(device, l1_memory_config);
         for (auto encoder_index = 0; encoder_index < num_encoders; encoder_index++) {

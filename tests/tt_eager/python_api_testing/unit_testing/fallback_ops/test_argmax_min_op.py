@@ -47,5 +47,5 @@ class TestArgMaxMinOps:
 
         output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, comp_out = comparison_funcs.comp_equal(pt_out, output)
-        logger.info(comp_out)
+        logger.debug(comp_out)
         assert comp_pass

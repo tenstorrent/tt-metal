@@ -29,8 +29,7 @@ using namespace std;
 bool run_DataTransformation_test_0(bool DEBUG) {
     bool pass = true;
 
-    if (DEBUG) cout << "======================================\nrun_DataTransformation_test_0\n======================================" << endl;
-
+    if (DEBUG) tt::log_debug(tt::LogDTX, "======================================\nrun_DataTransformation_test_0\n======================================");
     TransformationNode * node0 = new TransformationNode("producer", 1);
     TransformationNode * node1 = new TransformationNode("tx1", 1);
     TransformationNode * node2 = new TransformationNode("consumer", 1);
@@ -67,7 +66,7 @@ bool run_DataTransformation_test_0(bool DEBUG) {
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
-    if (DEBUG) cout << "PASS = " << pass << endl;
+    if (DEBUG) tt::log_debug(tt::LogDTX, "PASS = {}", pass);
 
     return pass;
 }
@@ -75,7 +74,7 @@ bool run_DataTransformation_test_0(bool DEBUG) {
 bool run_DataTransformation_test_1(bool DEBUG) {
     bool pass = true;
 
-    if (DEBUG) cout << "======================================\nrun_DataTransformation_test_1\n======================================" << endl;
+    if (DEBUG) tt::log_debug(tt::LogDTX, "======================================\nrun_DataTransformation_test_1\n======================================");
 
     TransformationNode * node0 = new TransformationNode("producer", 1);
     TransformationNode * node1 = new TransformationNode("tx1", 1);
@@ -114,7 +113,7 @@ bool run_DataTransformation_test_1(bool DEBUG) {
     if (DEBUG) golden->print(0);
 
     pass = compare_two_groups(golden->groups[0], node2->groups[0]);
-    if (DEBUG) cout << "PASS = " << pass << endl;
+    if (DEBUG) tt::log_debug(tt::LogDTX, "PASS = {}", pass);
 
 
     return pass;
@@ -230,9 +229,9 @@ int main(int argc, char** argv) {
     bool pass = true;
 
     pass &= test_DataTransformations();
-    printf("test_DataTransformations - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_DataTransformations - {}", pass);
 
-    if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
-    else cout << "TESTS FAILED\n\n\n" << endl;
+    if (pass == true) tt::log_debug(tt::LogDTX, "TESTS PASSED");
+    else tt::log_error(tt::LogDTX, "TESTS FAILED");
 
 }

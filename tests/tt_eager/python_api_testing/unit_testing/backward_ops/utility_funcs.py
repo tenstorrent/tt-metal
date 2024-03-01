@@ -27,8 +27,8 @@ def compare_results(tt_tensor, golden_tensor, pcc=0.99):
         pt_out_tensor = golden_tensor[i]
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=pcc)
         comp_all, _ = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=4, rtol=1e-1)
-        logger.info(comp_pass)
-        logger.info(comp_all)
-        logger.info(comp_out)
+        logger.debug(comp_pass)
+        logger.debug(comp_all)
+        logger.debug(comp_out)
         status = status & (comp_pass | comp_all)
     return status

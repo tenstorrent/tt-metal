@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        std::cout << "Moving src data to host to validate" << std::endl;
+        log_debug(LogTest, "Moving src data to host to validate");
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
         Tensor golden = host_a.to(Layout::TILE);
         auto golden_vec = owned_buffer::get_as<bfloat16>(golden);

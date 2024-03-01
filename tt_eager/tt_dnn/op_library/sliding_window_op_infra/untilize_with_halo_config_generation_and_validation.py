@@ -4,6 +4,7 @@
 
 import torch
 import numpy as np
+from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
@@ -118,8 +119,8 @@ def validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata(
     out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
     # compare to pytorch
     passing_pcc, output_pcc = comp_equal(out_golden_pyt_tensor_cnhw.reshape(-1), output_pyt_tensor.reshape(-1))
-    print("Passing=", passing_pcc)
-    print("Output pcc=", output_pcc)
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
     assert passing_pcc
 
 

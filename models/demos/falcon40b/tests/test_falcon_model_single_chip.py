@@ -538,16 +538,16 @@ def test_sharded_nlp_create_qkv_heads_test(
         pcc = 1.0
 
     passing_pcc_q, output_pcc_q = comp_pcc(pyt_got_back_rm_q, ref_q, pcc)
-    logger.info(f"Q passing={passing_pcc_q}")
-    logger.info(f"Q output pcc={output_pcc_q}")
+    logger.debug(f"Q passing={passing_pcc_q}")
+    logger.debug(f"Q output pcc={output_pcc_q}")
 
     passing_pcc_k, output_pcc_k = comp_pcc(pyt_got_back_rm_k, ref_k, pcc)
-    logger.info(f"K passing={passing_pcc_k}")
-    logger.info(f"K output pcc={output_pcc_k}")
+    logger.debug(f"K passing={passing_pcc_k}")
+    logger.debug(f"K output pcc={output_pcc_k}")
 
     passing_pcc_v, output_pcc_v = comp_pcc(pyt_got_back_rm_v, ref_v, pcc)
-    logger.info(f"V passing={passing_pcc_v}")
-    logger.info(f"V output pcc={output_pcc_v}")
+    logger.debug(f"V passing={passing_pcc_v}")
+    logger.debug(f"V output pcc={output_pcc_v}")
     assert passing_pcc_q
     assert passing_pcc_k
     assert passing_pcc_v

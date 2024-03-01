@@ -141,7 +141,7 @@ def test_group_norm_fallback(input_shape, weight_shape, bias_shape, num_groups, 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
-    logger.info(comp_out)
+    logger.debug(comp_out)
     assert comp_pass
 
 
@@ -253,5 +253,5 @@ def test_GroupNorm_fallback(
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
-    logger.info(comp_out)
+    logger.debug(comp_out)
     assert comp_pass

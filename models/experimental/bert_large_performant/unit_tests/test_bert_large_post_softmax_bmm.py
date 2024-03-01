@@ -71,8 +71,8 @@ def run_bert_large_post_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_
 
     ref_bmm = torch.matmul(A.reshape([9, 16, 384, 384]), B)
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 
