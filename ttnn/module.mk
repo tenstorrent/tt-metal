@@ -1,5 +1,6 @@
 TTNN_LIB = $(LIBDIR)/libttnn.so
 TTNN_PYBIND11_LIB = $(LIBDIR)/_ttnn.so
+TTNN_PYBIND11_LOCAL_SO = ttnn/ttnn/_ttnn.so
 
 TTNN_DEFINES =
 
@@ -24,7 +25,15 @@ TTNN_DEPS = $(addprefix $(OBJDIR)/, $(TTNN_SRCS:.cpp=.d))
 
 -include $(TTNN_PYBIND11_SRCS:.cpp=.d)
 
-ttnn: $(TTNN_LIB) $(TTNN_PYBIND11_LIB) ttnn/ttnn/_ttnn.so
+TTNN_LIBS_TO_BUILD = $(TTNN_LIB) \
+		     $(TTNN_PYBIND11_LIB) \
+
+ifdef TT_METAL_ENV_IS_DEV
+TTNN_LIBS_TO_BUILD += \
+	$(TTNN_PYBIND11_LOCAL_SO)
+endif
+
+ttnn: $(TTNN_LIBS_TO_BUILD)
 
 $(TTNN_LIB): $(TTNN_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_LIB) tt_eager/tt_lib
 	@mkdir -p $(LIBDIR)
@@ -34,9 +43,8 @@ $(TTNN_PYBIND11_LIB): tt_lib/csrc $(TTNN_PYBIND11_OBJS)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $(TTNN_PYBIND11_OBJS) $(TTNN_PYBIND11_LDFLAGS)
 
-ttnn/ttnn/_ttnn.so: $(TTNN_PYBIND11_LIB)
+$(TTNN_PYBIND11_LOCAL_SO): $(TTNN_PYBIND11_LIB)
 	cp -fp $^ $@
-
 
 $(OBJDIR)/ttnn/cpp/ttnn/%.o: ttnn/cpp/ttnn/%.cpp
 	@mkdir -p $(@D)
