@@ -24,11 +24,5 @@ inline void calculate_add1()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void add1_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

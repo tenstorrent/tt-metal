@@ -28,11 +28,5 @@ inline void calculate_square()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void square_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

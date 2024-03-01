@@ -88,11 +88,5 @@ inline void calculate_comp(uint exponent_size_8)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void comp_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

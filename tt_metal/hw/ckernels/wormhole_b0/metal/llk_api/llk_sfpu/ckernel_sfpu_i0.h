@@ -33,10 +33,5 @@ inline void calculate_i0()
 
 }
 
-template <bool APPROXIMATION_MODE>
-void i0_init() {
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

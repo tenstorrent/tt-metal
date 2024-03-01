@@ -29,11 +29,5 @@ inline void calculate_min()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void min_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

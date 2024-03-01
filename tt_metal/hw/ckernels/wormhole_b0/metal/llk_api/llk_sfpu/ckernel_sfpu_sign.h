@@ -35,11 +35,5 @@ inline void calculate_sign()
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void sign_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

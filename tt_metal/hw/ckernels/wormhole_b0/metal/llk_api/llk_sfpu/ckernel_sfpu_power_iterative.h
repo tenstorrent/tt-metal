@@ -29,11 +29,5 @@ inline void calculate_power_iterative(const uint exponent)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void power_iterative_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

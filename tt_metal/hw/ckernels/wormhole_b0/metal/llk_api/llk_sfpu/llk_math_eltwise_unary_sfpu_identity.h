@@ -22,7 +22,7 @@ inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_identity_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(sfpu::identity_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
 }
 
 }

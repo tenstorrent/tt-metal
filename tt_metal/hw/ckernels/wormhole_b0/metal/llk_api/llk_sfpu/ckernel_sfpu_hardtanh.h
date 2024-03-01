@@ -50,11 +50,5 @@ inline void calculate_hardtanh(uint param0, uint param1, uint param2)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void hardtanh_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

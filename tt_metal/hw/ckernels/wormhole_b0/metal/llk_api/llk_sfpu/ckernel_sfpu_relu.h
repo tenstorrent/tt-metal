@@ -76,21 +76,5 @@ inline void calculate_lrelu(uint slope)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void relu_max_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void relu_min_init() {
-    ;
-}
-
-template <bool APPROXIMATION_MODE>
-void lrelu_init() {
-    ;
-}
-
-
 }  // namespace sfpu
 }  // namespace ckernel

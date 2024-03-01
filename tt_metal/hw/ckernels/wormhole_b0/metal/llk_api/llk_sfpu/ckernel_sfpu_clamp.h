@@ -44,11 +44,5 @@ inline void calculate_clamp(uint param0, uint param1, uint param2)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void clamp_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

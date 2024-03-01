@@ -41,11 +41,5 @@ inline void calculate_heaviside(uint value)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void heaviside_init()
-{
-    ;
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

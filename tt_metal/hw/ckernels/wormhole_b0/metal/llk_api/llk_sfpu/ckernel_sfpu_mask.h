@@ -32,5 +32,6 @@ inline void calculate_mask()
         dst_reg++;
     }
 }
+
 }  // namespace sfpu
 }  // namespace ckernel

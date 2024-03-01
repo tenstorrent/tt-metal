@@ -24,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(uint dst_index, uint32
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(sfpu::calculate_binop_with_scalar_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
 }
 
 }  // namespace ckernel
