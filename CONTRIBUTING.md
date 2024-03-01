@@ -164,7 +164,8 @@ This includes the environment variables, Python dev environment etc.
 
 All developers are responsible for ensuring that post-commit regressions pass
 upon any submission to the project. We will cover how to run these regressions
-both locally and on CI.
+both locally and on CI. Failure to ensure these tests pass will constitute a
+major regression and will likely mean reverting your commits.
 
 ### Running post-commit regressions
 
