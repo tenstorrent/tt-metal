@@ -950,6 +950,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.angle_bw
 
+.. autofunction:: tt_lib.tensor.sin_bw
+
 Loss Functions
 ==============
 
