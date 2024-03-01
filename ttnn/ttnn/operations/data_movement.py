@@ -28,6 +28,10 @@ def _fallback_pad(input_tensor: ttnn.Tensor, padding, value):
     if len(padding) != len(input_tensor.shape):
         raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
 
+    for start, end in padding:
+        if start < 0 or end < 0:
+            raise RuntimeError("ttnn.pad: padding must be non-negative")
+
     pad_start = tuple(start for start, _ in padding)
     *_, pad_start_height, pad_start_width = pad_start
     if input_tensor.layout == ttnn.TILE_LAYOUT:
@@ -102,6 +106,10 @@ def pad(
     original_rank = len(input_tensor.shape)
     if len(padding) != original_rank:
         raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
+
+    for start, end in padding:
+        if start < 0 or end < 0:
+            raise RuntimeError("ttnn.pad: padding must be non-negative")
 
     if original_rank < 4:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
