@@ -161,6 +161,8 @@ std::vector<Tensor> angle_bw(const Tensor& grad, const Tensor& input, const Memo
 
 std::vector<Tensor> sin_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> sinh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
