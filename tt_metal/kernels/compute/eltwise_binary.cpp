@@ -7,6 +7,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api.h"
 #include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "bit_utils.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
@@ -34,7 +35,7 @@ void MAIN {
     #endif
     constexpr auto cb_out0 =  tt::CB::c_out0;
 
-    int num_dbg_regs_to_print = 1;
+    int num_dbg_regs_to_print = 2;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
@@ -135,19 +136,22 @@ void MAIN {
                 uint32_t rd_data[8];
                 dbg_thread_dump_srca_row(0, rd_data);
                 for (int j = 0; j < 8; j++) {
-                    DPRINT_MATH(DPRINT << "Src A row " << j << " = 0x" << HEX() << rd_data[j] << ENDL());
+                    DPRINT_MATH(DPRINT << "Src A row " << j << " = 0x" << HEX() << rd_data[j] << " " << ENDL());
                 }
 
                 dbg_thread_dump_srcb_row(0, rd_data);
+                uint32_t unpacked_src_b[8]; // 8 values of 19 bits are densely packed into 5 dwords
+                extract_bit_array (rd_data, 19, unpacked_src_b, 8);
+
                 for (int j = 0; j < 8; j++) {
-                    DPRINT_MATH(DPRINT << "Src B row " << j << " = 0x" << HEX() << rd_data[j] << ENDL());
+                    DPRINT_MATH(DPRINT << "Src B row " << j << " = 0x" << HEX() << unpacked_src_b[j] << ENDL());
                 }
 
                 dbg_thread_dump_dest_acc_row(0, rd_data);
                 for (int j = 0; j < 8; j++) {
                     DPRINT_MATH(DPRINT << "Dest row " << j << " = 0x" << HEX() << rd_data[j] << ENDL());
                 }
-                })
+            })
             dbg_unhalt();
             num_dbg_regs_to_print--;
         }
