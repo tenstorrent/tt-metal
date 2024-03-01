@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-exp:
+  - ttnn-deg2rad:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -25,4 +25,4 @@ test-list:
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_exp_sweep.csv
+      output-file: eltwise_deg2rad_sweep.csv
