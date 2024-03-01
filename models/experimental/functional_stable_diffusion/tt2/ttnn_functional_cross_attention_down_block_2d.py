@@ -9,28 +9,11 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downsam
 
 
 class cross_attention_down_block_2d:
-    def __init__(
-        self,
-        device,
-        parameters,
-        reader_patterns_cache,
-        batch_size,
-        input_height,
-        input_width,
-        group_norm_on_device=False,
-    ):
+    def __init__(self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(
-                device,
-                resnet,
-                reader_patterns_cache,
-                batch_size,
-                input_height,
-                input_width,
-                group_norm_on_device=group_norm_on_device if i == 0 else False,
-            )
+            resnetBlock2D(device, resnet, reader_patterns_cache, batch_size, input_height, input_width)
             for i, resnet in enumerate(parameters.resnets)
         ]
         self.attentions = [
@@ -73,7 +56,6 @@ class cross_attention_down_block_2d:
         only_cross_attention=False,
         upcast_attention=False,
         resnet_time_scale_shift: str = "default",
-        group_norm_sharded_config=None,
     ):
         output_states = ()
 
@@ -93,7 +75,6 @@ class cross_attention_down_block_2d:
                 non_linearity=resnet_act_fn,
                 output_scale_factor=output_scale_factor,
                 pre_norm=resnet_pre_norm,
-                group_norm_sharded_config=group_norm_sharded_config if index == 0 else None,
             )
             if not dual_cross_attention:
                 hidden_states = attn(

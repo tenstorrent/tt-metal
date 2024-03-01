@@ -114,10 +114,10 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     # setup pytorch model
     torch.manual_seed(0)
-
+    model_name = "CompVis/stable-diffusion-v1-4"
     load_from_disk = True
     if not load_from_disk:
-        pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+        pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
 
         model = pipe.unet
         model.eval()
@@ -127,7 +127,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         config = torch.load("unet_config.pt")
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
     )
 
     timestep_shape = [1, 1, 2, 320]
