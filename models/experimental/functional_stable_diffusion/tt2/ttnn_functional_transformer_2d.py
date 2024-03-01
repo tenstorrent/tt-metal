@@ -95,7 +95,7 @@ class transformer_2d_model:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
-            # enable_auto_formatting=True,
+            deallocate_activation=True,
         )
 
         parameters.proj_out.weight, parameters.proj_out.bias = permute_conv_parameters(
@@ -127,7 +127,7 @@ class transformer_2d_model:
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={},
             use_shallow_conv_variant=False,
-            # enable_auto_formatting=True,
+            deallocate_activation=True,
         )
 
         self.output_height = self.proj_out.output_height
@@ -199,12 +199,14 @@ class transformer_2d_model:
         # sample in l1 interelaved and tiled and nhwc
 
         residual = hidden_states
+        # residual in DRAM
+        residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
 
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.ROW_MAJOR_LAYOUT,
-            output_memory_config=ttnn.get_memory_config(hidden_states),
+            output_memory_config=self.proj_in.conv.input_sharded_memory_config,
             use_multicore=True,
         )
         hidden_states = ttnn.group_norm(

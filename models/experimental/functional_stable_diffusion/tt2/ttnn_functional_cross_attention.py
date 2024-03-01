@@ -105,7 +105,7 @@ class cross_attention:
 
     def get_attention_scores(self, query, t_key, attention_mask=None, scale=None, device=None):
         # t_key = ttnn.permute(key, (0, 1, 3, 2))
-        attention_scores = ttnn.matmul(query, t_key)
+        attention_scores = ttnn.matmul(query, t_key, core_grid=ttnn.CoreGrid(y=8, x=8))
         del t_key, query
         attention_scores = ttnn.mul(attention_scores, scale)
         del scale
@@ -146,12 +146,17 @@ class cross_attention:
                 dtype=ttnn.bfloat16,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
             )
+            del hidden_states
             query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
                 qkv_out,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 num_heads=heads,
             )
             del qkv_out
+            # if query.shape[2] == 4096:
+            #     query = ttnn.reallocate(query)
+            #     key = ttnn.reallocate(key)
+            #     value = ttnn.reallocate(value)
         else:
             hidden_seq_len = hidden_states.shape.with_tile_padding()[-2]
             encoder_hidden_seq_len = encoder_hidden_states.shape.with_tile_padding()[-2]
