@@ -9,8 +9,8 @@ import torch
 import ttnn
 import traceback
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def run_eltwise_rsqrt_tests(
@@ -28,11 +28,13 @@ def run_eltwise_rsqrt_tests(
     try:
         # get ref result
         ref_value = torch.rsqrt(x)
+        logger.info(f"PyTorch: {ref_value[0:10, 0:10]}")
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
 
         tt_result = ttnn.rsqrt(x)
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
+        logger.info(f"TensTorrent: {tt_result[0:10, 0:10]}")
 
     except Exception as e:
         logger.warning(f"Test execution crashed: {e}")
@@ -41,7 +43,13 @@ def run_eltwise_rsqrt_tests(
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
-    assert_with_pcc(ref_value, tt_result, 0.99)
+
+    # compare tt and golden outputs
+    success, pcc_value = comp_pcc(ref_value, tt_result)
+    logger.debug(pcc_value)
+    logger.debug(success)
+
+    assert success
 
 
 test_sweep_args = [
