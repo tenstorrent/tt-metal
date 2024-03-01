@@ -83,6 +83,18 @@ The headers of the columns with their descriptions is below:
 
 - **DEVICE TRISC2 KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC2s of all cores
 
+- **DEVICE COMPUTE CB WAIT FRONT [ns]**: Total time spent on ``cb_wait_front`` on TRISC0, averaged across all cores
+
+- **DEVICE COMPUTE CB RESERVE BACK [ns]**: Total time spent on ``cb_reserve_back`` on TRISC2, averaged across all cores
+
+- **COMPUTE KERNEL PATH**: Path of the compute kernels in the program
+
+- **COMPUTE KERNEL HASH**: Kernel hash for compute kernel cache
+
+- **DATAMOVEMENT KERNEL PATH**: Path of the datamovement kernels in the program
+
+- **DATAMOVEMENT KERNEL HASH**: Kernel hash for datamovement kernel cache
+
 - **Input & Output Tensor Headers**: Header template is {Input/Output}_{IO Number}_{Field}. e.g. INPUT_0_MEMORY
 
     - *W*: Tensor batch count

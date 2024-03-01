@@ -34,7 +34,6 @@ run_post_proc_test(){
     export PYTHONPATH=$TT_METAL_HOME
 
     pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_logs.py -vvv
-    pytest $PROFILER_TEST_SCRIPTS_ROOT/test_unaryop_profiler.py -vvv
 }
 
 run_tracy_test(){

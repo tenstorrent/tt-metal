@@ -30,6 +30,8 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
+uint32_t device_function_sums[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
+uint64_t device_function_starts[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
 }
 
 extern "C" void ncrisc_resume(void);
@@ -61,7 +63,7 @@ int main(int argc, char *argv[]) {
       DEBUG_STATUS('R');
       kernel_init();
       DEBUG_STATUS('D');
-
+      kernel_profiler::store_function_sums();
       kernel_profiler::mark_time(CC_MAIN_END);
   }
 
