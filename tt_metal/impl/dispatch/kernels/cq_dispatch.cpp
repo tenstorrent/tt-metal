@@ -124,7 +124,7 @@ void dispatch_write() {
     uint32_t dst_addr = cmd->write.dst_addr;
     uint32_t length = cmd->write.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
-
+    DPRINT << "dispatch_write: " << length << ENDL();
     while (length != 0) {
         uint32_t xfer_size = (length > dispatch_cb_page_size) ? dispatch_cb_page_size : length;
         uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
@@ -212,7 +212,9 @@ void kernel_main() {
     bool done = false;
     while (!done) {
         if (cmd_ptr == cb_fence) {
+            DPRINT << "GET PAGE\n";
             get_dispatch_cb_page();
+            DPRINT << "GOT PAGE\n";
         }
 
     re_run_command:
@@ -221,6 +223,7 @@ void kernel_main() {
         switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE:
             DEBUG_STATUS('D', 'W', 'B');
+            DPRINT << "dispatch write\n";
             dispatch_write();
             DEBUG_STATUS('D', 'W', 'D');
             break;
@@ -243,11 +246,16 @@ void kernel_main() {
             break;
 
         case CQ_DISPATCH_CMD_TERMINATE:
+            DPRINT << "dispatch write\n";
             done = true;
             break;
 
         default:
             DPRINT << "dispatcher invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << ENDL();
+            DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
+            DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
             DEBUG_STATUS('!', 'C', 'M', 'D');
             while(1);
         }

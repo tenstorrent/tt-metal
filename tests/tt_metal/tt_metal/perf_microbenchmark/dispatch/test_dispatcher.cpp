@@ -46,6 +46,7 @@ uint32_t min_xfer_size_bytes_g = MIN_XFER_SIZE_16B << 4;
 bool debug_g;
 bool lazy_g;
 bool fire_once_g;
+bool use_coherent_data_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -65,6 +66,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -min: min transfer size (default {})", MIN_XFER_SIZE_16B << 4);
         log_info(LogTest, "  -f: prefetcher fire once, use to measure dispatcher perf w/ prefetcher out of the way (default disabled)");
         log_info(LogTest, "  -d: wrap all commands in debug commands (default disabled)");
+        log_info(LogTest, "  -c: use coherent data as payload (default false)");
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         exit(0);
     }
@@ -99,6 +101,8 @@ void init(int argc, char **argv) {
             prefetcher_buffer_size_g = dispatch_buffer_size_g + terminate_cmd_pages * dispatch_buffer_page_size_g;
         }
     }
+
+    use_coherent_data_g = test_args::has_command_option(input_args, "-c");
 
     debug_g = test_args::has_command_option(input_args, "-d");
     lazy_g = test_args::has_command_option(input_args, "-z");

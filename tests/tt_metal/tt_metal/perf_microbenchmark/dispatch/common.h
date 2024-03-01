@@ -16,7 +16,7 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
                                     uint32_t length) {
 
     for (uint32_t i = 0; i < length; i++) {
-        uint32_t datum = std::rand();
+        uint32_t datum = (use_coherent_data_g) ? i : std::rand();
         cmds.push_back(datum);
     }
 }
@@ -26,7 +26,7 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
                                     uint32_t length_words) {
 
     for (uint32_t i = 0; i < length_words; i++) {
-        uint32_t datum = std::rand();
+        uint32_t datum = (use_coherent_data_g) ? i : std::rand();
         cmds.push_back(datum);
         data.push_back(datum);
     }
@@ -78,6 +78,24 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
         }
         debug_cmd_ptr->debug.checksum = checksum;
     }
+}
+
+// bare: doesn't generate random payload data, for use w/ eg, dram reads
+inline void gen_bare_dispatcher_write_cmd(vector<uint32_t>& cmds,
+                                          vector<uint32_t>& worker_data,
+                                          CoreCoord worker_core,
+                                          uint32_t dst_addr,
+                                          uint32_t length) {
+
+    CQDispatchCmd cmd;
+
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE;
+    cmd.base.flags = 0;
+    cmd.write.dst_noc_addr = worker_core.x | (worker_core.y << 6);
+    cmd.write.dst_addr = dst_addr + worker_data.size() * sizeof(uint32_t);
+    cmd.write.length = length;
+
+    add_bare_dispatcher_cmd(cmds, cmd);
 }
 
 inline void gen_dispatcher_write_cmd(vector<uint32_t>& cmds,
