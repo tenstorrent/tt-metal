@@ -105,7 +105,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
     EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
 
     BeginTrace(trace);
-    EnqueueProgram(trace.trace_queue(), simple_program, false);
+    EnqueueProgram(trace.queue(), simple_program, false);
     EndTrace(trace);
     // Instantiate a trace on a device queue
     uint32_t trace_id = InstantiateTrace(trace, command_queue);
@@ -148,9 +148,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
     for (auto i = 0; i < num_loops; i++) {
         EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
 
-        if (!trace_captured) {
+        if (not trace_captured) {
             BeginTrace(trace);
-            EnqueueProgram(trace.trace_queue(), simple_program, false);
+            EnqueueProgram(trace.queue(), simple_program, false);
             EndTrace(trace);
             // Instantiate a trace on a device queue
             trace_id = InstantiateTrace(trace, command_queue);
@@ -214,7 +214,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
             EnqueueProgram(command_queue, simple_program, blocking);
             EnqueueReadBuffer(command_queue, output, eager_output_data.data(), blocking);
         }
-        if (!blocking) {
+        if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
             Finish(command_queue);
         }

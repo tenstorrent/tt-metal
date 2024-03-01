@@ -128,7 +128,7 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
             EnqueueProgram(command_queue, op1, blocking);
             EnqueueReadBuffer(command_queue, output, eager_output_data.data(), blocking);
         }
-        if (!blocking) {
+        if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
             Finish(command_queue);
         }
@@ -210,7 +210,7 @@ TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
             }
             EnqueueReadBuffer(command_queue, output, eager_output_data.data(), blocking);
         }
-        if (!blocking) {
+        if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
             Finish(command_queue);
         }

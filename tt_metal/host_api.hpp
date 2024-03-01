@@ -351,8 +351,8 @@ void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Progra
 void Finish(CommandQueue& cq);
 
 /**
- * Begins capture on a trace, when the trace is in capture mode all programs push into the trace queue will not be executed.
- * The capture must be later ended via EndTrace, and can be instantiated via InstantiateTrace on a device command queue.
+ * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
+ * The capture must be later ended via EndTrace, and can be instantiated via InstantiateTrace on a device command queue, and finally scheduled to be executed via EnqueueTrace.
  *
  * Return value: CommandQueue&
  *
@@ -364,7 +364,7 @@ CommandQueue& BeginTrace(Trace &trace);
 
 /**
  * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
- * This trace can later be instantiated via InstantiateTrace on a device command queue, and executed via EnqueueTrace on the same device command queue.
+ * This trace can later be instantiated via InstantiateTrace on a device command queue, and enqueued for execution via EnqueueTrace on the same device command queue.
  *
  * Return value: void
  *
@@ -376,7 +376,7 @@ void EndTrace(Trace &trace);
 
 /**
  * Instantiates a trace on a device command queue, triggering the staging of traced commands and data to the device.
- * Staging is a blocking operation and must be completed before the trace can be enqueued. A unique trace instance id is returned
+ * Staging is a blocking operation and must be completed before the trace can be enqueued for exeuction. A unique trace instance id is returned
  *
  * Return value: uint32_t
  *

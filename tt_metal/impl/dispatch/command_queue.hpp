@@ -375,7 +375,7 @@ class Trace {
 
    public:
     Trace();
-    CommandQueue& trace_queue() const { return *cq; };
+    CommandQueue& queue() const { return *cq; };
     uint32_t instantiate(CommandQueue& cq);  // return a unique trace id
 };
 
@@ -499,8 +499,6 @@ class HWCommandQueue {
     void completion_wrap(uint32_t event);
     void launch(launch_msg_t& msg);
     friend void EnqueueTraceImpl(CommandQueue& cq);
-    // friend void EndTrace(Trace& trace);
-    // friend Trace BeginTrace(CommandQueue& cq);
     friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
     friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
@@ -568,7 +566,6 @@ class CommandQueue {
         RUNNING = 1,
         TERMINATE = 2,
     };
-    constexpr static uint32_t TRACE_QUEUE_CQ_ID = 401;
     friend class Trace;
     friend void EnqueueTraceImpl(CommandQueue& cq);
     friend uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq);
