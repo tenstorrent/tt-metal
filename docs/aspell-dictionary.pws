@@ -37,6 +37,7 @@ ConfigureDeviceWithProgram
 CoreCoord
 CoreRange
 CoreRangeSet
+CoreType
 CreateBuffer
 CreateCircularBuffer
 CreateComputeKernel
