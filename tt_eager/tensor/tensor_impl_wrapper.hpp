@@ -32,7 +32,7 @@ Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const
 
 Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, const Shape &output_tensor_end);
 
-std::string to_string_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print);
+std::string to_string_wrapper(const Tensor &tensor);
 
 }  // namespace tensor_impl
 

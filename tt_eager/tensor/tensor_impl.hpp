@@ -171,223 +171,6 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 }
 
 // ======================================================================================
-//                                         Print
-// ======================================================================================
-std::ostream& operator<<(std::ostream& os, const DataType& dtype);
-
-namespace detail {
-
-template <typename T>
-inline void print_datum(std::ostream& ss, T datum) {
-    ss << datum;
-}
-
-template <>
-inline void print_datum(std::ostream& ss, bfloat16 datum) {
-    ss << datum.to_float();
-}
-
-template <typename BufferType>
-std::string to_string(const BufferType& buffer, DataType dtype) {
-    std::stringstream ss;
-    ss << "[ ";
-    for (int i = 0; i < buffer.size(); i++) {
-        print_datum(ss, buffer[i]);
-        if (i < buffer.size() - 1) {
-            ss << ", ";
-        }
-    }
-    ss << " dtype=" << dtype << " ]" << std::endl;
-    return ss.str();
-}
-
-template <typename BufferType>
-std::string to_string_row_major_0D(const BufferType& buffer, const Shape& shape, DataType dtype) {
-    std::stringstream ss;
-    ss << "Tensor( ";
-    print_datum(ss, buffer[0]);
-    ss << ", dtype=" << dtype << " )" << std::endl;
-    return ss.str();
-}
-
-// TODO: make these configurable
-const Shape MAX_NUM_ELEMENTS_TO_PRINT = Shape({4, 4, 32, 32});
-
-template <typename BufferType>
-std::string to_string_row_major_1D(const BufferType& buffer, const Shape& shape, DataType dtype) {
-    std::stringstream ss;
-    ss << "Tensor([ ";
-    for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
-        // data in row major order
-        auto index = x;
-        print_datum(ss, buffer[index]);
-        if (x < shape[-1] - 1) {
-            ss << ", ";
-        }
-    }
-    if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
-        ss << "...";
-    }
-    ss << "], dtype=" << dtype << " )" << std::endl;
-    return ss.str();
-}
-
-template <typename BufferType>
-std::string to_string_row_major_2D(const BufferType& buffer, const Shape& shape, DataType dtype) {
-    std::stringstream ss;
-    ss << "Tensor([ ";
-    for (auto y = 0; y < std::min(shape[-2], MAX_NUM_ELEMENTS_TO_PRINT[-2]); y++) {
-        if (y == 0)
-            ss << "[";
-        else
-            ss << "    [";
-        for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
-            // data in row major order
-            auto index = x + y * shape[1];
-            print_datum(ss, buffer[index]);
-            if (x < shape[1] - 1) {
-                ss << ", ";
-            }
-        }
-        if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
-            ss << "...";
-        }
-        if (y < shape[0] - 1)
-            ss << "]," << std::endl;
-        else
-            ss << "]";
-    }
-    if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
-        ss << "...";
-    }
-    ss << "], dtype=" << dtype << " )" << std::endl;
-    return ss.str();
-}
-
-template <typename BufferType>
-std::string to_string_row_major_3D(const BufferType& buffer, const Shape& shape, DataType dtype) {
-    std::stringstream ss;
-    ss << "Tensor([ ";
-    for (auto z = 0; z < std::min(shape[-3], MAX_NUM_ELEMENTS_TO_PRINT[-3]); z++) {
-        if (z == 0)
-            ss << "[";
-        else
-            ss << "   [";
-        for (auto y = 0; y < std::min(shape[-2], MAX_NUM_ELEMENTS_TO_PRINT[-2]); y++) {
-            if (y == 0)
-                ss << "[";
-            else
-                ss << "    [";
-            for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
-                // data in row major order
-                auto index = x + y * shape[2] + z * shape[1] * shape[2];
-                print_datum(ss, buffer[index]);
-                if (x < shape[2] - 1) {
-                    ss << ", ";
-                }
-            }
-            if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
-                ss << "...";
-            }
-            if (y < shape[1] - 1)
-                ss << "]," << std::endl;
-            else
-                ss << "]";
-        }
-        if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
-            ss << "...";
-        }
-        if (z < shape[0] - 1)
-            ss << "]," << std::endl << std::endl;
-        else
-            ss << "]";
-    }
-    if (shape[-3] > MAX_NUM_ELEMENTS_TO_PRINT[-3]) {
-        ss << "...";
-    }
-    ss << "], dtype=" << dtype << " )" << std::endl;
-    return ss.str();
-}
-
-template <typename BufferType>
-std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape, DataType dtype) {
-    std::stringstream ss;
-    ss << "Tensor([ ";
-    for (auto w = 0; w < std::min(shape[-4], MAX_NUM_ELEMENTS_TO_PRINT[-4]); w++) {
-        if (w == 0)
-            ss << "[";
-        else
-            ss << "  [";
-        for (auto z = 0; z < std::min(shape[-3], MAX_NUM_ELEMENTS_TO_PRINT[-3]); z++) {
-            if (z == 0)
-                ss << "[";
-            else
-                ss << "   [";
-            for (auto y = 0; y < std::min(shape[-2], MAX_NUM_ELEMENTS_TO_PRINT[-2]); y++) {
-                if (y == 0)
-                    ss << "[";
-                else
-                    ss << "    [";
-                for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
-                    // data in row major order
-                    auto index = x + y * shape[3] + z * shape[2] * shape[3] + w * shape[1] * shape[2] * shape[3];
-                    print_datum(ss, buffer[index]);
-                    if (x < shape[3] - 1) {
-                        ss << ", ";
-                    }
-                }
-                if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
-                    ss << "...";
-                }
-                if (y < shape[2] - 1)
-                    ss << "]," << std::endl;
-                else
-                    ss << "]";
-            }
-            if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
-                ss << "...";
-            }
-            if (z < shape[1] - 1)
-                ss << "]," << std::endl << std::endl;
-            else
-                ss << "]";
-        }
-        if (shape[-3] > MAX_NUM_ELEMENTS_TO_PRINT[-3]) {
-            ss << "...";
-        }
-        if (w < shape[0] - 1)
-            ss << "]," << std::endl << std::endl << std::endl;
-        else
-            ss << "]";
-    }
-    if (shape[-4] > MAX_NUM_ELEMENTS_TO_PRINT[-4]) {
-        ss << "...";
-    }
-    ss << "], dtype=" << dtype << " )" << std::endl;
-    return ss.str();
-}
-
-template <typename BufferType>
-std::string to_string_row_major(const BufferType& buffer, const Shape& shape, DataType dtype) {
-    if (shape.rank() == 0) {
-        return to_string_row_major_0D(buffer, shape, dtype);
-    }
-    if (shape.rank() == 1) {
-        return to_string_row_major_1D(buffer, shape, dtype);
-    } else if (shape.rank() == 2) {
-        return to_string_row_major_2D(buffer, shape, dtype);
-    } else if (shape.rank() == 3) {
-        return to_string_row_major_3D(buffer, shape, dtype);
-    } else if (shape.rank() == 4) {
-        return to_string_row_major_4D(buffer, shape, dtype);
-    } else {
-        TT_THROW("Cannot print tensor of rank {}", shape.rank());
-    }
-}
-
-}  // namespace detail
-
-// ======================================================================================
 //                                      Validators
 // ======================================================================================
 void validate_on_device_dtype_and_layout(Device* device, DataType dtype, Layout layout);
@@ -826,67 +609,207 @@ Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, c
 // ======================================================================================
 //                                         Print
 // ======================================================================================
-template <typename T>
-inline std::string to_string(const Tensor& tensor, Layout print_layout, bool pretty_print = false) {
-    const auto shape = tensor.shape();
-    const auto dtype = tensor.dtype();
-    const auto layout = tensor.layout();
 
-    if (tensor.storage_type() == StorageType::DEVICE) {
-        return to_string<T>(to_host<T>(tensor), print_layout, pretty_print);
+std::ostream& operator<<(std::ostream& os, const DataType& dtype);
+
+struct DimensionShortener {
+    size_t size;
+    std::optional<std::size_t> max;
+
+    bool print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
+        std::ostream& ss, std::size_t& index, const std::string& before, const std::string& after) const {
+        if (this->max.has_value() and this->size >= this->max.value() and index == this->max.value() / 2) {
+            ss << before << "...," << after;
+            index = this->size - (this->max.value() / 2);
+        }
+        return index < this->size;
+    }
+};
+
+inline DimensionShortener get_dimension_shortener(std::size_t size) {
+    auto TTNN_TENSOR_PRINT_LEVEL_ENV = std::getenv("TTNN_TENSOR_PRINT_LEVEL");
+    std::string TTNN_TENSOR_PRINT_LEVEL = "SHORT";
+    if (TTNN_TENSOR_PRINT_LEVEL_ENV != nullptr) {
+        TTNN_TENSOR_PRINT_LEVEL = TTNN_TENSOR_PRINT_LEVEL_ENV;
+    }
+    if (TTNN_TENSOR_PRINT_LEVEL == "NONE") {
+        return DimensionShortener{size, 0};
+    } else if (TTNN_TENSOR_PRINT_LEVEL == "SHORT") {
+        return DimensionShortener{size, 4};
+    } else if (TTNN_TENSOR_PRINT_LEVEL == "FULL") {
+        return DimensionShortener{size, std::nullopt};
+    } else {
+        TT_THROW("Unrecognized TTNN_TENSOR_PRINT_LEVEL {}", TTNN_TENSOR_PRINT_LEVEL);
+    }
+}
+
+inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_t size, const std::string& after) {
+    if (index < size - 1) {
+        ss << "," << after;
+    }
+}
+
+namespace detail {
+
+template <typename T>
+inline void print_datum(std::ostream& ss, T datum) {
+    if (std::is_integral<T>::value) {
+        ss << fmt::format("{:5}", datum);
+    } else {
+        ss << fmt::format("{:8.5f}", datum);
+    }
+}
+
+template <>
+inline void print_datum(std::ostream& ss, bfloat16 datum) {
+    print_datum(ss, datum.to_float());
+}
+
+constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
+constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = std::strlen(TENSOR_TYPE_STRING) + 1;
+
+static constexpr auto TAB = "    ";
+static constexpr auto TAB_MINUS_1 = "   ";
+
+template <typename BufferType, std::int64_t Rank, std::int64_t Dim = 0>
+void to_string_row_major(
+    std::stringstream& ss,
+    const BufferType& buffer,
+    const Shape& shape,
+    std::size_t outer_index,
+    const std::size_t buffer_offset) {
+    auto stride = 1;
+    for (auto index = Dim + 1; index < shape.rank(); index++) {
+        stride *= shape[index];
     }
 
-    if (dtype == DataType::BFLOAT8_B) {
-            // Convert to FLOAT32 tensor and change layout
+    std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + Dim, ' ');
+    std::string before;
+    std::string after;
+    if constexpr (Rank == 1) {
+        before = " ";
+        after = " ";
+    } else if constexpr (Rank == 2) {
+        before = spaces + " ";
+        after = "\n";
+    } else {
+        before = spaces + " ";
+        after = "\n\n";
+    }
+
+    if (Dim > 0 and outer_index > 0) {
+        ss << spaces;
+    }
+    ss << "[";
+    auto dimension_shortener = get_dimension_shortener(shape[-Rank]);
+    for (std::size_t index = 0;
+         dimension_shortener.print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
+             ss, index, before, after);
+         index++) {
+        std::string after_comma;
+        if constexpr (Rank == 1) {
+            after_comma = " ";
+        } else if constexpr (Rank == 2) {
+            after_comma = "\n";
+        } else {
+            after_comma = after;
+        }
+
+        if constexpr (Rank > 1) {
+            to_string_row_major<BufferType, Rank - 1, Dim + 1>(
+                ss, buffer, shape, index, buffer_offset + index * stride);
+        } else {
+            print_datum(ss, buffer[buffer_offset + index]);
+        }
+        print_trailing_comma(ss, index, shape[-Rank], after_comma);
+    }
+    ss << "]";
+}
+
+template <typename BufferType, std::int64_t Rank, std::int64_t Dim = 0>
+void to_string_tile(
+    std::stringstream& ss,
+    const BufferType& buffer,
+    const Shape& shape,
+    std::size_t outer_index,
+    const std::size_t buffer_offset) {
+    // For now, print it the same way as row-major
+    return to_string_row_major<BufferType, Rank, Dim>(ss, buffer, shape, outer_index, buffer_offset);
+}
+
+template <typename BufferType>
+std::string to_string(const BufferType& buffer, const Shape& shape, DataType dtype, Layout layout) {
+    std::stringstream ss;
+    ss << "ttnn.Tensor(";
+
+    if (layout == Layout::ROW_MAJOR) {
+        switch (shape.rank()) {
+            case 0: to_string_row_major<BufferType, 0>(ss, buffer, shape, 0, 0); break;
+            case 1: to_string_row_major<BufferType, 1>(ss, buffer, shape, 0, 0); break;
+            case 2: to_string_row_major<BufferType, 2>(ss, buffer, shape, 0, 0); break;
+            case 3: to_string_row_major<BufferType, 3>(ss, buffer, shape, 0, 0); break;
+            case 4: to_string_row_major<BufferType, 4>(ss, buffer, shape, 0, 0); break;
+            case 5: to_string_row_major<BufferType, 5>(ss, buffer, shape, 0, 0); break;
+            case 6: to_string_row_major<BufferType, 6>(ss, buffer, shape, 0, 0); break;
+            case 7: to_string_row_major<BufferType, 7>(ss, buffer, shape, 0, 0); break;
+            case 8: to_string_row_major<BufferType, 8>(ss, buffer, shape, 0, 0); break;
+            default: TT_THROW("Unsupported Rank for printing tensor with ROW_MAJOR_LAYOUT!"); break;
+        }
+    } else if (layout == Layout::TILE) {
+        switch (shape.rank()) {
+            case 2: to_string_tile<BufferType, 2>(ss, buffer, shape, 0, 0); break;
+            case 3: to_string_tile<BufferType, 3>(ss, buffer, shape, 0, 0); break;
+            case 4: to_string_tile<BufferType, 4>(ss, buffer, shape, 0, 0); break;
+            case 5: to_string_tile<BufferType, 5>(ss, buffer, shape, 0, 0); break;
+            case 6: to_string_tile<BufferType, 6>(ss, buffer, shape, 0, 0); break;
+            case 7: to_string_tile<BufferType, 7>(ss, buffer, shape, 0, 0); break;
+            case 8: to_string_tile<BufferType, 8>(ss, buffer, shape, 0, 0); break;
+            default: TT_THROW("Unsupported Rank for printing tensor with TILE_LAYOUT!"); break;
+        }
+    } else {
+        TT_THROW("Unsupported Layout for printing tensor!");
+    }
+    ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
+       << ", layout=" << fmt::format("{}", layout) << ")" << std::endl;
+    return ss.str();
+}
+
+}  // namespace detail
+
+template <typename T>
+inline std::string to_string(const Tensor& tensor, std::optional<DataType> original_dtype = std::nullopt) {
+    const auto shape = tensor.shape();
+    const auto dtype = original_dtype.value_or(tensor.dtype());
+    const auto layout = tensor.layout();
+
+    if (not tensor.is_allocated()) {
+        return fmt::format("Tensor(<buffer is not allocated>, shape={}, dtype={}, layout={})", shape, dtype, layout);
+    }
+
+    if (tensor.storage_type() == StorageType::DEVICE) {
+        return to_string<T>(to_host<T>(tensor));
+    }
+
+    if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
+        // Convert to FLOAT32 tensor before printing
         auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
         auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
         auto float_tensor =
             Tensor(OwnedStorage{input_float_buffer}, tensor.shape(), DataType::FLOAT32, tensor.layout());
-        return to_string<float>(float_tensor, print_layout, pretty_print);
+        return to_string<float>(float_tensor, tensor.dtype());
     }
-
-
-    auto to_string_impl = [&print_layout, &pretty_print, &shape, &dtype, &layout](const auto& buffer) -> std::string {
-        switch (layout) {
-            case Layout::ROW_MAJOR:
-                if (print_layout == Layout::ROW_MAJOR) {
-                    return pretty_print ? detail::to_string_row_major(buffer, shape, dtype) : detail::to_string(buffer, dtype);
-                } else if (print_layout == Layout::TILE) {
-                    TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
-                    auto converted_data = convert_layout_row_major_to_tile(shape, buffer);
-                    return detail::to_string(converted_data, dtype);
-                }
-                else {
-                    TT_THROW("Unsupported print layout");
-                }
-                break;
-            case Layout::TILE:
-                if (print_layout == Layout::ROW_MAJOR) {
-                    auto converted_data = convert_layout_tile_to_row_major(shape, buffer);
-                    return pretty_print ? detail::to_string_row_major(converted_data, shape, dtype) : detail::to_string(converted_data, dtype);
-                } else if (print_layout == Layout::TILE) {
-                    TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
-                    return detail::to_string(buffer, dtype);
-                } else {
-                    TT_THROW("Unsupported print layout");
-                }
-                break;
-            default:
-                TT_THROW("Unsupported print layout");
-        }
-    };
 
     return std::visit(
         [&] (auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                const auto input_data = owned_buffer::get_as<T>(storage.buffer);
-                return to_string_impl(input_data);
+                const auto buffer = owned_buffer::get_as<T>(storage.buffer);
+                return detail::to_string(buffer, shape, dtype, layout);
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
-                return to_string_impl(input_data);
+                const auto buffer = borrowed_buffer::get_as<T>(storage.buffer);
+                return detail::to_string(buffer, shape, dtype, layout);
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Cannot print a device tensor!");

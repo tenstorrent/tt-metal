@@ -132,13 +132,9 @@ Tensor Tensor::to(Layout target_layout) const {
     return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
 
-const std::string Tensor::write_to_string(Layout print_layout, bool pretty_print) const {
-    return tensor_impl::to_string_wrapper(*this, print_layout, pretty_print);
-}
+const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
-void Tensor::print(Layout print_layout, bool pretty_print) const {
-    std::cout << write_to_string(print_layout, pretty_print);
-}
+void Tensor::print() const { std::cout << write_to_string() << std::endl; }
 
 Tensor Tensor::pad(const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) const {
     ZoneScoped;

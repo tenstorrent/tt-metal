@@ -1088,24 +1088,7 @@ Tensor convert_python_tensor_to_tt_tensor(
                         [7, 8, 9]]] dtype=bfloat16 ]
             )doc")
             .def(
-                "print",
-                [](const Tensor &self, Layout print_layout) { std::cout << self.write_to_string(print_layout); },
-                py::arg("print_layout") = Layout::ROW_MAJOR,
-                R"doc(
-                Prints the tensor as a flat list of numbers. By default, the tensor will be printed in row major order.
-
-                .. code-block:: python
-
-                    tt_tensor.print()
-
-                Example output:
-
-                .. code-block::
-
-                    [ 0.722656, 0.0332031, 0.109375, ..., 0.333984, 0.396484, 0.851562 dtype=bfloat16 ]
-            )doc")
-            .def(
-                "__str__", [](const Tensor &self) { return self.write_to_string(Layout::ROW_MAJOR, true); }, R"doc(
+                "__repr__", [](const Tensor &self) { return self.write_to_string(); }, R"doc(
                 Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
                 .. code-block:: python
