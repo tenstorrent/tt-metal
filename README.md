@@ -309,9 +309,10 @@ and manageable time frame at this time. In the meantime, please review the
 [contributor's guide](CONTRIBUTING.md) for more information about contribution
 standards.
 
-If you would like more information on running tests locally and CI, please
-refer to the relevant section in the the [contributor's guide](CONTRIBUTING.md)
-and read it in its entirety.
+If you would like to contribute, your submissions **must** pass post-commit
+regressions. If you would like more information on running tests locally and
+CI, please refer to the relevant section in the the [contributor's
+guide](CONTRIBUTING.md) and read it in its entirety.
 
 ## Communication
 
