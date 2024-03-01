@@ -39,7 +39,7 @@ def run_tt_lib_test(
     device=None,
     plot_func=None,
 ):
-    logger.info(f"Running with args: {test_args}")
+    logger.debug(f"Running with args: {test_args}")
 
     tensor_inputs = []
 

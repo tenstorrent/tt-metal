@@ -46,8 +46,8 @@ def run_embeddings_tests(
     ).reshape((batch_size, 1, num_rows, embedding_dim))
 
     passing_pcc, output_pcc = comp_equal(t_ref, tt_got_back)
-    logger.info(f"Out passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Out passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
     assert passing_pcc
 
 

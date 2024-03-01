@@ -149,7 +149,7 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
 
     # Check output
     pass_y, out_y = comp_allclose(expected_y, actual_y, rtol=rtol, atol=atol)
-    logger.info(f"output's {out_y}")
+    logger.debug(f"output's {out_y}")
     assert pass_y
 
 
@@ -215,5 +215,5 @@ def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, device):
 
     # Check input_grad
     pass_dx, out_dx = comp_allclose(expected_dx, actual_dx, rtol=rtol, atol=atol)
-    logger.info(f"input_grad's {out_dx}")
+    logger.debug(f"input_grad's {out_dx}")
     assert pass_dx

@@ -59,5 +59,5 @@ def test_embedding_bw(input_shapes, device):
 
     comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a)
 
-    logger.info(comp_out_a)
+    logger.debug(comp_out_a)
     assert comp_pass_a

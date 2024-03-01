@@ -537,8 +537,8 @@ def test_generate_all_configs_and_references(
             atol=1e-3,
             pcc=0.9999,
         )
-        logger.info(f"Passing={passing_allclose_and_pcc}")
-        logger.info(f"Output info={output_info}")
+        logger.debug(f"Passing={passing_allclose_and_pcc}")
+        logger.debug(f"Output info={output_info}")
         passing_pcc, _ = comp_pcc(
             golden_untilize_with_halo_output_pyt_tensor, untilize_with_halo_output_pyt_tensor, pcc=0.999
         )

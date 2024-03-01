@@ -43,7 +43,7 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order)
         end[rank-1]--;
         end[rank-2]--;
 
-        cout << s(3) << "counter = " << v2s(counter) << ", reorderd = " << v2s(counter_reordered) << ";   " << v2s(str) << " => " << v2s(end) << endl;
+        tt::log_debug(tt::LogDTX, "   counter = {} , reordered = {};   {} => {}", v2s(counter), v2s(counter_reordered), v2s(str), v2s(end));
         list_of_counted_dims.push_back(counter_reordered);
 
         counter.back()++;
@@ -54,8 +54,6 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order)
             }
         }
     }
-    cout << endl;
-    cout << endl;
 
     return list_of_counted_dims;
 }
@@ -64,7 +62,7 @@ vector<vector<int>> dim_order_counting(vector<int> shape, vector<int> dim_order)
 bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
     bool DEBUG = true;
 
-    if (DEBUG) cout << "\n\nPASS: Tilize and Store" << endl;
+    if (DEBUG) tt::log_info(tt::LogDTX, "PASS: Tilize and Store");
 
     // Identify producer TX & Consumer
     TransformationNode * producer = dtx->transformations.back();
@@ -72,7 +70,7 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
     dtx->transformations.push_back(consumer);
 
     for (int group_idx=0; group_idx<producer->groups.size(); group_idx++) {
-        cout << "\n\n" << s(2) << "Group = " << group_idx << endl;
+        tt::log_debug(tt::LogDTX, "Group = {}", group_idx);
 
         TensorPairGroup * consumer_group = consumer->groups[group_idx];
         TensorPairGroup * producer_group = producer->groups[group_idx];
@@ -86,21 +84,18 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
 
         vector<int> consumer_str = zeros(rank);
         vector<int> consumer_end = vector_addition(consumer_str, tile_shape, -1);
-        cout << s(4) << "tile shape      = " << v2s(tile_shape) << endl;
+        tt::log_debug(tt::LogDTX, "    tile_shape = {}", v2s(tile_shape));
 
         if (shape.size() != dim_order.size()) throw std::runtime_error("shape and dim_order dont have the same rank!");
 
         int shape_x = list_of_counted_dims.size() * 32;
         consumer_group->shape = {32, shape_x};
 
-        cout << s(4) << "Tensor Pairs: " << list_of_counted_dims.size() << endl;
+        tt::log_debug("    Tensor Pairs: {}", list_of_counted_dims.size());
         for (int i=0; i< list_of_counted_dims.size(); i++) {
-            std::cout <<  std::endl;
             for(int j = 0; j < list_of_counted_dims[i].size(); j++) {
-
-                std::cout << "dim " << list_of_counted_dims[i][j] << std::endl;
+                tt::log_debug(tt::LogDTX, "dim {}", list_of_counted_dims[i][j]);
             }
-            std::cout <<  std::endl;
             // Source Tensor: within the ND tensor from producer
             vector<int> str;
             vector<int> end;
@@ -112,7 +107,7 @@ bool tilize_and_store(DataTransformations * dtx, vector<int> dim_order) {
                                             new DTXTensor({consumer_str}, {consumer_end}));
             consumer_group->tensor_pairs.push_back(tp);
 
-            cout << s(6) << i << ".  " << tp->get_string() << endl;
+            tt::log_debug(tt::LogDTX, "      {}. {}", i, tp->get_string());
 
             // Prepare for the next itteration
             consumer_str.back() = (i+1) * 32;

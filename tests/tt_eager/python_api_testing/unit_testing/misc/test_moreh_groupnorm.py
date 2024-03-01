@@ -215,17 +215,17 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, device):
 
     # Check output
     pass_output, out_output = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
-    logger.info(f"output's {out_output}")
+    logger.debug(f"output's {out_output}")
     assert pass_output
 
     # Check mean
     pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
-    logger.info(f"mean's {out_mean}")
+    logger.debug(f"mean's {out_mean}")
     assert pass_mean
 
     # Check rstd
     pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
-    logger.info(f"rstd's {out_rstd}")
+    logger.debug(f"rstd's {out_rstd}")
     assert pass_rstd
 
 
@@ -292,7 +292,7 @@ def test_moreh_groupnorm_backward(N, C_num_groups, H, W, eps, affine, device):
 
     # Check input_grad
     pass_input_grad, out_input_grad = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
-    logger.info(f"input_grad's {out_input_grad}")
+    logger.debug(f"input_grad's {out_input_grad}")
     assert pass_input_grad
 
     # I divide gamma_grad and beta_grad by (N * C * Ht * Wt), because the error of bf16 sum increases.
@@ -305,7 +305,7 @@ def test_moreh_groupnorm_backward(N, C_num_groups, H, W, eps, affine, device):
         pass_gamma_grad, out_gamma_grad = comp_allclose(
             expected_gamma_grad / divisor, actual_gamma_grad / divisor, rtol=rtol, atol=atol
         )
-        logger.info(f"gamma_grad's {out_gamma_grad}")
+        logger.debug(f"gamma_grad's {out_gamma_grad}")
         assert pass_gamma_grad
 
     # Check beta_grad
@@ -313,5 +313,5 @@ def test_moreh_groupnorm_backward(N, C_num_groups, H, W, eps, affine, device):
         pass_beta_grad, out_beta_grad = comp_allclose(
             expected_beta_grad / divisor, actual_beta_grad / divisor, rtol=rtol, atol=atol
         )
-        logger.info(f"beta_grad's {out_beta_grad}")
+        logger.debug(f"beta_grad's {out_beta_grad}")
         assert pass_beta_grad

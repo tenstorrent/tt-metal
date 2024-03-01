@@ -178,7 +178,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    log_info(LogTest, "Slicing input tensors and copying them to dram along with sending runtime args to device");
+    log_debug(LogTest, "Slicing input tensors and copying them to dram along with sending runtime args to device");
     for(int i = 0; i < num_cores_r; i++) {
         std::vector<bfloat16> activation_slice = get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
         for(int j = 0; j < num_cores_c; j++) {
@@ -246,13 +246,13 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
         }
     }
 
-    log_info(LogTest, "Copying inputs to dram and runtime args to cores complete");
+    log_debug(LogTest, "Copying inputs to dram and runtime args to cores complete");
 
-    log_info(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
+    log_debug(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
     tt_metal::detail::LaunchProgram(device, program);
-    log_info(LogTest, "Matmul test done");
-    log_info(LogTest, "Gathering data back from dram and checking against golden");
+    log_debug(LogTest, "Matmul test done");
+    log_debug(LogTest, "Gathering data back from dram and checking against golden");
     for(int i = 0; i < num_cores_r; i++) {
         auto golden_row = get_row_slice(golden, num_cores_r, i, M * 32, N * 32);
         for(int j = 0; j < num_cores_c; j++) {
@@ -268,7 +268,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
             pass &= (per_core_golden == result_untilized);
         }
     }
-    log_info(LogTest, "Golden check complete");
+    log_debug(LogTest, "Golden check complete");
     return pass;
 }
 
@@ -411,7 +411,7 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
+    log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -424,12 +424,12 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
 
     auto weight_buffer = std::make_shared<Buffer>(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, weights, K, N, weight_buffer);
-    log_info(LogTest, "Copying inputs to dram complete");
+    log_debug(LogTest, "Copying inputs to dram complete");
 
     auto out_buffer = std::make_shared<Buffer>(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
     uint32_t out_dram_addr = out_buffer->address();
 
-    log_info(LogTest, "Writing kernel runtime args to device");
+    log_debug(LogTest, "Writing kernel runtime args to device");
     pass &= unit_tests_common::matmul::test_matmul_multi_core_X_dram::assign_runtime_args_to_program(
         device,
         program,
@@ -448,13 +448,13 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
         activation_buffer->address(),
         weight_buffer->address(),
         out_dram_addr);
-    log_info(LogTest, "Writing kernel runtime args to device complete");
+    log_debug(LogTest, "Writing kernel runtime args to device complete");
 
-    log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
+    log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
     fixture->RunProgram(device, program);
 
-    log_info(LogTest, "Matmul test done");
-    log_info(LogTest, "Gathering data back from dram and checking against golden");
+    log_debug(LogTest, "Matmul test done");
+    log_debug(LogTest, "Gathering data back from dram and checking against golden");
 
     vector<uint32_t> result;
     fixture->ReadBuffer(device, out_buffer, result);
@@ -476,7 +476,7 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
             pass &= (golden_tile == result_flat_layout);
         }
     }
-    log_info(LogTest, "Golden check complete");
+    log_debug(LogTest, "Golden check complete");
     return pass;
 }
 

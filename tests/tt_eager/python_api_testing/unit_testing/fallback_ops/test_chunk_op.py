@@ -40,5 +40,5 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device, device):
         tt_output = tt_out[i].cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comp_pcc(pt_output, tt_output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_output, tt_output)
-        logger.info(comp_out)
+        logger.debug(comp_out)
         assert comp_pass

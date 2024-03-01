@@ -43,8 +43,8 @@ def run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config
     pyt_got_back_rm = tt_host_rm.to_torch()
 
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm, torch_tensor, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 

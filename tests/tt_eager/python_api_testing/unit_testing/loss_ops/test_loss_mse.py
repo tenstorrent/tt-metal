@@ -49,7 +49,7 @@ class TestMSELoss:
         pt_mse_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
         comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(pt_mse_output, tt_mse_output)
 
-        logger.info(comp_out_a)
+        logger.debug(comp_out_a)
         assert comp_pass_a
 
     def test_loss_mse_sum(self, input_shapes, memcfg, device):
@@ -76,7 +76,7 @@ class TestMSELoss:
             pt_mse_output, torch.tensor(tt_mse_output[0, 0, 0, 0]), atol=4, rtol=1e-1
         )
 
-        logger.info(comp_out_a)
+        logger.debug(comp_out_a)
         assert comp_pass_a
 
     def test_loss_mse_mean(self, input_shapes, memcfg, device):
@@ -105,5 +105,5 @@ class TestMSELoss:
             pt_mse_output, torch.tensor(tt_mse_output[0, 0, 0, 0]), atol=4, rtol=1e-1
         )
 
-        logger.info(comp_out_a)
+        logger.debug(comp_out_a)
         assert comp_pass_a

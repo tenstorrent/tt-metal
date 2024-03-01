@@ -4,6 +4,7 @@
 
 
 import tt_lib as ttl
+from loguru import logger
 
 from models.utility_functions import (
     untilize,
@@ -44,9 +45,8 @@ def run_tilize_matmul_test(M, K, N, device):
     ref_bmm = torch.matmul(A.reshape(1, M, K), B.reshape(1, K, N))
     ref_bmm = ref_bmm.reshape(1, 1, M, N)
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    print("Passing=", passing_pcc)
-    print("Output pcc=", output_pcc)
-
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
     assert passing_pcc
 
 

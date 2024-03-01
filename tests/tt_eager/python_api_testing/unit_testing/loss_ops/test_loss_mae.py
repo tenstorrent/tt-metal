@@ -49,7 +49,7 @@ class TestMAELoss:
         pt_mae_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
         comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(pt_mae_output, tt_mae_output)
 
-        logger.info(comp_out_a)
+        logger.debug(comp_out_a)
         assert comp_pass_a
 
     def test_loss_mae_sum(self, input_shapes, memcfg, device):
@@ -77,7 +77,7 @@ class TestMAELoss:
             pt_mae_output, torch.tensor(tt_mae_output[0, 0, 0, 0]), atol=4, rtol=1e-1
         )
 
-        logger.info(comp_out_a)
+        logger.debug(comp_out_a)
         assert comp_pass_a
 
     def test_loss_mae_mean(self, input_shapes, memcfg, device):
@@ -107,5 +107,5 @@ class TestMAELoss:
             pt_mae_output, torch.tensor(tt_mae_output[0, 0, 0, 0]), atol=4, rtol=1e-1
         )
 
-        logger.info(comp_out_a)
+        logger.debug(comp_out_a)
         assert comp_pass_a

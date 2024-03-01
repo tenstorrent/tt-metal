@@ -108,7 +108,7 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
 
     auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-    log_info(tt::LogVerif, "Creating kernel");
+    log_debug(tt::LogVerif, "Creating kernel");
     // Create the kernel
     auto dram_kernel = tt_metal::CreateKernel(
         program,

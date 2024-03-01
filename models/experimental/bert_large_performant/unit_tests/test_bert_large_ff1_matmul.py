@@ -127,8 +127,8 @@ def run_bert_large_ff1_matmul_test(
         else:
             assert False, "Unknown activation"
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 

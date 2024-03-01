@@ -143,21 +143,21 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, device):
 
     rtol = atol = 0.01
     passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.999, rtol=rtol, atol=atol)
-    logger.info(f"Out passing (param)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (param)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     passing, out = comp_allclose_and_pcc(cpu_exp_avg_result, exp_avg_result, pcc=0.999, rtol=rtol, atol=atol)
-    logger.info(f"Out passing (exp_avg)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (exp_avg)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     passing, out = comp_allclose_and_pcc(cpu_exp_avg_sq_result, exp_avg_sq_result, pcc=0.999, rtol=rtol, atol=atol)
-    logger.info(f"Out passing (exp_avg_sq)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (exp_avg_sq)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     if "max_exp_avg_sq" in optimizer_state_dict["state"][0]:
         passing, out = comp_allclose_and_pcc(
             cpu_max_exp_avg_sq_result, max_exp_avg_sq_result, pcc=0.999, rtol=rtol, atol=atol
         )
-        logger.info(f"Out passing (max_exp_avg_sq)={passing}")
-        logger.info(f"Output pcc={out}")
+        logger.debug(f"Out passing (max_exp_avg_sq)={passing}")
+        logger.debug(f"Output pcc={out}")
     assert passing

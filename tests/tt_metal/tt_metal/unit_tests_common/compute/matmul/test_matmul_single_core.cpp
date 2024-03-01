@@ -194,9 +194,9 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
         core,
         writer_rt_args);
 
-    log_info(LogTest, "Launching kernels");
+    log_debug(LogTest, "Launching kernels");
     fixture->RunProgram(device, program);
-    log_info(LogTest, "Kernels done");
+    log_debug(LogTest, "Kernels done");
 
     std::vector<uint32_t> result_vec;
     fixture->ReadBuffer(device, dst_dram_buffer, result_vec);

@@ -81,11 +81,9 @@ bool test_golden_comparisons() {
 }
 
 void run_tensor_data_test(vector<int> shape, string filename){
-    cout << endl;
     TensorData * t = new TensorData(shape);
     t->print();
     //t->generate_csv(filename);
-    cout << endl;
 }
 
 
@@ -112,9 +110,9 @@ int main(int argc, char** argv) {
     printf("test_DataTransformations - %d\n\n", pass);
     */
     pass &= test_tensor_data_class();
-    printf("test_tensor_data_class - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_tensor_data_class - {}", pass);
 
-    if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
-    else cout << "TESTS FAILED\n\n\n" << endl;
+    if (pass == true) tt::log_debug(tt::LogDTX, "TESTS PASSED");
+    else tt::log_error(tt::LogDTX, "TESTS FAILED");
 
 }

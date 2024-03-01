@@ -677,14 +677,14 @@ def test_resnet50_conv(
         # Compare baseline against golden
         assert out_result_baseline.shape == out_golden.shape
         passing_pcc_baseline, output_pcc_baseline = comp_pcc(out_golden, out_result_baseline, 0.99)
-        logger.info(f"Passing baseline={passing_pcc_baseline}")
-        logger.info(f"Output pcc baseline={output_pcc_baseline}")
+        logger.debug(f"Passing baseline={passing_pcc_baseline}")
+        logger.debug(f"Output pcc baseline={output_pcc_baseline}")
 
         # Compare out result against golden
         assert out_result.shape == out_golden.shape
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
-        logger.info(f"Passing={passing_pcc}")
-        logger.info(f"Output pcc={output_pcc}")
+        logger.debug(f"Passing={passing_pcc}")
+        logger.debug(f"Output pcc={output_pcc}")
         assert passing_pcc
 
         # Compare baseline to output (should be identical)
@@ -694,4 +694,4 @@ def test_resnet50_conv(
             eq = torch.equal(out_result_baseline, out_result)
             assert eq, "Output should be identical to old conv!"
             assert passing_pcc == passing_pcc_baseline, "Output pcc should be identical to old conv pcc!"
-            logger.info(f"Output pcc passes and matches old conv pcc")
+            logger.debug(f"Output pcc passes and matches old conv pcc")

@@ -464,7 +464,7 @@ bool test_channels_last_to_2D_matrix() {
     pass &= convert_tensor_layout_3d_conv_act_to_2Dmatrix(dtx_right, {1,1,1,1,0,0});
     pass &= row_major_memory_store(dtx_right);
 
-    cout << "\n\nDTX_RIGHT" << endl;
+    tt::log_debug(tt::LogDTX, "DTX_RIGHT");
     dtx_right->print();
 
 
@@ -475,19 +475,19 @@ bool test_channels_last_to_2D_matrix() {
     dtx_left->transformations.push_back(node1);
     pass &= convert_abstract_tensor_to_channels_last_layout(dtx_left);
 
-    cout << "\n\nDTX_LEFT" << endl;
+    log_debug(tt::LogDTX, "DTX_LEFT");
     dtx_left->print();
 
     DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
-    cout << "\n\nDTX_COMBINED" << endl;
+    log_debug(tt::LogDTX, "DTX_COMBINED");
     combined->print();
 
     pass &= optimize_away_transpose(combined);
-    cout << "\n\nDTX_OPTIMIZED" << endl;
+    log_debug(tt::LogDTX, "DTX_OPTIMIZED");
     combined->print();
 
     pass &= collapse_transformations(combined);
-    cout << "\n\nDTX_COLLAPSED" << endl;
+    log_debug(tt::LogDTX, "DTX_COLLAPSED");
     combined->print();
     pass &= generate_transfer_addresses(combined);
     combined->print();
@@ -513,7 +513,7 @@ bool test_channels_last_to_2D_matrix_conv1x1() {
     pass &= convert_tensor_layout_3d_conv_act_to_2Dmatrix(dtx_right, {1,1,1,1,0,0});
     pass &= row_major_memory_store(dtx_right);
 
-    cout << "\n\nDTX_RIGHT" << endl;
+    tt::log_debug(tt::LogDTX, "DTX_RIGHT");
     dtx_right->print();
 
 
@@ -524,19 +524,19 @@ bool test_channels_last_to_2D_matrix_conv1x1() {
     dtx_left->transformations.push_back(node1);
     pass &= convert_abstract_tensor_to_channels_last_layout(dtx_left);
 
-    cout << "\n\nDTX_LEFT" << endl;
+    tt::log_debug(tt::LogDTX, "DTX_LEFT");
     dtx_left->print();
 
     DataTransformations * combined = reverse_and_combine_transformations(dtx_left, dtx_right);
-    cout << "\n\nDTX_COMBINED" << endl;
+    tt:log_debug(tt::LogDTX, "DTX_COMBINED");
     combined->print();
 
     pass &= optimize_away_transpose(combined);
-    cout << "\n\nDTX_OPTIMIZED" << endl;
+    tt::log_debug(tt::LogDTX, "DTX_OPTIMIZED");
     combined->print();
 
     pass &= collapse_transformations(combined);
-    cout << "\n\nDTX_COLLAPSED" << endl;
+    tt::log_debug(tt::LogDTX, "DTX_COLLAPSED");
     combined->print();
     pass &= generate_transfer_addresses(combined);
     combined->print();
@@ -616,12 +616,11 @@ bool test_padding_pass() {
         auto golden_data = std::get<1>(t);
         pass &= test_padding_pass_(shape, pad_to_nearest, input_data_2_2, golden_data);
         if(pass) {
-            std::cout << "Passed test with shape = ";
+            tt::log_debug(tt::LogDTX, "Passed test with shape = {} , pad to nearest = {}", v2s(shape), v2s(pad_to_nearest));
         }
         else {
-            std::cout << "Failed test with shape = ";
+            tt::log_error(tt::LogDTX, "Failed test with shape = {} , pad to nearest = {}", v2s(shape), v2s(pad_to_nearest));
         }
-        std::cout << v2s(shape) << " , pad to nearest = " << v2s(pad_to_nearest) << std::endl;
         if(!pass) exit(1);
     }
     return pass;
@@ -675,12 +674,11 @@ bool test_block_2d_matrix_pass() {
         auto golden_data = std::get<2>(t);
         pass &= test_block_2d_matrix_pass_(shape, block_shape, dim_order, input_data_4_4, golden_data);
         if(pass) {
-            std::cout << "Passed test with shape = ";
+            tt::log_debug(tt::LogDTX, "Passed test with shape = {} , block shape = {} , dim_order = {}", v2s(shape), v2s(block_shape), v2s(dim_order));
         }
         else {
-            std::cout << "Failed test with shape = ";
+            tt::log_error(tt::LogDTX, "Failed test with shape = {} , block shape = {} , dim_order = {}", v2s(shape), v2s(block_shape), v2s(dim_order));
         }
-        std::cout << v2s(shape) << " , block shape = " << v2s(block_shape) << " , dim order = " << v2s(dim_order) << std::endl;
     }
     // Testing shape with x != y
     shape = {1, 2, 6};
@@ -701,12 +699,11 @@ bool test_block_2d_matrix_pass() {
         auto golden_data = std::get<2>(t);
         pass &= test_block_2d_matrix_pass_(shape, block_shape, dim_order, input_data_2_6, golden_data);
         if(pass) {
-            std::cout << "Passed test with shape = ";
+            tt::log_debug(tt::LogDTX, "Passed test with shape = {} , block shape = {} , dim order = {}", v2s(shape), v2s(block_shape), v2s(dim_order));
         }
         else {
-            std::cout << "Failed test with shape = ";
+            tt::log_error(tt::LogDTX, "Failed test with shape = {} , block shape = {} , dim order = {}", v2s(shape), v2s(block_shape), v2s(dim_order));
         }
-        std::cout << v2s(shape) << " , block shape = " << v2s(block_shape) << " , dim order = " << v2s(dim_order) << std::endl;
     }
     return pass;
 
@@ -769,12 +766,11 @@ bool test_block_2d_matrix_group_pass() {
         auto golden_data = std::get<2>(t);
         pass &= test_block_2d_matrix_group_pass_(shape, block_shape, dim_order, input_data_4_4, golden_data);
         if(pass) {
-            std::cout << "Passed test with shape = ";
+            tt::log_debug(tt::LogDTX, "Passed test with shape = {} , block shape = {} , dim order = {}", v2s(shape), v2s(block_shape), v2s(dim_order));
         }
         else {
-            std::cout << "Failed test with shape = ";
+            tt::log_error(tt::LogDTX, "Failed test with shape = {} , block shape = {} , dim order = {}", v2s(shape), v2s(block_shape), v2s(dim_order));
         }
-        std::cout << v2s(shape) << " , block shape = " << v2s(block_shape) << " , dim order = " << v2s(dim_order) << std::endl;
     }
     return pass;
 
@@ -829,16 +825,11 @@ bool test_pad_and_block_passes() {
         auto golden_data = std::get<3>(t);
         pass &= test_pad_and_block_passes_(shape, pad_to_nearest, block_shape, dim_order, input_data_2_2, golden_data);
         if(pass) {
-            std::cout << "Passed test with shape = ";
+            tt::log_debug(tt::LogDTX, "Passed test with shape = {} , pad to nearest = {} , block shape = {} , dim order = {}", v2s(shape), v2s(pad_to_nearest), v2s(block_shape), v2s(dim_order));
         }
         else {
-            std::cout << "Failed test with shape = ";
+            tt::log_error(tt::LogDTX, "Failed test with shape = {} , pad to nearest = {} , block shape = {} , dim order = {}", v2s(shape), v2s(pad_to_nearest), v2s(block_shape), v2s(dim_order));
         }
-        std::cout << v2s(shape) <<
-            " , pad to nearest = " << v2s(pad_to_nearest) <<
-            " , block shape = " << v2s(block_shape) <<
-            " , dim order = " << v2s(dim_order) <<
-            std::endl;
         if (!pass) exit(1);
     }
     return pass;
@@ -847,9 +838,9 @@ bool test_pad_and_block_passes() {
 void run_dtx_tests() {
     bool pass = true;
 
-    cout << "==================================================================" << endl;
-    cout << "                         Starting DTX TESTs                       " << endl;
-    cout << "==================================================================" << endl;
+    tt::log_info(tt::LogDTX, "==================================================================");
+    tt::log_info(tt::LogDTX, "                         Starting DTX TESTs                       ");
+    tt::log_info(tt::LogDTX, "==================================================================");
 
     // pass &= test_GenerateAddresses();
     // printf("test_GenerateAddresses - %d\n\n", pass);
@@ -885,31 +876,31 @@ void run_dtx_tests() {
     //printf("test_pass_convert_abstract_tensor_to_channels_last_layout - %d\n\n", pass);
 
     pass &= test_channels_last_to_2D_matrix();
-    printf("test_channels_last_to_2D_matrix - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_channels_last_to_2D_matrix - {}", pass);
 
     pass &= test_channels_last_to_2D_matrix_conv1x1();
-    printf("test_channels_last_to_2D_matrix_conv1x1 - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_channels_last_to_2D_matrix_conv1x1 - {}", pass);
 
     pass &= test_high_level_pass_and_evaluate();
-    printf("test_high_level_pass_and_evaluate - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_high_level_pass_and_evaluate - {}", pass);
 
     pass &= test_block_2d_matrix_pass();
-    printf("test_block_2d_matrix_pass - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_block_2d_matrix_pass - {}", pass);
 
     pass &= test_block_2d_matrix_group_pass();
-    printf("test_block_2d_matrix_group_pass - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_block_2d_matrix_group_pass - {}", pass);
 
     pass &= test_padding_pass();
-    printf("test_pad_2d_matrix_pass - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_pad_2d_matrix_pass - {}", pass);
 
     pass &= test_pad_and_block_passes();
-    printf("test_pad_and_block_passes - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_pad_and_block_passes - {}", pass);
 
     pass &= test_run_conv_transform_no_evaluate();
-    printf("test_run_conv_transform_no_evaluate - %d\n\n", pass);
+    tt::log_info(tt::LogDTX, "test_run_conv_transform_no_evaluate - {}", pass);
 
-    if (pass == true) cout << "\nTESTS PASSED\n\n\n" << endl;
-    else cout << "TESTS FAILED\n\n\n" << endl;
+    if (pass == true) tt::log_info(tt::LogDTX, "TESTS PASSED");
+    else tt::log_error(tt::LogDTX, "TESTS FAILED");
 }
 
 // ===============================================================

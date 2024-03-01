@@ -42,8 +42,8 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
         pcc = 1.0
 
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, pcc)
-    logger.info(f"passing={passing_pcc}")
-    logger.info(f"output pcc={output_pcc}")
+    logger.debug(f"passing={passing_pcc}")
+    logger.debug(f"output pcc={output_pcc}")
     assert passing_pcc
 
 

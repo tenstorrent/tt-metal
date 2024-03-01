@@ -159,8 +159,8 @@ def test_moreh_nll_loss_4d(shape, ignore_index, reduction_mean, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(torch_loss, tt_loss_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
-    logger.info(f"Out passing (param)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (param)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     assert passing
 
@@ -187,8 +187,8 @@ def test_moreh_nll_loss_2d(shape, ignore_index, reduction_mean, device):
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(torch_loss, tt_loss_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
-    logger.info(f"Out passing (param)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (param)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     assert passing
 
@@ -247,8 +247,8 @@ def test_moreh_nll_loss_4d_backward(shape, ignore_index, reduction_mean, device)
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-    logger.info(f"Out passing (param)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (param)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     assert passing
 
@@ -306,7 +306,7 @@ def test_moreh_nll_loss_2d_backward(shape, ignore_index, reduction_mean, device)
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-    logger.info(f"Out passing (param)={passing}")
-    logger.info(f"Output pcc={out}")
+    logger.debug(f"Out passing (param)={passing}")
+    logger.debug(f"Output pcc={out}")
 
     assert passing

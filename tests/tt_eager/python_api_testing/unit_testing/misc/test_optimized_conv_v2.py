@@ -213,6 +213,6 @@ def test_optimized_conv_v2(
     else:
         pcc = 0.999
     passing_pcc, info = comp_pcc(out_golden, out_result, pcc=pcc)
-    print("Passing=", passing_pcc)
-    print("Info=", info)
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Info={info}")
     assert passing_pcc

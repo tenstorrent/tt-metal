@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
+from loguru import logger
 
 import numpy as np
 import tt_lib as ttl
@@ -97,8 +97,8 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     out_golden = pytorch_inputs_and_golden[2]
     assert out_result.shape == out_golden.shape
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
-    print("Passing=", passing_pcc)
-    print("Output pcc=", output_pcc)
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
     return passing_pcc
 
 

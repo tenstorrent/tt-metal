@@ -108,8 +108,8 @@ def run_falcon_attn_matmul_test(
     ref_bmm = torch.matmul(A.transpose(0, 2), B).transpose(0, 2)
 
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, pcc)
-    logger.info(f"Passing={passing_pcc}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing_pcc
 

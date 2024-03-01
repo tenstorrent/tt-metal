@@ -145,6 +145,6 @@ def test_split_tiled_w(shape, in_mem_config, out_mem_config, device, dtype=ttl.t
     for index, pyt_buff in enumerate(pyt_buff_list):
         golden_buff = golden_buffers[index]
         passing_pcc, output_pcc = comp_pcc(pyt_buff, golden_buff, 1.0)
-        logger.info(f"Out passing={passing_pcc}")
-        logger.info(f"Output pcc={output_pcc}")
+        logger.debug(f"Out passing={passing_pcc}")
+        logger.debug(f"Output pcc={output_pcc}")
         assert passing_pcc

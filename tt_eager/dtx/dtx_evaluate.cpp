@@ -43,7 +43,7 @@ vector<uint32_t> generate_address_map(DataTransformations * dtx, bool in_bytes, 
 vector<vector<float>> evaluate(vector<float> data, std::vector<uint32_t> address_map, vector<vector<int>> output_shape) {
     uint32_t address_map_index = 0;
     uint32_t num_groups = address_map[address_map_index];
-    std::cout << "num_groups = " << num_groups << std::endl;
+    log_debug(tt::LogDTX, "num_groups = {}", num_groups);
     assert(output_shape.size() == num_groups);
     address_map_index += 1;
     vector<vector<float>> data_transformed_groups;

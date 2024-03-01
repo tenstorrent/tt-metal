@@ -66,8 +66,8 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
         (std::uint32_t)core_start_physical.y,
         (std::uint32_t)(grid_size.x * grid_size.y) - cfg.target_grid_offset}; // Note: exclude src from acks, since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
 
-    log_info(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
-    log_info(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
+    log_debug(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
+    log_debug(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
     auto mcast_reader_kernel = tt_metal::CreateKernel(
         program,
         cfg.kernel_file,
@@ -81,9 +81,9 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
 
     tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
 
-    log_info(LogTest, "Launching kernels");
+    log_debug(LogTest, "Launching kernels");
     fixture->RunProgram(device, program);
-    log_info(LogTest, "Kernels done");
+    log_debug(LogTest, "Kernels done");
 
     for(int i = 0 ; i < grid_size.y; i++) {
         for(int j = 0 ; j < grid_size.x; j++) {

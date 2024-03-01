@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
+from loguru import logger
 import numpy as np
 
 import tt_lib as ttl
@@ -273,6 +273,6 @@ def test_resnet50_first_conv(
         golden_pcc = 0.9999
 
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, golden_pcc)
-        print("Passing=", passing_pcc)
-        print("Output pcc=", output_pcc)
+        logger.debug(f"Passing={passing_pcc}")
+        logger.debug(f"Output pcc={output_pcc}")
         assert passing_pcc

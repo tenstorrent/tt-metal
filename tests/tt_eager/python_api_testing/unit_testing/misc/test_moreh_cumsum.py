@@ -86,8 +86,8 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-    logger.info(f"Out passing={passing}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing
 
@@ -137,7 +137,7 @@ def test_moreh_cumsumsum_backward(input_shape, dim, device):
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-    logger.info(f"Out passing={passing}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing

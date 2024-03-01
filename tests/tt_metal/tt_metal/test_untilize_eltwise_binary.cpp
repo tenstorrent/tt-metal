@@ -233,8 +233,10 @@ int main(int argc, char **argv) {
 
         vector<uint32_t> golden = gold_standard_untilize(src0_vec, {num_tiles_r * 32, num_tiles_c * 32});
 
-        print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles, "result");
-        print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles, "golden");
+        if (not pass){
+            print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles, "result");
+            print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles, "golden");
+        }
 
         pass &= (golden == result_vec);
 

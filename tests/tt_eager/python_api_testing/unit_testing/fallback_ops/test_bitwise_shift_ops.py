@@ -45,7 +45,7 @@ class TestBitwiseShiftOps:
         output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
-        logger.info(comp_out)
+        logger.debug(comp_out)
         assert comp_pass
 
     def test_bitwise_binary_shift_fallback(self, input_shapes, shift_kind, on_device, device):
@@ -79,5 +79,5 @@ class TestBitwiseShiftOps:
         output = tout.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
-        logger.info(comp_out)
+        logger.debug(comp_out)
         assert comp_pass

@@ -27,12 +27,11 @@ TensorData::TensorData(vector<int> shape) {
 
 void TensorData::print() {
     bool DEBUG = true;
-    if (DEBUG) tt::log_info(tt::LogDTX, "Printing TensorData");
+    if (DEBUG) tt::log_debug(tt::LogDTX, "Printing TensorData");
 
     vector<int> counter = zeros(this->rank);
     for (int i=0; i<this->volume; i++){
-
-        if (DEBUG) cout << s(2) << "i = " << i << ".  counter = " << v2s(counter) << endl;
+        if (DEBUG) tt::log_debug(tt::LogDTX, "i = {}.  counter = {}", i, v2s(counter));
 
         int index = 0;   // = y*this->shape[0] + x;
         for (int d=0; d<rank; d++) {
@@ -170,24 +169,24 @@ string Transfer::get_string() {
 
 void TransformationNode::print(int spaces) {
 
-    tt::log_info(tt::LogDTX, "{}Transformation Node: opcode = {}", s(spaces), this->opcode);
+    tt::log_debug(tt::LogDTX, "{}Transformation Node: opcode = {}", s(spaces), this->opcode);
 
     int group_index = 0;
     for (TensorPairGroup * group : this->groups) {
 
-        tt::log_info(tt::LogDTX, "{}Group = {}; shape = {}, core = {}", s(2 + spaces), group_index, v2s(group->shape), v2s(group->core));
+        tt::log_debug(tt::LogDTX, "{}Group = {}; shape = {}, core = {}", s(2 + spaces), group_index, v2s(group->shape), v2s(group->core));
 
-        tt::log_info(tt::LogDTX, "{}TensorPairs ({}):", s(4+spaces), group->tensor_pairs.size());
+        tt::log_debug(tt::LogDTX, "{}TensorPairs ({}):", s(4+spaces), group->tensor_pairs.size());
         int tp_index = 0;
         for (TensorPair * tp : group->tensor_pairs) {
-            tt::log_info(tt::LogDTX, "{}TensorPair[{}]{}", s(6+spaces), tp_index, tp->get_string());
+            tt::log_debug(tt::LogDTX, "{}TensorPair[{}]{}", s(6+spaces), tp_index, tp->get_string());
             tp_index++;
         }
 
-        tt::log_info(tt::LogDTX, "{}Transactions:", s(4+spaces));
+        tt::log_debug(tt::LogDTX, "{}Transactions:", s(4+spaces));
         int tx_index = 0;
         for (Transfer * tx : group->transfers) {
-            tt::log_info(tt::LogDTX, "{}, Transaction[{}]  {}", s(6+spaces), tx_index, tx->get_string());
+            tt::log_debug(tt::LogDTX, "{}, Transaction[{}]  {}", s(6+spaces), tx_index, tx->get_string());
             tx_index++;
         }
         group_index++;
@@ -199,8 +198,8 @@ void DataTransformations::print() {
 }
 
 void DataTransformations::print(int spaces) {
-    tt::log_info(tt::LogDTX, "{} DataTransformations -- nodes = {}", s(spaces), this->transformations.size());
-    tt::log_info(tt::LogDTX, "{} ----------------------------------------------------", s(spaces));
+    tt::log_debug(tt::LogDTX, "{} DataTransformations -- nodes = {}", s(spaces), this->transformations.size());
+    tt::log_debug(tt::LogDTX, "{} ----------------------------------------------------", s(spaces));
     for (int t=0; t<this->transformations.size(); t++) {
         this->transformations[t]->print(spaces+3);
     }

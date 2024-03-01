@@ -49,8 +49,8 @@ def test_moreh_bmm(shape, device):
 
     ## test for equivalance
     passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_out, pcc=0.999)
-    logger.info(f"Out passing={passing}")
-    logger.info(f"Output pcc={output_pcc}")
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
 
     assert passing
 
@@ -108,8 +108,8 @@ def test_moreh_bmm_backward(shape, requires_grad, device):
 
         torch_input_grad = torch.unsqueeze(torch_input.grad, dim=0)
         passing, output_pcc = comp_allclose_and_pcc(torch_input_grad, ttcpu_input_grad, pcc=0.999, rtol=rtol, atol=atol)
-        logger.info(f"input_grad passing={passing}")
-        logger.info(f"input_grad pcc={output_pcc}")
+        logger.debug(f"input_grad passing={passing}")
+        logger.debug(f"input_grad pcc={output_pcc}")
         assert passing
 
     if require_mat2_grad:
@@ -117,6 +117,6 @@ def test_moreh_bmm_backward(shape, requires_grad, device):
 
         torch_mat2_grad = torch.unsqueeze(torch_mat2.grad, dim=0)
         passing, output_pcc = comp_allclose_and_pcc(torch_mat2_grad, ttcpu_mat2_grad, pcc=0.999, rtol=rtol, atol=atol)
-        logger.info(f"mat2_grad passing={passing}")
-        logger.info(f"mat2_grad pcc={output_pcc}")
+        logger.debug(f"mat2_grad passing={passing}")
+        logger.debug(f"mat2_grad pcc={output_pcc}")
         assert passing

@@ -296,7 +296,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
                                                                                                     in0_block_w, out_subblock_h, out_subblock_w,
                                                                                                     per_core_M, per_core_N);
 
-    log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
+    log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -306,7 +306,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
-    log_info(LogTest, "Copying inputs to dram complete");
+    log_debug(LogTest, "Copying inputs to dram complete");
 
     for(int i = 0; i < num_cores_r; i++) {
         for(int j = 0; j < num_cores_c; j++) {
@@ -316,7 +316,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
         }
     }
 
-    log_info(LogTest, "Writing kernel runtime args to device");
+    log_debug(LogTest, "Writing kernel runtime args to device");
     pass &= write_runtime_args_to_device(
         in1_or_in0,
         device,
@@ -331,14 +331,14 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
         in0_dram_addr, in1_dram_addr, out_dram_addr,
         in_mcast_sender_semaphore_addr, in_mcast_receiver_semaphore_addr
     );
-    log_info(LogTest, "Writing kernel runtime args to device complete");
+    log_debug(LogTest, "Writing kernel runtime args to device complete");
 
-    log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
+    log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
     tt_metal::detail::LaunchProgram(device, program);
-    log_info(LogTest, "Matmul test done");
+    log_debug(LogTest, "Matmul test done");
 
-    log_info(LogTest, "Gathering data back from dram and checking against golden");
+    log_debug(LogTest, "Gathering data back from dram and checking against golden");
 
     for(int i = 0; i < M; i++) {
         auto row = get_row_slice(golden, M, i, M * 32, N * 32);
@@ -357,7 +357,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
             pass &= (golden_tile == result_flat_layout);
         }
     }
-    log_info(LogTest, "Golden check complete");
+    log_debug(LogTest, "Golden check complete");
     return pass;
 }
 } // namespace unit_tests_common::matmul::test_matmul_multi_core

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
+from loguru import logger
 import tt_lib as ttl
 from tt_lib.utils import (
     blocked_mm_with_conv_act,
@@ -247,6 +247,6 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
     assert out_result.shape == out_golden.shape
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
-    print("Passing=", passing_pcc)
-    print("Output pcc=", output_pcc)
+    logger.debug(f"Passing={passing_pcc}")
+    logger.debug(f"Output pcc={output_pcc}")
     assert passing_pcc
