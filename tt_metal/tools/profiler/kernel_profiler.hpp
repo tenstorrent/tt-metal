@@ -23,6 +23,8 @@
 namespace kernel_profiler{
 
     extern uint32_t wIndex;
+    extern uint32_t device_function_sums[GLOBAL_SUM_COUNT];
+    extern uint64_t device_function_starts[GLOBAL_SUM_COUNT];
 
     inline __attribute__((always_inline)) void init_profiler()
     {
@@ -31,6 +33,11 @@ namespace kernel_profiler{
         wIndex = MARKER_DATA_START;
         buffer [BUFFER_END_INDEX] = wIndex;
         buffer [DROPPED_MARKER_COUNTER] = 0;
+        for (uint32_t i=0; i< GLOBAL_SUM_COUNT; i++)
+        {
+            device_function_sums[i] = 0;
+            device_function_starts[i] = 0;
+        }
 #if defined(COMPILE_FOR_BRISC)
         buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_NC);
         buffer [BUFFER_END_INDEX] = wIndex;
@@ -52,6 +59,58 @@ namespace kernel_profiler{
         buffer[BUFFER_END_INDEX] = wIndex;
         buffer[DROPPED_MARKER_COUNTER] = 0;
 #endif
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_function_sum_start(uint32_t function_id)
+    {
+#if defined(PROFILE_KERNEL)
+#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
+        uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+#else
+        uint32_t time_L = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+#endif
+
+        device_function_starts[function_id] = ((uint64_t) time_H) << 32 | time_L;
+#endif
+    }
+
+    inline __attribute__((always_inline)) void mark_function_sum_end(uint32_t function_id)
+    {
+#if defined(PROFILE_KERNEL)
+#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
+        uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+#else
+        uint32_t time_L = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+#endif
+
+        device_function_sums[function_id] += (((uint64_t) time_H) << 32 | time_L) - device_function_starts[function_id];
+#endif
+    }
+
+    inline __attribute__((always_inline)) void store_function_sums()
+    {
+#if defined(PROFILE_KERNEL)
+        volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_debug_print_buffer());
+        for (uint32_t i = 0; i < GLOBAL_SUM_COUNT; i++)
+        {
+            if (device_function_sums[i] > 0)
+            {
+                if ((wIndex + (3*TIMER_DATA_UINT32_SIZE)) < (PRINT_BUFFER_SIZE/sizeof(uint32_t))){
+                    buffer[wIndex+TIMER_ID] = i + GLOBAL_SUM_MARKER;
+                    buffer[wIndex+TIMER_VAL_L] = device_function_sums[i];
+                    buffer[wIndex+TIMER_VAL_H] = 0;
+                    wIndex += TIMER_DATA_UINT32_SIZE;
+                    buffer [BUFFER_END_INDEX] = wIndex;
+                } else {
+                    buffer [DROPPED_MARKER_COUNTER]++;
+                }
+            }
+        }
 #endif //PROFILE_KERNEL
     }
 

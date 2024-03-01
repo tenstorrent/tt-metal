@@ -14,6 +14,11 @@
 #define CC_KERNEL_MAIN_END     3U
 #define CC_MAIN_END            4U
 
+#define GLOBAL_SUM_MARKER      3000U
+#define GLOBAL_SUM_COUNT       2U
+#define CB_WAIT_FRONT_MARKER   0U
+#define CB_RESERVE_BACK_MARKER 1U
+
 namespace kernel_profiler{
 /**
  * L1 buffer structure for profiler markers

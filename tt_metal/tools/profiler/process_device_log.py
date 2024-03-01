@@ -22,6 +22,8 @@ from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 import tt_metal.tools.profiler.dummy_refresh as dummy_refresh
 
+SUM_MARKER_ID_START = 3000
+
 
 def coreCompare(core):
     if type(core) == str:
@@ -329,21 +331,44 @@ def import_device_profile_log(logPath):
                 if chipID in devicesData["devices"].keys():
                     if core in devicesData["devices"][chipID]["cores"].keys():
                         if risc in devicesData["devices"][chipID]["cores"][core]["riscs"].keys():
-                            devicesData["devices"][chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
-                                (timerID, timeData)
-                            )
+                            if timerID < SUM_MARKER_ID_START:
+                                devicesData["devices"][chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
+                                    (timerID, timeData)
+                                )
+                            else:
+                                devicesData["devices"][chipID]["cores"][core]["riscs"][risc]["durations"].append(
+                                    (timerID, timeData)
+                                )
                         else:
-                            devicesData["devices"][chipID]["cores"][core]["riscs"][risc] = {
-                                "timeseries": [(timerID, timeData)]
-                            }
+                            if timerID < SUM_MARKER_ID_START:
+                                devicesData["devices"][chipID]["cores"][core]["riscs"][risc] = {
+                                    "timeseries": [(timerID, timeData)],
+                                    "durations": [],
+                                }
+                            else:
+                                devicesData["devices"][chipID]["cores"][core]["riscs"][risc] = {
+                                    "timeseries": [],
+                                    "durations": [(timerID, timeData)],
+                                }
+
                     else:
-                        devicesData["devices"][chipID]["cores"][core] = {
-                            "riscs": {risc: {"timeseries": [(timerID, timeData)]}}
-                        }
+                        if timerID < SUM_MARKER_ID_START:
+                            devicesData["devices"][chipID]["cores"][core] = {
+                                "riscs": {risc: {"timeseries": [(timerID, timeData)], "durations": []}}
+                            }
+                        else:
+                            devicesData["devices"][chipID]["cores"][core] = {
+                                "riscs": {risc: {"durations": [(timerID, timeData)], "timeseries": []}}
+                            }
                 else:
-                    devicesData["devices"][chipID] = {
-                        "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData)]}}}}
-                    }
+                    if timerID < SUM_MARKER_ID_START:
+                        devicesData["devices"][chipID] = {
+                            "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData)], "durations": []}}}}
+                        }
+                    else:
+                        devicesData["devices"][chipID] = {
+                            "cores": {core: {"riscs": {risc: {"durations": [(timerID, timeData)], "timeseries": []}}}}
+                        }
 
             elif lineCount == 0:
                 arch, freq = extract_device_info(row)
@@ -383,9 +408,12 @@ def risc_to_core_timeseries(devicesData):
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
             tmpTimeseries = []
+            tmpDurations = []
             for risc, riscData in coreData["riscs"].items():
                 for ts in riscData["timeseries"]:
                     tmpTimeseries.append(ts + (risc,))
+                for delta in riscData["durations"]:
+                    tmpDurations.append(delta + (risc,))
 
             tmpTimeseries.sort(key=lambda x: x[1])
 
@@ -398,7 +426,7 @@ def risc_to_core_timeseries(devicesData):
                     if len(launches) > 0:
                         launches[-1].append(ts)
 
-            coreData["riscs"]["TENSIX"] = {"timeseries": tmpTimeseries, "launches": launches}
+            coreData["riscs"]["TENSIX"] = {"durations": tmpDurations, "timeseries": tmpTimeseries, "launches": launches}
 
 
 def core_to_device_timeseries(devicesData):
@@ -414,7 +442,10 @@ def core_to_device_timeseries(devicesData):
                     if risc in tmpTimeseries["riscs"].keys():
                         tmpTimeseries["riscs"][risc]["timeseries"].append(tsCore)
                     else:
-                        tmpTimeseries["riscs"][risc] = {"timeseries": [tsCore]}
+                        tmpTimeseries["riscs"][risc] = {"durations": [], "timeseries": [tsCore]}
+                for delta in riscData["durations"]:
+                    deltaCore = delta + (core,)
+                    tmpTimeseries["riscs"][risc]["durations"].append(deltaCore)
 
         for risc in tmpTimeseries["riscs"].keys():
             tmpTimeseries["riscs"][risc]["timeseries"].sort(key=lambda x: x[1])
@@ -687,6 +718,17 @@ def launch_first_last_analysis(riscData, analysis):
     return durations
 
 
+def get_duration(riscData, analysis):
+    durations = []
+    for duration in riscData["durations"]:
+        timerID, delta, risc, *metaData = duration
+        desMarker = {"risc": risc, "timerID": timerID}
+        if desMarker == analysis["marker"]:
+            durations.append(dict(durationType=timerID, diff=delta))
+
+    return durations
+
+
 def adjacent_LF_analysis(riscData, analysis):
     timeseries = riscData["timeseries"]
     durations = []
@@ -717,6 +759,8 @@ def timeseries_analysis(riscData, name, analysis):
         tmpList = session_first_last_analysis(riscData, analysis)
     elif analysis["type"] == "launch_first_last":
         tmpList = launch_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "sum":
+        tmpList = get_duration(riscData, analysis)
 
     tmpDF = pd.DataFrame(tmpList)
     tmpDict = {}
