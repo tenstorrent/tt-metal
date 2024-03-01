@@ -16,6 +16,9 @@ Table of Contents
       * [Adding post-commit tests](#adding-post-commit-tests)
       * [Running post-commit regressions](#running-post-commit-regressions)
       * [Running model performance tests](#running-model-performance-tests)
+      * [Running C++ Integration Tests (Legacy)](#running-c-integration-tests-legacy)
+      * [Running Googlegtest (gtest) C++ tests](#running-googletest-gtest-c-tests)
+      * [Running Python integration tests](#running-python-integration-tests)
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
       * [File structure and formats](#file-structure-and-formats)
@@ -225,7 +228,7 @@ make tests
 ```
 2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
 
-### Running Googlegtest (gtest) C++ tests
+### Running Googletest (gtest) C++ tests
 
 The new fangled way we run our tests is with Googletest. The way we generally
 structure our tests with this framework is to bundle it into a single
@@ -257,7 +260,7 @@ We have split our tests into the two dispatch modes for less pollution of state
 between the two. We would like to eventually enable switching between the two
 modes easily.
 
-### Python Integration Tests
+### Running Python integration tests
 
 We use pytest to run our Python-based tests. This is the general procedure for
 running such tests.

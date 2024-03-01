@@ -17,8 +17,6 @@
    * [Getting started](#getting-started)
       * [Environment setup](#environment-setup)
       * [Running example programs](#running-example-programs)
-      * [C++ Integration Tests](#c-integration-tests)
-      * [Python Integration Tests](#python-integration-tests)
    * [Documentation](#documentation)
    * [Troubleshooting and debugging tips](#troubleshooting-and-debugging-tips)
    * [Contributing](#contributing)
