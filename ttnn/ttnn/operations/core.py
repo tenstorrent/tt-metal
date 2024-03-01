@@ -863,7 +863,20 @@ def _reallocate_validate_input_tensors(operation_name, input_tensor, *args, **kw
     name="ttnn.reallocate", validate_input_tensors=_reallocate_validate_input_tensors, torch_function=_torch_identity
 )
 def reallocate(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+<<<<<<< HEAD
     return ttl.tensor.move(input_tensor)
+=======
+    def impl(input_tensor):
+        ttl_input_tensor = input_tensor.value
+        if ttnn.get_memory_config(input_tensor).is_sharded():
+            ttl_output_tensor = ttl.tensor.move_sharded(ttl_input_tensor)
+        else:
+            ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
+
+        return ttnn.Tensor(ttl_output_tensor)
+
+    return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.reallocate")(input_tensor)
+>>>>>>> 76d5a9a7f... #0: WIP
 
 
 def _load_tensor_validate_input_tensors(operation_name, file_name, *args, **kwargs):
