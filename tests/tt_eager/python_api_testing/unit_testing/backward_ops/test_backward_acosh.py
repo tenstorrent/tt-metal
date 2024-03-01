@@ -16,19 +16,19 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_asin(input_shapes, device):
+def test_bw_acosh(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
-    min_val = -1
-    max_val = 1
-    pyt_y = torch.nn.functional.hardtanh(in_data, min_val, max_val)
 
-    tt_output_tensor_on_device = tt_lib.tensor.hardtanh_bw(grad_tensor, input_tensor, min_val, max_val)
+    pyt_y = torch.acosh(in_data)
+
+    tt_output_tensor_on_device = tt_lib.tensor.acosh_bw(grad_tensor, input_tensor)
 
     in_data.retain_grad()
 
     pyt_y.backward(gradient=grad_data)
 
     golden_tensor = [in_data.grad]
+
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
