@@ -928,7 +928,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
     m_tensor.def("concat_bw", &tt::tt_metal::concat_bw,
-            py::arg("grad").noconvert(), py::arg("input_a").noconvert(), py::arg("input_b").noconvert(),  py::arg("dim") = 1, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("grad").noconvert(), py::arg("input_a").noconvert(), py::arg("input_b").noconvert(),  py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Performs backward operations for concat of ``input_a`` and ``input_b`` tensors with given ``grad``.
 
             Input tensor must have BFLOAT16 data type.
@@ -939,9 +939,27 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input_a", "Tensor addalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "Dim", "Dim value", "int", "default to 0.0f", "Yes"
+                "input_a", "Tensor concat is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Tensor concat is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "Dim", "Dim value", "int", "default to 0", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def("hardtanh_bw", &tt::tt_metal::hardtanh_bw,
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("min")= -1.0f, py::arg("max") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs backward operations for hardtanh activation function on ``input`` tensor with given ``grad``, ``min`` and ``max``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensors will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor hardtanh is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "Min", "Min value", "Float", "default to -1.0f", "Yes"
+                "Max", "Max value", "Float", "default to 1.0f", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
