@@ -37,15 +37,13 @@ def main(args):
 
 
 def build_generator(args):
-    if args.num_layers is None:
-        args.num_layers = 1
     generator = Llama.build(
         ckpt_dir=args.ckpt_dir,
         tokenizer_path=args.tokenizer_path,
         max_seq_len=args.max_seq_len,
         max_batch_size=args.max_batch_size,
         skip_model_load=args.skip_model_load,
-        n_layers=args.num_layers,
+        n_layers=1 if args.implementation == "tt" else args.num_layers,
     )
 
     if args.implementation == "tt":
