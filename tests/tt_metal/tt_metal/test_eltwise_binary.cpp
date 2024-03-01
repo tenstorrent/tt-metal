@@ -193,8 +193,16 @@ int main(int argc, char** argv) {
             //                      Validation & Teardown
             ////////////////////////////////////////////////////////////////////////////
 
-            printf ("Result_vec[0] = 0x%x", result_vec[0]);
+
+            printf ("Result_vec[0] = 0x%x\n", result_vec[0]);
             pass &= (dest_vec == result_vec);
+
+            for (int i = 0; i < dest_vec.size(); i++) {
+                if (dest_vec[i] != result_vec[i]) {
+                    printf ("Mismatch at index %d: Expected=0x%x, Got=0x%x\n", i, dest_vec[i], result_vec[i]);
+                    break;
+                }
+            }
 
             // Print the first element of the result vector
             // bfloat16 result_bf16(result_vec[0] & 0xffff);
