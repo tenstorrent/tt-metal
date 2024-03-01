@@ -13,7 +13,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import logical_ori as pt_ori
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logical_ori as tt_ori
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand_complex
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
 def run_ori_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, immediate, data_seed, device):
