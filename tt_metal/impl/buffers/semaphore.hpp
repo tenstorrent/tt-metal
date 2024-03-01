@@ -20,7 +20,13 @@ class Semaphore {
     Semaphore(
         const CoreRangeSet &core_range_set,
         uint32_t address,
-        uint32_t initial_value) : core_range_set_(core_range_set), address_(address), initial_value_(initial_value) {}
+        uint32_t initial_value) : core_range_set_(core_range_set), address_(address), initial_value_(initial_value), core_type_(CoreType::WORKER) {}
+
+    Semaphore(
+        const CoreRangeSet &core_range_set,
+        uint32_t address,
+        uint32_t initial_value,
+        CoreType core_type) : core_range_set_(core_range_set), address_(address), initial_value_(initial_value), core_type_(core_type) {}
 
     Semaphore(const Semaphore &other);
 
@@ -37,6 +43,8 @@ class Semaphore {
 
     CoreRangeSet core_range_set() const { return core_range_set_; }
 
+    CoreType core_type() const { return core_type_; }
+
     uint32_t initial_value() const { return initial_value_; }
 
     bool initialized_on_logical_core(const CoreCoord &logical_core) const;
@@ -45,6 +53,7 @@ class Semaphore {
     CoreRangeSet core_range_set_;             // Ranges of cores where this semaphore is initialized
     uint32_t address_;
     uint32_t initial_value_;              // Initial value of semaphore
+    CoreType core_type_;                       // Type of core. ETH, WORKER.
 };
 
 }  // namespace tt_metal

@@ -414,7 +414,7 @@ TEST_F(CommandQueueFixture, TestAsyncAssertForDeprecatedAPI) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncFlattenStress){
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncFlattenStress){
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);

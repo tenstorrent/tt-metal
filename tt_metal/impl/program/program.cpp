@@ -505,16 +505,16 @@ uint32_t Program::semaphore_address ( uint32_t sem_idx ) const {
     return semaphores_.at(sem_idx).address();
 }
 
-void Program::init_semaphores( const Device & device, const CoreCoord &logical_core ) const{
+void Program::init_semaphores( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const{
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(device.id(), device.worker_core_from_logical_core(logical_core), {semaphore.get().initial_value()}, semaphore.get().address());
+        llrt::write_hex_vec_to_core(device.id(), device.physical_core_from_logical_core(logical_core, core_type), {semaphore.get().initial_value()}, semaphore.get().address());
     }
 }
 
-void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value) {
+void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
-    semaphores_.emplace_back(Semaphore( crs, address, init_value));
+    semaphores_.emplace_back(Semaphore( crs, address, init_value, core_type));
 }
 
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
@@ -860,7 +860,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
     // Step 4 (Multicast): Continue constructing pages for semaphore configs, only multicast/worker cores supported
     for (const Semaphore& semaphore : program.semaphores()) {
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
+            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
 
         src = update_program_page_transfers(
             src,

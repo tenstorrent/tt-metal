@@ -32,7 +32,14 @@ FORCE_INLINE uint32_t get_command_slot_addr(bool db_buf_switch) {
 
 FORCE_INLINE
 void db_acquire(volatile uint32_t* semaphore, uint64_t noc_encoding) {
-    while (semaphore[0] == 0);
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
+    while (semaphore[0] == 0) {
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
+    };
     noc_semaphore_inc(noc_encoding | uint32_t(semaphore), -1); // Two's complement addition
     noc_async_write_barrier();
 }

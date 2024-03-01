@@ -8,7 +8,7 @@ else
 	INCLUDES = -I$(TT_METAL_HOME)/tt_metal/hw/inc/$(ARCH_NAME)
 endif
 
-hw/toolchain: $(OUTPUT_DIR)/brisc.ld $(OUTPUT_DIR)/ncrisc.ld $(OUTPUT_DIR)/trisc0.ld $(OUTPUT_DIR)/trisc1.ld $(OUTPUT_DIR)/trisc2.ld
+hw/toolchain: $(OUTPUT_DIR)/idle-erisc.ld $(OUTPUT_DIR)/brisc.ld $(OUTPUT_DIR)/ncrisc.ld $(OUTPUT_DIR)/trisc0.ld $(OUTPUT_DIR)/trisc1.ld $(OUTPUT_DIR)/trisc2.ld
 
 hw/toolchain/clean:
 	rm -rf $(OUTPUT_DIR)

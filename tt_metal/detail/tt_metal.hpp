@@ -230,9 +230,9 @@ namespace tt::tt_metal{
          * | address       | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
          * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
          */
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer)
+        inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type = CoreType::WORKER)
         {
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
             llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
             return true;
         }
@@ -355,7 +355,8 @@ namespace tt::tt_metal{
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
             const uint8_t cq_id = 0; // Currently, only the first command queue is responsible for enqueuing programs
             tt_cxy_pair enqueue_program_dispatch_core = dispatch_core_manager::get(device->num_hw_cqs()).command_dispatcher_core(device->id(), channel, cq_id);
-            CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, CoreType::WORKER);
+            CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+            CoreCoord physical_enqueue_program_dispatch_core = get_physical_core_coordinate(enqueue_program_dispatch_core, core_type);
 
             jit_build_genfiles_noc_addr_ranges_header(
                 path,

@@ -16,12 +16,14 @@ struct core_descriptor_t {
     std::vector<RelativeCoreCoord> relative_storage_cores;
     uint32_t storage_core_bank_size;
     std::vector<RelativeCoreCoord> relative_dispatch_cores;
+    CoreType dispatch_core_type;
 };
 
 inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
 
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     string tt_metal_home;
+    string wh_arch = "tt_metal/core_descriptors/wormhole_b0_80_arch.yaml";
     if (getenv("TT_METAL_HOME")) {
         tt_metal_home = getenv("TT_METAL_HOME");
     } else {
@@ -30,7 +32,10 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
     if (tt_metal_home.back() != '/') {
         tt_metal_home += "/";
     }
-
+    if (getenv("WH_ARCH_YAML")) {
+        wh_arch = "tt_metal/core_descriptors/";
+        wh_arch += getenv("WH_ARCH_YAML");
+    }
     bool targeting_versim = false;
 #ifndef TT_METAL_VERSIM_DISABLED
     targeting_versim = true;
@@ -51,7 +56,7 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
             case tt::ARCH::JAWBRIDGE: throw std::runtime_error("JAWBRIDGE arch not supported");
             case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/core_descriptors/grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/core_descriptors/wormhole_b0_80_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + wh_arch;
             default: throw std::runtime_error("Unsupported device arch");
         };
     }
@@ -139,12 +144,23 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, 
     }
     TT_ASSERT(dispatch_cores.size(), "Dispatch cores size must be positive");
 
+    auto dispatch_core_type = arch == tt::ARCH::GRAYSKULL ? "tensix" : desc_yaml["dispatch_core_type"].as<std::string>();
+    CoreType core_type;
+    if (dispatch_core_type == "tensix") {
+        core_type = CoreType::WORKER;
+    } else if (dispatch_core_type == "ethernet") {
+        core_type = CoreType::ETH;
+    } else {
+        TT_THROW("Only tensix/ethernet cores supported for dispatch_core_type");
+    }
+
     config_by_num_cqs[num_hw_cqs] = core_descriptor_t{
         .compute_grid_size = compute_grid_size,
         .relative_compute_cores = compute_cores,
         .relative_storage_cores = storage_cores,
         .storage_core_bank_size = storage_core_bank_size,
-        .relative_dispatch_cores = dispatch_cores
+        .relative_dispatch_cores = dispatch_cores,
+        .dispatch_core_type = core_type
     };
     return config_by_arch.at(arch).at(product_name).at(num_hw_cqs);
 }
@@ -196,6 +212,16 @@ inline const std::vector<CoreCoord> &get_logical_dispatch_cores(chip_id_t device
     std::transform(core_desc.relative_dispatch_cores.cbegin(), core_desc.relative_dispatch_cores.cend(), std::back_inserter(logical_dispatch_cores),
                 [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
     return logical_dispatch_cores;
+}
+
+inline const CoreType get_dispatch_core_type(chip_id_t device_id, const uint8_t num_hw_cqs) {
+    const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
+    static std::unordered_map<chip_id_t, CoreType> dispatch_core_type_by_device;
+    if (dispatch_core_type_by_device.count(device_id)) {
+        return dispatch_core_type_by_device.at(device_id);
+    }
+    dispatch_core_type_by_device[device_id] = core_desc.dispatch_core_type;
+    return core_desc.dispatch_core_type;
 }
 
 /// @brief Get physical core coordinate from a logical location (device ID + core coordinate)

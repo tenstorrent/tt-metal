@@ -41,6 +41,8 @@ inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status, uint32
 #define DEBUG_STATUS_MAILBOX_OFFSET 1
 #elif defined(COMPILE_FOR_ERISC)
 #define DEBUG_STATUS_MAILBOX_OFFSET 0
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+#define DEBUG_STATUS_MAILBOX_OFFSET 0
 #else
 #define DEBUG_STATUS_MAILBOX_OFFSET (2 + COMPILE_FOR_TRISC)
 #endif

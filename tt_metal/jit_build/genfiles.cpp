@@ -485,6 +485,10 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     ofstream file_stream_ec(path + "/erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_ec << output_string;
     file_stream_ec.close();
+    fs::create_directories(path + "/idle_erisc");
+    ofstream file_stream_iec(path + "/idle_erisc/generated_bank_to_noc_coord_mapping.h");
+    file_stream_iec << output_string;
+    file_stream_iec.close();
 }
 
 static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {
@@ -625,6 +629,11 @@ void jit_build_genfiles_noc_addr_ranges_header(
     ofstream file_stream_er(path + "/erisc/noc_addr_ranges_gen.h");
     file_stream_er << output_string;
     file_stream_er.close();
+
+    fs::create_directories(path + "/idle_erisc");
+    ofstream file_stream_ier(path + "/idle_erisc/noc_addr_ranges_gen.h");
+    file_stream_ier << output_string;
+    file_stream_ier.close();
 }
 
 } // namespace tt::tt_metal

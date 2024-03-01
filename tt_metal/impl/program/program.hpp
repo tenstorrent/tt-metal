@@ -95,7 +95,7 @@ class Program {
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
     uint32_t semaphore_address ( uint32_t sem_index ) const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core ) const;
+    void init_semaphores ( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const;
     std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores() const;
 
     // Is worker_crs_ used anywhere?
@@ -174,14 +174,14 @@ class Program {
     friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
-    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
+    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
     KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
-    void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
+    void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device) const;

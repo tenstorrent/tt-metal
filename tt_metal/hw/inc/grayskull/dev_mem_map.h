@@ -44,6 +44,7 @@
 #define MEM_BOOT_CODE_SIZE             4
 #define MEM_BRISC_FIRMWARE_SIZE        (10 * 1024)
 #define MEM_NCRISC_FIRMWARE_SIZE       (16 * 1024)
+#define MEM_IERISC_FIRMWARE_SIZE       (0)
 #define MEM_TRISC0_SIZE                (16 * 1024)
 #define MEM_TRISC1_SIZE                (16 * 1024)
 #define MEM_TRISC2_SIZE                (16 * 1024)
@@ -52,9 +53,12 @@
 #define MEM_BOOT_CODE_BASE             0
 #define MEM_MAILBOX_BASE               20
 #define MEM_MAILBOX_END                (MEM_MAILBOX_BASE + 128)
+#define MEM_IERISC_MAILBOX_BASE        0
+#define MEM_IERISC_MAILBOX_END         0
 #define MEM_ZEROS_BASE                 2048
 #define MEM_BRISC_FIRMWARE_BASE        (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 #define MEM_NCRISC_FIRMWARE_BASE       MEM_NCRISC_IRAM_BASE
+#define MEM_IERISC_FIRMWARE_BASE       0
 #define MEM_TRISC0_BASE                (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
 #define MEM_TRISC1_BASE                (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)
 #define MEM_TRISC2_BASE                (MEM_TRISC1_BASE + MEM_TRISC1_SIZE)
@@ -74,6 +78,8 @@
 #define MEM_TRISC2_INIT_LOCAL_L1_BASE     (MEM_TRISC1_INIT_LOCAL_L1_BASE + MEM_TRISC_LOCAL_SIZE)
 
 #define MEM_NCRISC_INIT_IRAM_L1_BASE      (MEM_TRISC2_INIT_LOCAL_L1_BASE + MEM_TRISC_LOCAL_SIZE)
+
+#define MEM_IERISC_INIT_LOCAL_L1_BASE     0
 
 /////////////
 // Stack info

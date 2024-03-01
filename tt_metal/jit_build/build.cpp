@@ -310,48 +310,83 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
 
 JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw)
 {
-    this->target_name_ = "erisc";
-
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
-    this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
-
-    this->defines_ = env_.defines_ +
-        "-DCOMPILE_FOR_ERISC "
-        "-DERISC "
-        "-DRISC_B0_HW ";
-    if (this->is_fw_) {
-        this->defines_ += "-DLOADING_NOC=0 ";
-    }
-
     this->includes_ = env_.includes_ +
-        "-I " + env_.root_ + "tt_metal/hw/inc/ethernet " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
-    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
-    if (this->is_fw_) {
-        this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
-        this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
-    } else {
-        this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
-        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
-    }
+    this->defines_ = env_.defines_;
 
-    string linker_str;
-    if (this->is_fw_) {
-        linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
-    } else {
-        linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
-    }
-    this->lflags_ = env_.lflags_ +
-                    "-Os "
-                    "-L" +
-                    env_.root_ +
-                    "/tt_metal/hw/toolchain "
-                    "-T" +
-                    env_.root_ + linker_str;
+    switch (this->core_id_) {
+    case 0:
+    {
+        this->target_name_ = "erisc";
+        this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
 
+        this->defines_ +=
+            "-DCOMPILE_FOR_ERISC "
+            "-DERISC "
+            "-DRISC_B0_HW ";
+        if (this->is_fw_) {
+            this->defines_ += "-DLOADING_NOC=0 ";
+        }
+
+        this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
+
+        this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+        if (this->is_fw_) {
+            this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
+            this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
+        } else {
+            this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+        }
+
+        string linker_str;
+        if (this->is_fw_) {
+            linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+        } else {
+            linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
+        }
+        this->lflags_ = env_.lflags_ +
+                        "-Os "
+                        "-L" +
+                        env_.root_ +
+                        "/tt_metal/hw/toolchain "
+                        "-T" +
+                        env_.root_ + linker_str;
+        break;
+    }
+    case 1:
+        this->target_name_ = "idle_erisc";
+        this->cflags_ = env_.cflags_ +
+            "-Os " +
+            "-fno-tree-loop-distribute-patterns "; // don't use memcpy for cpy loops
+
+        this->defines_ += "-DCOMPILE_FOR_IDLE_ERISC "
+                    "-DERISC "
+                    "-DRISC_B0_HW ";
+
+        this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
+        // TODO(pgk): build these once at init into built/libs!
+        this->srcs_.push_back("tt_metal/hw/firmware/src/risc_common.cc");
+        this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+        this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
+        if (this->is_fw_) {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisc.cc");
+        } else {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+        }
+        this->lflags_ = env_.lflags_ + "-Os ";
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/idle-erisc.ld ";
+        break;
+    }
     this->process_defines_at_compile = true;
 
     finish_init();
