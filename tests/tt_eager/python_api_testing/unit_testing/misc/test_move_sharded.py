@@ -7,9 +7,7 @@ from loguru import logger
 
 
 import tt_lib as ttl
-from models.utility_functions import (
-    comp_pcc,
-)
+from models.utility_functions import comp_pcc, skip_for_wormhole_b0
 import torch
 
 shapes = [
@@ -17,6 +15,7 @@ shapes = [
 ]
 
 
+@skip_for_wormhole_b0("disabled due to watcher error, see issue #5863")
 @pytest.mark.parametrize("shape", shapes)
 def test_move_op(shape, device):
     run_move_op(shape, device)
