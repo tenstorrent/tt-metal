@@ -5,6 +5,7 @@
 import torch
 import pytest
 from loguru import logger
+from pathlib import Path
 
 import tt_lib
 
@@ -75,24 +76,21 @@ def run_test_LlamaAttention_inference(
     batch,
     seq_len,
     pcc,
-    model_config,
     optimized,
+    model_config,
     n_devices,
-    emulated=False
-    # tt_cache_path,
-    # model_location_generator,
+    emulated=False,
 ):
-    # model_name = model_location_generator(model_version, model_subdir="Falcon")
-
     if emulated:
         ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
         ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/home/llama-data/tokenizer.model"
-
+        cache_path = Path("/home/llama-data-cache/weights-cache")
     max_seq_len = 4096
     hugging_face_reference_model = Llama.build(
         ckpt_dir, tokenizer_path, max_seq_len=max_seq_len, max_batch_size=batch, n_layers=1, skip_model_load=False
@@ -100,8 +98,6 @@ def run_test_LlamaAttention_inference(
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
     print(state_dict.keys())
-
-    # devices = [device for _ in range(n_devices)]
 
     # Prepare configs
     torch.manual_seed(0)
@@ -113,17 +109,31 @@ def run_test_LlamaAttention_inference(
     hidden_dim = configuration.dim
     head_dim = hidden_dim // n_heads
 
+    print(f"Running optimized: {optimized}")
+    print(f"Running emulated: {emulated}")
+
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     # TT model -------------------------------------------------------------
     if optimized:
         tt_LlamaAttention_model = TtLlamaAttention_optimized(
-            devices, state_dict, base_url, layer_num, model_config, configuration, emulated=emulated
+            devices,
+            state_dict,
+            base_url,
+            layer_num,
+            model_config,
+            configuration,
+            emulated=emulated,
+            cache_path=cache_path,
         )
     else:
         tt_LlamaAttention_model = TtLlamaAttention(
             devices, state_dict, base_url, layer_num, model_config, configuration
         )
+
+    if not emulated:
+        for device in devices:
+            tt_lib.device.Synchronize(device)
 
     generation_start_pos = 120
     generation_length = 20
@@ -216,33 +226,39 @@ def run_test_LlamaAttention_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc, optimized, n_devices, emulated",
-    (("llama-2-70B", 32, 1, 0.98, True, 4, False), ("llama-2-70B", 32, 1, 0.98, True, 4, True)),
+    "batch, seq_len, pcc, optimized, n_devices, emulated",
+    (
+        (32, 1, 0.98, True, 4, False),
+        (32, 1, 0.98, True, 8, False),
+        (32, 1, 0.98, True, 4, True),
+        (32, 1, 0.98, True, 8, True),
+    ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_LlamaAttention_inference(
-    model_version,
     batch,
     seq_len,
     pcc,
-    model_config_str,
     optimized,
+    model_config_str,
     n_devices,
     pcie_devices,
     emulated,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
-    # tt_cache_path = get_tt_cache_path(model_version)
+    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if len(pcie_devices) < n_devices and not emulated:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaAttention_inference(
         pcie_devices[:n_devices],
         batch,
         seq_len,
         pcc,
-        model_config,
         optimized,
+        model_config,
         n_devices,
-        # tt_cache_path,
-        # model_location_generator,
         emulated=emulated,
     )

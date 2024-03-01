@@ -45,11 +45,15 @@ def run_cache_model(
     if emulated:
         ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
         ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/home/llama-data/tokenizer.model"
+        cache_path = Path("/home/llama-data-cache/weights-cache")
+
+    print(f"Running emulated: {emulated}")
 
     max_seq_len = 4096
 
@@ -89,7 +93,6 @@ def run_cache_model(
         hidden_dim = configuration.dim
         head_dim = hidden_dim // n_heads
 
-        CACHE_PATH = Path("/home/llama-data-cache/weights-cache-2")
         # TT model -------------------------------------------------------------
         # Create TT model which caches weights as it inits
         tt_model = TtLlamaModel_optimized(
@@ -100,7 +103,7 @@ def run_cache_model(
             model_config,
             configuration,
             batch,
-            cache_path=CACHE_PATH,
+            cache_path=cache_path,
             emulated=emulated,
             start_layer_idx=start_layer_idx,
         )
@@ -120,8 +123,11 @@ def run_cache_model(
     ((32, 1, 4, 4),),
 )
 @pytest.mark.parametrize(
-    "model_version, pcc, optimized",
-    (("llama-2-70B", 0.98, True),),
+    "model_version, pcc, optimized, emulated",
+    (
+        ("llama-2-70B", 0.98, True, True),
+        ("llama-2-70B", 0.98, True, False),
+    ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_cache_model(
@@ -133,13 +139,13 @@ def test_cache_model(
     optimized,
     n_layers,
     n_devices,
-    # model_location_generator,
     pcie_devices,
+    emulated,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     # tt_cache_path = get_tt_cache_path(model_version)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < n_devices:
+    if len(pcie_devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -152,7 +158,6 @@ def test_cache_model(
         model_config,
         optimized,
         n_layers,
-        n_devices
-        # tt_cache_path,
-        # model_location_generator,
+        n_devices,
+        emulated,
     )

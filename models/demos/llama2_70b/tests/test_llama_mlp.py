@@ -5,6 +5,7 @@
 import torch
 import pytest
 from loguru import logger
+from pathlib import Path
 
 import tt_lib
 from models.demos.llama2_70b.reference.llama import Llama
@@ -44,18 +45,17 @@ def run_test_LlamaMLP_inference(
     optimized,
     n_devices,
     emulated=False,
-    # tt_cache_path,
-    # model_location_generator,
 ):
-    # model_name = model_location_generator(model_version, model_subdir="Llama2")
     if emulated:
         ckpt_dir = "/proj_sw/user_dev/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/proj_sw/user_dev/llama-data/tokenizer.model"
+        cache_path = Path("/proj_sw/user_dev/llama-data-cache/weights-cache")
         device = devices[0]
         devices = [device for _ in range(n_devices)]  # Emulate fracturing on N chips
     else:
         ckpt_dir = "/home/llama-data-repacked-2/llama-2-70b/"
         tokenizer_path = "/home/llama-data/tokenizer.model"
+        cache_path = Path("/home/llama-data-cache/weights-cache")
 
     hugging_face_reference_model = Llama.build(
         ckpt_dir, tokenizer_path, seq_len, batch, n_layers=1, skip_model_load=False
@@ -84,6 +84,7 @@ def run_test_LlamaMLP_inference(
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     print(f"Compute grid size: {compute_grid_size}")
     print(f"Running optimized: {optimized}")
+    print(f"Running emulated: {emulated}")
 
     if optimized:
         # TT hardware execution -------------------------------------------------------------
@@ -94,6 +95,8 @@ def run_test_LlamaMLP_inference(
             layer_num,
             configuration.dim,
             model_config,
+            emulated=emulated,
+            cache_path=cache_path,
         )
         # Put input sharded in L1
         tt_mlp_input = [
@@ -132,12 +135,16 @@ def run_test_LlamaMLP_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc, optimized, n_devices",
+    "model_version, batch, seq_len, pcc, optimized, n_devices, emulated",
     (
-        ("llama-2-70B", 32, 1, 0.98, False, 8),
-        ("llama-2-70B", 32, 1, 0.98, True, 8),
-        ("llama-2-70B", 32, 1, 0.98, False, 4),
-        ("llama-2-70B", 32, 1, 0.98, True, 4),
+        ("llama-2-70B", 32, 1, 0.98, False, 8, True),
+        ("llama-2-70B", 32, 1, 0.98, True, 8, True),
+        ("llama-2-70B", 32, 1, 0.98, False, 4, True),
+        ("llama-2-70B", 32, 1, 0.98, True, 4, True),
+        ("llama-2-70B", 32, 1, 0.98, False, 8, False),
+        ("llama-2-70B", 32, 1, 0.98, True, 8, False),
+        ("llama-2-70B", 32, 1, 0.98, False, 4, False),
+        ("llama-2-70B", 32, 1, 0.98, True, 4, False),
     ),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
@@ -149,12 +156,12 @@ def test_LlamaMLP_inference(
     optimized,
     model_config_str,
     n_devices,
-    # model_location_generator,
     pcie_devices,
+    emulated,
 ):
     model_config = get_model_config(model_config_str, num_devices=n_devices)
     compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < n_devices:
+    if len(pcie_devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -167,7 +174,6 @@ def test_LlamaMLP_inference(
         pcc,
         model_config,
         optimized,
-        n_devices
-        # tt_cache_path,
-        # model_location_generator,
+        n_devices,
+        emulated,
     )
