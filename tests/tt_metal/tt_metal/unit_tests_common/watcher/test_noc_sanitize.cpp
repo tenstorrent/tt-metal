@@ -60,9 +60,9 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0
-            }
+        tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_0
+        }
     );
     } else {
     dram_copy_kernel = tt_metal::CreateKernel(
