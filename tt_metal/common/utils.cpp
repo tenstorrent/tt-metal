@@ -48,7 +48,7 @@ namespace utils
     const std::string& get_reports_dir() {
         static std::string outpath;
         if (outpath == "") {
-            outpath = tt::llrt::OptionsG.get_root_dir() + "/.reports/";
+            outpath = tt::llrt::OptionsG.get_root_dir() + "/generated/reports/";
         }
         return outpath;
     }
