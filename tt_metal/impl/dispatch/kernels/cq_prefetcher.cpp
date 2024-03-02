@@ -116,7 +116,7 @@ void kernel_main() {
     volatile db_cb_config_t* local_dispatch_multicore_cb_cfg = get_local_db_cb_config(CQ_DISPATCHER_CB_CONFIG_BASE);
     volatile db_cb_config_t* dispatch_multicore_cb_cfg = get_remote_db_cb_config(CQ_CONSUMER_CB_BASE);
 
-    constexpr uint32_t dispatch_cb_num_pages = (MEM_L1_SIZE - L1_UNRESERVED_BASE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * 2) / DeviceCommand::PROGRAM_PAGE_SIZE / 4 * 4;
+    constexpr uint32_t dispatch_cb_num_pages = (MEM_L1_SIZE - L1_UNRESERVED_BASE - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND * 2) / DeviceCommand::PROGRAM_PAGE_SIZE / DeviceCommand::SYNC_NUM_PAGES * DeviceCommand::SYNC_NUM_PAGES;
     constexpr uint32_t dispatch_cb_size = dispatch_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
     if constexpr (pull_and_push_config == tt::PullAndPushConfig::LOCAL or pull_and_push_config == tt::PullAndPushConfig::REMOTE_PULL_AND_PUSH) {
