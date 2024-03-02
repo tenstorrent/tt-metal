@@ -67,8 +67,14 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
 
     uint32_t num_cores = this->buffer.num_cores();
     uint32_t shard_size = this->buffer.shard_spec().size();
-    // TODO: for now all shards are same size of pages
-    vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
+
+    auto core_host_page_indices = this->buffer.core_host_page_indices();
+    vector<uint32_t> num_pages_in_shards;
+    num_pages_in_shards.reserve(num_cores);
+    for(size_t core_id = 0; core_id < num_cores; core_id++) {
+        num_pages_in_shards.push_back(core_host_page_indices[core_id].size());
+    }
+
     vector<uint32_t> core_id_x;
     core_id_x.reserve(num_cores);
     vector<uint32_t> core_id_y;
@@ -243,8 +249,14 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
 
     uint32_t num_cores = this->buffer.num_cores();
     uint32_t shard_size = this->buffer.shard_spec().size();
-    // TODO: for now all shards are same size of pages
-    vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
+
+    auto core_host_page_indices = this->buffer.core_host_page_indices();
+    vector<uint32_t> num_pages_in_shards;
+    num_pages_in_shards.reserve(num_cores);
+    for(size_t core_id = 0; core_id < num_cores; core_id++) {
+        num_pages_in_shards.push_back(core_host_page_indices[core_id].size());
+    }
+
     vector<uint32_t> core_id_x;
     core_id_x.reserve(num_cores);
     vector<uint32_t> core_id_y;

@@ -10,6 +10,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/math.hpp"
 #include <map>
 #include <optional>
 
@@ -225,7 +226,7 @@ class Buffer {
             return 1;
         else{
             auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = num_pages/this->shard_spec().size();
+            auto shards_for_compute = div_up(num_pages,this->shard_spec().size());
             return shards_for_compute;
         }
     }
