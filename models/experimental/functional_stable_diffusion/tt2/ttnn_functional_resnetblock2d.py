@@ -69,6 +69,7 @@ config_override = {
     (640, 1280, 32, 32): {"act_block_h": 32},
     (1280, 1920, 16, 16): {"act_block_h": 32},
     (1280, 1280, 32, 32): {"act_block_h": 32},
+    (1280, 1280, 16, 16): {"act_block_h": 32, "grid_size": (8, 8)},
     (320, 960, 64, 64): {"act_block_h": 32},
     (640, 960, 32, 32): {"act_block_h": 32},
     (320, 640, 64, 64): {"act_block_h": 32},
@@ -114,6 +115,8 @@ class resnetBlock2D:
         if (out_channels, in_channels, input_height, input_width) in split_chunks:
             conv1_split_chunks = split_chunks[(out_channels, in_channels, input_height, input_width)]
         split_input_channels = in_channels // conv1_split_chunks
+        if conv1_split_chunks > 1:
+            print(f"Splitting: {(out_channels, in_channels, input_height, input_width)} into: {conv1_split_chunks}")
         if conv1_split_chunks == 1:
             split_weight_tensors = [parameters.conv1.weight]
         else:
@@ -343,7 +346,7 @@ class resnetBlock2D:
                 )
                 output_tensor_start_width_dim += split_input_channels
                 output_tensor_end_width_dim += split_input_channels
-            hidden_states = split_hidden_states
+            # hidden_states = split_hidden_states
         if conv1_split_chunks == 1:
             if self.group_norm_on_device:
                 # breakpoint()
@@ -353,11 +356,12 @@ class resnetBlock2D:
             # breakpoint()
         else:
             for i in range(conv1_split_chunks):
-                hidden_states[i] = self.conv1s[i](hidden_states[i])
+                split_hidden_states[i] = self.conv1s[i](split_hidden_states[i])
                 if i != 0:
-                    hidden_states[i] = ttnn.add(hidden_states[i], hidden_states[i - 1])
-                    ttnn.deallocate(hidden_states[i - 1])
-            hidden_states = hidden_states[-1]
+                    split_hidden_states[i] = ttnn.add(split_hidden_states[i], split_hidden_states[i - 1])
+                    ttnn.deallocate(split_hidden_states[i - 1])
+            hidden_states = split_hidden_states[-1]
+            ttnn.deallocate(split_hidden_states[-1])
 
         # split_hidden_states = []
         # breakpoint()
@@ -477,6 +481,7 @@ class resnetBlock2D:
         output_tensor = ttnn.add(input_tensor, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if output_scale_factor != 1.0:
+            assert False  # Do we need this?
             output_sc_recip = 1 / output_scale_factor
             output_sc_recip = ttnn.from_torch(
                 torch.full([1, 1, 1, 1], output_sc_recip), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b

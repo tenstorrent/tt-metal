@@ -59,7 +59,7 @@ class upblock_2d:
                     res_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
                 )
 
-            hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=1)
+            hidden_states = ttnn.concat([hidden_states, on_dev_res_hidden_states], dim=2)
             hidden_states = resnet(
                 hidden_states,
                 temb=temb,

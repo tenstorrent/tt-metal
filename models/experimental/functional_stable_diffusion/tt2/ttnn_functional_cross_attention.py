@@ -174,10 +174,6 @@ class cross_attention:
                 num_heads=heads,
             )
             ttnn.deallocate(qkv_out)
-            # if query.shape[2] == 4096:
-            #     query = ttnn.reallocate(query)
-            #     key = ttnn.reallocate(key)
-            #     value = ttnn.reallocate(value)
         else:
             hidden_seq_len = hidden_states.shape.with_tile_padding()[-2]
             encoder_hidden_seq_len = encoder_hidden_states.shape.with_tile_padding()[-2]
