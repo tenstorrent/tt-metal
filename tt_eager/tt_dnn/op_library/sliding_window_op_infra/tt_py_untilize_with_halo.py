@@ -89,6 +89,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
         shard_shape = [
             math.ceil((shape[0] * shape[1] * shape[2]) / self.sliding_window_op_params.num_cores_nhw),
             (((shape[3] + 31) // 32) * 32) // logical_grid_y,
+            # shape[3] // logical_grid_y,
         ]
         shard_orientation = (
             ttl.tensor.ShardOrientation.COL_MAJOR if block_sharding else ttl.tensor.ShardOrientation.ROW_MAJOR
