@@ -9,7 +9,7 @@ namespace tt::tt_metal {
 namespace detail {
 
 inline const std::string &metal_reports_dir() {
-    static const std::string reports_path = tt::utils::get_reports_dir() + "tt_metal/";
+    static const std::string reports_path = tt::utils::get_reports_dir();
     return reports_path;
 }
 
