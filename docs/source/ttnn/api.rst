@@ -10,6 +10,7 @@ Device
    ttnn/open_device
    ttnn/close_device
    ttnn/manage_device
+   ttnn/synchronize_device
 
 Memory Config
 *************
