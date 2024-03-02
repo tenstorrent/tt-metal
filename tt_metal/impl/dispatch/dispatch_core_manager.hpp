@@ -57,10 +57,13 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.issue_queue_reader = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
-        if (mmio_device_id == device_id) {
-            // For MMIO devices completion queue core is same as command dispatcher core
-            TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Completion queue writer core must match issue queue reader core for MMIO device {}", device_id);
-            assignment.completion_queue_writer = assignment.issue_queue_reader;
+
+        if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
+            if (mmio_device_id == device_id) {
+                // For MMIO devices completion queue core is same as command dispatcher core
+                TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Completion queue writer core must match issue queue reader core for MMIO device {}", device_id);
+                assignment.completion_queue_writer = assignment.issue_queue_reader;
+            }
         }
         return assignment.issue_queue_reader.value();
     }
@@ -83,9 +86,14 @@ class dispatch_core_manager {
         CoreCoord completion_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.completion_queue_writer = tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
         if (mmio_device_id == device_id) {
-            // For MMIO devices completion queue core is same as command dispatcher core
-            TT_ASSERT(not assignment.issue_queue_reader.has_value(), "Issue queue reader core {} must match completion queue interface core for MMIO device {}", assignment.issue_queue_reader.value().str(), device_id);
-            assignment.issue_queue_reader = assignment.completion_queue_writer;
+            if (tt::Cluster::instance().arch() == tt::ARCH::WORMHOLE_B0) {
+                // For MMIO devices with FD v1.3 completion queue core is same as issue queue core
+                TT_ASSERT(not assignment.issue_queue_reader.has_value(), "Issue queue reader core {} must match completion queue interface core for MMIO device {}", assignment.issue_queue_reader.value().str(), device_id);
+                assignment.issue_queue_reader = assignment.completion_queue_writer;
+            } else if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+                TT_ASSERT(not assignment.command_dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.command_dispatcher.value().str(), device_id);
+                assignment.command_dispatcher = assignment.completion_queue_writer;
+            }
         }
         return assignment.completion_queue_writer.value();
     }
@@ -103,6 +111,10 @@ class dispatch_core_manager {
         CoreCoord command_dispatcher_coord = this->get_next_available_dispatch_core(device_id);
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         assignment.command_dispatcher = tt_cxy_pair(device_id, command_dispatcher_coord.x, command_dispatcher_coord.y);
+        if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+            TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
+            assignment.completion_queue_writer = assignment.command_dispatcher;
+        }
         return assignment.command_dispatcher.value();
     }
 

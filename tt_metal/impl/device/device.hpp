@@ -189,6 +189,7 @@ class Device {
     void initialize_command_queue();
     void initialize_synchronous_sw_cmd_queue();
     void compile_command_queue_programs();
+    void compile_command_queue_programs_for_grayskull();
     void configure_command_queue_programs();
     void clear_l1_state();
 

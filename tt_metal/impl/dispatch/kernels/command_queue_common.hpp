@@ -26,7 +26,7 @@ static constexpr uint32_t CQ_DISPATCHER_CB_CONFIG_BASE = CQ_CONSUMER_CB_BASE + l
 template <uint32_t cmd_base_address, uint32_t data_buffer_size>
 FORCE_INLINE uint32_t get_command_slot_addr(bool db_buf_switch) {
     static constexpr uint32_t command0_start = cmd_base_address;
-    static constexpr uint32_t command1_start = cmd_base_address + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    static constexpr uint32_t command1_start = cmd_base_address + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND  + data_buffer_size;
     return (not db_buf_switch) ? command0_start : command1_start;
 }
 
@@ -38,27 +38,30 @@ void db_acquire(volatile uint32_t* semaphore, uint64_t noc_encoding) {
 }
 
 // Local refers to the core that is calling this function
-tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr) {
+tt_l1_ptr db_cb_config_t* get_local_db_cb_config(uint32_t base_addr, bool db_buf_switch = false) {
     // TODO: remove multiply here
-    // db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
-    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr);
+    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
     return db_cb_config;
 }
 
 // Remote refers to any other core on the same chip
-tt_l1_ptr db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr) {
+tt_l1_ptr db_cb_config_t* get_remote_db_cb_config(uint32_t base_addr, bool db_buf_switch = false) {
     // TODO: remove multiply here
-    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr);
+    db_cb_config_t* db_cb_config = (db_cb_config_t*)(base_addr + (db_buf_switch * l1_db_cb_addr_offset));
     return db_cb_config;
 }
 
-
-template <SyncCBConfigRegion cb_config_region>
-FORCE_INLINE uint32_t get_cb_start_address() {
+// For FD v1.3 there is only one circular buffer for data
+template <SyncCBConfigRegion cb_config_region, uint32_t data_buffer_size = 0>
+FORCE_INLINE uint32_t get_cb_start_address(bool db_buf_switch) {
     if constexpr (cb_config_region == SyncCBConfigRegion::ROUTER_ISSUE) {
         return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     } else if constexpr (cb_config_region == SyncCBConfigRegion::ROUTER_COMPLETION) {
         return eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE +  eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+    } else if constexpr (cb_config_region == SyncCBConfigRegion::DB_TENSIX) {
+        static constexpr uint32_t buf0_start = L1_UNRESERVED_BASE + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        static constexpr uint32_t buf1_start = buf0_start + data_buffer_size + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+        return (not db_buf_switch) ? buf0_start : buf1_start;
     } else {
         return L1_UNRESERVED_BASE + 2 * DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     }

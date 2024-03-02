@@ -255,7 +255,10 @@ TEST_F(N300DeviceFixture, RandomDirectSendTests) {
         CoreCoord sender_core = std::get<1>(it->first);
         const auto& receiver_chip = devices_.at(std::get<0>(it->second));
         CoreCoord receiver_core = std::get<1>(it->second);
-        int num_words = rand() % MAX_NUM_WORDS + 1;
+        int num_words = 0;
+        if constexpr (MAX_NUM_WORDS != 0) {
+            num_words = rand() % MAX_NUM_WORDS + 1;
+        }
 
         ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
             send_chip, receiver_chip, sender_core, receiver_core, WORD_SIZE * num_words));

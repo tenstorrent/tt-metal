@@ -109,8 +109,8 @@ void reset_dispatch_message_addr() {
     *message_addr_ptr = 0;
 }
 
-FORCE_INLINE
-void write_and_launch_program(
+template <bool use_static_program_cb = false>
+FORCE_INLINE void write_and_launch_program(
     db_cb_config_t* db_cb_config,
     const db_cb_config_t* remote_db_cb_config,
     const CommandHeader* header,
@@ -120,8 +120,7 @@ void write_and_launch_program(
     uint32_t l1_consumer_fifo_limit) {
 
     uint32_t global_page_idx = 0;
-
-
+    uint32_t aligned_global_page_idx = 0;
     for (uint32_t transfer_type_idx = 0; transfer_type_idx < (uint32_t) DeviceCommand::TransferType::NUM_TRANSFER_TYPES; transfer_type_idx++) {
         uint32_t num_pages_in_transfer;
         bool multicast = true;
@@ -130,7 +129,7 @@ void write_and_launch_program(
             case (uint32_t) DeviceCommand::TransferType::RUNTIME_ARGS:
                 multicast = false;
                 num_pages_in_transfer = header->num_runtime_arg_pages;
-                DPRINT << "NUM RUNTIME ARG PAGES: " << num_pages_in_transfer << ENDL();
+                // DPRINT << "NUM RUNTIME ARG PAGES: " << num_pages_in_transfer << ENDL();
                 break;
             case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
                 num_pages_in_transfer = header->num_cb_config_pages;
@@ -163,18 +162,18 @@ void write_and_launch_program(
     }
 
     // Snapping
-    uint32_t aligned_global_page_idx = align(global_page_idx, producer_consumer_transfer_num_pages);
-    if (global_page_idx != aligned_global_page_idx) {
-        multicore_cb_pop_front(
-            db_cb_config,
-            remote_db_cb_config,
-            producer_noc_encoding,
-            (l1_consumer_fifo_limit >> 4),
-            aligned_global_page_idx - global_page_idx,
-            (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
+    if constexpr (use_static_program_cb) {
+        aligned_global_page_idx = align(global_page_idx, producer_consumer_transfer_num_pages);
+        if (global_page_idx != aligned_global_page_idx) {
+            multicore_cb_pop_front(
+                db_cb_config,
+                remote_db_cb_config,
+                producer_noc_encoding,
+                (l1_consumer_fifo_limit >> 4),
+                aligned_global_page_idx - global_page_idx,
+                (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
+        }
     }
-
-    uint32_t debug_ptr = db_cb_config->rd_ptr_16B << 4;
 
     global_page_idx = 0;
     for (uint32_t transfer_type_idx = 0; transfer_type_idx < (uint32_t) DeviceCommand::TransferType::NUM_TRANSFER_TYPES; transfer_type_idx++) {
@@ -223,15 +222,17 @@ void write_and_launch_program(
         }
     }
 
-    aligned_global_page_idx = align(global_page_idx, producer_consumer_transfer_num_pages);
-    if (global_page_idx != aligned_global_page_idx) {
-        multicore_cb_pop_front(
-            db_cb_config,
-            remote_db_cb_config,
-            producer_noc_encoding,
-            (l1_consumer_fifo_limit >> 4),
-            aligned_global_page_idx - global_page_idx,
-            (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
+    if constexpr (use_static_program_cb) {
+        aligned_global_page_idx = align(global_page_idx, producer_consumer_transfer_num_pages);
+        if (global_page_idx != aligned_global_page_idx) {
+            multicore_cb_pop_front(
+                db_cb_config,
+                remote_db_cb_config,
+                producer_noc_encoding,
+                (l1_consumer_fifo_limit >> 4),
+                aligned_global_page_idx - global_page_idx,
+                (DeviceCommand::PROGRAM_PAGE_SIZE >> 4));
+        }
     }
 }
 
@@ -245,10 +246,10 @@ FORCE_INLINE void wait_for_program_completion(uint32_t num_workers) {
     volatile tt_l1_ptr uint32_t* message_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
 
-    DPRINT << "WAIT FOR PROG COMPLETION" << ENDL();
+    // DPRINT << "WAIT FOR PROG COMPLETION" << ENDL();
     while (*message_addr_ptr != num_workers)
         ;
-    DPRINT << "DONE PROGRAM" << ENDL();
+    // DPRINT << "DONE PROGRAM" << ENDL();
 
 
     DEBUG_STATUS('Q', 'D');

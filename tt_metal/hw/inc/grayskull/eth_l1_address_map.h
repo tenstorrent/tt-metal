@@ -34,5 +34,8 @@ struct address_map {
 
   static constexpr std::int32_t ERISC_BARRIER_BASE = 0;
   static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1;
+
+  static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = 0;
+  static constexpr std::int32_t ERISC_L1_TUNNEL_BUFFER_SIZE = 0;
 };
 }  // namespace llk

@@ -121,9 +121,10 @@ struct eth_word_t {
 };
 
 enum class SyncCBConfigRegion: uint8_t {
-    TENSIX = 0,
-    ROUTER_ISSUE = 1,
-    ROUTER_COMPLETION = 2,
+    DB_TENSIX = 0,
+    TENSIX = 1,
+    ROUTER_ISSUE = 2,
+    ROUTER_COMPLETION = 3,
 };
 
 struct routing_info_t {

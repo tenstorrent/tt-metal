@@ -21,7 +21,7 @@ void kernel_main() {
     uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
     while (true) {
         // Wait for producer to supply a command
-        uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, consumer_data_buffer_size>(db_buf_switch);
+        uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, 0>(db_buf_switch);
         uint32_t program_transfer_start_addr = command_start_addr + ((DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER + DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
         volatile tt_l1_ptr CommandHeader* header = (CommandHeader*)command_ptr;
@@ -34,8 +34,8 @@ void kernel_main() {
         uint32_t completion_data_size = header->completion_data_size;
         reset_dispatch_message_addr();
         // DPRINT << "Dispatcher got program" << ENDL();
-        DPRINT << "LAUNCH PROGRAM" << ENDL();
-        write_and_launch_program(
+        // DPRINT << "LAUNCH PROGRAM" << ENDL();
+        write_and_launch_program<true>(
             db_cb_config,
             remote_db_cb_config,
             (CommandHeader*)command_ptr,
@@ -44,9 +44,9 @@ void kernel_main() {
             program_transfer_num_pages,
             l1_consumer_fifo_limit);
         // DPRINT << "Dispatcher launched program" << ENDL();
-        DPRINT << "WAIT FOR PROGRAM" << ENDL();
+        // DPRINT << "WAIT FOR PROGRAM" << ENDL();
         wait_for_program_completion(num_workers);
-        DPRINT << "DONE WAIT" << ENDL();
+        // DPRINT << "DONE WAIT" << ENDL();
         // DPRINT << "Dispatcher done program" << ENDL();
 
         // notify producer that it has completed a command

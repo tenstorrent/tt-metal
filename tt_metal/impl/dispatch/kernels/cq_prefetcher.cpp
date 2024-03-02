@@ -230,7 +230,7 @@ void kernel_main() {
             wait_consumer_space_available(dispatch_semaphore_addr);
 
             if (is_program) {
-                relay_command<command_start_addr, consumer_cmd_base_addr, consumer_data_buffer_size>(db_dispatch_cmd_slot_switch, dispatch_noc_encoding);
+                relay_command<command_start_addr, consumer_cmd_base_addr, 0>(db_dispatch_cmd_slot_switch, dispatch_noc_encoding);
                 db_dispatch_cmd_slot_switch = not db_dispatch_cmd_slot_switch;
             }
             if (stall) {
@@ -311,7 +311,7 @@ void kernel_main() {
             wait_consumer_space_available(push_semaphore_addr); // ensure SRC router has space to push command
 
             // Send command to SRC router
-            relay_command<command_start_addr, issue_cmd_eth_src_base, consumer_data_buffer_size>(false, push_noc_encoding);
+            relay_command<command_start_addr, issue_cmd_eth_src_base, 0>(false, push_noc_encoding);
             update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0)); // notify SRC router that command was pushed
 
             volatile tt_l1_ptr uint32_t* buffer_transfer_ptr = command_ptr + DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
@@ -424,7 +424,7 @@ void kernel_main() {
 
             if (is_program) {
                 // if there is any program data then we need to read it in from DST CB and send it to dispatcher core CB
-                relay_command<command_start_addr, L1_UNRESERVED_BASE, consumer_data_buffer_size>(db_dispatch_cmd_slot_switch, dispatch_noc_encoding);
+                relay_command<command_start_addr, L1_UNRESERVED_BASE, 0>(db_dispatch_cmd_slot_switch, dispatch_noc_encoding);
                 db_dispatch_cmd_slot_switch = not db_dispatch_cmd_slot_switch;
                 program_event_buffer.push_event(event);
                 update_producer_consumer_sync_semaphores(my_noc_encoding, dispatch_noc_encoding, dispatch_semaphore_addr, get_semaphore(0));
@@ -526,7 +526,7 @@ void kernel_main() {
 
                     // Doing doing the write now send the write buffer command back to the src router without any data
                     header->num_buffer_transfers = 0; // make sure src router doesn't expect any data incoming
-                    relay_command<command_start_addr, completion_cmd_eth_src_base, consumer_data_buffer_size>(false, push_noc_encoding); // SRC router has one cmd slot
+                    relay_command<command_start_addr, completion_cmd_eth_src_base, 0>(false, push_noc_encoding); // SRC router has one cmd slot
                     update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
 
                     //DPRINT << "DONE TX COMPLETION WRITE BUFFER" << ENDL();
@@ -564,7 +564,7 @@ void kernel_main() {
 
                     //DPRINT << "READ FROM SRC BUFFER AND WRITE CB" << ENDL();
 
-                    relay_command<command_start_addr, completion_cmd_eth_src_base, consumer_data_buffer_size>(false, push_noc_encoding); // src router has one cmd slot
+                    relay_command<command_start_addr, completion_cmd_eth_src_base, 0>(false, push_noc_encoding); // src router has one cmd slot
                     update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
                     pull_and_relay<PullAndRelayType::BUFFER, PullAndRelayType::CIRCULAR_BUFFER, write_to_completion_queue>(src_pr_cfg, dst_pr_cfg, num_pages_in_transfer);
 
@@ -572,7 +572,7 @@ void kernel_main() {
                 }
             } else {    // commands with no buffer transfer (a completion wrap)
                 // Send command to src router
-                relay_command<command_start_addr, completion_cmd_eth_src_base, consumer_data_buffer_size>(false, push_noc_encoding); // src router has one cmd slot
+                relay_command<command_start_addr, completion_cmd_eth_src_base, 0>(false, push_noc_encoding); // src router has one cmd slot
                 update_producer_consumer_sync_semaphores(my_noc_encoding, push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
                 //DPRINT << "DONE SEND CMD BACK TO COMPLETION Q" << ENDL();
             }

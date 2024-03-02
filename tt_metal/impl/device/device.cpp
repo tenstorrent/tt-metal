@@ -269,6 +269,96 @@ void Device::clear_l1_state() {
     }
 }
 
+// TODO: This will be removed once FD v1.3 is backported to Grayskull
+void Device::compile_command_queue_programs_for_grayskull() {
+    ZoneScoped;
+    unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
+
+    const uint32_t num_tensix_command_slots = 2;
+    uint32_t cmd_start_tensix = get_command_start_l1_address();
+    uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
+    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
+    uint32_t consumer_data_buffer_size_tensix = get_consumer_data_buffer_size();
+
+    uint8_t num_hw_cqs = this->num_hw_cqs();
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
+    uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(this->id(), channel) / num_hw_cqs;
+
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+        tt_cxy_pair issue_q_reader_location = dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(this->id(), channel, cq_id);
+        tt_cxy_pair completion_q_writer_location = dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(this->id(), channel, cq_id);
+
+        TT_ASSERT(issue_q_reader_location.chip == this->id() and completion_q_writer_location.chip == this->id(),
+            "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", issue_q_reader_location.chip, completion_q_writer_location.chip, this->id());
+
+        CoreCoord issue_q_logical_core(issue_q_reader_location.x, issue_q_reader_location.y);
+        CoreCoord completion_q_logical_core(completion_q_writer_location.x, completion_q_writer_location.y);
+        CoreCoord issue_q_physical_core = get_physical_core_coordinate(issue_q_reader_location, CoreType::WORKER);
+        CoreCoord completion_q_physical_core = get_physical_core_coordinate(completion_q_writer_location, CoreType::WORKER);
+
+        std::map<string, string> producer_defines = {
+            {"DISPATCH_KERNEL", "1"},
+            {"CONSUMER_NOC_X", std::to_string(completion_q_physical_core.x)},
+            {"CONSUMER_NOC_Y", std::to_string(completion_q_physical_core.y)},
+        };
+        std::map<string, string> consumer_defines = {
+            {"DISPATCH_KERNEL", "1"},
+            {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
+            {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
+        };
+
+        // Address in sysmem for CQ to write back its read ptr to
+        uint32_t host_issue_queue_read_ptr_addr = HOST_CQ_ISSUE_READ_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+        uint32_t issue_queue_start_addr = CQ_START + get_absolute_cq_offset(channel, cq_id, cq_size);
+        uint32_t issue_queue_size = tt::round_up((cq_size - CQ_START) * SystemMemoryCQInterface::default_issue_queue_split, 32);
+
+        uint32_t consumer_cmd_base_addr = cmd_start_tensix;
+        uint32_t consumer_data_buff_size = consumer_data_buffer_size_tensix;
+
+        std::vector<uint32_t> producer_compile_args = {
+            host_issue_queue_read_ptr_addr,
+            issue_queue_start_addr,
+            issue_queue_size,
+            cmd_start_tensix,
+            data_section_addr_tensix,
+            producer_data_buffer_size_tensix,
+            consumer_cmd_base_addr,
+            consumer_data_buff_size};
+
+        uint32_t host_completion_queue_write_ptr_addr = HOST_CQ_COMPLETION_WRITE_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+        uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+        uint32_t completion_queue_size = (cq_size - CQ_START) - issue_queue_size;
+        uint32_t host_finish_addr = HOST_CQ_FINISH_PTR + get_absolute_cq_offset(channel, cq_id, cq_size);
+        std::vector<uint32_t> consumer_compile_args = {host_completion_queue_write_ptr_addr, completion_queue_start_addr, completion_queue_size, host_finish_addr, consumer_cmd_base_addr, consumer_data_buff_size};
+
+        tt::tt_metal::CreateKernel(
+            *command_queue_program_ptr,
+            "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
+            issue_q_logical_core,
+            tt::tt_metal::DataMovementConfig {
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = producer_compile_args,
+                .defines = producer_defines});
+
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, issue_q_logical_core, num_tensix_command_slots);
+
+        tt::tt_metal::CreateKernel(
+            *command_queue_program_ptr,
+            "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
+            completion_q_logical_core,
+            tt::tt_metal::DataMovementConfig {
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = consumer_compile_args,
+                .defines = consumer_defines});
+
+        tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, completion_q_logical_core, 0);
+    }
+    detail::CompileProgram(this, *command_queue_program_ptr);
+    this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+}
+
 // TODO (abhullar): Refactor this with #2593 to allow each target fast dispatch (FD) device to program their associated FD cores regardless of whether they are on the target device or not.
 // Currently we have to program FD cores for the remote device when initializing the MMIO device because completion queue cores are on MMIO device
 //  and we don't have handle on MMIO device when initializing the remote device
@@ -283,7 +373,7 @@ void Device::compile_command_queue_programs() {
 
     uint32_t cmd_start_tensix = get_command_start_l1_address();
     uint32_t data_section_addr_tensix = get_data_section_l1_address(false);
-    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false); //get_producer_data_buffer_size(false);
+    uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
     uint32_t consumer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
 
     // TODO: change these
@@ -531,7 +621,6 @@ void Device::compile_command_queue_programs() {
                     .noc = tt::tt_metal::NOC::RISCV_0_default,
                     .compile_args = eth_tunneller_compile_args,
                     .defines = eth_tunneller_defines});
-
         std::cout << "Remote pull and push core: " << remote_processor_physical_core.str() << std::endl;
         std::cout << "DST router (R): " << physical_eth_router_remote_dst.str() << std::endl;
         std::cout << "SRC router (R): " << physical_eth_router_remote_src.str() << std::endl;
@@ -671,8 +760,11 @@ void Device::initialize_command_queue() {
         hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
         sw_command_queues_[cq_id] = std::make_unique<CommandQueue>(this, cq_id);
     }
-
-    this->compile_command_queue_programs();
+    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+        this->compile_command_queue_programs_for_grayskull();
+    } else {
+        this->compile_command_queue_programs();
+    }
     TT_ASSERT(this->command_queue_programs.size() == 1);
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];

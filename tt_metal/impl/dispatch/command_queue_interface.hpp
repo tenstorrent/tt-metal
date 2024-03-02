@@ -46,6 +46,13 @@ inline uint32_t get_cq_data_buffer_size(bool use_eth_l1) {
     }
 }
 
+// Space available in command_queue_consumer
+inline uint32_t get_consumer_data_buffer_size() {
+    uint32_t num_consumer_cmd_slots = 2;
+    uint32_t producer_data_buffer_size = get_cq_data_buffer_size(false);
+    return (producer_data_buffer_size - DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND) / num_consumer_cmd_slots;
+}
+
 /// @brief Get offset of the command queue relative to its channel
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
@@ -196,7 +203,7 @@ class SystemMemoryManager {
     }
 
     void set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
-        TT_ASSERT(event_id >= this->cq_to_last_completed_event[cq_id], "Event ID is expected to increase. Wrapping not supported for sync.");
+        TT_ASSERT(event_id >= this->cq_to_last_completed_event[cq_id], "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded completed event is {}", event_id, this->cq_to_last_completed_event[cq_id]);
         cq_to_event_locks[cq_id].lock();
         this->cq_to_last_completed_event[cq_id] = event_id;
         cq_to_event_locks[cq_id].unlock();
