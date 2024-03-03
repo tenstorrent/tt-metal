@@ -147,6 +147,30 @@ example: `http://10.250.37.37:4242`, for port ``4242``.
 
 If you forwarded your port, navigate to `http://localhost:8888`.
 
+4. If you make changes, you may need to check spelling errors.
+
+We use the spell-checker, Aspell, to ensure we don't sneak in some typos in
+our documentation. This is enforced by static-checks on github workflows as
+well.
+
+To check if your updated docs pass this check you can run,
+
+```bash
+$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh
+```
+
+If there are errors in this check you will see an exit code non-zero.
+
+To update the documentation for spelling errors or any out-of-dictionary words
+you can run,
+
+```bash
+$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh update
+```
+
+Commit your changes and the personal dictionary, at docs/aspell-dictionary.pws,
+that is changed.
+
 ### Cleaning the dev environment with `make nuke`
 
 Normally, `make clean` only clears out build artifacts. It does **not** delete
