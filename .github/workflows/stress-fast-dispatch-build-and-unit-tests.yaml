@@ -16,8 +16,12 @@ jobs:
         runner-info: [
           {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], machine-type: "bare_metal"},
           {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
-          {arch: grayskull, runs-on: ["stress-grayskull", "cloud-virtual-machine"], machine-type: "virtual_machine"},
-          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "cloud-virtual-machine"], machine-type: "virtual_machine"},
+          # E150
+          {arch: grayskull, runs-on: ["grayskull", "cloud-virtual-machine"], machine-type: "virtual_machine"},
+          # N150
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], machine-type: "virtual_machine"},
+          # N300
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], machine-type: "virtual_machine"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

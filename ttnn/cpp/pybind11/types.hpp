@@ -74,19 +74,7 @@ void py_module(py::module& module) {
     py::class_<TensorWrapper>(module, "Tensor")
         .def(py::init<tt::tt_metal::Tensor>())
         .def_property_readonly("value", [](const TensorWrapper& self) -> auto& { return self.value; })
-        .def(
-            "__repr__",
-            [](const TensorWrapper& self) {
-                if (self.value.is_allocated()) {
-                    return self.value.write_to_string(Layout::ROW_MAJOR, true);
-                } else {
-                    return fmt::format(
-                        "Tensor(shape={}, dtype={}, layout={})",
-                        self.value.ttnn_shape(),
-                        self.value.dtype(),
-                        self.value.layout());
-                }
-            })
+        .def("__repr__", [](const TensorWrapper& self) { return self.value.write_to_string(); })
         .def_property_readonly("shape", [](const TensorWrapper& self) { return py::cast(Shape{self.value.shape()}); })
         .def_property_readonly("dtype", [](const TensorWrapper& self) { return self.value.dtype(); })
         .def_property_readonly("layout", [](const TensorWrapper& self) { return self.value.layout(); })

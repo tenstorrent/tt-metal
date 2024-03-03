@@ -32,6 +32,7 @@ enum debug_sanitize_which_riscv {
 
 #if defined(COMPILE_FOR_ERISC)
 #include "erisc.h"
+extern "C" void erisc_early_exit(std::int32_t stack_save_addr);
 #endif
 
 extern uint8_t noc_index;
@@ -79,8 +80,12 @@ inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32
         v[noc_index].which = debug_sanitize_get_which_riscv();
         v[noc_index].invalid = invalid;
     }
+
 #if defined(COMPILE_FOR_ERISC)
+    // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
+    // kernel is written. In this case we'll do an early exit back to base FW.
     internal_::disable_erisc_app();
+    erisc_early_exit(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_STACK_SAVE);
 #endif
 
     while(1) {

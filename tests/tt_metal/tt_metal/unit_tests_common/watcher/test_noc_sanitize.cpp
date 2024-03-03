@@ -170,9 +170,6 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeEth) {
-    // Skip this test for now until we add a way to recover from the hang.
-    log_info(LogTest, "Skip this test until we can recover from the hang on an eth core.");
-    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(RunTestEth, this->devices_[0]);

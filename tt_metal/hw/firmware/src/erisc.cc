@@ -13,6 +13,9 @@
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_producer.hpp"
 
+// Number of registers to save for early exit
+#define CONTEXT_SIZE (13 * 4)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -82,7 +85,7 @@ void __attribute__((section("code_l1"))) router_init() {
     my_routing_mode = (EthRouterMode)routing_info->routing_mode;
 }
 
-void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
+void __attribute__((section("erisc_l1_code"))) Application(void) {
     DEBUG_STATUS('I');
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -238,4 +241,51 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         }
     }
     internal_::disable_erisc_app();
+}
+
+void __attribute__((section("erisc_l1_code"), naked)) ApplicationHandler(void) {
+    // Save the registers, stack pointer, return address so that we can early exit in the case of
+    // an error.
+    __asm__(
+        "addi sp, sp, -%[context_size]\n\t"
+        "sw x1, 0 * 4( sp )\n\t" // Return addr saved on stack
+        "sw x8, 1 * 4( sp )\n\t"
+        "sw x9, 2 * 4( sp )\n\t"
+        "sw x18, 3 * 4( sp )\n\t"
+        "sw x19, 4 * 4( sp )\n\t"
+        "sw x20, 5 * 4( sp )\n\t"
+        "sw x21, 6 * 4( sp )\n\t"
+        "sw x22, 7 * 4( sp )\n\t"
+        "sw x23, 8 * 4( sp )\n\t"
+        "sw x24, 9 * 4( sp )\n\t"
+        "sw x25, 10 * 4( sp )\n\t"
+        "sw x26, 11 * 4( sp )\n\t"
+        "sw x27, 12 * 4( sp )\n\t"
+        "li x10, %[stack_save_addr]\n\t"
+        "sw  sp, 0( x10 )\n\t"
+        : /* No Inputs */
+        : [context_size] "i" (CONTEXT_SIZE), [stack_save_addr] "i" (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_STACK_SAVE)
+        : "x10", "memory"
+    );
+    Application();
+    __asm__(
+        "lw  x1, 0 * 4( sp )\n\t"
+        "lw  x8, 1 * 4( sp )\n\t"
+        "lw  x9, 2 * 4( sp )\n\t"
+        "lw  x18, 3 * 4( sp )\n\t"
+        "lw  x19, 4 * 4( sp )\n\t"
+        "lw  x20, 5 * 4( sp )\n\t"
+        "lw  x21, 6 * 4( sp )\n\t"
+        "lw  x22, 7 * 4( sp )\n\t"
+        "lw  x23, 8 * 4( sp )\n\t"
+        "lw  x24, 9 * 4( sp )\n\t"
+        "lw  x25, 10 * 4( sp )\n\t"
+        "lw  x26, 11 * 4( sp )\n\t"
+        "lw  x27, 12 * 4( sp )\n\t"
+        "addi sp, sp, %[context_size]\n\t"
+        "ret\n\t"
+        : /* No Inputs */
+        : [context_size] "i" (CONTEXT_SIZE)
+        :
+    );
 }

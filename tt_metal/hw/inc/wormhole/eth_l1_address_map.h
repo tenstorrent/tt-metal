@@ -28,6 +28,8 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
   static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMMAND_Q_BASE - 204 - 128;
+  // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
   // TT Metal Specific
   static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
