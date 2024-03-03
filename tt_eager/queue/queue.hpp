@@ -26,9 +26,9 @@ void EnqueueDeviceToHostTransfer(
     const std::optional<std::size_t> transfer_size = std::nullopt,
     size_t src_offset = 0);
 
-void EnqueueRecordEvent(CommandQueue&, Event&);
-void EnqueueWaitForEvent(CommandQueue&, Event&);
-void EventSynchronize(Event&);
+void EnqueueRecordEvent(CommandQueue&, std::shared_ptr<Event>);
+void EnqueueWaitForEvent(CommandQueue&, std::shared_ptr<Event>);
+void EventSynchronize(std::shared_ptr<Event>);
 void QueueSynchronize(CommandQueue&);
 
 std::vector<Tensor> EnqueueOperation(

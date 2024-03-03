@@ -490,9 +490,9 @@ class HWCommandQueue {
     void enqueue_write_buffer(std::shared_ptr<const Buffer> buffer, const void* src, bool blocking);
     void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
     void enqueue_program(Program& program, std::optional<std::reference_wrapper<Trace>> trace, bool blocking);
-    void enqueue_record_event(std::reference_wrapper<Event> event);
-    void populate_record_event(std::reference_wrapper<Event> event);
-    void enqueue_wait_for_event(std::reference_wrapper<Event> event);
+    void enqueue_record_event(std::shared_ptr<Event> event);
+    void populate_record_event(std::shared_ptr<Event> event);
+    void enqueue_wait_for_event(std::shared_ptr<Event> event);
     void enqueue_trace();
     void finish();
     void issue_wrap();
@@ -502,10 +502,10 @@ class HWCommandQueue {
     friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);
     friend void EnqueueWriteBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, const void* src, bool blocking);
-    friend void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
-    friend void EnqueueWaitForEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event);
+    friend void EnqueueRecordEventImpl(CommandQueue& cq, std::shared_ptr<Event> event);
+    friend void EnqueueWaitForEventImpl(CommandQueue& cq, std::shared_ptr<Event> event);
     friend void FinishImpl(CommandQueue & cq);
-    friend void EnqueueRecordEvent(CommandQueue& cq, Event &event);
+    friend void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event);
     friend class Trace;
 };
 
@@ -518,7 +518,7 @@ struct CommandInterface {
     std::optional<std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>>> program;
     std::optional<const void*> src;
     std::optional<void*> dst;
-    std::optional<std::reference_wrapper<Event>> event;
+    std::optional<std::shared_ptr<Event>> event;
 };
 
 class CommandQueue {

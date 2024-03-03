@@ -1,4 +1,4 @@
 EnqueueWaitForEvent
 ===================
 
-.. doxygenfunction:: EnqueueWaitForEvent(CommandQueue& cq, Event &event)
+.. doxygenfunction:: EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event)
