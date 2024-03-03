@@ -421,9 +421,9 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | event        | An event that will be populated by this function, and inserted in CQ   | Event &                       |                                    | Yes      |
+ * | event        | An event that will be populated by this function, and inserted in CQ   | std::shared_ptr<Event>        |                                    | Yes      |
  */
-void EnqueueRecordEvent(CommandQueue& cq, Event &event);
+void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event);
 
 /**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
@@ -432,18 +432,18 @@ void EnqueueRecordEvent(CommandQueue& cq, Event &event);
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * |              | and waits for the event to complete.                                   |                               |                                    |          |
- * | event        | The event object that this CQ will wait on for completion.             | Event &                       |                                    | Yes      |
+ * | event        | The event object that this CQ will wait on for completion.             | std::shared_ptr<Event>        |                                    | Yes      |
  */
-void EnqueueWaitForEvent(CommandQueue& cq, Event &event);
+void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event);
 
 /**
  * Blocking function for host to synchronize (wait) on an event completion on device.
  * Return value: void
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will wait on for completion.                | Event &                       |                                    | Yes      |
+ * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
  */
-void EventSynchronize(Event &event);
+void EventSynchronize(std::shared_ptr<Event> event);
 
 }  // namespace tt_metal
 

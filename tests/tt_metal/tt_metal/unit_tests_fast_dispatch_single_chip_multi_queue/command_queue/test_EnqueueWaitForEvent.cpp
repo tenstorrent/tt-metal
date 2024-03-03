@@ -31,16 +31,16 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
     CommandQueue a(this->device_, 0);
     CommandQueue b(this->device_, 1);
     vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
-    std::unordered_map<uint, std::vector<Event>> sync_events;
+    std::unordered_map<uint, std::vector<std::shared_ptr<Event>>> sync_events;
     size_t num_events = 10;
 
     for (size_t j = 0; j < num_events; j++) {
         for (uint i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "Recording and Host Syncing on event for CQ ID: {}", cqs[i].get().id());
-            auto &event = sync_events[i].emplace_back(Event());
+            auto event = sync_events[i].emplace_back(std::make_shared<Event>());
             EnqueueRecordEvent(cqs[i], event);
-            EXPECT_EQ(event.cq_id, cqs[i].get().id());
-            EXPECT_EQ(event.event_id, j); // 1 cmd per CQ
+            EXPECT_EQ(event->cq_id, cqs[i].get().id());
+            EXPECT_EQ(event->event_id, j); // 1 cmd per CQ
             EventSynchronize(event);
         }
     }
@@ -65,10 +65,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventSanity
     for (size_t j = 0; j < num_events; j++) {
         for (uint i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "Recording and Device Syncing on event for CQ ID: {}", cqs[i].get().id());
-            Event event;
+            auto event = std::make_shared<Event>();
             EnqueueRecordEvent(cqs[i], event);
-            EXPECT_EQ(event.cq_id, cqs[i].get().id());
-            EXPECT_EQ(event.event_id, j * 2);
+            EXPECT_EQ(event->cq_id, cqs[i].get().id());
+            EXPECT_EQ(event->event_id, j * 2);
             EnqueueWaitForEvent(cqs[i], event);
         }
     }
@@ -98,12 +98,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossC
         for (uint i = 0; i < cqs.size(); i++) {
             auto &cq_record_event = cqs[i];
             auto &cq_wait_event = cqs[(i + 1) % cqs.size()];
-            Event event;
+            auto event = std::make_shared<Event>();
             log_debug(tt::LogTest, "Recording event on CQ ID: {} and Device Syncing on CQ ID: {}", cq_record_event.get().id(), cq_wait_event.get().id());
 
             EnqueueRecordEvent(cq_record_event, event);
-            EXPECT_EQ(event.cq_id, cq_record_event.get().id());
-            EXPECT_EQ(event.event_id, i + (j * num_cmds_per_cq));
+            EXPECT_EQ(event->cq_id, cq_record_event.get().id());
+            EXPECT_EQ(event->event_id, i + (j * num_cmds_per_cq));
             EnqueueWaitForEvent(cq_wait_event, event);
 
             // Occasionally do host wait for extra coverage from both CQs.
@@ -141,7 +141,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
 
     size_t num_buffers_per_cq = 10;
     bool pass = true;
-    std::unordered_map<uint, std::vector<Event>> sync_events;
+    std::unordered_map<uint, std::vector<std::shared_ptr<Event>>> sync_events;
 
     for (uint buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
         vector<std::unique_ptr<Buffer>> buffers;
@@ -152,12 +152,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
             srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
             log_debug(tt::LogTest, "Doing Write to cq_id: {} of data: {}", i, srcs[i]);
             EnqueueWriteBuffer(cqs[i], *buffers[i], srcs[i], false);
-            auto &event = sync_events[i].emplace_back(Event());
+            auto event = sync_events[i].emplace_back(std::make_shared<Event>());
             EnqueueRecordEvent(cqs[i], event);
         }
 
         for (uint i = 0; i < cqs.size(); i++) {
-            auto &event = sync_events[i][buf_idx];
+            auto event = sync_events[i][buf_idx];
             EnqueueWaitForEvent(cqs[i], event);
             vector<uint32_t> result;
             EnqueueReadBuffer(cqs[i], *buffers[i], result, true);
@@ -200,7 +200,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
             uint32_t wr_data_base = (buf_idx * 1000) + (i * 100);
             auto &cq_write = cqs[i];
             auto &cq_read = cqs[(i + 1) % cqs.size()];
-            Event event;
+            auto event = std::make_shared<Event>();
             vector<uint32_t> result;
 
             buffers.push_back(std::make_unique<Buffer>(this->device_, buf_size, config.page_size, config.buftype));
@@ -254,8 +254,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
         for (uint j = 0; j < num_wr_rd_per_buf; j++) {
 
             // 2 Events to synchronize delaying the read after write, and delaying the next write after read.
-            Event event_sync_read_after_write;
-            Event event_sync_write_after_read;
+            auto event_sync_read_after_write = std::make_shared<Event>();
+            auto event_sync_write_after_read = std::make_shared<Event>();
 
             // Add entry in resutls vector, and construct write data, unique per loop
             read_results.emplace_back();
@@ -280,7 +280,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
 
         // Basically like Finish, but use host sync on event to ensure all read cmds are finished.
         if (use_events) {
-            Event event_done_reads;
+            auto event_done_reads = std::make_shared<Event>();
             EnqueueRecordEvent(cq_read, event_done_reads);
             EventSynchronize(event_done_reads);
         }

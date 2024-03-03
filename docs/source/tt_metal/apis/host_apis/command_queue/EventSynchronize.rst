@@ -1,4 +1,4 @@
 EventSynchronize
 ================
 
-.. doxygenfunction:: EventSynchronize(Event &event)
+.. doxygenfunction:: EventSynchronize(std::shared_ptr<Event> event)

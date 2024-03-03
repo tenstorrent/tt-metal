@@ -973,28 +973,26 @@ void HWCommandQueue::enqueue_program(
 
 // Populate event struct for caller. This must not occur in enqueue_* function which is "too late" when async
 // queues are enabled, since top level API is non-blocking and enqueue_* runs on child thread.
-void HWCommandQueue::populate_record_event(std::reference_wrapper<Event> event) {
-    auto &event_ref = event.get();
-    event_ref.cq_id = this->id;
-    event_ref.event_id = this->manager.get_next_event(this->id);
-    event_ref.device = this->device;
+void HWCommandQueue::populate_record_event(std::shared_ptr<Event> event) {
+    event->cq_id = this->id;
+    event->event_id = this->manager.get_next_event(this->id);
+    event->device = this->device;
 }
 
-void HWCommandQueue::enqueue_record_event(std::reference_wrapper<Event> event) {
+void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
     uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
-    auto event_id = event.get().event_id; // Captured and incremented, already.
 
     if ((this->manager.get_issue_queue_write_ptr(this->id)) + command_size >= this->manager.get_issue_queue_limit(this->id)) {
         this->issue_wrap();
     }
 
-    auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event_id);
+    auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event->event_id);
     this->enqueue_command(command, false);
     this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 }
 
-void HWCommandQueue::enqueue_wait_for_event(std::reference_wrapper<Event> event) {
+void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> event) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
 
     uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
@@ -1002,7 +1000,7 @@ void HWCommandQueue::enqueue_wait_for_event(std::reference_wrapper<Event> event)
         this->issue_wrap();
     }
 
-    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, this->manager.get_next_event(this->id), event.get());
+    auto command = EnqueueWaitForEventCommand(this->id, this->device, this->manager, this->manager.get_next_event(this->id), *event);
     this->enqueue_command(command, false);
     this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 }
@@ -1270,10 +1268,10 @@ void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<
     }, program);
 }
 
-void EnqueueRecordEvent(CommandQueue& cq, Event &event) {
-    TT_ASSERT(event.device == nullptr, "EnqueueRecordEvent expected to be given an uninitialized event");
-    TT_ASSERT(event.event_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
-    TT_ASSERT(event.cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
+void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
+    TT_ASSERT(event->device == nullptr, "EnqueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event->event_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
+    TT_ASSERT(event->cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
 
     detail::DispatchStateCheck(true);
     cq.hw_command_queue().populate_record_event(event);
@@ -1284,17 +1282,17 @@ void EnqueueRecordEvent(CommandQueue& cq, Event &event) {
     });
 }
 
-void EnqueueRecordEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event) {
+void EnqueueRecordEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
     cq.hw_command_queue().enqueue_record_event(event);
 }
 
 
-void EnqueueWaitForEvent(CommandQueue& cq, Event &event) {
-    TT_ASSERT(event.device != nullptr, "EnqueueRecordEvent expected to be given Event with initialized device ptr");
-    TT_ASSERT(event.event_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized event_id");
-    TT_ASSERT(event.cq_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized cq_id");
+void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
+    TT_ASSERT(event->device != nullptr, "EnqueueWaitForEvent expected to be given Event with initialized device ptr");
+    TT_ASSERT(event->event_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized event_id");
+    TT_ASSERT(event->cq_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized cq_id");
     log_trace(tt::LogMetal, "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
-        event.device->id(), event.cq_id, event.event_id, cq.device()->id(), cq.id());
+        event->device->id(), event->cq_id, event->event_id, cq.device()->id(), cq.id());
 
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -1304,16 +1302,16 @@ void EnqueueWaitForEvent(CommandQueue& cq, Event &event) {
     });
 }
 
-void EnqueueWaitForEventImpl(CommandQueue& cq, std::reference_wrapper<Event> event) {
+void EnqueueWaitForEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
     cq.hw_command_queue().enqueue_wait_for_event(event);
 }
 
 
-void EventSynchronize(Event& event) {
+void EventSynchronize(std::shared_ptr<Event> event) {
     detail::DispatchStateCheck(true);
-    log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event.device->id(), event.cq_id, event.event_id);
+    log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event->device->id(), event->cq_id, event->event_id);
 
-    while (event.device->sysmem_manager().get_last_completed_event(event.cq_id) < event.event_id) {
+    while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 }
@@ -1503,11 +1501,11 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             break;
         case EnqueueCommandType::ENQUEUE_RECORD_EVENT:
             TT_ASSERT(command.event.has_value(), "Must provide an event!");
-            EnqueueRecordEventImpl(*this, *command.event);
+            EnqueueRecordEventImpl(*this, command.event.value());
             break;
         case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT:
             TT_ASSERT(command.event.has_value(), "Must provide an event!");
-            EnqueueWaitForEventImpl(*this, *command.event);
+            EnqueueWaitForEventImpl(*this, command.event.value());
             break;
         case EnqueueCommandType::FINISH:
             FinishImpl(*this);
