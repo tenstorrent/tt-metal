@@ -20,6 +20,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
+      CONFIG: release
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
         with:

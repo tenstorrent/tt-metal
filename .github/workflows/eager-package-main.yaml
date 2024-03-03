@@ -31,7 +31,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
     steps:
       - uses: actions/checkout@v4
         with:
