@@ -294,7 +294,7 @@ void ComputeKernel::read_binaries(Device *device) {
         const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::COMPUTE, trisc_id);
         ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
         this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, trisc_id + 2);
-        log_debug("RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
+        log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
         binaries.push_back(binary_mem);
     }
     this->set_binaries(device->id(), std::move(binaries));
