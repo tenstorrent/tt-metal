@@ -276,24 +276,6 @@ this time.
 Please refer to our
 [documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html).
 
-### Updating Documentation
-
-We use the spell-checker, *Aspell*, to ensure we don't sneak in some typos in
-our documentation. This is enforced by static-checks on github workflows as
-well. Your your OS package manager to install the Aspell program.
-
-To check if your updated docs pass this check you can run,
-```bash
-$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh
-```
-If there are errors in this check you will see an exit code non-zero.
-
-To update the documentation for spelling errors or any out-of-dictionary words you can run,
-```bash
-$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh update
-```
-Commit your changes and the personal dictionary, at docs/aspell-dictionary.pws, that is changed.
-
 ## Troubleshooting and debugging tips
 
 In addition to our documentation above, you can check out relevant sections in
