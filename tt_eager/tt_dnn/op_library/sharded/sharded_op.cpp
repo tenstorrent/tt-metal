@@ -66,9 +66,9 @@ operation::ProgramWithCallbacks Sharded::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     if (this->sharded_op_type == ShardedOpType::InterleavedToSharded) {
-        return interleaved_to_sharded_multi_core(input_tensor, output_tensor);
+        return interleaved_to_sharded_multi_core(input_tensor, output_tensor, this->grid_size);
     } else {
-        return sharded_to_interleaved_multi_core(input_tensor, output_tensor);
+        return sharded_to_interleaved_multi_core(input_tensor, output_tensor, this->grid_size);
     }
 }
 
