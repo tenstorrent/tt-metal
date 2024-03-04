@@ -179,7 +179,7 @@ def test_group_norm_with_block_sharded(device, N, C, H, W, num_groups):
     shard_grid = ttnn.experimental.tensor.CoreRangeSet(
         {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
     )
-    shard_shape = N * H * W // grid_size.y, C // grid_size.x
+    shard_shape = N * H * W // grid_size.x, C // grid_size.y
     shard_spec = ttnn.experimental.tensor.ShardSpec(
         shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR, False
     )
