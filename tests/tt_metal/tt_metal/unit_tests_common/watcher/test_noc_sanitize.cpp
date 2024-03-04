@@ -16,7 +16,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core) {
+void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, bool test_illegal_core=true) {
     // Set up program
     Program program = Program();
     CoreCoord phys_core;
@@ -76,9 +76,14 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     tt_metal::detail::WriteToBuffer(input_dram_buffer, input_vec);
 
-    // Write runtime args - update to a core that doesn't exist
-    output_dram_noc_xy.x = 16;
-    output_dram_noc_xy.y = 16;
+    // Write runtime args - update to a core that doesn't exist or an improperly aligned address,
+    // depending on the flags passed in.
+    if (test_illegal_core) {
+        output_dram_noc_xy.x = 16;
+        output_dram_noc_xy.y = 16;
+    } else {
+        l1_buffer_addr += 1;
+    }
     tt_metal::SetRuntimeArgs(
         program,
         dram_copy_kernel,
@@ -104,14 +109,26 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     }
 
     // We should be able to find the expected watcher error in the log as well.
-    string expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
-    expected[7] = '0' + device->id();
-    expected[18] = '0' + phys_core.x;
-    expected[22] = '0' + phys_core.y;
-    string addr = fmt::format("{:08x}", output_dram_buffer_addr);
-    expected.replace(99, addr.length(), addr);
-    if (is_eth_core)
-        expected[43] = 'e';
+    string expected;
+    if (test_illegal_core) {
+        expected = "Device x, Core (x=x,y=x):    NAWW,*,*,*,*  brisc using noc0 tried to access core (16,16) L1[addr=0x********,len=102400]";
+        expected[7] = '0' + device->id();
+        expected[18] = '0' + phys_core.x;
+        expected[22] = '0' + phys_core.y;
+        string addr = fmt::format("{:08x}", output_dram_buffer_addr);
+        expected.replace(99, addr.length(), addr);
+        if (is_eth_core)
+            expected[43] = 'e';
+    } else {
+        expected = "Device x, Core (x=x,y=x):    NARW,*,*,*,*  brisc using noc0 reading L1[addr=0x********,len=102400]";
+        expected[7] = '0' + device->id();
+        expected[18] = '0' + phys_core.x;
+        expected[22] = '0' + phys_core.y;
+        string addr = fmt::format("{:08x}", l1_buffer_addr);
+        expected.replace(78, addr.length(), addr);
+        if (is_eth_core)
+            expected[43] = 'e';
+    }
 
     EXPECT_TRUE(
         FileContainsAllStrings(
@@ -119,12 +136,6 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             {expected}
         )
     );
-}
-
-static void RunTest(WatcherFixture* fixture, Device* device) {
-    // Run on just the first worker core, can't run on all since it takes down teh watcher server.
-    CoreCoord core {0, 0};
-    RunTestOnCore(fixture, device, core, false);
 }
 
 static void RunTestEth(WatcherFixture* fixture, Device* device) {
@@ -153,9 +164,6 @@ void CheckHostSanitization(Device *device) {
     }
 }
 
-void CheckDeviceSantization(WatcherFixture *fixture, bool use_eth_core) {
-}
-
 TEST_F(WatcherFixture, TestWatcherSanitize) {
     // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
     // tricky to check watcher server status from the finish loop for slow dispatch. Once issue #4363
@@ -166,7 +174,25 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
     CheckHostSanitization(this->devices_[0]);
 
     // Only run on device 0 because this test takes down the watcher server.
-    this->RunTestOnDevice(RunTest, this->devices_[0]);
+    this->RunTestOnDevice(
+        [](WatcherFixture *fixture, Device *device){
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false);
+        },
+        this->devices_[0]
+    );
+}
+
+TEST_F(WatcherFixture, TestWatcherSanitizeAlignment) {
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+    this->RunTestOnDevice(
+        [](WatcherFixture *fixture, Device *device){
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, false);
+        },
+        this->devices_[0]
+    );
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeEth) {
