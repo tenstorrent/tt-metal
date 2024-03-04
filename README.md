@@ -83,21 +83,22 @@ Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-mo
 
 ## What's coming for models
 
-We will also be writing efficient versions of the following models to run on our Wormhole (WH) architecture (Nebula X2):
+We are writing efficient versions of the following models to run on our Wormhole (WH) architecture (N300 2x WH card):
 
-| Model            | WH Throughput       |
-|------------------|---------------------|
-| Falcon-7B        | Coming end of March |
-| Mamba-2.8B       | Coming end of March |
-| Stable Diffusion | Coming end of March |
+| Model            | N300 (2x WH) Throughput |
+|------------------|-------------------------|
+| Falcon-7B        | Coming end of March     |
+| Mistral-7B        | Coming end of March     |
+| Mamba-2.8B       | Coming end of March     |
+| Stable Diffusion | Coming end of March     |
 
-And we will also writing versions of the following models to run on our T3000 workstation (a 2x4 Wormhole card layout) and Galaxy systems with the Wormhole architecture:
+And are also mapping models to run on our T3000 workstation with a 2x4 mesh of Wormhole devices (8x WH), and Galaxy systems with a 4x8 mesh of Wormhole devices (32x WH):
 
-| Model       | T3000 Throughput          | Galaxy (WH) Throughput |
-|-------------|---------------------------|------------------------|
-| Falcon-40B  | Coming end of March       | Coming end of March    |
-| LLaMA-2-70B | Coming end of March       | Coming end of March    |
-| Mixtral7Bx8 | Coming end of March       | Coming end of March    |
+| Model       | T3000 (8x WH) Throughput  | Galaxy (32x WH) Throughput |
+|-------------|---------------------------|----------------------------|
+| Falcon-40B  | Coming end of March       | Coming end of March        |
+| LLaMA-2-70B | Coming end of March       | Coming end of March        |
+| Mixtral7Bx8 | Coming end of March       | Coming end of March        |
 
 ## Table of contents
 
