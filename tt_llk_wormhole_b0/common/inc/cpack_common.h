@@ -23,6 +23,9 @@ namespace ckernel::packer
             (pack_count == 4) ? 0xF : 0x0;
    }
 
+   constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
+                                          // fist 16 for sfpu, next 16 for fpu
+
    // Pack config
    typedef struct {
       //word 0
@@ -524,11 +527,11 @@ namespace ckernel::packer
       TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
    }
 
-   template <uint32_t block_ct_dim>
+   template <uint32_t block_ct_dim, uint32_t full_ct_dim>
    inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
    {
-      // Each packer packs 8 rows of block_ct_dim*TILE_C_DIM datums
-      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
+      // Each packer packs 8 rows of full_ct_dim*TILE_C_DIM datums
+      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
       constexpr uint32_t offset0 = 0;
       const uint32_t offset1 = (1*block_size)/16;
       const uint32_t offset2 = (2*block_size)/16;
