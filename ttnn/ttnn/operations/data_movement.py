@@ -213,7 +213,7 @@ def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
             adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
         order = adjusted_order_for_4D_tensor
 
-    if ttnn.has_padding(input_tensor):
+    if ttnn.has_tile_padding(input_tensor):
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
     ttl_input_tensor = input_tensor.value
@@ -322,14 +322,14 @@ def concat(
     rank = len(tensors[0].shape)
 
     all_tensors_are_tile_layout_without_padding = not any(
-        tensor.layout != ttnn.TILE_LAYOUT or ttnn.has_padding(tensor) for tensor in tensors
+        tensor.layout != ttnn.TILE_LAYOUT or ttnn.has_tile_padding(tensor) for tensor in tensors
     )
 
     if rank < 4 and all_tensors_are_tile_layout_without_padding:
-        any_tensor_has_padding = any(ttnn.has_padding(tensor) for tensor in tensors)
+        any_tensor_has_tile_padding = any(ttnn.has_tile_padding(tensor) for tensor in tensors)
 
         def convert_to_ttl_tensor(tensor):
-            if any_tensor_has_padding:
+            if any_tensor_has_tile_padding:
                 tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
             return ttnn.unsqueeze_to_4D(tensor).value
 
