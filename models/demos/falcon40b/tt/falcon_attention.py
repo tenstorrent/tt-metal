@@ -342,6 +342,7 @@ class TtFalconAttention:
 
     def __call__(
         self,
+        pt_ref,
         hidden_states: tt_lib.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -375,6 +376,7 @@ class TtFalconAttention:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
         # Reshard
+        breakpoint()
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
             for i in range(len(hidden_states)):
                 hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
@@ -384,6 +386,7 @@ class TtFalconAttention:
                 hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
                     hidden_states[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
                 )
+        breakpoint()
 
         #################
         ### FUSED QKV ###

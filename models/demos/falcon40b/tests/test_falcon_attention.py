@@ -250,6 +250,7 @@ def run_test_FalconAttention_inference(
     )
 
     tt_out, tt_layer_present = tt_FalconAttention_model(
+        pytorch_FalconAttention_model.attention,
         tt_attention_input,
         alibi=None,
         attention_mask=tt_attention_mask,
@@ -322,7 +323,7 @@ def run_test_FalconAttention_inference(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 32, 0),
+        ("prefill", 1, 128, 0),
         ("decode", 32, 1, 128),
     ),
     ids=["prefill_seq32", "decode_batch32"],
