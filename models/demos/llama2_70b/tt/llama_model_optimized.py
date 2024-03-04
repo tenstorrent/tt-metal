@@ -9,7 +9,12 @@ import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32
 from models.demos.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.demos.llama2_70b.tt.llama_common import generate_rot_emb, gather_rotary_emb, tt_all_gather_torch
+from models.demos.llama2_70b.tt.llama_common import (
+    generate_rot_emb,
+    gather_rotary_emb,
+    tt_all_gather_torch,
+    get_weight_cache_path,
+)
 
 
 class TtLlamaModel_optimized(nn.Module):
@@ -77,6 +82,8 @@ class TtLlamaModel_optimized(nn.Module):
                 configuration,
                 batch,
                 emulated=emulated,
+                cache_path=cache_path,
+                kv_cache_dir=kv_unique_dir,
             )
             for i in range(n_layers)
         ]
