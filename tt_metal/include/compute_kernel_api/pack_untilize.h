@@ -25,7 +25,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
-    PACK(( llk_pack_untilize_init<block_ct_dim>() ));
+    PACK(( llk_pack_untilize_init<block_ct_dim>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, true>() ));
 
@@ -61,16 +61,16 @@ ALWI void pack_untilize_uninit(uint32_t ocb = 16) {
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf, false>() ));
 }
 
-template <uint32_t block_ct_dim = 8>
-ALWI void pack_untilize_dst_init_short(uint32_t face_r_dim = 16, uint32_t num_faces = 4)
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+ALWI void pack_untilize_dst_init_short(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4)
 {
-    PACK(( llk_pack_untilize_init<block_ct_dim>(face_r_dim, num_faces) ));
+    PACK(( llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb, face_r_dim, num_faces) ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf, true>() ));
 }
 
-template <uint32_t block_ct_dim = 8>
-ALWI void pack_untilize_dst(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
-    PACK(( llk_pack_untilize<block_ct_dim>(1 /*num_blocks*/, ocb, face_r_dim, num_faces) ));
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+ALWI void pack_untilize_dst(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t block_c_index = 0 /* valid only when full_ct_dim > block_ct_dim*/) {
+    PACK(( llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, face_r_dim, num_faces, block_c_index) ));
 }
 
 }
