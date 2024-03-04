@@ -10,16 +10,16 @@ jobs:
   build:
     uses: ./.github/workflows/build.yaml
     secrets: inherit
-  build-and-unit-tests:
+  sd-unit-tests:
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
-  build-and-unit-tests-fast-dispatch:
+  fd-unit-tests:
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
-  run-profiler-regression:
+  profiler-regression:
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
-  run-eager-package-main:
+  eager-package-main:
     uses: ./.github/workflows/eager-package-main.yaml
     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
