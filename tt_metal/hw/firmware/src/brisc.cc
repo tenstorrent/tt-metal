@@ -60,6 +60,8 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
+uint32_t device_function_sums[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
+uint64_t device_function_starts[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
 }
 
 void enable_power_management() {
@@ -345,6 +347,7 @@ int main() {
 
         mailboxes->launch.run = RUN_MSG_DONE;
 
+        kernel_profiler::store_function_sums();
         // Not including any dispatch related code
         kernel_profiler::mark_time(CC_MAIN_END);
 
