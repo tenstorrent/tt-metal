@@ -105,7 +105,6 @@ void MAIN {
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
 
     constexpr uint32_t out_block_num_tiles    = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
-
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
@@ -146,7 +145,6 @@ void MAIN {
     for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
 
         for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
-
             #ifdef PRE_TILIZE
             unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
@@ -176,6 +174,11 @@ void MAIN {
                         PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
                     }
                     #endif
+                    #ifdef PACKER_L1_ACC
+                        pack_reconfig_l1_acc(0);
+                        pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
+                    #endif
+
                     unpack_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
 
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
@@ -193,8 +196,14 @@ void MAIN {
                     // if last block we pack the final result with relu enabled
                     PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
                     #endif
+                    #ifndef FUSE_BIAS
                     curr_matmul_out_cb = mm_out_cb_id;
+                    #endif
                 }
+
+                #ifdef PACKER_L1_ACC
+                pack_reconfig_data_format(curr_matmul_out_cb);
+                #endif
                 uint32_t in0_index_subblock_offset = 0;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
@@ -242,6 +251,23 @@ void MAIN {
                         cb_reserve_back(curr_matmul_out_cb, out_subblock_num_tiles);
                         tile_regs_wait();
 
+                        #ifdef PACKER_L1_ACC
+                            //Fuse bias always uses intermediate buffer
+                            //l1 accumulation flag needs to remain set to true
+                            #ifdef FUSE_BIAS
+                                pack_reconfig_l1_acc(1);
+                            #else
+                                // no accumulation for first iteration
+                                // last iteration accumulation happens with copying tiles
+                                // to dst
+                                if (in0_block_w_i == 0 || last_out) {
+                                    pack_reconfig_l1_acc(0);
+                                } else {
+                                    pack_reconfig_l1_acc(1);
+                                }
+                            #endif
+                        #endif
+
                         uint32_t start_dst_index = 0;
                         matmul_pack_tile(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 
@@ -253,14 +279,28 @@ void MAIN {
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
 
-                if constexpr (spill) {
-                    enable_reload = true;
+                #ifdef PACKER_L1_ACC
+                    #ifdef FUSE_BIAS
+                        if (in0_block_w_i < in0_num_blocks_w  - 1) {
+                            cb_pop_front(matmul_partials_cb, out_block_num_tiles);
+                        }
+                        enable_reload = false; // never reload when with bias
+                    #else
+                        if (in0_block_w_i < in0_num_blocks_w  - 2) {
+                            cb_pop_front(matmul_partials_cb, out_block_num_tiles);
+                        }
+                        if (spill and (in0_block_w_i == in0_num_blocks_w - 2)) enable_reload = true; // reload when last iteration
+                    #endif
+                #else
+                    if (spill) enable_reload = true;
+                #endif
+
+                if(spill) {
                     if (!last_out) {
                         UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
                         PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
                     }
                 }
-
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
@@ -272,6 +312,10 @@ void MAIN {
             // if last block we pack the final result with relu enabled
             PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
             #endif
+            #ifdef PACKER_L1_ACC
+            pack_reconfig_l1_acc(0);
+            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
+            #endif
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
             add_bcast_rows_init_short();
             cb_wait_front(bias_cb_id, bias_ntiles_w);
@@ -279,8 +323,6 @@ void MAIN {
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                 uint32_t in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                    // reconfig packer df for out
-                    // pack_reconfig_data_format(out_cb_id);
                     tile_regs_acquire();
                     uint32_t i = 0;
                     for (uint32_t h = 0; h < out_subblock_h; ++ h) {
@@ -311,9 +353,13 @@ void MAIN {
 
                     in1_index_subblock_offset += out_subblock_w;
                 } // for in1_num_subblocks
-            }
+            } // in0_num_subblocks
             #endif
             if constexpr(untilize_out) {
+                #ifdef PACKER_L1_ACC
+                pack_reconfig_l1_acc(0);
+                pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
+                #endif
                 #ifdef PACK_RELU
                 PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
                 #endif
@@ -343,7 +389,6 @@ void MAIN {
                     mm_block_init_short(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
             }
-
         } // for in0_num_blocks_h
         #ifdef FUSE_BIAS
             bias_block_offset += in1_block_w;
