@@ -13,7 +13,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 0>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_max()
 {
     for (int d = 0; d < ITERATIONS; d++)
