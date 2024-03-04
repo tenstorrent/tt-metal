@@ -228,7 +228,7 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 
 
 10. Changing the string representation of the tensor
----------------------------------------------------
+----------------------------------------------------
 
 .. code-block:: python
 
