@@ -1055,17 +1055,17 @@ void HWCommandQueue::enqueue_program(
     this->manager.next_completion_queue_push_back(align(EVENT_PADDED_SIZE, 32), this->id);
 }
 
-// Populate event struct for caller. This must not occur in enqueue_* function which is "too late" when async
-// queues are enabled, since top level API is non-blocking and enqueue_* runs on child thread.
-void HWCommandQueue::populate_record_event(std::shared_ptr<Event> event) {
-    event->cq_id = this->id;
-    event->event_id = this->manager.get_next_event(this->id);
-    event->device = this->device;
-}
-
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
     uint32_t command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
+
+    // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
+    // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
+    // in main thread otherwise event_id selection would get out of order due to main/worker thread timing.
+    event->cq_id = this->id;
+    event->event_id = this->manager.get_next_event(this->id);
+    event->device = this->device;
+    event->ready = true;
 
     if ((this->manager.get_issue_queue_write_ptr(this->id)) + command_size >= this->manager.get_issue_queue_limit(this->id)) {
         this->issue_wrap();
@@ -1518,7 +1518,6 @@ void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
     TT_ASSERT(event->cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
 
     detail::DispatchStateCheck(true);
-    cq.hw_command_queue().populate_record_event(event);
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_RECORD_EVENT,
         .blocking = false,
@@ -1532,11 +1531,6 @@ void EnqueueRecordEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
 
 
 void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
-    TT_ASSERT(event->device != nullptr, "EnqueueWaitForEvent expected to be given Event with initialized device ptr");
-    TT_ASSERT(event->event_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized event_id");
-    TT_ASSERT(event->cq_id != -1, "EnqueueWaitForEvent expected to be given Event with initialized cq_id");
-    log_trace(tt::LogMetal, "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
-        event->device->id(), event->cq_id, event->event_id, cq.device()->id(), cq.id());
 
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -1547,12 +1541,16 @@ void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
 }
 
 void EnqueueWaitForEventImpl(CommandQueue& cq, std::shared_ptr<Event> event) {
+    event->wait_until_ready(); // Block until event populated. Worker thread.
+    log_trace(tt::LogMetal, "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
+        event->device->id(), event->cq_id, event->event_id, cq.device()->id(), cq.id());
     cq.hw_command_queue().enqueue_wait_for_event(event);
 }
 
 
 void EventSynchronize(std::shared_ptr<Event> event) {
     detail::DispatchStateCheck(true);
+    event->wait_until_ready(); // Block until event populated. Parent thread.
     log_trace(tt::LogMetal, "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})", event->device->id(), event->cq_id, event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
