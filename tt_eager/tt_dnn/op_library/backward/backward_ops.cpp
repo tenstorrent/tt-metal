@@ -332,16 +332,22 @@ std::vector<Tensor> embedding_bw(const Tensor& grad, const Tensor& input, const 
 // - name: sub.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 //   self: grad
 //   other: -grad * alpha
-std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+
+std::vector<Tensor> _subalpha_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor grad_b = neg(grad);
+    Tensor grad_b = mul_unary(neg(grad, output_mem_config), alpha, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
+std::vector<Tensor> subalpha_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _subalpha_bw)(grad, input, other, alpha, output_mem_config);
+}
+
 std::vector<Tensor> sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _sub_bw)(grad, input, other, output_mem_config);
+    return operation::decorate_as_composite(__func__, _subalpha_bw)(grad, input, other, 1.0, output_mem_config);
 }
 
 // - name: sub.Scalar(Tensor self, Scalar other, Scalar alpha=1) -> Tensor
@@ -368,7 +374,7 @@ std::vector<Tensor> neg_bw(const Tensor& grad, const Tensor& input, const Memory
 }
 
 std::vector<Tensor> _rsub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor = _sub_bw(grad,input,other,output_mem_config);
+    std::vector<Tensor> grad_tensor = _subalpha_bw(grad,input,other, 1.0f, output_mem_config);
     std::swap(grad_tensor[0],grad_tensor[1]);
     return grad_tensor;
 }

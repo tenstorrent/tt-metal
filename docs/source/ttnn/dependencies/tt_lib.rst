@@ -974,6 +974,7 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_lt_bw
 
+.. autofunction:: tt_lib.tensor.subalpha_bw
 
 Loss Functions
 ==============
