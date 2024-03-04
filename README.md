@@ -3,9 +3,9 @@
 <img src="./docs/source/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="250"/>
 <img src="./docs/source/_static/tt_nn_w_logo.png" alt="ttnn logo" height="250"/>
 
-**TT-Metalium** is our lightweight, low-level runtime to interact with and run custom kernels on Tenstorrent hardware.
+**TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
-**ttnn** is our higher-level API to write neural networks.
+**TT-NN** is our neural network OP library with a PyTorch-like Python, and C++ API.
 
 <h3>
 
@@ -17,7 +17,7 @@
 
 ---
 
-## Using ttnn ops and tensors
+## Using TT-NN ops and tensors
 
 ```python
 import ttnn
@@ -38,7 +38,7 @@ print(output)
 
 You can use simple conversion APIs to use PyTorch tensors with Tenstorrent hardware.
 
-## Tracing graphs for ttnn operators
+## Tracing graphs for TT-NN operators
 
 ```python
 import ttnn
@@ -57,13 +57,47 @@ with ttnn.manage_device(device_id=0) as device, ttnn.tracer.trace():
 ttnn.tracer.visualize(output)
 ```
 
-We also provide tools to review the graphs you create and run in ttnn.
+We also provide tools to review the graphs you create and run in TT-NN.
 
 <img src="./docs/source/_static/add.svg" alt="ttnn tracer example" height="250"/>
 
-## Running out-of-the-box models
+## Running performant out-of-the-box models
 
-We have working demos for models such as [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), and Falcon, both [7B in ttnn](./models/demos/ttnn_falcon7b) and [40B](./models/demos/falcon40b).
+We have working demos for models such as [ResNet](./models/demos/resnet), [BERT](./models/demos/bert), [Falcon7B](./models/demos/ttnn_falcon7b) and [Falcon40B](./models/demos/falcon40b).
+
+These are some performance metrics for our models running on Grayskull (GS). We constantly improve these
+and publish these metrics on [GitHub
+Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-models.yaml).
+
+| Model                            | Batch size          | GS end-to-end throughput [1] | GS on-device throughput [2] | Target GS end-to-end throughput [1] |
+|----------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
+| ResNet 50 (fps)                  | 20                  | 2070                         | 6701                        | 10000                               |
+| BERT 11 (sen/s)                  | 12                  | 362                          | 406                         | 410                                 |
+| TT-NN Falcon-7B decode (t/s)     | 32                  | 135                          | coming soon      | 140                                 |
+| ViT                              | Coming end of March |                              |                             |                                     |
+| U-Net                            | Coming end of March |                              |                             |                                     |
+
+[1] - Throughput is measured by taking batch size and dividing by accelerator inference time, and reported per sec.
+
+[2] - Throughput on device is measured by directly counting the clock cycles for operations done on device.
+
+## What's coming for models
+
+We will also be writing efficient versions of the following models to run on our Wormhole (WH) architecture (Nebula X2):
+
+| Model            | WH Throughput       |
+|------------------|---------------------|
+| Falcon-7B        | Coming end of March |
+| Mamba-2.8B       | Coming end of March |
+| Stable Diffusion | Coming end of March |
+
+And we will also writing versions of the following models to run on our T3000 workstation (a 2x4 Wormhole card layout) and Galaxy systems with the Wormhole architecture:
+
+| Model       | T3000 Throughput          | Galaxy (WH) Throughput |
+|-------------|---------------------------|------------------------|
+| Falcon-40B  | Coming end of March       | Coming end of March    |
+| LLaMA-2-70B | Coming end of March       | Coming end of March    |
+| Mixtral7Bx8 | Coming end of March       | Coming end of March    |
 
 ## Table of contents
 
