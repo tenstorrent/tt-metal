@@ -1592,12 +1592,40 @@ op_map = {
         "tt_lib_op": ttnn_ops.l1_loss,
         "pytorch_op": pytorch_ops.l1_loss,
     },
-    "ttnn-l1_loss_sum": {
-        "tt_lib_op": ttnn_ops.l1_loss_sum,
-        "pytorch_op": pytorch_ops.l1_loss_sum,
-    },
     "ttnn-l1_loss_mean": {
         "tt_lib_op": ttnn_ops.l1_loss_mean,
         "pytorch_op": pytorch_ops.l1_loss_mean,
     },
+   "ttnn-ldexp": {
+        "tt_lib_op": ttnn_ops.ldexp,
+        "pytorch_op": pytorch_ops.ldexp,
+    },
+    "ttnn-logical_xor": {
+        "tt_lib_op": ttnn_ops.logical_xor,
+        "pytorch_op": pytorch_ops.logical_xor,
+    },
+    "ttnn-logical_or": {
+        "tt_lib_op": ttnn_ops.logical_or,
+        "pytorch_op": pytorch_ops.logical_or,
+    },
+    "ttnn-logical_and": {
+        "tt_lib_op": ttnn_ops.logical_and,
+        "pytorch_op": pytorch_ops.logical_and,
+    },
+    "ttnn-logical_or": {
+        "tt_lib_op": ttnn_ops.logical_or,
+        "pytorch_op": pytorch_ops.logical_or,
+    },
+    "ttnn-pow": {
+        "tt_lib_op": ttnn_ops.pow,
+        "pytorch_op": pytorch_ops.power,
+    },
+    "ttnn-logaddexp2": {
+        "tt_lib_op": ttnn_ops.logaddexp2,
+        "pytorch_op": pytorch_ops.logaddexp2,
+    },
+    "ttnn-logaddexp": {
+        "tt_lib_op": ttnn_ops.logaddexp,
+        "pytorch_op": pytorch_ops.logaddexp,
+    },    
 }
