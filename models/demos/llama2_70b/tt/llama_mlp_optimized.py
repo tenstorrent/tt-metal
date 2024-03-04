@@ -65,7 +65,6 @@ class TtLlamaMLP_optimized(nn.Module):
         # Test if the all weights have been cached
         test_cache_path = get_weight_cache_path(self.cache_path, w3_str, self.num_devices - 1, self.num_devices)
         if test_cache_path.exists():
-            logger.info(f"Loading {self.layer_name} MLP weights from cache")
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
                 self.w1_list.append(

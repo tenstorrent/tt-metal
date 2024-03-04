@@ -27,7 +27,7 @@ class TtLlamaModelForGeneration:
         head_dim = hidden_dim // n_heads
 
         # Cache Weights setup
-        CACHE_PATH = Path("/home/llama-data-cache/weights-cache")
+        CACHE_PATH = Path("/home/llama-data-cache/weights-cache-2")
         if n_layers == None:
             n_layers = 80
         n_layers_per_group = 20
