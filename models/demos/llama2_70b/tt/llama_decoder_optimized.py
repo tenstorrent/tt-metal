@@ -96,8 +96,6 @@ class TtLlamaDecoder_optimized:
         # TODO: Weight caching!
         test_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, self.num_devices - 1, self.num_devices)
         if test_cache_path.exists():
-            logger.info(f"Loading {self.layer_name} DECODER weights from cache")
-
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)
                 self.attn_norm_list.append(
