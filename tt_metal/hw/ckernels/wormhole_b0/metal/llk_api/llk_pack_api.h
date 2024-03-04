@@ -195,14 +195,14 @@ inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output, co
 
     for (std::uint32_t block=0; block<num_blocks; block++) {
 
-        _llk_pack_untilize_<block_ct_dim>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,
             num_faces
         );
 
-        pack_tile_addr += block_ct_dim*cb_interface[output_id].fifo_page_size;
+        pack_tile_addr += full_ct_dim*cb_interface[output_id].fifo_page_size;
     }
 }
 
