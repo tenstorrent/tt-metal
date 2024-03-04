@@ -14,6 +14,14 @@ from torch.nn import Linear as RowParallelLinear
 from torch import nn
 
 
+class Linear(torch.nn.Linear):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def reset_parameters(self):
+        pass
+
+
 @dataclass
 class ModelArgs:
     dim: int = 4096
@@ -441,10 +449,13 @@ class Transformer(nn.Module):
         self.tok_embeddings = ParallelEmbedding(params.vocab_size, params.dim)  # , init_method=lambda x: x
 
         self.layers = torch.nn.ModuleList()
+        for layer_id in range(params.start_layer_idx):
+            self.layers.append(Linear(1, 1))
+            # Dummy layer to get state dict indices right
         for layer_id in range(params.n_layers):
-            if params.start_layer_idx:
-                # Allow loading from layer N onwards
-                layer_id += params.start_layer_idx
+            # if params.start_layer_idx:
+            #     # Allow loading from layer N onwards
+            #     layer_id += params.start_layer_idx
             self.layers.append(TransformerBlock(layer_id, params))
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)

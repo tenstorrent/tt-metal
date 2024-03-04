@@ -185,7 +185,6 @@ class TtLlamaAttention_optimized(torch.nn.Module):
 
         test_cache_path = get_weight_cache_path(self.cache_path, wo_str, self.num_devices - 1, self.num_devices)
         if test_cache_path.exists():
-            logger.info(f"Loading {self.layer_name} ATTN weights from cache")
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)
                 self.qkv_list.append(

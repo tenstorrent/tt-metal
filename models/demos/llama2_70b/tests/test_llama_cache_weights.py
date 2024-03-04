@@ -53,31 +53,33 @@ def run_cache_model(
 
     max_seq_len = 4096
 
-    layer_group_size = 4
-    n_layers = 80
+    layer_group_size = 3
+    n_layers = 12
 
-    for start_layer_idx in range(0, n_layers, layer_group_size):
-        hugging_face_reference_model = Llama.build(
-            ckpt_dir,
-            tokenizer_path,
-            max_seq_len=max_seq_len,
-            max_batch_size=batch,
-            n_layers=layer_group_size,
-            skip_model_load=False,
-            start_layer_idx=start_layer_idx,
-        ).model
-        hugging_face_reference_model.eval()
-        state_dict = hugging_face_reference_model.state_dict()
-        print(state_dict.keys())
+    global_start = 68
 
-        new_state_dict = {
-            ".".join([k.split(".")[0], str(start_layer_idx + int(k.split(".")[1]))] + k.split(".")[2:])
-            if "layers" in k
-            else k: v
-            for k, v in state_dict.items()
-        }
+    hugging_face_reference_model = Llama.build(
+        ckpt_dir,
+        tokenizer_path,
+        max_seq_len=max_seq_len,
+        max_batch_size=batch,
+        n_layers=n_layers,
+        skip_model_load=False,
+        start_layer_idx=global_start,
+    ).model
+    hugging_face_reference_model.eval()
+    state_dict = hugging_face_reference_model.state_dict()
+    print(state_dict.keys())
 
-        print(new_state_dict.keys())
+    for start_layer_idx in range(global_start, global_start + n_layers, layer_group_size):
+        # new_state_dict = {
+        #     ".".join([k.split(".")[0], str(start_layer_idx + int(k.split(".")[1]))] + k.split(".")[2:])
+        #     if "layers" in k
+        #     else k: v
+        #     for k, v in state_dict.items()
+        # }
+
+        # print(new_state_dict.keys())
 
         torch.manual_seed(0)
         base_url = "layers"
@@ -87,12 +89,12 @@ def run_cache_model(
         hidden_dim = configuration.dim
         head_dim = hidden_dim // n_heads
 
-        CACHE_PATH = Path("/home/llama-data-cache/weights-cache")
+        CACHE_PATH = Path("/home/llama-data-cache/weights-cache-2")
         # TT model -------------------------------------------------------------
         # Create TT model which caches weights as it inits
         tt_model = TtLlamaModel_optimized(
             devices,
-            new_state_dict,
+            state_dict,
             base_url,
             layer_group_size,
             model_config,
@@ -108,10 +110,6 @@ def run_cache_model(
 
         # Free up all space on device
         tt_model.free_layers(start_layer_idx, layer_group_size)
-
-        del hugging_face_reference_model
-        del state_dict
-        del new_state_dict
         del tt_model
 
         gc.collect()

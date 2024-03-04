@@ -145,14 +145,12 @@ class TtLlamaModel_optimized(nn.Module):
     def free_layers(self, start_layer, end_layer):
         # Save layer for each layer in layer_group
         if self.do_reload:
-            logger.info(f"Freeing layers[{start_layer}:{end_layer}]")
             for layer in self.layers[start_layer:end_layer]:
                 layer.free_layer()
 
     def load_layers(self, start_layer, end_layer):
         # Load layer for each layer in layer_group
         if self.do_reload:
-            logger.info(f"Loading layers[{start_layer}:{end_layer}]")
             for layer in self.layers[start_layer:end_layer]:
                 layer.load_layer()
 
@@ -249,8 +247,6 @@ class TtLlamaModel_optimized(nn.Module):
 
             for layer in self.layers[start_layer:end_layer]:
                 xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
-
-            logger.info(f"Finished layers[{start_layer}:{end_layer}]")
 
             # Epilogue: Save KV cache to disk and free weights
             self.free_layers(start_layer, end_layer)
