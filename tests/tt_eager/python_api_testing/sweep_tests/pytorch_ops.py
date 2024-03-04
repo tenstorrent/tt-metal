@@ -967,6 +967,18 @@ def squared_difference(x, y, *args, **kwargs):
     return torch.square(t_diff)
 
 
+def add_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.add(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
+
+
 def logaddexp(x, y, *args, **kwargs):
     return torch.logaddexp(x, y)
 

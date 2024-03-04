@@ -1288,6 +1288,29 @@ def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
     return test_args_combinations
 
 
+def gen_activation_args(input_shapes, dtypes, layouts, mem_configs):
+    input_info = gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    )
+
+    test_args_combinations = []
+
+    for input_args in input_info:
+        if input_args is not None:
+            input_args = input_args.copy()
+            input_args.update({"activation": None})
+            test_args_combinations.append(input_args)
+
+            input_args = input_args.copy()
+            input_args.update({"activation": "relu"})
+            test_args_combinations.append(input_args)
+
+    return test_args_combinations
+
+
 def gen_two_scalar_args(
     input_shapes,
     dtypes,
