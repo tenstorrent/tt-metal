@@ -997,6 +997,20 @@ std::vector<Tensor> leaky_relu_bw(const Tensor& grad, const Tensor& input, float
 {
     return operation::decorate_as_composite(__func__, _leaky_relu_bw)(grad, input, negative_slope, output_mem_config);
 }
+
+// ELU
+// result : grad * (torch.where(input >= 0, 1, alpha * torch.exp(input)))
+std::vector<Tensor> _elu_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_result = where(gez(input, output_mem_config), grad, mul(grad, mul_unary(exp(input, output_mem_config), alpha, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_result);
+    return grad_tensor;
+}
+std::vector<Tensor> elu_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _elu_bw)(grad, input, alpha, output_mem_config);
+}
+
 // Hardtanh
 // result: torch.where((input <= min) | (input >= max), 0.0, grad)
 std::vector<Tensor> _hardtanh_bw(const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
