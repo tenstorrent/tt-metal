@@ -274,15 +274,6 @@ class transformer_2d_model:
                     residual,
                 )
 
-                # hidden_states = post_process_output(
-                #     self.device,
-                #     hidden_states,
-                #     self.proj_out.batch_size,
-                #     self.proj_out.input_height,
-                #     self.proj_out.input_width,
-                #     self.proj_out.out_channels,
-                # )
-
             else:
                 hidden_states = ttnn.to_device(hidden_states, self.device)
                 hidden_states = ttnn.matmul(hidden_states, self.parameters.proj_out.weight)
