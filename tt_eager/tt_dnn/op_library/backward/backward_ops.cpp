@@ -1109,6 +1109,19 @@ std::vector<Tensor> erfinv_bw(const Tensor& grad, const Tensor& input, const Mem
     return operation::decorate_as_composite(__func__, _erfinv_bw)(grad, input, output_mem_config);
 }
 
+
+std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul(grad, recip(mul_unary(input, M_LN10, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    return grad_tensor;
+}
+std::vector<Tensor> log10_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _log10_bw)(grad, input, output_mem_config);
+}
+
+
 }//namespace tt_metal
 
 }//namespace tt
