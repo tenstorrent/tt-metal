@@ -48,11 +48,11 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
         # Small conv
         (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, False),
         # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, False, True, False), # Asserts #5323
-        # Untilize out (FIXME: enable when GS support is added)
-        # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, True),
-        # (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, False, True),
-        # (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, True, True),
-        # (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, True),
+        # Untilize out
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, False, True),
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, False, True),
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, True, True),
+        (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, False, True, True),
     ),
 )
 @pytest.mark.parametrize(
