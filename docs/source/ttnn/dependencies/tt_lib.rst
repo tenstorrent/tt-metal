@@ -956,6 +956,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.acos_bw
 
+.. autofunction:: tt_lib.tensor.erfinv_bw
+
 .. autofunction:: tt_lib.tensor.leaky_relu_bw
 
 .. autofunction:: tt_lib.tensor.elu_bw

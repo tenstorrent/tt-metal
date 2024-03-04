@@ -1089,6 +1089,20 @@ std::vector<Tensor> binary_lt_bw(const Tensor& grad, const Tensor& input, const 
 {
     return operation::decorate_as_composite(__func__, _binary_lt_bw)(grad, input, output_mem_config);
 }
+
+//erfinv
+//self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
+std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = mul_unary(0.5, mul(sqrt(full_like(input, M_PI , output_mem_config), output_mem_config), mul( exp( square(erfinv(input, output_mem_config), output_mem_config), output_mem_config), grad, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> erfinv_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _erfinv_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
