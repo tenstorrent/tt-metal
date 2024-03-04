@@ -1,4 +1,4 @@
-name: "[post-commit] models - Run perf regressions on models and output report"
+name: "Model perf regressions and output report"
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
   workflow_call:
 
 jobs:
-  build-and-test-measure-perf:
+  models-perf:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
