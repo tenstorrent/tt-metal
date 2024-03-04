@@ -59,13 +59,18 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     const Tensor& output,
     uint32_t bias_ntiles,
     bool with_bias,
-    bool split_reader
+    bool split_reader,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc
 ) {
+
+    tt::DataFormat interm0_df = packer_l1_acc ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
+    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
 
     CBHandle cb_sharded_act = 0;
     if (input.memory_config().is_sharded()) {
@@ -126,8 +131,8 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 
     CBHandle cb_output = 0;
     if (untilize_out) {
-        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{matmul_partials_cb, out_df}})
-		    .set_page_size(matmul_partials_cb, out_tile_size);
+        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
+		    .set_page_size(matmul_partials_cb, interm0_single_tile_size);
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
 
         // Supposed to be a small CB only responsible for reorganizing
@@ -143,18 +148,33 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
         }
         cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
-        CoreRangeSet cores(std::set<CoreRange>({core}));
-        std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
-            {out0_cb, out_df},
-            {matmul_partials_cb, out_df}
-        };
-        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
-		    .set_page_size(out0_cb, out_tile_size)
-            .set_page_size(matmul_partials_cb, out_tile_size);
-        if (output.is_sharded()) {
-            cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
+        //Share buffer if same data format
+        if(interm0_df == out_df) {
+            CoreRangeSet cores(std::set<CoreRange>({core}));
+            std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
+                {out0_cb, out_df},
+                {matmul_partials_cb, out_df}
+            };
+            CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
+                .set_page_size(out0_cb, out_tile_size)
+                .set_page_size(matmul_partials_cb, out_tile_size);
+            if (output.is_sharded()) {
+                cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
+            }
+            cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
+        } else {
+            //Separate buffer if not same data format
+            CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
+                .set_page_size(matmul_partials_cb, interm0_single_tile_size);
+            auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+
+            CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{out0_cb, out_df}})
+                .set_page_size(out0_cb, out_tile_size);
+            if (output.is_sharded()) {
+                cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+            }
+            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
         }
-        cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
     }
 
     if (with_bias) {
@@ -652,7 +672,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             output,
             bias_ntiles_per_core,
             has_bias,
-            split_reader
+            split_reader,
+            fp32_dest_acc_en,
+            packer_l1_acc
     );
 
     string reader_kernel;
@@ -762,6 +784,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     if (split_reader) {
         reader_defines["SPLIT_READER"] = "1";
         compute_defines["SPLIT_READER"] = "1";
+    }
+
+    if (packer_l1_acc) {
+        compute_defines["PACKER_L1_ACC"] = "1";
     }
 
     writer_compile_time_args = {
