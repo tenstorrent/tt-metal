@@ -980,6 +980,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.log1p_bw
 
+.. autofunction:: tt_lib.tensor.binary_ne_bw
+
 Loss Functions
 ==============
 
