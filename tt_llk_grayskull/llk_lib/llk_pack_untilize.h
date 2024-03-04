@@ -53,18 +53,23 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     }    
 }
 
-template <std::uint32_t block_ct_dim>
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void _llk_pack_untilize_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
 
     _llk_pack_untilize_configure_addrmod_();
 
     _llk_pack_untilize_mop_config_<block_ct_dim>(face_r_dim, num_faces);
+
+    if (block_ct_dim != full_ct_dim) {
+        const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces>1) ? num_faces/2 : 1) * FACE_C_DIM);
+        TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset/16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
+    }
 }
 
-template <std::uint32_t block_ct_dim>
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4 /*not used*/) {
 
-    program_packer_untilized_destination<block_ct_dim>(address, pack_dst_format);
+    program_packer_untilized_destination<block_ct_dim, full_ct_dim>(address, pack_dst_format);
 
     const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : TILE_R_DIM/4;
 
@@ -72,7 +77,24 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, 0); // Clear tile counter
         ckernel::ckernel_template::run(instrn_buffer);
         TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
+        if constexpr (block_ct_dim != full_ct_dim) {
+            TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
+            // update l1 address
+            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR+1, p_gpr_pack::OUTPUT_ADDR+1, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR+2, p_gpr_pack::OUTPUT_ADDR+2, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR+3, p_gpr_pack::OUTPUT_ADDR+3, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+            TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK0 | p_stall::PACK1);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR+1);
+            TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK2 | p_stall::PACK3);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR+2);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR+3);
+            TTI_NOP;
+        }
     }
 
-    TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
+    if constexpr (block_ct_dim == full_ct_dim) {
+        TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
+    }    
 }

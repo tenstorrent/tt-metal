@@ -334,10 +334,10 @@ namespace ckernel::packer
      }
     }
 
-   template <uint32_t block_ct_dim>
+   template <uint32_t block_ct_dim, uint32_t full_ct_dim>
    inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
    {
-      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
+      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
       constexpr uint32_t offset0 = 0;
       const uint32_t offset1 = (1*block_size)/16;
       const uint32_t offset2 = (2*block_size)/16;

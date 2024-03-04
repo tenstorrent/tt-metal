@@ -87,6 +87,7 @@ struct p_gpr_pack
     constexpr static uint BFP4_EXP_SEC_SIZE = 52;  // holds packer 0-3 exp section size for bfp4 format
     constexpr static uint BFP2_EXP_SEC_SIZE = 56;  // holds packer 0-3 exp section size for bfp2 format
     constexpr static uint PERF_PACK_NUM_TILES = 60; // output operand num tiles
+    constexpr static uint OUTPUT_ADDR_OFFSET  = 61;  // output offset address that's added to OUTPUT_ADDR
 };
 
 } // namespace ckernel
