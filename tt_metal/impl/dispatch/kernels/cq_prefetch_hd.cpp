@@ -251,8 +251,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr) {
     noc_async_write(data_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), length);
     dispatch_data_ptr += length;
 
-    DPRINT << "inline_noflush: " << length << " " << cmd->relay_inline.stride << ENDL();
-    return cmd_ptr + 2 * length;
+    return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
@@ -382,8 +381,9 @@ uint32_t process_relay_dram_paged_cmd(uint32_t cmd_ptr) {
     uint32_t pad_to_page = dispatch_cb_page_size - (dispatch_data_ptr & (dispatch_cb_page_size - 1));
     dispatch_data_ptr += pad_to_page;
 
-    dispatch_cb_release_pages(npages);// yes, npages
-    return cmd_ptr + 2 * sizeof(CQPrefetchCmd);// XXXXX
+    dispatch_cb_release_pages(npages);
+
+    return cmd_ptr + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
 void kernel_main() {
@@ -416,9 +416,9 @@ void kernel_main() {
             break;
 
         case CQ_PREFETCH_CMD_WRAP:
-            DPRINT << "dev wrap: " << (uint32_t)sizeof(CQPrefetchCmd) << ENDL();
+            DPRINT << "dev wrap: " << ENDL();
             pcie_read_ptr = pcie_base;
-            cmd_ptr += 32;
+            cmd_ptr += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
             break;
 
         case CQ_PREFETCH_CMD_STALL:
