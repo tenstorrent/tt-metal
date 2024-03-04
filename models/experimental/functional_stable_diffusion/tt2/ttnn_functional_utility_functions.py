@@ -9,6 +9,10 @@ import torch
 from typing import Optional, Dict
 
 
+def round_up_to_tile_dim(n):
+    return ((n + 31) // 32) * 32
+
+
 def is_tile_dim_alligned(dim):
     return dim % 32 == 0
 

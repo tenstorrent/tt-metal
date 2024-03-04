@@ -7,7 +7,10 @@ import ttnn
 import torch
 import tt_lib as ttl
 from ttnn.operations.core import squeeze, unsqueeze_to_4D
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import is_tile_dim_alligned
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+    is_tile_dim_alligned,
+    round_up_to_tile_dim,
+)
 
 
 def ttnn_to_torch(input):
@@ -15,6 +18,32 @@ def ttnn_to_torch(input):
     input = ttnn.from_device(input)
     input = ttnn.to_torch(input)
     return input
+
+
+def pad_heads(tensor, num_heads=8, dim=-1):
+    device = tensor.device
+    memory_config = ttnn.get_memory_config(tensor)
+
+    padding_needed = not is_tile_dim_alligned(tensor.shape[dim] // num_heads)
+    if padding_needed:
+        tensor = ttnn_to_torch(tensor)
+        unpadded_len = tensor.shape[-1] // num_heads
+        padding_needed = round_up_to_tile_dim(unpadded_len) - unpadded_len
+        unpadded_tensors = torch.split(tensor, tensor.shape[dim] // num_heads, dim=dim)
+        padding = (
+            torch.zeros((tensor.shape[-2], padding_needed))
+            if dim == -1
+            else torch.zeros((padding_needed, tensor.shape[-1]))
+        )
+        padded_tensor = torch.Tensor()
+        for unpadded_tensor in unpadded_tensors:
+            padded_tensor = torch.cat([padded_tensor, unpadded_tensor, padding], dim=dim)
+
+        padded_tensor = ttnn.from_torch(padded_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        padded_tensor = ttnn.to_device(padded_tensor, device, memory_config=memory_config)
+        tensor = padded_tensor
+
+    return tensor
 
 
 def concatenate_qkv(q, k, v):
@@ -36,6 +65,7 @@ def concatenate_qkv(q, k, v):
         qkv = torch.cat([q, k, v], dim=dim)
     else:
         qkv = torch.cat([k, v], dim=dim)
+
     qkv = ttnn.from_torch(qkv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     qkv = ttnn.to_device(qkv, device, memory_config=memory_config)
     return qkv
@@ -53,22 +83,23 @@ def weight_to_bfp8(weight):
 class cross_attention:
     def __init__(self, device, parameters):
         self.fused_qkv = parameters.to_q.weight.shape[0] == parameters.to_k.weight.shape[0]
+        for key in ["to_q", "to_k", "to_v"]:
+            parameters[key].weight = pad_heads(parameters[key].weight, 8)
+            assert "bias" not in parameters[key]
+        parameters.to_out[0].weight = pad_heads(parameters.to_out[0].weight, 8, dim=-2)
+
         if self.fused_qkv:
             parameters["qkv"] = ttnn.model_preprocessing.ParameterDict()
             parameters.qkv["weight"] = concatenate_qkv(
                 parameters.to_q.weight, parameters.to_k.weight, parameters.to_v.weight
             )
-
-            for key in ["to_q", "to_k", "to_v"]:
-                assert "bias" not in parameters[key]
-                # del parameters[key]
         else:
             parameters["kv"] = ttnn.model_preprocessing.ParameterDict()
             parameters.kv["weight"] = concatenate_qkv(None, parameters.to_k.weight, parameters.to_v.weight)
             parameters.to_q.weight = weight_to_bfp8(parameters.to_q.weight)
 
-        self.device = device
         self.parameters = parameters
+        self.device = device
 
         scale = torch.ones((1, 1)) * 40**-0.5
         self.scale_40 = ttnn.from_torch(scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
@@ -82,7 +113,7 @@ class cross_attention:
         self.scales = {40: self.scale_40, 80: self.scale_80, 160: self.scale_160}
 
         attention_mask_96 = torch.ones((1, 1, 1, 96)) * -1e9
-        attention_mask_96[:, :, :, :77] = 0
+        attention_mask_96[:, :, :, :64] = 0
         attention_mask_96 = ttnn.from_torch(
             attention_mask_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
@@ -109,7 +140,7 @@ class cross_attention:
             4096: attention_mask_4096,
         }
 
-        padding_shapes = [[2, 4000, 640], [2, 928, 1280], [2, 160, 2560], [2, 32, 1280]]
+        padding_shapes = [[2, 4000, 1024], [2, 928, 1536], [2, 160, 2560], [2, 32, 1280]]
         self.padded_tensors = {}
         for shape in padding_shapes:
             padding = torch.zeros(shape)
@@ -163,8 +194,8 @@ class cross_attention:
                 hidden_states,
                 self.parameters.qkv.weight,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=hidden_states.device.core_grid,
                 dtype=ttnn.bfloat8_b,
-                # core_grid=ttnn.CoreGrid(y=8, x=8),
             )
             ttnn.deallocate(hidden_states)
 
@@ -181,10 +212,11 @@ class cross_attention:
             q_proj = ttnn.linear(
                 hidden_states,
                 self.parameters.to_q.weight,
+                core_grid=hidden_states.device.core_grid,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                # core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat8_b,
             )
-            del hidden_states
+            ttnn.deallocate(hidden_states)
             if encoder_hidden_seq_len > hidden_seq_len:
                 padding_needed = encoder_hidden_seq_len - hidden_seq_len
                 q_proj = ttnn.concat([q_proj, self.padded_tensors[padding_needed]], dim=1)
@@ -193,21 +225,30 @@ class cross_attention:
             kv_proj = ttnn.linear(
                 encoder_hidden_states,
                 self.parameters.kv.weight,
+                core_grid=encoder_hidden_states.device.core_grid,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                # core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat8_b,
             )
+            ttnn.deallocate(encoder_hidden_states)
             if hidden_seq_len > encoder_hidden_seq_len:
                 padding_needed = hidden_seq_len - encoder_hidden_seq_len
                 kv_proj = ttnn.concat([kv_proj, self.padded_tensors[padding_needed]], dim=1)
 
-                # encoder_hidden_states = ttnn.pad(encoder_hidden_states, ((0, 0), (0, padding_needed)), 0)
-            del encoder_hidden_states
             query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(q_proj, kv_proj, num_heads=heads)
-            del kv_proj
-            del q_proj
+            ttnn.deallocate(kv_proj)
+            ttnn.deallocate(q_proj)
 
+            if key.shape[-1] > 96:
+                key = key[:, :, :, :96]
+            if value.shape[-2] > 96:
+                value = value[:, :, :96, :]
             assert key.shape[-1] in self.attention_masks
             attention_mask = self.attention_masks[key.shape[-1]]
+
+        if hidden_states.shape[-2] == 4096:
+            query = ttnn.reallocate(query)
+            key = ttnn.reallocate(key)
+            value = ttnn.reallocate(value)
 
         attention_probs = self.get_attention_scores(
             query, key, attention_mask, scale=self.scales[dim_head], device=self.device
@@ -227,7 +268,9 @@ class cross_attention:
             hidden_states,
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,
+            core_grid=hidden_states.device.core_grid,
             memory_config=ttnn.get_memory_config(hidden_states),
+            dtype=ttnn.bfloat8_b,
         )
 
         if len(hidden_states.shape) == 3:
