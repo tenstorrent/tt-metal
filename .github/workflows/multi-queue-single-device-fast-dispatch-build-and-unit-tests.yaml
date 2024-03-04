@@ -1,4 +1,4 @@
-name: "[post-commit] all - Fast dispatch multi queue single device post-commit main build and unit tests"
+name: "[post-commit] Fast dispatch multi queue single device unit tests"
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
   workflow_call:
 
 jobs:
-  build-and-unit-tests-fast-dispatch:
+  tests-fast-dispatch-multi-queue:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines

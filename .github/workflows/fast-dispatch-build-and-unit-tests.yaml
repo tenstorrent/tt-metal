@@ -1,4 +1,4 @@
-name: "[post-commit] all - Fast dispatch post-commit main build and unit tests"
+name: "[post-commit] Fast dispatch unit tests"
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
   workflow_call:
 
 jobs:
-  python_api_ops_tests:
+  python-api-ops-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -62,7 +62,6 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_moreh.sh
-
   python-api-misc-unit-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -97,7 +96,6 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_unit_test_misc.sh
-
   model-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -131,8 +129,7 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_python_model_tests.sh
-     
-  sweep-metal-and-eager-tests:
+  sweep-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
