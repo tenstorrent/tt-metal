@@ -1149,6 +1149,29 @@ std::vector<Tensor> binary_ne_bw(const Tensor& grad, const Tensor& input, const 
 {
     return operation::decorate_as_composite(__func__, _binary_ne_bw)(grad, input, output_mem_config);
 }
+
+std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = mul_unary(M_2_SQRTPI, mul(exp(neg(square(input, output_mem_config), output_mem_config), output_mem_config), grad, std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _erf_bw)(grad, input, output_mem_config);
+}
+
+std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = mul_unary(-M_2_SQRTPI, mul(exp(neg(square(input, output_mem_config), output_mem_config), output_mem_config), grad, std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> erfc_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _erfc_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
