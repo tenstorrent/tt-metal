@@ -191,6 +191,15 @@ operation::ProgramWithCallbacks groupnorm_sharded_(
     uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
+    if (shard_orientation == ShardOrientation::COL_MAJOR) {
+        TT_ASSERT(per_core_N * num_cores_r == W);
+        TT_ASSERT(per_core_M * num_cores_c == H);
+    } else {
+        TT_ASSERT(per_core_N * num_cores_c == W);
+        TT_ASSERT(per_core_M * num_cores_r == H);
+    }
+
+
     // subblock
     bool is_channel_divisible_by_tile = true;
     uint32_t block_wt = per_core_Nt / num_groups_per_core;
