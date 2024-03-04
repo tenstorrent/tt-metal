@@ -66,8 +66,9 @@ from ttnn.types import (
 from ttnn.device import Device, open_device, close_device, manage_device, synchronize_device, dump_device_memory_state
 
 from ttnn.core import (
+    set_printoptions,
     has_storage_type_of,
-    has_padding,
+    has_tile_padding,
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,

@@ -182,10 +182,10 @@ git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules
 cd tt-metal
 ```
 
-For example, if you are trying to use version `v0.35.0`, you can execute:
+For example, if you are trying to use version `v0.44.0`, you can execute:
 
 ```
-git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.35.0
+git clone https://github.com/tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.44.0
 cd tt-metal
 ```
 

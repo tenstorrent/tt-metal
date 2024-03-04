@@ -612,6 +612,16 @@ Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, c
 
 std::ostream& operator<<(std::ostream& os, const DataType& dtype);
 
+enum class TensorPrintProfile {
+    Empty,
+    Short,
+    Full,
+};
+
+inline TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
+
+namespace detail {
+
 struct DimensionShortener {
     size_t size;
     std::optional<std::size_t> max;
@@ -627,19 +637,11 @@ struct DimensionShortener {
 };
 
 inline DimensionShortener get_dimension_shortener(std::size_t size) {
-    auto TTNN_TENSOR_PRINT_LEVEL_ENV = std::getenv("TTNN_TENSOR_PRINT_LEVEL");
-    std::string TTNN_TENSOR_PRINT_LEVEL = "SHORT";
-    if (TTNN_TENSOR_PRINT_LEVEL_ENV != nullptr) {
-        TTNN_TENSOR_PRINT_LEVEL = TTNN_TENSOR_PRINT_LEVEL_ENV;
-    }
-    if (TTNN_TENSOR_PRINT_LEVEL == "NONE") {
-        return DimensionShortener{size, 0};
-    } else if (TTNN_TENSOR_PRINT_LEVEL == "SHORT") {
-        return DimensionShortener{size, 4};
-    } else if (TTNN_TENSOR_PRINT_LEVEL == "FULL") {
-        return DimensionShortener{size, std::nullopt};
-    } else {
-        TT_THROW("Unrecognized TTNN_TENSOR_PRINT_LEVEL {}", TTNN_TENSOR_PRINT_LEVEL);
+    switch (TTNN_TENSOR_PRINT_PROFILE) {
+        case TensorPrintProfile::Empty: return DimensionShortener{size, 0};
+        case TensorPrintProfile::Short: return DimensionShortener{size, 4};
+        case TensorPrintProfile::Full: return DimensionShortener{size, std::nullopt};
+        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_TENSOR_PRINT_PROFILE);
     }
 }
 
@@ -648,8 +650,6 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
         ss << "," << after;
     }
 }
-
-namespace detail {
 
 template <typename T>
 inline void print_datum(std::ostream& ss, T datum) {
@@ -740,9 +740,11 @@ void to_string_tile(
 template <typename BufferType>
 std::string to_string(const BufferType& buffer, const Shape& shape, DataType dtype, Layout layout) {
     std::stringstream ss;
-    ss << "ttnn.Tensor(";
+    ss << TENSOR_TYPE_STRING << "(";
 
-    if (layout == Layout::ROW_MAJOR) {
+    if (TTNN_TENSOR_PRINT_PROFILE == TensorPrintProfile::Empty) {
+        ss << "...";
+    } else if (layout == Layout::ROW_MAJOR) {
         switch (shape.rank()) {
             case 0: to_string_row_major<BufferType, 0>(ss, buffer, shape, 0, 0); break;
             case 1: to_string_row_major<BufferType, 1>(ss, buffer, shape, 0, 0); break;
@@ -770,7 +772,7 @@ std::string to_string(const BufferType& buffer, const Shape& shape, DataType dty
         TT_THROW("Unsupported Layout for printing tensor!");
     }
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
-       << ", layout=" << fmt::format("{}", layout) << ")" << std::endl;
+       << ", layout=" << fmt::format("{}", layout) << ")";
     return ss.str();
 }
 
@@ -783,7 +785,12 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
     const auto layout = tensor.layout();
 
     if (not tensor.is_allocated()) {
-        return fmt::format("Tensor(<buffer is not allocated>, shape={}, dtype={}, layout={})", shape, dtype, layout);
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            detail::TENSOR_TYPE_STRING,
+            shape,
+            dtype,
+            layout);
     }
 
     if (tensor.storage_type() == StorageType::DEVICE) {

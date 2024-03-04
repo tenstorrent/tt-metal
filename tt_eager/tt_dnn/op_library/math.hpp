@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+namespace tt {
 
-#include "tt_metal/common/assert.hpp"
-namespace tt::tt_metal {
+namespace tt_metal {
 
 template <typename T>
 bool is_power_of_two(T val) {
-    return (val & (val - 1)) == T(0);
+    return (val & (val-1))==T(0);
 }
 
 template <typename T>
@@ -22,4 +22,6 @@ bool is_power_of_two_at_least_32(T val) {
     return is_power_of_two_at_least(val, T(32));
 }
 
-}  // namespace tt::tt_metal
+}  // namespace metal
+
+}  // namespace tt

@@ -10,6 +10,7 @@
 #include "tt_eth_api.h"
 #include "erisc.h"
 
+#include "tools/profiler/kernel_profiler.hpp"
 #include "../dataflow_api.h"
 
 #define FORCE_INLINE inline __attribute__((always_inline))

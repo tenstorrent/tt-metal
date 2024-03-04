@@ -12,7 +12,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape",
     (([1, 2048, 7, 7], ([1, 64, 1, 32]))),

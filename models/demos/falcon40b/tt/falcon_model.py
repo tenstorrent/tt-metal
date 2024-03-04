@@ -142,12 +142,16 @@ class TtFalconModelShared:
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
-            tt_embeddings = torch2tt_tensor(
-                embeddings.unsqueeze(1),
-                self.device,
-                tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-                tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-            )
+            embeddings = torch.chunk(embeddings.unsqueeze(1), len(self.devices), -1)
+            tt_embeddings = [
+                torch2tt_tensor(
+                    embeddings[i],
+                    self.devices[i],
+                    tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
+                    tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                )
+                for i in range(len(self.devices))
+            ]
 
             attention_mask_bool = torch.ones(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
@@ -160,12 +164,27 @@ class TtFalconModelShared:
                 dim=-1,
             )
 
-            tt_attention_mask = torch2tt_tensor(
+            attention_mask_bool_chunks = torch.chunk(
                 (attention_mask_bool_padded * -1e3).expand(-1, self.config.num_attention_heads, -1, -1),
-                self.device,
-                tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                len(self.devices),
+                1,
             )
+            tt_attention_mask = []
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = sequence_size
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
+            for i in range(len(self.devices)):
+                tt_attention_mask.append(
+                    torch2tt_tensor(
+                        attention_mask_bool_chunks[i],
+                        self.devices[i],
+                        tt_memory_config=attention_mask_memconfig,
+                        tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                    )
+                )
 
         elif llm_mode == "decode":
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"

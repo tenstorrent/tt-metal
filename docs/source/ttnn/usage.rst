@@ -224,3 +224,14 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 
     # Less than or equals
     input_tensor_a <= input_tensor_b
+
+
+
+10. Changing the string representation of the tensor
+----------------------------------------------------
+
+.. code-block:: python
+
+    import ttnn
+
+    ttnn.set_printoptions(profile="full")

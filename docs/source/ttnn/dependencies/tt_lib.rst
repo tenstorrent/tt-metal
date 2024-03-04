@@ -958,6 +958,16 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.leaky_relu_bw
 
+.. autofunction:: tt_lib.tensor.hardtanh_bw
+
+.. autofunction:: tt_lib.tensor.angle_bw
+
+.. autofunction:: tt_lib.tensor.sin_bw
+
+.. autofunction:: tt_lib.tensor.sinh_bw
+
+.. autofunction:: tt_lib.tensor.celu_bw
+
 Loss Functions
 ==============
 

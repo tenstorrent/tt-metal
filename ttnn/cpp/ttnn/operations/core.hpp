@@ -4,11 +4,13 @@
 
 #pragma once
 
-#include "tt_eager/tt_numpy/functions.hpp"
-#include "ttnn/types.hpp"
+#include "tt_eager/tensor/types.hpp"
+#include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "tt_eager/tt_numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
 
 namespace ttnn {

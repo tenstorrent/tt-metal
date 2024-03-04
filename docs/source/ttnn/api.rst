@@ -11,9 +11,20 @@ Device
    ttnn/close_device
    ttnn/manage_device
 
+Memory Config
+*************
 
-Tensor
-******
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/create_sharded_memory_config
+
+
+Operations
+**********
+
+Core
+====
 
 .. toctree::
    :maxdepth: 1
@@ -30,18 +41,6 @@ Tensor
    ttnn/reallocate
    ttnn/to_memory_config
 
-
-Memory Config
-*************
-
-.. toctree::
-   :maxdepth: 1
-
-   ttnn/create_sharded_memory_config
-
-
-Operations
-**********
 
 Tensor Creation
 ===============
@@ -302,3 +301,11 @@ Model Conversion
 
    ttnn/model_preprocessing/preprocess_model
    ttnn/model_preprocessing/preprocess_model_parameters
+
+
+Miscellaneous
+*************
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/set_printoptions

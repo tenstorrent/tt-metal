@@ -24,6 +24,8 @@ from models.utility_functions import (
     profiler,
     torch2tt_tensor,
     tt2torch_tensor,
+    nearest_32,
+    get_devices_for_t3000,
 )
 
 END_OF_TEXT = 11
@@ -49,38 +51,69 @@ def post_process(logits, index):
     return ids
 
 
-def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len):
+def preprocess_and_validate_inputs(input_prompts, tokenizer):
     tokenizer.pad_token = tokenizer.eos_token
+
+    num_users = len(input_prompts)
+    num_input_tokens = -1
+    for prompt in input_prompts:
+        tokenized_prompt = tokenizer(prompt, padding=False, add_special_tokens=False, return_tensors="pt")
+        num_input_tokens = max(num_input_tokens, len(tokenized_prompt["input_ids"][0]))
+
+    seq_len_padded_to_32 = nearest_32(num_input_tokens)
+    assert seq_len_padded_to_32 == 32, "Prefill only supports 32 tokens max"
+
     tokenized_inputs = tokenizer(
-        input_prompts, padding="max_length", max_length=max_seq_len, add_special_tokens=False, return_tensors="pt"
+        input_prompts,
+        padding="max_length",
+        max_length=seq_len_padded_to_32,
+        add_special_tokens=False,
+        return_tensors="pt",
     )
     prefill_ids = tokenized_inputs["input_ids"]
 
-    tokenized_inputs_nopad = tokenizer(
-        input_prompts, padding=False, max_length=max_seq_len, add_special_tokens=False, return_tensors="pt"
-    )
-
-    num_users = len(tokenized_inputs_nopad["input_ids"])
-    num_input_tokens = len(tokenized_inputs_nopad["input_ids"][0])
-    for input_prompt in tokenized_inputs_nopad["input_ids"]:
-        assert len(input_prompt) == num_input_tokens
     logger.info(f"# of users: {num_users}")
     logger.info(f"# of input tokens per user: {num_input_tokens}")
 
     return prefill_ids, num_users, num_input_tokens
 
 
-# TODO: Review for falcon40b on multi-chip once we have prefill
-def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device):
+def initialize_kv_cache(model_config, configuration, num_layers, batch_size, max_seq_len, devices):
+    logger.info("Filling kv cache on device")
     head_dim = configuration.hidden_size // configuration.num_attention_heads
-    kv_cache = ()
-    for _ in range(num_layers):
-        k_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
-        v_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
-        tt_k_cache = torch2tt_tensor(k_cache, device)
-        tt_v_cache = torch2tt_tensor(v_cache, device)
-        kv_cache += ((tt_k_cache, tt_v_cache),)
-    return kv_cache
+    num_kv_heads = configuration.num_kv_heads
+
+    tt_kv_cache = ()
+    tt_k_cache_host = torch.zeros(batch_size, num_kv_heads, max_seq_len, head_dim)
+    tt_v_cache_host = torch.zeros(batch_size, num_kv_heads, max_seq_len, head_dim)
+    tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
+    tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
+
+    for i in range(num_layers):
+        logger.info(f"Initializing kv cache on devices for layer: {i+1}")
+        tt_k_cache = []
+        tt_v_cache = []
+        for j in range(len(devices)):
+            tt_k_cache.append(
+                torch2tt_tensor(
+                    tt_k_cache_host[j],
+                    devices[j],
+                    tt_lib.tensor.Layout.TILE,
+                    model_config["KV_CACHE_MEMCFG"],
+                    model_config["KV_CACHE_DTYPE"],
+                )
+            )
+            tt_v_cache.append(
+                torch2tt_tensor(
+                    tt_v_cache_host[j],
+                    devices[j],
+                    tt_lib.tensor.Layout.TILE,
+                    model_config["KV_CACHE_MEMCFG"],
+                    model_config["KV_CACHE_DTYPE"],
+                )
+            )
+        tt_kv_cache += ((tt_k_cache, tt_v_cache),)
+    return tt_kv_cache
 
 
 # TODO: Remove once we have prefill on device
@@ -103,7 +136,6 @@ def initialize_and_fill_kv_cache(
     # pytorch_layer_present = (single_layer_cache,) * 60
 
     kv_cache = ()
-    # tt_layer_past_host = () # TODO: Not needed?
     for i in range(num_layers):
         logger.info(f"Putting kv cache on devices for layer: {i+1}")
         k_cache_repeat_interleaved, v_cache_repeat_interleaved = pytorch_layer_present[i]
@@ -116,7 +148,6 @@ def initialize_and_fill_kv_cache(
         tt_v_cache_host[:num_users, :, :kv_cache_len, :] = v_cache
         tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
         tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
-        # tt_layer_past_host += ((tt_k_cache_host, tt_v_cache_host),) # TODO: Not needed?
 
         tt_k_cache = []
         tt_v_cache = []
@@ -153,13 +184,15 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
 def run_falcon_demo_kv(
     user_input,
     model_version,
+    model_config_str,
+    model_config,
     batch_size,
     num_layers,
     max_seq_len,
-    model_config,
     model_location_generator,
     tt_cache_path,
     devices,
+    prefill_on_host,
 ):
     torch.manual_seed(0)
 
@@ -219,76 +252,89 @@ def run_falcon_demo_kv(
     for device in devices:
         tt_lib.device.Synchronize(device)
 
-    # TODO: Remove pytorch model once prefill is on device
-    logger.info("Loading PyTorch model for prefill")
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
-    hugging_face_reference_model.eval()
-    pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
+    if prefill_on_host:
+        # TODO: Remove pytorch model once prefill is on device
+        logger.info("Loading PyTorch model for prefill")
+        model_name = model_location_generator(model_version, model_subdir="Falcon")
+        hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+        hugging_face_reference_model.eval()
+        pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
+    else:
+        logger.info("Initializing and KV cache")
+        profiler.start(f"initializing_KV_cache")
+        kv_cache = initialize_kv_cache(model_config, configuration, num_layers, batch_size, max_seq_len, devices)
+        profiler.end(f"initializing_KV_cache")
 
     logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
 
     tokenizer = AutoTokenizer.from_pretrained(model_version)
-    prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len)
+    prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(input_prompts, tokenizer)
 
     profiler.end(f"tokenizing_inputs")
 
-    logger.info("Initializing and filling KV cache on host...")
-    profiler.start(f"initializing_KV_cache")
-    pt_logits, kv_cache = initialize_and_fill_kv_cache(
-        pytorch_FalconCausalLM,
-        model_config,
-        configuration,
-        prefill_ids[:, :num_input_tokens],
-        num_layers,
-        batch_size,
-        max_seq_len,
-        devices,
-    )
-    profiler.end(f"initializing_KV_cache")
+    post_processor = partial(post_process)
+    if prefill_on_host:
+        logger.info("Initializing and filling KV cache")
+        profiler.start(f"initializing_KV_cache_on_host")
+        pt_logits, kv_cache = initialize_and_fill_kv_cache(
+            pytorch_FalconCausalLM,
+            model_config,
+            configuration,
+            prefill_ids[:, :num_input_tokens],
+            num_layers,
+            batch_size,
+            max_seq_len,
+            devices,
+        )
+        profiler.end(f"initializing_KV_cache")
+
+        output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
+        for user_id in range(num_users):
+            user_output_ids = post_processor(logits=pt_logits[user_id : user_id + 1, :, :], index=num_input_tokens - 1)
+            output_ids[user_id] = user_output_ids
+
     profiler.disable()
     # TODO: Is this safe? Disabling kernel caching disable program caching as well?
     enable_persistent_kernel_cache()
 
     ### First prefill run with compile ###
-    # TODO: Add prefill once it works on device
-    logger.info("Running 1st run prefill stage with compile...")
-    post_processor = partial(post_process)
     use_cache = True
-    output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
-    time_prefill_compile = 0
-    for user_id in range(num_users):
-        time_prefill_compile_start = time.time()
-        # (
-        #     tt_prefill_embeddings,
-        #     tt_prefill_attention_mask,
-        # ) = tt_FalconCausalLM.model_preprocessing(
-        #     "prefill", prefill_ids[user_id : user_id + 1], 0, num_input_tokens=num_input_tokens
-        # )
-        # assert tt_prefill_attention_mask is not None
+    if not prefill_on_host:
+        logger.info("Running 1st run prefill stage with compile...")
+        output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
+        time_prefill_compile = 0
+        for user_id in range(num_users):
+            logger.info(f"Filling kv cache for user {user_id + 1}")
+            time_prefill_compile_start = time.time()
+            (
+                tt_prefill_embeddings,
+                tt_prefill_attention_mask,
+            ) = tt_FalconCausalLM.model_preprocessing(
+                "prefill", prefill_ids[user_id : user_id + 1], 0, num_input_tokens=num_input_tokens
+            )
+            assert tt_prefill_attention_mask is not None
 
-        # tt_logits, kv_cache = tt_FalconCausalLM(
-        #     input_embeddings=tt_prefill_embeddings,
-        #     llm_mode="prefill",
-        #     attention_mask=tt_prefill_attention_mask,
-        #     user_id=user_id,
-        #     layer_past=kv_cache,
-        #     layer_past_len=0,
-        #     use_cache=use_cache,
-        # )
-        time_prefill_compile_end = time.time()
-        time_prefill_compile += time_prefill_compile_end - time_prefill_compile_start
+            tt_logits, kv_cache = tt_FalconCausalLM(
+                input_embeddings=tt_prefill_embeddings,
+                llm_mode="prefill",
+                attention_mask=tt_prefill_attention_mask,
+                user_id=user_id,
+                layer_past=kv_cache,
+                layer_past_len=0,
+                use_cache=use_cache,
+            )
+            time_prefill_compile_end = time.time()
+            time_prefill_compile += time_prefill_compile_end - time_prefill_compile_start
 
-        # tt_prefill_embeddings.deallocate()
-        # if tt_prefill_attention_mask is not None:
-        #     tt_prefill_attention_mask.deallocate()
+            del tt_prefill_embeddings
+            del tt_prefill_attention_mask
 
-        # logits = tt2torch_tensor(tt_logits).squeeze(1)
-        # tt_logits.deallocate()
+            logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+            del tt_logits
 
-        user_output_ids = post_processor(logits=pt_logits[user_id : user_id + 1, :, :], index=num_input_tokens - 1)
-        output_ids[user_id] = user_output_ids
+            user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
+            output_ids[user_id] = user_output_ids
 
     # TODO: Should the concat be removed since output token for prefill shouldn't be used
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
@@ -298,6 +344,10 @@ def run_falcon_demo_kv(
     logger.info("Finished 1st run prefill stage with compile!")
 
     ### First run decode stage with compile ###
+    # Update model_config for decode
+    model_config = get_model_config(model_config_str, "decode", [batch_size, 1], len(devices))
+    tt_FalconCausalLM.model_config = model_config
+
     attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
     if attention_mask_memconfig.is_sharded():
         attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
@@ -540,18 +590,19 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    pcie_devices,
+    all_devices,
     use_program_cache,
 ):
-    disable_persistent_kernel_cache()
+    num_devices = 4
+    devices = get_devices_for_t3000(all_devices, num_devices)
+
+    # disable_persistent_kernel_cache()
     disable_compilation_reports()
     tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon40b")
 
-    # TODO: Prefill and decode will likely require different configs for sharding
-    # Currently, prefill is on host so only generate for decode
-    llm_mode = "decode"
-    num_devices = 4
-    model_config = get_model_config("BFLOAT8_B-SHARDED", llm_mode, num_devices)
+    # Set it up for prefill initially and change the model_config to decode
+    model_config_str = "BFLOAT8_B-SHARDED"
+    model_config = get_model_config("BFLOAT8_B-SHARDED", "prefill", [1, 32], num_devices)
     model_version = model_config_entries["_name_or_path"]
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
@@ -560,11 +611,13 @@ def test_demo(
     return run_falcon_demo_kv(
         user_input=user_input,
         model_version=model_version,
+        model_config_str=model_config_str,
+        model_config=model_config,
         batch_size=32,
         num_layers=model_config_entries["num_hidden_layers"],
         max_seq_len=128,  # 1024,
-        model_config=model_config,
         model_location_generator=model_location_generator,
         tt_cache_path=tt_cache_path,
-        devices=pcie_devices[: model_config["NUM_DEVICES"]],
+        devices=devices,
+        prefill_on_host=True,
     )

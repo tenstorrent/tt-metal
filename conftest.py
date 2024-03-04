@@ -295,6 +295,23 @@ def pcie_devices(request):
     ttl.device.CloseDevices(devices)
 
 
+@pytest.fixture(scope="function")
+def all_devices(request):
+    import tt_lib as ttl
+
+    num_devices = ttl.device.GetNumAvailableDevices()
+
+    # Get only physical devices
+    devices = ttl.device.CreateDevices([i for i in range(num_devices)])
+
+    yield [devices[i] for i in range(num_devices)]
+
+    for device in devices.values():
+        ttl.device.DeallocateBuffers(device)
+
+    ttl.device.CloseDevices(devices)
+
+
 @pytest.fixture(autouse=True)
 def clear_program_cache():
     yield

@@ -22,7 +22,6 @@ def test_base_case(device):
     assert_with_pcc(expected_embeddings, embeddings)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [8, 9])
 @pytest.mark.parametrize("sentence_size", [32, 512])
 @pytest.mark.parametrize("hidden_embedding_dim", [768, 4096])
@@ -55,7 +54,6 @@ def test_embedding(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sentence_size", [384])
 @pytest.mark.parametrize("hidden_embedding_dim", [1024])

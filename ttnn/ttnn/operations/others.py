@@ -83,10 +83,6 @@ def embedding(
             [1.35917e-38, 0, 4.49994e-39, 0]]], dtype=bfloat16 )
 
     """
-    if len(input_tensor.shape) != 2:
-        raise RuntimeError("Input Tensor must have rank of 2!")
-    if len(weight.shape) not in {2, 4}:
-        raise RuntimeError("Weight Tensor must either have rank of 2 or 4!")
 
     *_, hidden_embedding_dim = tuple(weight.shape)
     weight = ttnn.unsqueeze_to_4D(weight)

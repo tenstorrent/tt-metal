@@ -52,6 +52,8 @@ OPS_CSV_HEADER = [
     "DEVICE TRISC1 KERNEL DURATION [ns]",
     "DEVICE TRISC2 KERNEL DURATION [ns]",
     "DEVICE ERISC KERNEL DURATION [ns]",
+    "DEVICE COMPUTE CB WAIT FRONT [ns]",
+    "DEVICE COMPUTE CB RESERVE BACK [ns]",
     # "CALL COUNT",
     "INPUTS",
     "OUTPUTS",
@@ -164,6 +166,16 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
                 "start": {"core": "ANY", "risc": "ERISC", "timerID": 2},
                 "end": {"core": "ANY", "risc": "ERISC", "timerID": 3},
             },
+            "CB_COMPUTE_WAIT_FRONT": {
+                "across": "device",
+                "type": "sum",
+                "marker": {"risc": "TRISC_0", "timerID": 3000},
+            },
+            "CB_COMPUTE_RESERVE_BACK": {
+                "across": "device",
+                "type": "sum",
+                "marker": {"risc": "TRISC_2", "timerID": 3001},
+            },
         }
 
         devicesData = import_log_run_stats(setup)
@@ -188,6 +200,8 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         t1_kernel_delta_time_ns = 0
         t2_kernel_delta_time_ns = 0
         er_kernel_delta_time_ns = 0
+        cb_wait_compute_delta_time_ns = 0
+        cb_reserve_compute_delta_time_ns = 0
 
         if "BR_KERNEL_START->BR_KERNEL_END" in deviceLevelStats.keys():
             br_kernel_delta_time_ns = (
@@ -213,6 +227,12 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
             er_kernel_delta_time_ns = (
                 deviceLevelStats["ER_KERNEL_START->ER_KERNEL_END"]["stats"]["Average"] * 1000 / freq
             )
+        if "CB_COMPUTE_WAIT_FRONT" in deviceLevelStats.keys():
+            cb_wait_compute_delta_time_ns = deviceLevelStats["CB_COMPUTE_WAIT_FRONT"]["stats"]["Average"] * 1000 / freq
+        if "CB_COMPUTE_RESERVE_BACK" in deviceLevelStats.keys():
+            cb_reserve_compute_delta_time_ns = (
+                deviceLevelStats["CB_COMPUTE_RESERVE_BACK"]["stats"]["Average"] * 1000 / freq
+            )
 
         timeDataDict["DEVICE FW START CYCLE"] = start_ts
         timeDataDict["DEVICE FW END CYCLE"] = end_ts
@@ -224,6 +244,8 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         timeDataDict["DEVICE TRISC1 KERNEL DURATION [ns]"] = round(t1_kernel_delta_time_ns)
         timeDataDict["DEVICE TRISC2 KERNEL DURATION [ns]"] = round(t2_kernel_delta_time_ns)
         timeDataDict["DEVICE ERISC KERNEL DURATION [ns]"] = round(er_kernel_delta_time_ns)
+        timeDataDict["DEVICE COMPUTE CB WAIT FRONT [ns]"] = round(cb_wait_compute_delta_time_ns)
+        timeDataDict["DEVICE COMPUTE CB RESERVE BACK [ns]"] = round(cb_reserve_compute_delta_time_ns)
         timeDataDict["CORE COUNT"] = len(cores)
 
     else:
@@ -237,6 +259,8 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         timeDataDict["DEVICE TRISC1 KERNEL DURATION [ns]"] = "-"
         timeDataDict["DEVICE TRISC2 KERNEL DURATION [ns]"] = "-"
         timeDataDict["DEVICE ERISC KERNEL DURATION [ns]"] = "-"
+        timeDataDict["DEVICE COMPUTE CB WAIT FRONT [ns]"] = "-"
+        timeDataDict["DEVICE COMPUTE CB RESERVE BACK [ns]"] = "-"
         timeDataDict["CORE COUNT"] = "-"
 
 

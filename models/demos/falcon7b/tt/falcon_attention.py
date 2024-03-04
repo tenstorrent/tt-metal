@@ -49,13 +49,18 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
 
         layer_name = f"{base_url}.{layer_num}.rotary_embedding"
-        if (
+        overwrite_cos, overwrite_sin = False, False
+        cos_exists = (
             tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
-        ).exists():
+        ).exists()
+        if cos_exists:
             self.tt_cos_cached = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin")
             ).to(tt_device, self.model_config["COS_CACHED_WEIGHTS_MEMCFG"])
-        else:
+            overwrite_cos = (
+                tt2torch_tensor(self.tt_cos_cached).shape[-2] != self.max_seq_len_cached
+            )  # Verify cached tensor has same max seq len
+        if not cos_exists or overwrite_cos:
             self.tt_cos_cached = torch2tt_tensor(
                 emb.cos()[None, None, :, :],
                 tt_device,
@@ -68,13 +73,17 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
                 ),
                 self.tt_cos_cached.cpu(),
             )
-        if (
+        sin_exists = (
             tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
-        ).exists():
+        ).exists()
+        if sin_exists:
             self.tt_sin_cached = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin")
             ).to(tt_device, self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"])
-        else:
+            overwrite_sin = (
+                tt2torch_tensor(self.tt_sin_cached).shape[-2] != self.max_seq_len_cached
+            )  # Verify cached tensor has same max seq len
+        if not sin_exists or overwrite_sin:
             self.tt_sin_cached = torch2tt_tensor(
                 emb.sin()[None, None, :, :],
                 tt_device,

@@ -7,7 +7,7 @@ on:
   workflow_call:
 
 jobs:
-  run-profiler-regression:
+  profiler-regression:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines

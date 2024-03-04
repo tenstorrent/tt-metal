@@ -17,7 +17,7 @@ from models.demos.falcon40b.tt.model_config import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 
 
 class PytorchFalconDecoderModel(torch.nn.Module):
@@ -82,15 +82,66 @@ def run_test_FalconDecoder_inference(
         attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(diagonal=1)
         layer_past = None
 
-        tt_decoder_input = torch2tt_tensor(decoder_input.unsqueeze(1), device)
-        tt_attention_mask = torch2tt_tensor(
-            (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1),
-            device,
+        tt_decoder_input_host = torch.chunk(decoder_input.unsqueeze(1), len(devices), -1)
+        tt_decoder_input = []
+        for i in range(len(devices)):
+            tt_decoder_input.append(
+                torch2tt_tensor(
+                    tt_decoder_input_host[i],
+                    devices[i],
+                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
+                    tt_dtype=model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+                )
+            )
+
+        attention_mask_bool_chunks = torch.chunk(
+            (attention_mask_bool * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
+            len(devices),
+            1,
         )
-        tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
-        tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
-        tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)
-        tt_v_cache = torch2tt_tensor(tt_v_cache.unsqueeze(1), device)
+        tt_attention_mask = []
+        attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = kv_len
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
+        for i in range(len(devices)):
+            tt_attention_mask.append(
+                torch2tt_tensor(
+                    attention_mask_bool_chunks[i],
+                    devices[i],
+                    tt_memory_config=attention_mask_memconfig,
+                    tt_dtype=model_config["ATTN_MASK_DTYPE"],
+                )
+            )
+
+        tt_k_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)
+        tt_v_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)
+        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
+        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
+        tt_k_cache = []
+        tt_v_cache = []
+        for j in range(len(devices)):
+            tt_k_cache.append(
+                torch2tt_tensor(
+                    tt_k_cache_host[j],
+                    devices[j],
+                    tt_lib.tensor.Layout.TILE,
+                    model_config["KV_CACHE_MEMCFG"],
+                    model_config["KV_CACHE_DTYPE"],
+                )
+            )
+            tt_v_cache.append(
+                torch2tt_tensor(
+                    tt_v_cache_host[j],
+                    devices[j],
+                    tt_lib.tensor.Layout.TILE,
+                    model_config["KV_CACHE_MEMCFG"],
+                    model_config["KV_CACHE_DTYPE"],
+                )
+            )
         tt_layer_past = (tt_k_cache, tt_v_cache)
 
     elif llm_mode == "decode":
@@ -220,6 +271,7 @@ def run_test_FalconDecoder_inference(
         layer_past_len=kv_cache_len,
         use_cache=use_cache,
     )
+
     tt_out = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1)
     tt_layer_present = (
         torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[0]], 1),
@@ -246,24 +298,29 @@ def run_test_FalconDecoder_inference(
 
     does_pass = does_pass and does_pass2
 
-    does_pass2, output_pcc = comp_pcc(
-        pytorch_layer_present[0][:, kv_len - 1 : kv_len, :], tt_layer_present[0][:, kv_len - 1 : kv_len, :], token_pcc
-    )
-    logger.info(f"K Cache new token: {output_pcc}")
-
-    does_pass = does_pass and does_pass2
-
     does_pass2, output_pcc = comp_pcc(pytorch_layer_present[1], tt_layer_present[1], cache_pcc)
     logger.info(f"V Cache: {output_pcc}")
 
     does_pass = does_pass and does_pass2
 
-    does_pass2, output_pcc = comp_pcc(
-        pytorch_layer_present[1][:, kv_len - 1 : kv_len, :], tt_layer_present[1][:, kv_len - 1 : kv_len, :], token_pcc
-    )
-    logger.info(f"V Cache new token: {output_pcc}")
+    if llm_mode == "decode":
+        does_pass2, output_pcc = comp_pcc(
+            pytorch_layer_present[0][:, kv_len - 1 : kv_len, :],
+            tt_layer_present[0][:, kv_len - 1 : kv_len, :],
+            token_pcc,
+        )
+        logger.info(f"K Cache new token: {output_pcc}")
 
-    does_pass = does_pass and does_pass2
+        does_pass = does_pass and does_pass2
+
+        does_pass2, output_pcc = comp_pcc(
+            pytorch_layer_present[1][:, kv_len - 1 : kv_len, :],
+            tt_layer_present[1][:, kv_len - 1 : kv_len, :],
+            token_pcc,
+        )
+        logger.info(f"V Cache new token: {output_pcc}")
+
+        does_pass = does_pass and does_pass2
 
     if does_pass:
         logger.info("Falcon Decoder output Passed!")
@@ -273,11 +330,14 @@ def run_test_FalconDecoder_inference(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("num_devices", (4,))
+@pytest.mark.parametrize("num_devices", (4, 8))
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
-    (("decode", 32, 1, 128),),
-    ids=["decode_batch32"],
+    (
+        ("prefill", 1, 32, 0),
+        ("decode", 32, 1, 128),
+    ),
+    ids=["prefill_seq32", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "model_version, layer_num",
@@ -301,19 +361,25 @@ def test_FalconDecoder_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    pcie_devices,
+    all_devices,
     use_program_cache,
 ):
-    model_config = get_model_config(model_config_str, llm_mode, num_devices)
-    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
+    if llm_mode == "prefill" and model_config_str == "BFLOAT16-SHARDED":
+        pytest.skip("Prefill is only tested for BFLOAT8_B!")
+
+    input_shape = [batch, seq_len]
+    model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
+    devices = get_devices_for_t3000(all_devices, num_devices)
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
 
     run_test_FalconDecoder_inference(
-        pcie_devices[: model_config["NUM_DEVICES"]],
+        devices,
         model_version,
         llm_mode,
         batch,
