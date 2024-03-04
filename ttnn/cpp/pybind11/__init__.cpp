@@ -8,6 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "core.hpp"
 #include "device.hpp"
 #include "types.hpp"
 
@@ -19,6 +20,9 @@ PYBIND11_MODULE(_ttnn, m_ttnn) {
 
     auto m_types = m_ttnn.def_submodule("types", "ttnn Types");
     ttnn::types::py_module(m_types);
+
+    auto m_core = m_ttnn.def_submodule("core", "core functions");
+    ttnn::core::py_module(m_core);
 
     auto m_device = m_ttnn.def_submodule("device", "ttnn devices");
     ttnn::device::py_module(m_device);
