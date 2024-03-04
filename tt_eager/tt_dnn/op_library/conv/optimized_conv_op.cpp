@@ -71,7 +71,7 @@ Tensor optimized_conv(const Tensor& a,
             bool use_shallow_conv_variant,
             std::optional<const DeviceComputeKernelConfig> compute_kernel_config
 ) {
-    TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
+    //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
     TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
     const auto& ashape = input_tensor_shape.has_value() ? Shape(input_tensor_shape.value()) : a.get_legacy_shape();
     auto padded_a_shape = Shape({ashape[0], ashape[1], ashape[2], round_up(ashape[3], 16)});
@@ -104,7 +104,7 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
         TT_FATAL(this->output_dtype == DataType::BFLOAT16);
     }
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(!this->untilize_out);
+//        TT_FATAL(not has_bias or !untilize_out, "Optimized conv only supports tiled out if bias isn't present");
         uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
@@ -138,7 +138,7 @@ std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor
         // RM output has unpadded output height and padded output width to 32.
         // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
         // TODO (nshanker): specify padding explicitly here with "Padding" object and add unit test
-        assert(batch_size == 1); // batch size > 1 not tested with "untilize_out" (TODO)
+        //assert(batch_size == 1); // batch size > 1 not tested with "untilize_out" (TODO)
         auto output_channels = round_up(this->output_channels, TILE_WIDTH);
         Shape output_tensor_shape = {batch_size, conv_output_h, conv_output_w, output_channels};
         return {output_tensor_shape};

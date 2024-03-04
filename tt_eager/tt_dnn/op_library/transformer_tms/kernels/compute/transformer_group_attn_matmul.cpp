@@ -136,7 +136,7 @@ void MAIN {
 
                         // TODO: Review inner dim blocking, untilizing, and in1_num_subblocks > 1 (with pack_untilize, can only untilize up to dst num tiles)
                         // This should normally be inside subblock loop and we pack out out_subblock_num_tiles
-                        pack_untilize_dst_init_short<intermediate_num_tiles>();
+                        pack_untilize_dst_init_short<intermediate_num_tiles>(cb_intermed0);
                         cb_reserve_back(cb_intermed0, intermediate_num_tiles);
                         tile_regs_wait();
                         pack_untilize_dst<intermediate_num_tiles>(cb_intermed0);

@@ -384,6 +384,7 @@ class TTPyCompositeConv(TTPyOp):
         deallocate_activation=True,
         padded_input_channels=None,
         compute_kernel_config=None,
+        output_layout=ttl.tensor.Layout.TILE,
     ):
         if padded_input_channels is None:
             self.padded_input_channels = _nearest_32(input_channels)
@@ -392,6 +393,7 @@ class TTPyCompositeConv(TTPyOp):
         self.enable_auto_formatting = enable_auto_formatting
         self.deallocate_activation = deallocate_activation
         self.use_shallow_conv_variant = use_shallow_conv_variant
+        self.untilize_out = output_layout == ttl.tensor.Layout.ROW_MAJOR
         if reader_patterns_cache is None:
             reader_patterns_cache = {}
 
@@ -752,7 +754,7 @@ class TTPyCompositeConv(TTPyOp):
                 conv_reader_indices,
                 [R, S, U, V, P_H, P_W],
                 K,
-                False,
+                self.untilize_out,
                 self.bias is not None,
                 fuse_relu,
                 math_fidelity,
@@ -987,7 +989,6 @@ class TTPyCompositeConv(TTPyOp):
         conv_output_on_device = self.conv_output_sharded_to_interleaved(conv_output_on_device)
 
         # convert tiled output to RM
-        assert conv_output_on_device.get_layout() == ttl.tensor.Layout.TILE
         if conv_output_on_device.get_legacy_shape() != conv_output_on_device.shape_without_padding():
             conv_output_on_device = ttl.tensor.format_output_tensor(
                 conv_output_on_device,
@@ -996,7 +997,8 @@ class TTPyCompositeConv(TTPyOp):
                 ttl.tensor.Layout.ROW_MAJOR,
                 interleaved_mem_config,
             )
-        else:
+        elif not self.untilize_out:
+            assert conv_output_on_device.layout() == ttl.tensor.Layout.TILE
             conv_output_on_device = ttl.tensor.untilize(
                 conv_output_on_device, interleaved_mem_config, use_multicore=True
             )

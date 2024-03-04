@@ -163,7 +163,7 @@ void MAIN {
 
     // tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
     tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
-    pack_untilize_dst_init_short<num_output_tiles>();
+    pack_untilize_dst_init_short<num_output_tiles>(out_cb_id);
 
     #if DEBUG_PRINT == 1
         print_full_tile(in_cb_id);
