@@ -982,6 +982,10 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_ne_bw
 
+.. autofunction:: tt_lib.tensor.erf_bw
+
+.. autofunction:: tt_lib.tensor.erfc_bw
+
 Loss Functions
 ==============
 
