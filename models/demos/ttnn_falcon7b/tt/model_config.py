@@ -143,8 +143,8 @@ def get_tt_cache_path(model_version):
     if tt_cache_path.exists():
         return tt_cache_path
     else:
-        Path(f"models/demos/falcon7b/datasets/{model_version}").mkdir(parents=True, exist_ok=True)
-        return Path(f"models/demos/falcon7b/datasets/{model_version}")
+        Path(f"models/demos/ttnn_falcon7b/datasets/{model_version}").mkdir(parents=True, exist_ok=True)
+        return Path(f"models/demos/ttnn_falcon7b/datasets/{model_version}")
 
 
 model_config_entries = {
