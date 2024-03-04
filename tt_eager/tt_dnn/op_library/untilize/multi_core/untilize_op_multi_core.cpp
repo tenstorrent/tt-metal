@@ -737,8 +737,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         vector<uint32_t> writer_rt_args = {
             num_output_rows_unpadded,
             ntiles_per_batch,
-            num_output_rows_unpadded / batch * block_row_size,
-            batch
+            (num_output_rows_unpadded / batch) * last_block_row_size_unpadded,
+            batch,
         };
         tt_metal::SetRuntimeArgs(
             program,
