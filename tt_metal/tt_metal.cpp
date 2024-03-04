@@ -136,8 +136,8 @@ std::map<chip_id_t, Device *> CreateDevices(
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
             for (const auto &mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                active_devices.insert(
-                    {mmio_controlled_device_id, CreateDevice(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap)});
+                Device * dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap);
+                active_devices.insert({mmio_controlled_device_id, dev});
             }
         }
     }
@@ -633,11 +633,13 @@ size_t GetNumPCIeDevices() {
 Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
 }
 
 bool CloseDevice(Device *device) {
     ZoneScoped;
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     return device->close();
 }
 
