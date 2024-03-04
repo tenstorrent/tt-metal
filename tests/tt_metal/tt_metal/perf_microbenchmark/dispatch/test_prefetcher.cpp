@@ -27,8 +27,7 @@ constexpr uint32_t DEFAULT_SCRATCH_CB_SIZE = 128 * 1024;
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
 constexpr uint32_t HOST_Q_LOG_MINSIZE = 4;
-constexpr uint32_t PCIE_NOC_ALIGNMENT = 32;
-constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << HOST_Q_LOG_MINSIZE) > PCIE_NOC_ALIGNMENT) ? (1 << HOST_Q_LOG_MINSIZE) : PCIE_NOC_ALIGNMENT;
+constexpr uint32_t HUGEPAGE_ALIGNMENT = ((1 << HOST_Q_LOG_MINSIZE) > CQ_PREFETCH_CMD_BARE_MIN_SIZE) ? (1 << HOST_Q_LOG_MINSIZE) : CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
@@ -94,11 +93,19 @@ uint32_t round_cmd_size_up(uint32_t size) {
 }
 
 void add_bare_prefetcher_cmd(vector<uint32_t>& cmds,
-                             CQPrefetchCmd& cmd) {
+                             CQPrefetchCmd& cmd,
+                             bool pad = false) {
 
     uint32_t *ptr = (uint32_t *)&cmd;
     for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
         cmds.push_back(*ptr++);
+    }
+
+    if (pad) {
+        // Pad debug cmd to always be the alignment size
+        for (uint32_t i = 0; i < (CQ_PREFETCH_CMD_BARE_MIN_SIZE - sizeof(CQPrefetchCmd)) / sizeof(uint32_t); i++) {
+            cmds.push_back(std::rand());
+        }
     }
 }
 
@@ -117,12 +124,7 @@ void add_prefetcher_dram_cmd(vector<uint32_t>& cmds,
     cmd.relay_dram_paged.page_size = page_size;
     cmd.relay_dram_paged.pages = pages;
 
-    add_bare_prefetcher_cmd(cmds, cmd);
-
-    uint32_t pad_size = round_cmd_size_up(sizeof(CQPrefetchCmd)) - sizeof(CQPrefetchCmd);
-    for (int i = 0; i < pad_size / sizeof(uint32_t); i++) {
-        cmds.push_back(0);
-    }
+    add_bare_prefetcher_cmd(cmds, cmd, true);
 }
 
 void add_prefetcher_cmd(vector<uint32_t>& cmds,
@@ -137,13 +139,13 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
     if (debug_g) {
         CQPrefetchCmd debug_cmd;
         debug_cmd.base.cmd_id = CQ_PREFETCH_CMD_DEBUG;
-        add_bare_prefetcher_cmd(cmds, debug_cmd);
+        add_bare_prefetcher_cmd(cmds, debug_cmd, true);
     }
 
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = id;
 
-    uint32_t payload_length = payload.size() * sizeof(uint32_t);
+    uint32_t payload_length_bytes = payload.size() * sizeof(uint32_t);
     switch (id) {
     case CQ_PREFETCH_CMD_RELAY_DRAM_PAGED:
         TT_ASSERT(false);
@@ -151,16 +153,16 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 
     case CQ_PREFETCH_CMD_RELAY_INLINE:
     case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
-        cmd.relay_inline.length = payload_length;
-        cmd.relay_inline.stride = round_cmd_size_up(payload_length + sizeof(CQPrefetchCmd));
+        cmd.relay_inline.length = payload_length_bytes;
+        cmd.relay_inline.stride = round_cmd_size_up(payload_length_bytes + sizeof(CQPrefetchCmd));
         break;
 
     case CQ_PREFETCH_CMD_DEBUG:
         {
             static uint32_t key = 0;
             cmd.debug.key = ++key;
-            cmd.debug.size = payload_length;
-            cmd.debug.stride = round_cmd_size_up(payload_length + sizeof(CQPrefetchCmd));
+            cmd.debug.size = payload_length_bytes;
+            cmd.debug.stride = round_cmd_size_up(payload_length_bytes + sizeof(CQPrefetchCmd));
             uint32_t checksum = 0;
             for (uint32_t i = 0; i < payload.size(); i++) {
                 checksum += payload[i];
@@ -181,11 +183,12 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
     }
 
     add_bare_prefetcher_cmd(cmds, cmd);
+    uint32_t cmd_size_bytes = (cmds.size() - prior_end) * sizeof(uint32_t);
     for (int i = 0; i < payload.size(); i++) {
         cmds.push_back(payload[i]);
     }
-    uint32_t pad_size = round_cmd_size_up(sizeof(CQPrefetchCmd) + payload_length) - payload_length - sizeof(CQPrefetchCmd);
-    for (int i = 0; i < pad_size / sizeof(uint32_t); i++) {
+    uint32_t pad_size_bytes = round_cmd_size_up(cmd_size_bytes + payload_length_bytes) - payload_length_bytes - cmd_size_bytes;
+    for (int i = 0; i < pad_size_bytes / sizeof(uint32_t); i++) {
         cmds.push_back(0);
     }
     uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
@@ -197,7 +200,7 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
         CQPrefetchCmd* debug_cmd_ptr;
         debug_cmd_ptr = (CQPrefetchCmd *)&cmds[prior_end];
         debug_cmd_ptr->debug.size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQPrefetchCmd);
-        debug_cmd_ptr->debug.stride = sizeof(CQPrefetchCmd);
+        debug_cmd_ptr->debug.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
         uint32_t checksum = 0;
         for (uint32_t i = prior_end + sizeof(CQPrefetchCmd) / sizeof(uint32_t); i < cmds.size(); i++) {
             checksum += cmds[i];
@@ -272,7 +275,6 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
 
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
 
-#if 0
     vector<uint32_t> rnd_payload;
     generate_random_payload(rnd_payload, 17);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
@@ -292,7 +294,7 @@ void gen_prefetcher_cmds(vector<uint32_t>& prefetch_cmds,
     dispatch_cmds.resize(0);
     gen_dispatcher_write_cmd(dispatch_cmds, worker_data, worker_core, dst_addr, 8448);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-#endif
+
     // Read from dram, write to worker
     // start_page, base addr, page_size, pages
     gen_dram_read_cmd(prefetch_cmds, cmd_sizes, dram_data, worker_data, worker_core, dst_addr,
@@ -389,12 +391,7 @@ void write_prefetcher_cmds(uint32_t iterations,
         cmd.base.cmd_id = CQ_PREFETCH_CMD_WRAP;
         // don't wrap the wrap command in a debug command since we didn't guarantee that there is
         // wrap+debug space in the hugepage
-        add_bare_prefetcher_cmd(wrap_cmd, cmd);
-        // Pad up to 32 byte alignment
-        wrap_cmd.push_back(0);
-        wrap_cmd.push_back(0);
-        wrap_cmd.push_back(0);
-        wrap_cmd.push_back(0);
+        add_bare_prefetcher_cmd(wrap_cmd, cmd, true);
     }
 
     if (initialize_device_g) {
@@ -408,10 +405,10 @@ void write_prefetcher_cmds(uint32_t iterations,
         uint32_t cmd_ptr = 0;
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
             uint32_t cmd_size_words = ((uint32_t)cmd_sizes[j] << HOST_Q_LOG_MINSIZE) / sizeof(uint32_t);
-            uint32_t space_at_end_for_wrap_words = sizeof(CQPrefetchCmd) / sizeof(uint32_t);
+            uint32_t space_at_end_for_wrap_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
             if ((void *)(host_mem_ptr + cmd_size_words + space_at_end_for_wrap_words) >= (void *)((uint8_t *)host_hugepage_base + hugepage_buffer_size_g)) {
                 uint32_t offset = 0;
-                write_prefetcher_cmd(device, wrap_cmd, offset, PCIE_NOC_ALIGNMENT >> HOST_Q_LOG_MINSIZE,
+                write_prefetcher_cmd(device, wrap_cmd, offset, CQ_PREFETCH_CMD_BARE_MIN_SIZE >> HOST_Q_LOG_MINSIZE,
                                      host_mem_ptr, host_q_dev_ptr, host_q_dev_fence, host_q_base, host_q_rd_ptr_addr, phys_prefetch_core);
                 host_mem_ptr = (uint32_t *)host_hugepage_base;
             }

@@ -9,6 +9,9 @@
 
 #pragma once
 
+constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = 32; // for NOC PCIe alignemnt
+constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;          // for L1 alignment
+
 // Prefetcher CMD ID enums
 enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_ILLEGAL = 0,              // common error value
