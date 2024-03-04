@@ -5,65 +5,61 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 void kernel_main() {
-    erisc_info->unused_arg0 = 21300000;
-    erisc_info->unused_arg1 = 21400000;
-    erisc_info->unused_arg2 = 21500000;
     constexpr bool sender_is_issue_path = get_compile_time_arg_val(0);
 
-    uint32_t consumer_noc_encoding = uint32_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y)); // soon to be unified
+    uint32_t consumer_noc_encoding = uint32_t(NOC_XY_ENCODING(CONSUMER_NOC_X, CONSUMER_NOC_Y));
     uint32_t producer_noc_encoding = uint32_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y));
 
-    volatile tt_l1_ptr uint32_t *eth_src_db_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
-    volatile tt_l1_ptr uint32_t *eth_dst_db_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(1));
+    volatile tt_l1_ptr uint32_t *eth_src_db_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(0));
+    volatile tt_l1_ptr uint32_t *eth_dst_db_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_get_semaphore(1));
 
-    const uint8_t buffer_id = sender_is_issue_path? 0: 1;
-    const uint8_t other_buffer_id = sender_is_issue_path? 1 : 0;
-    db_cb_config_t *eth_src_db_cb_config = sender_is_issue_path ? get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE) :
-                                                                  get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
-    db_cb_config_t *eth_dst_db_cb_config = sender_is_issue_path ? get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE) :
-                                                                  get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE);
+    const uint8_t buffer_id = sender_is_issue_path ? 0 : 1;
+    const uint8_t other_buffer_id = sender_is_issue_path ? 1 : 0;
+    db_cb_config_t *eth_src_db_cb_config = sender_is_issue_path
+                                               ? get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE)
+                                               : get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE);
+    db_cb_config_t *eth_dst_db_cb_config = sender_is_issue_path
+                                               ? get_local_db_cb_config(eth_l1_mem::address_map::COMPLETION_CQ_CB_BASE)
+                                               : get_local_db_cb_config(eth_l1_mem::address_map::ISSUE_CQ_CB_BASE);
 
-    int i = 0;
-  while(routing_info->routing_enabled) {
-    // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
-    while(routing_info->routing_enabled && eth_src_db_semaphore_addr[0] == 0 && routing_info->fd_buffer_msgs[buffer_id].bytes_sent != 1
-        && routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent != 1) {
-        internal_::risc_context_switch();
-    }
-    if (!routing_info->routing_enabled) {
-        break;
-    }
-    // can make two copies of this kernel, one for SRC is issue, one for SRC is completion
-    if (!sender_is_issue_path) {
-          // Service completion path first
-          // Acquired src for completion
-        if (eth_src_db_semaphore_addr[0] != 0) {
-        erisc_info->unused_arg0 = 21300001;
-          eth_tunnel_src_forward_one_cmd<buffer_id, other_buffer_id, sender_is_issue_path>(eth_src_db_cb_config, producer_noc_encoding);
-        erisc_info->unused_arg0 = 21300002;
+    while (routing_info->routing_enabled) {
+        // Implement yielding if SENDER is not ISSUE, this may help with devices getting commands first
+        while (routing_info->routing_enabled && eth_src_db_semaphore_addr[0] == 0 &&
+               routing_info->fd_buffer_msgs[buffer_id].bytes_sent != 1 &&
+               routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent != 1) {
+            internal_::risc_context_switch();
         }
-        // Cmd valid in issue DST
-        if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
-          erisc_info->unused_arg0 = 21300003;
-          eth_tunnel_dst_forward_one_cmd<other_buffer_id, buffer_id, sender_is_issue_path>(eth_dst_db_cb_config, consumer_noc_encoding);
-        erisc_info->unused_arg0 = 21300004;
+        if (!routing_info->routing_enabled) {
+            break;
         }
-    } else {
-        // Service completion path first
-        // Cmd valid in completion DST
-        if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
-        erisc_info->unused_arg0 = 21400003;
-          eth_tunnel_dst_forward_one_cmd<other_buffer_id, buffer_id, sender_is_issue_path>(eth_dst_db_cb_config, consumer_noc_encoding);
-        erisc_info->unused_arg0 = 21400004;
-        }
+        // can make two copies of this kernel, one for SRC is issue, one for SRC is completion
+        if (!sender_is_issue_path) {
+            // Service completion path first
+            // Acquired src for completion
+            if (eth_src_db_semaphore_addr[0] != 0) {
+                eth_tunnel_src_forward_one_cmd<buffer_id, other_buffer_id, sender_is_issue_path>(
+                    eth_src_db_cb_config, producer_noc_encoding);
+            }
+            // Cmd valid in issue DST
+            if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
+                eth_tunnel_dst_forward_one_cmd<other_buffer_id, buffer_id, sender_is_issue_path>(
+                    eth_dst_db_cb_config, consumer_noc_encoding);
+            }
+        } else {
+            // Service completion path first
+            // Cmd valid in completion DST
+            if (routing_info->fd_buffer_msgs[other_buffer_id].bytes_sent == 1) {
+                eth_tunnel_dst_forward_one_cmd<other_buffer_id, buffer_id, sender_is_issue_path>(
+                    eth_dst_db_cb_config, consumer_noc_encoding);
+            }
 
-        // Acquired src for issue
-        if (eth_src_db_semaphore_addr[0] != 0) {
-        erisc_info->unused_arg0 = 21400001;
-          eth_tunnel_src_forward_one_cmd<buffer_id, other_buffer_id, sender_is_issue_path>(eth_src_db_cb_config, producer_noc_encoding);
-        erisc_info->unused_arg0 = 21400002;
+            // Acquired src for issue
+            if (eth_src_db_semaphore_addr[0] != 0) {
+                eth_tunnel_src_forward_one_cmd<buffer_id, other_buffer_id, sender_is_issue_path>(
+                    eth_src_db_cb_config, producer_noc_encoding);
+            }
         }
     }
-    i++;
-  }
 }

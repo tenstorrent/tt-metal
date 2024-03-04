@@ -376,7 +376,6 @@ void Device::compile_command_queue_programs() {
     uint32_t producer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
     uint32_t consumer_data_buffer_size_tensix = get_cq_data_buffer_size(false);
 
-    // TODO: change these
     uint32_t issue_path_cmd_start_eth = get_eth_command_start_l1_address(SyncCBConfigRegion::ROUTER_ISSUE);
     uint32_t completion_path_cmd_start_eth = get_eth_command_start_l1_address(SyncCBConfigRegion::ROUTER_COMPLETION);
 
@@ -419,9 +418,6 @@ void Device::compile_command_queue_programs() {
                         completion_q_writer_location, EthRouterMode::BI_DIR_TUNNELING, device_id);
                     producer_physical_core = this->ethernet_core_from_logical_core(logical_eth_router_dst);
 
-                    std::cout << "CQ prefetcher core: " << issue_q_physical_core.str() << std::endl;
-                    std::cout << "SRC router (L): " << consumer_physical_core.str() << std::endl;
-                    std::cout << "DST router (L): " << producer_physical_core.str() << std::endl;
                     // remote_command_processor receiving from eth DST, semaphore 1
                     tt::Cluster::instance().write_core(&num_eth_command_slots, sizeof(uint32_t), tt_cxy_pair(this->id(), producer_physical_core), eth_l1_mem::address_map::SEMAPHORE_BASE + L1_ALIGNMENT);
 
@@ -433,7 +429,7 @@ void Device::compile_command_queue_programs() {
                         {"PRODUCER_NOC_X", std::to_string(issue_q_physical_core.x)},
                         {"PRODUCER_NOC_Y", std::to_string(issue_q_physical_core.y)},
                     };
-                    std::vector<uint32_t> eth_tunneller_compile_args = {true}; // TODO: what is this? SENDER is ISSUE?
+                    std::vector<uint32_t> eth_tunneller_compile_args = {true};
                     std::string command_q_tunneller_kernel = "tt_metal/impl/dispatch/kernels/command_queue_bidirectional_tunneller.cpp";
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
@@ -444,7 +440,6 @@ void Device::compile_command_queue_programs() {
                             .compile_args = eth_tunneller_compile_args,
                             .defines = eth_tunneller_defines});
                 }
-                std::cout << "Issue q phy: " << issue_q_physical_core.str() << " completion q phy: " << completion_q_physical_core.str() << std::endl;
 
                 TT_ASSERT(tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.size() == 1);
                 CoreCoord pcie_physical_core = tt::Cluster::instance().get_soc_desc(this->id()).pcie_cores.at(0);
@@ -496,7 +491,6 @@ void Device::compile_command_queue_programs() {
 
                 std::string pull_and_push_kernel = "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp";
 
-                std::cout << "Programming " << issue_q_reader_location.str() << " with cq prefetcher " << std::endl;
                 tt::tt_metal::CreateKernel(
                     *command_queue_program_ptr,
                     pull_and_push_kernel,
@@ -555,8 +549,6 @@ void Device::compile_command_queue_programs() {
                         (uint32_t)tt::PullAndPushConfig::PULL_FROM_REMOTE
                     };
 
-                    std::cout << "Programming " << completion_q_writer_location.str() << " with cq prefetcher " << std::endl;
-                    std::cout << "Programming completion q writer " << device_id << " with" << completion_q_physical_core.str() << std::endl;
                     tt::tt_metal::CreateKernel(
                         *command_queue_program_ptr,
                         pull_and_push_kernel,
@@ -592,7 +584,6 @@ void Device::compile_command_queue_programs() {
 
         // TODO (abhullar / aliu): there is no API to configure ethernet semaphores used for FD so manually write initial semaphore value
         // remote_completion_writer receiving from eth DST, semaphore 1
-        std::cout << " writing to dst on remote " << physical_eth_router_remote_dst.str() << std::hex << " " << eth_l1_mem::address_map::SEMAPHORE_BASE + L1_ALIGNMENT << std::dec << std::endl;
         tt::Cluster::instance().write_core(&num_eth_command_slots, sizeof(uint32_t), tt_cxy_pair(this->id(), physical_eth_router_remote_dst), eth_l1_mem::address_map::SEMAPHORE_BASE + L1_ALIGNMENT);
 
         // Set up the src router on remote device to send fast dispatch packets on the return path to MMIO device
@@ -621,10 +612,6 @@ void Device::compile_command_queue_programs() {
                     .noc = tt::tt_metal::NOC::RISCV_0_default,
                     .compile_args = eth_tunneller_compile_args,
                     .defines = eth_tunneller_defines});
-        std::cout << "Remote pull and push core: " << remote_processor_physical_core.str() << std::endl;
-        std::cout << "DST router (R): " << physical_eth_router_remote_dst.str() << std::endl;
-        std::cout << "SRC router (R): " << physical_eth_router_remote_src.str() << std::endl;
-        std::cout << "Remote dispatcher: " << dispatch_physical_core.str() << std::endl;
 
         std::vector<uint32_t> remote_pull_and_push_compile_args = {
             0, // host_issue_queue_read_ptr_addr,
@@ -652,7 +639,6 @@ void Device::compile_command_queue_programs() {
             {"DISPATCH_NOC_Y", std::to_string(dispatch_physical_core.y)},
         };
 
-        std::cout << " remote chip command processor kernel " << this->id() << remote_processor_physical_core.str() << std::endl;
         tt::tt_metal::CreateKernel(
             *command_queue_program_ptr,
             "tt_metal/impl/dispatch/kernels/cq_prefetcher.cpp",

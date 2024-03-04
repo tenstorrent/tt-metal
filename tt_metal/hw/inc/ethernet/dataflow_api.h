@@ -16,9 +16,6 @@
 #include "../dataflow_api.h"
 #include "tunneling.h"
 
-FORCE_INLINE
-void reset_erisc_info() { erisc_info->user_buffer_bytes_sent = 0; }
-
 /**
  * A blocking call that waits until the value of a local L1 memory address on
  * the Tensix core executing this function becomes equal to a target value.
