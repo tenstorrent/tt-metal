@@ -93,4 +93,11 @@ ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t n
     PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
 }
 
+/**
+ * Helper function to reconfigure packer l1 accumulation flag
+ */
+ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
+    PACK(( llk_pack_reconfig_l1_acc(l1_acc_en) ));
+}
+
 }
