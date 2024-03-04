@@ -71,7 +71,7 @@ Actions](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/perf-mo
 
 | Model                            | Batch size          | GS end-to-end throughput [1] | GS on-device throughput [2] | Target GS end-to-end throughput [1] |
 |----------------------------------|---------------------|------------------------------|-----------------------------|-------------------------------------|
-| ResNet 50 (fps)                  | 20                  | 2070                         | 6701                        | 10000                               |
+| ResNet 50 (fps)                  | 20                  | 2070                         | 6943                        | 10000                               |
 | BERT 11 (sen/s)                  | 12                  | 362                          | 406                         | 410                                 |
 | TT-NN Falcon-7B decode (t/s)     | 32                  | 135                          | coming soon      | 140                                 |
 | ViT                              | Coming end of March |                              |                             |                                     |
