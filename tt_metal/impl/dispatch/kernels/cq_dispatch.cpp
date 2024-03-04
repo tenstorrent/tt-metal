@@ -47,18 +47,25 @@ uint32_t dispatch_cb_acquire_pages() {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_cb_sem));
 
-    DEBUG_STATUS('A', 'P', 'W');
-    uint32_t available;
-    while ((available = *sem_addr) == 0);
-    DEBUG_STATUS('A', 'P', 'D');
+    static uint32_t available = 0;
+
+    if (available == 0) {
+        // Ensure last sem_inc has landed
+        noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
+
+        DEBUG_STATUS('A', 'P', 'W');
+        while ((available = *sem_addr) == 0);
+        DEBUG_STATUS('A', 'P', 'D');
+    }
 
     // Set a fence to limit how much is processed at once
     uint32_t limit = (block_next_start_addr[rd_block_idx] - cb_fence) >> dispatch_cb_log_page_size;
-    if (available > limit) available = limit;
+    uint32_t usable = (available > limit) ? limit : available;
 
-    noc_semaphore_inc(get_noc_addr_helper(dispatch_noc_xy, (uint32_t)sem_addr), -available);
+    noc_semaphore_inc(get_noc_addr_helper(dispatch_noc_xy, (uint32_t)sem_addr), -usable);
+    available -= usable;
 
-    return available;
+    return usable;
 }
 
 FORCE_INLINE
@@ -84,7 +91,7 @@ void dispatch_cb_block_release_pages() {
 }
 
 FORCE_INLINE
-void move_to_next_block() {
+void move_rd_to_next_block() {
 
     // This is subtle: in the free-running case, we don't want to clear the current block
     // if the noc catches up so we artificially inflate the clear value by 1 when we start
@@ -106,7 +113,7 @@ FORCE_INLINE
 void get_dispatch_cb_page() {
     // Strided past the data that has arrived, get the next page
     if (cb_fence == block_next_start_addr[rd_block_idx]) {
-        move_to_next_block();
+        move_rd_to_next_block();
     }
 
     // Wait for dispatcher to supply a page
@@ -148,7 +155,7 @@ void dispatch_write() {
                     dst = get_noc_addr_helper(dst_noc, dst_addr);
                 }
 
-                move_to_next_block();
+                move_rd_to_next_block();
             }
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -212,9 +219,7 @@ void kernel_main() {
     bool done = false;
     while (!done) {
         if (cmd_ptr == cb_fence) {
-            DPRINT << "GET PAGE\n";
             get_dispatch_cb_page();
-            DPRINT << "GOT PAGE\n";
         }
 
     re_run_command:
@@ -223,35 +228,40 @@ void kernel_main() {
         switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE:
             DEBUG_STATUS('D', 'W', 'B');
-            DPRINT << "dispatch write\n";
+            DPRINT << "cmd_write\n";
             dispatch_write();
             DEBUG_STATUS('D', 'W', 'D');
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PAGED:
+            DPRINT << "cmd_write_paged" << ENDL();
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
+            DPRINT << "cmd_wait" << ENDL();
             break;
 
         case CQ_DISPATCH_CMD_GO:
+            DPRINT << "cmd_go" << ENDL();
             break;
 
         case CQ_DISPATCH_CMD_SINK:
+            DPRINT << "cmd_sink" << ENDL();
             break;
 
         case CQ_DISPATCH_CMD_DEBUG:
+            DPRINT << "cmd_debug" << ENDL();
             cmd_ptr = process_debug_cmd(cmd_ptr);
             goto re_run_command;
             break;
 
         case CQ_DISPATCH_CMD_TERMINATE:
-            DPRINT << "dispatch write\n";
+            DPRINT << "dispatch terminate\n";
             done = true;
             break;
 
         default:
-            DPRINT << "dispatcher invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << ENDL();
+            DPRINT << "dispatcher invalid command:" << cmd_ptr << " " << cb_fence << " " << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << rd_block_idx << " " << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();

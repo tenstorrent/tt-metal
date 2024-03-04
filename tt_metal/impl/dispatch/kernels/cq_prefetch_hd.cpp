@@ -53,7 +53,11 @@ void dispatch_cb_acquire_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_cb_sem));
     DEBUG_STATUS('A', 'P', 'W');
-    while (*sem_addr == 0);
+
+    // Ensure last sem_inc has landed
+    noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
+
+    while (*sem_addr < n);
     DEBUG_STATUS('A', 'P', 'D');
     noc_semaphore_inc(get_noc_addr_helper(prefetch_noc_xy, (uint32_t)sem_addr), -n);
 }
