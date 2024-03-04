@@ -29,13 +29,13 @@ def unet_reshard(
         )
     else:
         ttl_tensor = ttnn_tensor.value
+        if ttl_tensor.is_sharded():
+            i = ttl_tensor
+            ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config)
+            ttnn.deallocate(ttnn.Tensor(i))
         if tilize:
             i = ttl_tensor
             ttl_tensor = ttnn.to_layout(ttnn.Tensor(ttl_tensor), layout=ttnn.TILE_LAYOUT, dtype=dtype).value
-            ttnn.deallocate(ttnn.Tensor(i))
-        if ttl_tensor.is_sharded():
-            i = ttl_tensor
-            ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
             ttnn.deallocate(ttnn.Tensor(i))
         ttl_tensor = ttl.tensor.interleaved_to_sharded(
             ttl_tensor,
@@ -135,8 +135,8 @@ class UNet:
 
         output_tensor = self.c1(input_tensor)
         output_tensor = self.c1_2(output_tensor)
-        # save_c1_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        save_c1_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
+        save_c1_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # save_c1_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
         output_tensor = self.p1(output_tensor)
 
         output_tensor = unet_reshard(
@@ -146,8 +146,8 @@ class UNet:
         )
         output_tensor = self.c2(output_tensor)
         output_tensor = self.c2_2(output_tensor)
-        # save_c2_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        save_c2_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
+        save_c2_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # save_c2_2_out = ttnn.Tensor(ttl.tensor.sharded_to_interleaved(output_tensor.value, ttnn.DRAM_MEMORY_CONFIG))
         output_tensor = self.p2(output_tensor)
 
         output_tensor = unet_reshard(
@@ -222,7 +222,7 @@ class UNet:
 
         output_tensor = unet_reshard(
             output_tensor,
-            self.c7.get_expected_memory_config(output_tensor.shape),
+            self.c7.get_expected_memory_config(output_tensor.shape, pad_tile=True),
             tilize=True,
             use_reshard=False,
             dtype=ttnn.bfloat8_b,

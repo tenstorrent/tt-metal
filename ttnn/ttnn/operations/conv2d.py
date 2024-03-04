@@ -145,8 +145,8 @@ class Conv2d:
     def get_parallel_config(self):
         return self.conv.get_parallel_config()
 
-    def get_expected_memory_config(self, shape: ttnn.Shape):
-        return self.conv.get_expected_memory_config(list(shape))
+    def get_expected_memory_config(self, shape: ttnn.Shape, pad_tile=False):
+        return self.conv.get_expected_memory_config(list(shape), pad_tile=pad_tile)
 
 
 __all__ = []
