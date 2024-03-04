@@ -103,6 +103,11 @@ void DeviceCommand::set_consumer_router_transfer_num_pages(const uint32_t consum
     this->packet.header.consumer_router_transfer_num_pages = consumer_router_transfer_num_pages;
 }
 
+void DeviceCommand::set_is_event_sync(const uint16_t is_event_sync) { this->packet.header.is_event_sync = is_event_sync; }
+void DeviceCommand::set_event_sync_core_x(const uint8_t event_sync_core_x) { this->packet.header.event_sync_core_x = event_sync_core_x; }
+void DeviceCommand::set_event_sync_core_y(const uint8_t event_sync_core_y) { this->packet.header.event_sync_core_y = event_sync_core_y; }
+void DeviceCommand::set_event_sync_event_id(const uint32_t event_sync_event_id) { this->packet.header.event_sync_event_id = event_sync_event_id; }
+
 void DeviceCommand::update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src) {
     this->packet.data
         [DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER +

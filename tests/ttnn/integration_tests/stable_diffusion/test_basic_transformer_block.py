@@ -11,11 +11,9 @@ from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_tr
     basic_transformer_block as ttnn_basic_transformer_block,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, attention_head_dim",
@@ -60,7 +58,6 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
-    state_dict = model.state_dict()
     config = model.config
     basic_transformer = pipe.unet.down_blocks[index].attentions[1].transformer_blocks[0]
 
@@ -104,7 +101,6 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
     assert_with_pcc(torch_output.unsqueeze(0), ttnn_output, pcc=0.98)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, attention_head_dim",
@@ -149,7 +145,6 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     model = pipe.unet
     model.eval()
-    state_dict = model.state_dict()
     config = model.config
     basic_transformer = pipe.unet.up_blocks[index].attentions[1].transformer_blocks[0]
 

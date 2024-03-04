@@ -18,6 +18,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
+      CONFIG: ci
       TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
     runs-on: model-runner-${{ matrix.arch }}

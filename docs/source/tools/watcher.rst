@@ -77,7 +77,7 @@ to commands have been removed for brevity.  After attaching to the program and s
 
     thread 1   # make sure the main thread is present
     up         # repeat until in the "tt" namespace (not in, e.g., template library code)
-    call tt::llrt::watcher::dump(stderr, true) # the "true" at the end enables dumping HW registers
+    call tt::watcher::dump(stderr, true) # the "true" at the end enables dumping HW registers
 
 Example
 -------

@@ -458,35 +458,12 @@ Tensor convert_python_tensor_to_tt_tensor(
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
-#ifndef TTNN_ENABLE_LOGGING
-                    if (not operation::is_logging_enabled()) {
-                        return function(*args, **kwargs);
-                    }
-#endif
-                    const auto start{std::chrono::steady_clock::now()};
-
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
                     operation::log_operation(op, input_tensors);
-
                     auto profile_scope = tt::tt_metal::op_profiler::OpProfileScope(
                         op.get_type_name(), tt::tt_metal::op_profiler::OpType::python_fallback);
-                    auto do_profile = tt::tt_metal::op_profiler::get_profiler_flag();
-                    if (do_profile) {
-                        op_profiler::set_preferred_name(op.get_type_name());
-                    }
 
                     auto output_tensors = function(*args, **kwargs);
-
-                    const auto end{std::chrono::steady_clock::now()};
-#ifdef TTNN_ENABLE_LOGGING
-                    const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
-                    tt::log_info(
-                        tt::LogOp,
-                        "Finished Operation {:50} in {:15} nanoseconds",
-                        op.get_type_name(),
-                        elapsed_seconds);
-#endif
-
                     return output_tensors;
                 }));
             },
@@ -1111,24 +1088,7 @@ Tensor convert_python_tensor_to_tt_tensor(
                         [7, 8, 9]]] dtype=bfloat16 ]
             )doc")
             .def(
-                "print",
-                [](const Tensor &self, Layout print_layout) { std::cout << self.write_to_string(print_layout); },
-                py::arg("print_layout") = Layout::ROW_MAJOR,
-                R"doc(
-                Prints the tensor as a flat list of numbers. By default, the tensor will be printed in row major order.
-
-                .. code-block:: python
-
-                    tt_tensor.print()
-
-                Example output:
-
-                .. code-block::
-
-                    [ 0.722656, 0.0332031, 0.109375, ..., 0.333984, 0.396484, 0.851562 dtype=bfloat16 ]
-            )doc")
-            .def(
-                "__str__", [](const Tensor &self) { return self.write_to_string(Layout::ROW_MAJOR, true); }, R"doc(
+                "__repr__", [](const Tensor &self) { return self.write_to_string(); }, R"doc(
                 Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
                 .. code-block:: python

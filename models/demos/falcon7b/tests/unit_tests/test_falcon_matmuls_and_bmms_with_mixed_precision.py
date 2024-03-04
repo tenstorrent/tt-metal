@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 
 import tt_lib as ttl
-from models.utility_functions import comp_pcc, tt2torch_tensor
+from models.utility_functions import comp_pcc, tt2torch_tensor, skip_for_wormhole_b0
 import torch
 
 
@@ -141,6 +141,7 @@ def run_falcon_matmul_test(
 
 
 # TODO: We could parametrize these separately for comprehensive testing
+@skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
 @pytest.mark.parametrize(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (

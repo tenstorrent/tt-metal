@@ -269,15 +269,10 @@ void TensorModule(py::module &m_tensor) {
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet",  R"doc(
         Class defining a set of CoreRanges required for sharding)doc"
     );
-    pyCoreRangeSet
-        .def(
-            py::init<>(
-                [](const std::set<CoreRange> &core_ranges ) {
-                    return CoreRangeSet(core_ranges);
-                }
-            )
-        );
-
+    pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
+        .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
+            return fmt::format("{}", core_range_set);
+        });
 
     auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
@@ -396,15 +391,21 @@ void TensorModule(py::module &m_tensor) {
 
     py::class_<OptimizedConvParallelizationConfig>(m_tensor, "OptimizedConvParallelizationConfig")
         .def(
-            py::init<CoreCoord, uint32_t, uint32_t>(),
+            py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("grid_size"),
+            py::arg("num_cores_nhw"),
             py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_weight_matrix_width_ntiles").noconvert()
-        )
+            py::arg("per_core_weight_matrix_width_ntiles").noconvert())
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
-        .def_property_readonly("per_core_out_matrix_height_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) { return c.per_core_weight_matrix_width_ntiles; });
+        .def_property_readonly(
+            "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
+        .def_property_readonly(
+            "per_core_out_matrix_height_ntiles",
+            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
+        .def_property_readonly("per_core_weight_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
+            return c.per_core_weight_matrix_width_ntiles;
+        });
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
@@ -431,7 +432,7 @@ void TensorModule(py::module &m_tensor) {
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert() = 0,
                  py::arg("output_mem_config").noconvert() = std::nullopt, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("input_tensor_shape").noconvert() = std::nullopt,
-                 py::arg("use_shallow_conv_variant").noconvert() = false, R"doc(
+                 py::arg("use_shallow_conv_variant").noconvert() = false, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 

@@ -19,12 +19,9 @@ enum class ShardedOpParallelizationStrategy { MULTI_CORE = 0 };
 
 enum class ShardedOpType { InterleavedToSharded, ShardedToInterleaved };
 
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
-    const Tensor &a, Tensor &output, const CoreCoord &grid_size);
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
-    const Tensor &a, Tensor &output, const CoreCoord &grid_size);
-operation::ProgramWithCallbacks reshard_multi_core(
-     const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks reshard_multi_core(const Tensor &a, Tensor &output);
 
 struct Sharded {
     const CoreCoord grid_size;
@@ -60,16 +57,13 @@ inline Tensor interleaved_to_sharded(
     const TensorMemoryLayout shard_scheme,
     const ShardOrientation shard_orientation,
     const std::optional<const DataType> output_dtype = std::nullopt) {
-
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set({});
     std::visit(
-        [&](const auto& grid) {
+        [&](const auto &grid) {
             using GridType = std::decay_t<decltype(grid)>;
-            if constexpr (
-                std::is_same_v<GridType, CoreCoord>
-            ) {
+            if constexpr (std::is_same_v<GridType, CoreCoord>) {
                 grid_size = grid;
                 uint32_t num_cores = 0;
                 uint32_t total_height = input_tensor.volume() / input_tensor.shape()[-1];
@@ -83,18 +77,14 @@ inline Tensor interleaved_to_sharded(
                     default: TT_ASSERT(false, "Unsupported sharding scheme");
                 }
                 grid_set = num_cores_to_corerange_set(num_cores, grid_size, row_wise);
-            } else if constexpr (
-                std::is_same_v<GridType, CoreRangeSet>
-            ) {
-                TT_FATAL(grid.ranges().size() == 1);
+            } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
                 auto bbox = grid.bounding_box();
                 grid_size = CoreCoord{bbox.end.x + 1, bbox.end.y + 1};
                 grid_set = grid;
             }
         },
-        grid
-    );
-    ShardSpec shard_spec(grid_set,  shard_shape, shard_orientation);
+        grid);
+    ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
     return operation::run(
                Sharded{
@@ -118,8 +108,7 @@ struct CorePageRange {
     PageRange range;
 };
 
-
-//TODO: tarafdarTT unify with Sharded struct
+// TODO: tarafdarTT unify with Sharded struct
 struct Reshard {
     const MemoryConfig output_mem_config;
 
@@ -130,13 +119,8 @@ struct Reshard {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names =
-        std::make_tuple("output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->output_mem_config)
-            );
-    }
+    static constexpr auto attribute_names = std::make_tuple("output_mem_config");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
 };
 
 inline Tensor interleaved_to_sharded(
@@ -156,7 +140,6 @@ inline Tensor interleaved_to_sharded(
                {input_tensor})
         .at(0);
 }
-
 
 inline Tensor sharded_to_interleaved(
     const Tensor &input_tensor,
@@ -179,16 +162,8 @@ inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem
     TT_FATAL(input_tensor.shard_spec().has_value());
     TT_FATAL(output_mem_config.is_sharded());
 
-    return operation::run(
-               Reshard{
-                   .output_mem_config = output_mem_config
-                   },
-               {input_tensor}).at(0);
-
-
-
+    return operation::run(Reshard{.output_mem_config = output_mem_config}, {input_tensor}).at(0);
 }
-
 
 }  // namespace tt_metal
 

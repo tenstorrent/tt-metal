@@ -16,6 +16,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils 
     SlidingWindowOpParams,
     SlidingWindowOpParamsWithParallelConfig,
     get_hash_from_sliding_window_op_params,
+    calculate_shard_grid,
 )
 from tt_lib.utils import _nearest_32, _nearest_y
 from models.utility_functions import is_wormhole_b0, is_grayskull
@@ -95,109 +96,104 @@ def find_closest_largest_divisor_with_num_padding(num: int, start_divisor: int):
 
 def determine_parallel_config(
     is_1d_systolic,
-    batch_size,
     output_channels,
     input_channels,
-    input_height,
-    input_width,
     sliding_window_op_params,
     device,
-    config_override={},
+    config_override=None,
 ):
+    if config_override is None:
+        config_override = {}
+
+    batch_size = sliding_window_op_params.batch_size
+    input_height = sliding_window_op_params.input_h
+    input_width = sliding_window_op_params.input_w
     output_height, output_width = compute_conv_output_height_width(input_height, input_width, sliding_window_op_params)
     conv_out_2d_matrix_height = batch_size * output_height * output_width
     # pad height to 32
     conv_out_2d_matrix_height = _nearest_32(conv_out_2d_matrix_height)
     conv_out_2d_matrix_height_ntiles = (int)(conv_out_2d_matrix_height / 32)
     conv_out_2d_matrix_width_ntiles = (int)(_nearest_32(output_channels) / 32)
-    device_grid_size = device.compute_with_storage_grid_size()
-    max_grid_size = {"x": device_grid_size.x, "y": device_grid_size.y}
-    if is_1d_systolic:
-        max_num_cores = max_grid_size["x"] * max_grid_size["y"]
-        actual_num_cores = find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
-        per_core_out_matrix_height_ntiles = (int)(conv_out_2d_matrix_height_ntiles / actual_num_cores)
-        per_core_out_matrix_width_ntiles = conv_out_2d_matrix_width_ntiles
-        grid_size = [
-            max_grid_size["x"],
-            max_grid_size["y"],
-        ]  # for 1d systolic array, we don't need to provide actual grid size because tensor sharding deterimines that automatically
-        num_cores_nhw = actual_num_cores
-        grid_size = [
-            max_grid_size["x"] if num_cores_nhw >= max_grid_size["x"] else num_cores_nhw,
-            math.ceil(num_cores_nhw / max_grid_size["x"]),
-        ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
-    else:
-        actual_num_cores_x = find_closest_largest_divisor_with_num_padding(
-            conv_out_2d_matrix_height_ntiles, max_grid_size["x"]
+    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
+    device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
+    max_num_cores = device_grid_size[0] * device_grid_size[1]
+
+    def calculate_num_cores_nhw(override):
+        num_cores_nhw = (
+            find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores)
+            if is_1d_systolic
+            else find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0])
         )
-        actual_num_cores_y = find_closest_common_largest_divisor(
-            conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, max_grid_size["y"]
-        )
-        per_core_out_matrix_height_ntiles = math.ceil(conv_out_2d_matrix_height_ntiles / actual_num_cores_x)
-        per_core_out_matrix_width_ntiles = (int)(conv_out_2d_matrix_width_ntiles / actual_num_cores_y)
-        grid_size = [actual_num_cores_x, actual_num_cores_y]
-        num_cores_nhw = actual_num_cores_x
+        if override is not None and num_cores_nhw != override:
+            warnings.warn(f"Overriding config: num_cores_nhw from {num_cores_nhw} to user provided config={override}")
+            num_cores_nhw = override
+        return num_cores_nhw
 
-    if "grid_size" in config_override:
-        if config_override["grid_size"][0] != grid_size[0]:
-            grid_size_x_override = config_override["grid_size"][0]
-            warnings.warn(
-                f"Overriding config: grid_size.x from {grid_size[0]} to user provided config={grid_size_x_override}"
-            )
-            grid_size[0] = grid_size_x_override
-        if config_override["grid_size"][1] != grid_size[1]:
-            grid_size_y_override = grid_size[1]
-            warnings.warn(
-                f"Overriding config: grid_size.y from {grid_size[1]} to user provided config={grid_size_y_override}"
-            )
-            grid_size[1] = grid_size_y_override
-    if "num_cores_nhw" in config_override:
-        num_cores_nhw_override = config_override["num_cores_nhw"]
-        if num_cores_nhw_override != num_cores_nhw:
-            warnings.warn(
-                f"Overriding config: num_cores_nhw from {num_cores_nhw} to user provided config={num_cores_nhw_override}"
-            )
-            num_cores_nhw = num_cores_nhw_override
-    if is_1d_systolic:
-        assert (
-            num_cores_nhw <= grid_size[0] * grid_size[1]
-        ), "Error: For 1d systolic conv, num_cores_nhw must be <= grid size"
-    else:
-        assert (
-            num_cores_nhw == grid_size[0]
-        ), "Error: For 2d systolic conv, num_cores_nhw must be == # of cols in grid size"
-    if "per_core_out_matrix_height" in config_override:
-        per_core_out_matrix_height_override = config_override["per_core_out_matrix_height"]
-        assert (
-            per_core_out_matrix_height_override % 32 == 0
-        ), "per_core_out_matrix_height must be divisible by 32 (tile height)"
-        if (per_core_out_matrix_height_override // 32) != per_core_out_matrix_height_ntiles:
-            warnings.warn(
-                f"Overriding config: per_core_out_matrix_height from {per_core_out_matrix_height_ntiles * 32} to user provided config={per_core_out_matrix_height_override}"
-            )
-            per_core_out_matrix_height_ntiles = per_core_out_matrix_height_override // 32
+    def calculate_grid_size(num_cores_nhw, override):
+        if is_1d_systolic:
+            grid_size = [
+                device_grid_size[0] if num_cores_nhw >= device_grid_size[0] else num_cores_nhw,
+                math.ceil(num_cores_nhw / device_grid_size[0]),
+            ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
+            assert (
+                num_cores_nhw <= grid_size[0] * grid_size[1]
+            ), "Error: For 1d systolic conv, num_cores_nhw must be <= grid size"
+        else:
+            grid_size = [
+                num_cores_nhw,
+                find_closest_common_largest_divisor(
+                    conv_out_2d_matrix_width_ntiles, _nearest_32(input_channels) // 32, device_grid_size[1]
+                ),
+            ]
+            assert (
+                num_cores_nhw == grid_size[0]
+            ), "Error: For 2d systolic conv, num_cores_nhw must be == # of cols in grid size"
 
-    if "per_core_weight_matrix_width" in config_override:
-        per_core_out_matrix_width_override = config_override["per_core_weight_matrix_width"]
-        assert (
-            per_core_out_matrix_width_override % 32 == 0
-        ), "per_core_weight_matrix_width must be divisible by 32 (tile width)"
-        if (per_core_out_matrix_width_override // 32) != per_core_out_matrix_width_ntiles:
-            warnings.warn(
-                f"Overriding config: per_core_weight_matrix_width from {per_core_out_matrix_width_ntiles * 32} to user provided config={per_core_out_matrix_width_override}"
-            )
-            per_core_out_matrix_width_ntiles = per_core_out_matrix_width_override // 32
+        if override is not None and grid_size != override:
+            warnings.warn(f"Overriding config: grid_size from {grid_size} to user provided config={override}")
+            grid_size = override
+        return grid_size
 
-    conv_parallelization_config = ttl.tensor.OptimizedConvParallelizationConfig(
+    def calculate_per_core_out_matrix_height_ntiles(logical_grid_x, override):
+        round_up = 0 if is_1d_systolic else (logical_grid_x - 1)
+        per_core_out_matrix_height_ntiles = (conv_out_2d_matrix_height_ntiles + round_up) // logical_grid_x
+        if override is not None:
+            assert override % 32 == 0, "per_core_out_matrix_height must be divisible by 32 (tile height)"
+            if (override // 32) != per_core_out_matrix_height_ntiles:
+                warnings.warn(
+                    f"Overriding config: per_core_out_matrix_height from {per_core_out_matrix_height_ntiles * 32} to user provided config={override}"
+                )
+                per_core_out_matrix_height_ntiles = override // 32
+        return per_core_out_matrix_height_ntiles
+
+    def calculate_per_core_out_matrix_width_ntiles(logical_grid_y, override):
+        per_core_out_matrix_width_ntiles = conv_out_2d_matrix_width_ntiles // logical_grid_y
+        if override is not None:
+            assert override % 32 == 0, "per_core_weight_matrix_width must be divisible by 32 (tile width)"
+            if (override // 32) != per_core_out_matrix_width_ntiles:
+                warnings.warn(
+                    f"Overriding config: per_core_weight_matrix_width from {per_core_out_matrix_width_ntiles * 32} to user provided config={override}"
+                )
+                per_core_out_matrix_width_ntiles = override // 32
+        return per_core_out_matrix_width_ntiles
+
+    num_cores_nhw = calculate_num_cores_nhw(config_override.get("num_cores_nhw", None))
+    grid_size = calculate_grid_size(num_cores_nhw, config_override.get("grid_size", None))
+    logical_grid_x = num_cores_nhw if is_1d_systolic else grid_size[0]
+    logical_grid_y = 1 if is_1d_systolic else grid_size[1]
+    per_core_out_matrix_height_ntiles = calculate_per_core_out_matrix_height_ntiles(
+        logical_grid_x, config_override.get("per_core_out_matrix_height_ntiles", None)
+    )
+    per_core_out_matrix_width_ntiles = calculate_per_core_out_matrix_width_ntiles(
+        logical_grid_y, config_override.get("per_core_out_matrix_width_ntiles", None)
+    )
+
+    return ttl.tensor.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
+        num_cores_nhw=num_cores_nhw,
         per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
         per_core_weight_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
     )
-    # print("num_cores_nhw=", num_cores_nhw)
-    # print("grid_size=", grid_size)
-    # print("per_core_out_matrix_height_ntiles=", per_core_out_matrix_height_ntiles)
-    # print("per_core_weight_matrix_width_ntiles=", per_core_out_matrix_width_ntiles)
-    return conv_parallelization_config, num_cores_nhw
 
 
 def determine_per_core_block_config(
@@ -209,8 +205,11 @@ def determine_per_core_block_config(
     sliding_window_op_params,
     use_shallow_conv_variant,
     padded_input_channels,
-    config_override={},
+    config_override=None,
 ):
+    if config_override is None:
+        config_override = {}
+
     act_block_h_override = 0
     if "act_block_h" in config_override:
         act_block_h_override = config_override["act_block_h"]
@@ -384,6 +383,7 @@ class TTPyCompositeConv(TTPyOp):
         enable_auto_formatting=False,
         deallocate_activation=True,
         padded_input_channels=None,
+        compute_kernel_config=None,
     ):
         if padded_input_channels is None:
             self.padded_input_channels = _nearest_32(input_channels)
@@ -421,17 +421,15 @@ class TTPyCompositeConv(TTPyOp):
         self.is_1d_systolic = is_1d_systolic
         self.device = device
         # determine conv op parallelization and blocking config
-        self.opt_conv_parall_conf_auto, num_cores_nhw = determine_parallel_config(
+        self.opt_conv_parall_conf_auto = determine_parallel_config(
             is_1d_systolic,
-            batch_size,
             output_channels,
             input_channels,
-            input_height,
-            input_width,
             sliding_window_op_params,
             device,
             config_override=conv_blocking_and_parallelization_config_override,
         )
+        self.parallel_config = self.opt_conv_parall_conf_auto
 
         self.opt_conv_block_conf_auto = determine_per_core_block_config(
             is_1d_systolic,
@@ -487,7 +485,7 @@ class TTPyCompositeConv(TTPyOp):
                 input_w=input_width,
                 num_cores_h=self.opt_conv_parall_conf_auto.grid_size.y,
                 num_cores_w=self.opt_conv_parall_conf_auto.grid_size.x,
-                num_cores_nhw=num_cores_nhw,
+                num_cores_nhw=self.opt_conv_parall_conf_auto.num_cores_nhw,
             )
 
         self.sliding_window_op_params = sliding_window_op_params
@@ -522,6 +520,7 @@ class TTPyCompositeConv(TTPyOp):
                 conv_params,
                 not is_1d_systolic,
                 reader_patterns_cache["conv"],
+                move_weights_to_device=move_weights_to_device,
             )
             assert sliding_window_op_params_hash in reader_patterns_cache["conv"]
             conv_reader_indices = reader_patterns_cache["conv"][sliding_window_op_params_hash]
@@ -545,6 +544,7 @@ class TTPyCompositeConv(TTPyOp):
             use_shallow_conv_variant=use_shallow_conv_variant,
             padded_input_channels=self.padded_input_channels,
             move_weights_to_device=move_weights_to_device,
+            compute_kernel_config=compute_kernel_config,
         )
 
         if not self.use_matmul_for_1x1_conv:
@@ -562,6 +562,7 @@ class TTPyCompositeConv(TTPyOp):
         conv_params,
         conv_is_2d,
         conv_reader_patterns_cache,
+        move_weights_to_device,
     ):
         # TODO: Need way of hashing sliding_window_op_params
         if sliding_window_op_params_hash not in conv_reader_patterns_cache:
@@ -612,14 +613,8 @@ class TTPyCompositeConv(TTPyOp):
 
             sliding_window_op_sharded_input_top_left_indices = (
                 generate_sliding_window_op_sharded_input_top_left_indices(
-                    data_top_left_indices, req_conv_input_shard_start_end
+                    data_top_left_indices, req_conv_input_shard_start_end, pad_tile=True, pad_last_core=True
                 )
-            )
-
-            # Pad indices for last core if not equal to other cores
-            indices_length_per_core = len(sliding_window_op_sharded_input_top_left_indices[0])
-            sliding_window_op_sharded_input_top_left_indices[-1].extend(
-                [0] * (indices_length_per_core - len(sliding_window_op_sharded_input_top_left_indices[-1]))
             )
 
             indices_torch_dtype = torch.int16
@@ -652,7 +647,7 @@ class TTPyCompositeConv(TTPyOp):
             )
             conv_reader_indices_sharded_tensor = (
                 conv_reader_indices_tt_tensor.to(device, mem_config)
-                if device is not None
+                if move_weights_to_device
                 else conv_reader_indices_tt_tensor
             )
 
@@ -679,6 +674,7 @@ class TTPyCompositeConv(TTPyOp):
         use_shallow_conv_variant,
         padded_input_channels,
         move_weights_to_device=False,
+        compute_kernel_config=None,
     ):
         assert len(conv_params) == 10
         K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
@@ -767,6 +763,7 @@ class TTPyCompositeConv(TTPyOp):
                 output_dtype=output_dtype,
                 input_tensor_shape=self.input_tensor_shape,
                 use_shallow_conv_variant=self.use_shallow_conv_variant,
+                compute_kernel_config=compute_kernel_config,
             )
             # assert(output.storage_type() == ttl.tensor.StorageType.DEVICE)
 
@@ -795,19 +792,6 @@ class TTPyCompositeConv(TTPyOp):
             move_output = ttl.tensor.move_sharded(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)
-
-        if is_grayskull():
-            compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=math_fidelity,
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-                math_fidelity=math_fidelity,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
 
         def conv1x1_as_matmul(activation):
             activation = downsample_if_needed(activation)
@@ -855,6 +839,9 @@ class TTPyCompositeConv(TTPyOp):
     def get_num_cores_nhw(self):
         return self.sliding_window_op_params.num_cores_nhw
 
+    def get_parallel_config(self):
+        return self.parallel_config
+
     # TODO: with this api, we get incorrect output
     def copy_input_to_device_with_sharded_api(self, conv_input: ttl.tensor.Tensor):
         assert conv_input.shape() == self.input_tensor_shape
@@ -879,34 +866,8 @@ class TTPyCompositeConv(TTPyOp):
             # Convert activation RM to tile layout
             conv_input = conv_input.to(ttl.tensor.Layout.TILE)
 
-        if self.is_1d_systolic and num_cores_nhw % num_cores_w > 0:
-            assert num_cores_h * num_cores_w > num_cores_nhw
-            first_range_num_cores_h = num_cores_nhw // num_cores_w
-            assert num_cores_nhw % num_cores_w < num_cores_w
-
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(num_cores_w - 1, first_range_num_cores_h - 1),
-                    ),
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, first_range_num_cores_h),
-                        ttl.tensor.CoreCoord((num_cores_nhw % num_cores_w) - 1, first_range_num_cores_h),
-                    ),
-                }
-            )
-        else:
-            if self.is_1d_systolic:
-                assert num_cores_nhw == num_cores_h * num_cores_w
-            shard_grid = ttl.tensor.CoreRangeSet(
-                {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
-                    )
-                }
-            )
-
+        shard_grid, shard_layout = calculate_shard_grid((num_cores_w, num_cores_h), self.ncores_nhw)
+        assert self.is_1d_systolic == (shard_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
         shard_orientation = (
             ttl.tensor.ShardOrientation.ROW_MAJOR if self.is_1d_systolic else ttl.tensor.ShardOrientation.COL_MAJOR
         )
@@ -916,12 +877,7 @@ class TTPyCompositeConv(TTPyOp):
             input_channels if self.is_1d_systolic else (int)(input_channels / act_c_num_blocks),
         ]
         shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
-        mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.is_1d_systolic
-            else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.BufferType.L1,
-        )
+        mem_config = ttl.tensor.MemoryConfig(shard_layout, ttl.tensor.BufferType.L1)
         conv_input_on_device = conv_input.to(self.device, mem_config, shard_spec)
         return conv_input_on_device
 

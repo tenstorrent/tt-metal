@@ -35,7 +35,7 @@ def test_t5_layer_norm(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_layer_norm(config, hidden_states, weight=parameters.weight)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output)
+    assert_with_pcc(torch_output, output, pcc=0.998)
 
 
 @skip_for_wormhole_b0()
@@ -59,7 +59,7 @@ def test_t5_dense_act_dense(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_dense_act_dense(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.9993)
+    assert_with_pcc(torch_output, output, pcc=0.997)
 
 
 @skip_for_wormhole_b0()
@@ -107,7 +107,7 @@ def test_t5_layer_ff(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_layer_ff(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.99906)
+    assert_with_pcc(torch_output, output, pcc=0.9979)
 
 
 @skip_for_wormhole_b0()

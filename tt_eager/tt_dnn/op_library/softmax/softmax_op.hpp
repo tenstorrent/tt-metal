@@ -32,7 +32,16 @@ struct SoftmaxShardedMultiCoreProgramConfig {
     MathFidelity math_fidelity;
     DataType im_data_format;
 
-    tt::stl::reflection::Attributes attributes() const;
+    tt::stl::reflection::Attributes attributes() const {
+        return {
+            {"compute_with_storage_grid_size", compute_with_storage_grid_size},
+            {"subblock_w", subblock_w},
+            {"block_h", block_h},
+            {"block_w", block_w},
+            {"math_fidelity", math_fidelity},
+            {"im_data_format", im_data_format},
+        };
+    };
 };
 
 using SoftmaxProgramConfig = std::variant<

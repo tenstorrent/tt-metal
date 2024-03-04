@@ -24,13 +24,12 @@ namespace ckernel {
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
-
     MATH(( llk_math_pack_sync_init<SyncHalf, DST_ACCUM_MODE>() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>(ocb) ));
+    PACK(( llk_pack_dest_init<SyncHalf, false, DST_ACCUM_MODE>(ocb) ));
 
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
@@ -41,11 +40,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 /**
  * Initialize the tilize operation. To be called once at beginning of a kernel.
  */
-ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb = 16)
+ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb = 16, uint32_t num_faces = 4)
 {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler) ));
-    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1_scaler, block) ));
+    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1_scaler, block, num_faces) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<SYNC>() ));
@@ -53,7 +52,7 @@ ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t bl
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false, DST_ACCUM_MODE>(ocb) ));
+    PACK(( llk_pack_dest_init<SYNC, false, DST_ACCUM_MODE>(ocb) ));
 }
 #endif
 
@@ -115,9 +114,9 @@ ALWI void unpack_tilize_block(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
 }
 
-ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b)
+ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b, uint32_t num_faces = 4)
 {
-    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b) ));
+    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b, num_faces) ));
 }
 
 /**

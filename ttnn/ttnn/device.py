@@ -13,6 +13,7 @@ def get_device_core_grid(device):
     return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
 
 
+# TODO: Device = ttnn._ttnn.Device
 Device = ttl.device.Device
 Device.core_grid = property(get_device_core_grid)
 
@@ -25,11 +26,7 @@ def open_device(*, device_id: int):
 
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
-    if device_id in DEVICES:
-        return DEVICES[device_id]
-    device = ttl.device.CreateDevice(device_id)
-    DEVICES[device_id] = device
-    return device
+    return ttnn._ttnn.device.open_device(device_id=device_id)
 
 
 def close_device(device):
@@ -38,9 +35,16 @@ def close_device(device):
 
     Close the device and remove it from the device cache.
     """
+    ttnn._ttnn.device.close_device(device)
+
+
+def synchronize_device(device):
+    """
+    synchronize_device(device: ttnn.Device) -> None:
+
+    Synchronize the device with host by waiting for all operations to complete.
+    """
     ttl.device.Synchronize(device)
-    ttl.device.CloseDevice(device)
-    del DEVICES[device.id()]
 
 
 @contextlib.contextmanager

@@ -25,24 +25,6 @@
 // SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
 
-
-// TODO: Uplift these APIs for compute_api.h?
-inline void col_major_to_row_major_init() {
-    #ifdef ARCH_GRAYSKULL
-    // Configure to RowMajor for tilize (similar to add bcast for bias)
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
-    #endif
-}
-
-inline void row_major_to_col_major_init() {
-    #ifdef ARCH_GRAYSKULL
-    // Configure back to ColMajor for matmul
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::ColMajor, false>()  ));
-    #endif
-}
-
 inline void tilize_in(
     uint32_t in_cb_id,
     uint32_t in_subblock_h,
@@ -185,9 +167,7 @@ void MAIN {
             #ifdef PRE_TILIZE
             unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
-            col_major_to_row_major_init();
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-            row_major_to_col_major_init();
 
             mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
             #endif
@@ -215,12 +195,10 @@ void MAIN {
                     #endif
                     unpack_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
 
-                    col_major_to_row_major_init();
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
                     #ifdef SPLIT_READER
                     tilize_in(in0_cb_second_reader_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
                     #endif
-                    row_major_to_col_major_init();
 
                     mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
@@ -240,7 +218,7 @@ void MAIN {
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_matmul_partials_init_short_with_dt(in1_cb_id, matmul_partials_cb);
+                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             tile_regs_acquire();
 
@@ -311,8 +289,8 @@ void MAIN {
             // if last block we pack the final result with relu enabled
             PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
             #endif
-            add_bcast_rows_init_short_post_matmul();
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
+            add_bcast_rows_init_short();
             cb_wait_front(bias_cb_id, bias_ntiles_w);
             cb_wait_front(matmul_partials_cb, out_block_num_tiles);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -352,10 +330,10 @@ void MAIN {
                 } // for in1_num_subblocks
             }
             if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
-                if constexpr (!tilize_in0) {
-                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-                }
                 unpack_reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
+                if constexpr (!tilize_in0) {
+                    mm_block_init_short(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                }
             }
             #else
             if constexpr(untilize_out) {
@@ -377,10 +355,10 @@ void MAIN {
                     }
                 }
                 if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
-                    if constexpr (!tilize_in) {
-                        mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-                    }
                     unpack_reconfig_data_format(matmul_partials_cb, in1_cb_id, untilize_mode_reblock_cb, mm_in0_cb_id);
+                    if constexpr (!tilize_in) {
+                        mm_block_init_short(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                    }
                 }
             }
             #endif

@@ -160,6 +160,13 @@ def prelu(x, *args, **kwargs):
     return result
 
 
+def ttnn_prelu(x, *args, **kwargs):
+    weight = kwargs.pop("scalar")
+    t_weight = torch.ones([1], dtype=x.dtype) * weight
+    result = torch.nn.functional.prelu(x, t_weight)
+    return result
+
+
 def softsign(x, *args, **kwargs):
     result = torch.nn.functional.softsign(x)
     return result
@@ -186,10 +193,14 @@ def bias_gelu_unary(x, *args, bias, **kwargs):
 
 
 def hardtanh(x, *args, **kwargs):
-    low = kwargs.pop("low")
-    high = kwargs.pop("high")
+    if "low" in kwargs and "high" in kwargs:
+        low = kwargs.pop("low")
+        high = kwargs.pop("high")
+        result = torch.nn.functional.hardtanh(x, min_val=low, max_val=high)
 
-    result = torch.nn.functional.hardtanh(x, min_val=low, max_val=high)
+    else:
+        result = torch.nn.functional.hardtanh(x)
+
     return result
 
 

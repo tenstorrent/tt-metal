@@ -7,7 +7,8 @@ JIT_BUILD_SRCS_RELATIVE = \
 	jit_build/build.cpp \
 	jit_build/genfiles.cpp \
 	jit_build/data_format.cpp \
-	jit_build/settings.cpp
+	jit_build/settings.cpp \
+	jit_build/kernel_args.cpp
 
 JIT_BUILD_SRCS = $(addprefix tt_metal/, $(JIT_BUILD_SRCS_RELATIVE))
 

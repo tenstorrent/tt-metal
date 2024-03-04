@@ -51,7 +51,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.shape().without_padding();
+    const auto input_shape = input.shape();
     // confirm that the output size supplied to the function matches
     TT_ASSERT(out_h_ == ((in_h_ + 2 * pad_h_ - (dilation_h_ * kernel_size_h_ - 1) - 1) / stride_h_) + 1);
     TT_ASSERT(out_w_ == ((in_w_ + 2 * pad_w_ - (dilation_w_ * kernel_size_w_ - 1) - 1) / stride_w_) + 1);
@@ -59,8 +59,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     uint32_t out_w = out_w_;
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
-    // uint32_t out_c_padded = ceil_multiple_of(out_c, constants::TILE_WIDTH);
-    uint32_t out_c_padded = ceil_multiple_of(out_c, 16);
+    uint32_t out_c_padded = ceil_multiple_of(out_c, (out_c <= 16) ? 16 : constants::TILE_WIDTH);
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.dtype()));
     uint32_t out_hw = out_h * out_w;
     uint32_t out_hw_padded = (uint32_t) ceil_multiple_of(out_hw, constants::TILE_HEIGHT);

@@ -573,11 +573,13 @@ size_t GetNumPCIeDevices() {
 }
 
 Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) {
+    ZoneScoped;
     Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
     return dev;
 }
 
 bool CloseDevice(Device *device) {
+    ZoneScoped;
     return device->close();
 }
 

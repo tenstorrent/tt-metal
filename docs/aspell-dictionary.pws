@@ -1,4 +1,4 @@
-personal_ws-1.1 en 521
+personal_ws-1.1 en 529
 ABI
 ADDI
 API
@@ -10,6 +10,7 @@ BRISC
 BRISCs
 BUF
 BUFs
+BeginTrace
 BertIntermediate
 BinaryOpType
 BorrowedStorage
@@ -56,11 +57,16 @@ DumpDeviceProfileResults
 ENDL
 ETH
 EltwiseUnary
+EndTrace
 EnqueueProgram
 EnqueueReadBuffer
+EnqueueRecordEvent
+EnqueueTrace
+EnqueueWaitForEvent
 EnqueueWriteBuffer
 Enum
 Enums
+EventSynchronize
 FW
 FileCopyrightText
 GGGG
@@ -72,6 +78,7 @@ GetRuntimeArgs
 Grayskull
 HW
 HiFi
+InstantiateTrace
 InterleavedBufferConfig
 Jupyter
 KernelHandle
@@ -314,6 +321,7 @@ itile
 iw
 iy
 jupyter
+kv
 labelled
 ld
 ldexp

@@ -13,6 +13,8 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_bmm \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency \
+		 tests/tt_metal/perf_microbenchmark/dispatch/test_dispatcher \
+		 tests/tt_metal/perf_microbenchmark/dispatch/test_prefetcher \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 \
 		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 \
@@ -81,7 +83,7 @@ TT_METAL_TESTS += \
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))
 
 TT_METAL_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES)
-TT_METAL_TESTS_LDFLAGS = -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest -lm
+TT_METAL_TESTS_LDFLAGS = $(LDFLAGS) -ltt_metal -ldl -lstdc++fs -pthread -lyaml-cpp -lgtest -lm
 
 TT_METAL_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.o))
 TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))
@@ -94,9 +96,9 @@ tests/tt_metal/all: $(TT_METAL_TESTS)
 tests/tt_metal/%: $(TESTDIR)/tt_metal/% ;
 
 .PRECIOUS: $(TESTDIR)/tt_metal/%
-$(TESTDIR)/tt_metal/%: $(OBJDIR)/tt_metal/tests/%.o $(TT_METAL_LIB) $(TT_DNN_LIB)
+$(TESTDIR)/tt_metal/%: $(OBJDIR)/tt_metal/tests/%.o $(TT_METAL_LIB)
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TESTS_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_METAL_TESTS_LDFLAGS)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TESTS_INCLUDES) -o $@ $^ $(TT_METAL_TESTS_LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/tt_metal/tests/%.o
 $(OBJDIR)/tt_metal/tests/%.o: tests/tt_metal/tt_metal/%.cpp

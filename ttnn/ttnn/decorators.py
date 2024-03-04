@@ -158,19 +158,33 @@ def query_all_registered_operations(include_experimental=False):
         return ttnn_operations
 
 
-def register_operation(
-    *, name, validate_input_tensors, torch_function=None, is_using_fallback=lambda *args, **kwargs: False
-):
+def register_operation(*, name, validate_input_tensors=None, torch_function=None, is_cpp_function=False, fallback=None):
     if name in REGISTERED_OPERATIONS:
         raise RuntimeError(f"{name} is already registered")
     REGISTERED_OPERATIONS.add(name)
 
+    if is_cpp_function:
+        if fallback is not None:
+            if validate_input_tensors is None:
+                raise RuntimeError(
+                    f"Registering {name}: validate_input_tensors is required for cpp functions with fallbacks"
+                )
+        else:
+            if validate_input_tensors is not None:
+                raise RuntimeError(
+                    f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks"
+                )
+    else:
+        if validate_input_tensors is None:
+            raise RuntimeError(f"Registering {name}: validate_input_tensors is required for non-cpp functions")
+
     def operation_decorator(function):
-        document_input_tensors(name, function, validate_input_tensors)
+        if not is_cpp_function or fallback is not None:
+            document_input_tensors(name, function, validate_input_tensors)
 
         def validate_decorator(function):
             def call_wrapper(*function_args, **function_kwargs):
-                if validate_input_tensors is not None:
+                if not is_cpp_function:
                     validate_input_tensors(name, *function_args, **function_kwargs)
                 return function(*function_args, **function_kwargs)
 
@@ -205,6 +219,26 @@ def register_operation(
                 return output
 
             return call_wrapper
+
+        def fallback_decorator(function):
+            def call_wrapper(*function_args, **function_kwargs):
+                try:
+                    return function(*function_args, **function_kwargs)
+                except NotImplementedError:
+                    logger.warning(f"{name}: falling back to torch due to NotImplementedError")
+                    return fallback(*function_args, **function_kwargs)
+                except Exception as e:
+                    exception_message = "\n".join(str(e).split("\n")[:3])
+                    logger.warning(f"{name}: falling back to torch due to {exception_message}")
+                    return fallback(*function_args, **function_kwargs)
+
+            return call_wrapper
+
+        if fallback is not None:
+            function = fallback_decorator(function)
+
+        if ttnn.TTNN_ENABLE_FAST_RUNTIME_MODE:
+            return function
 
         @wraps(function)
         def call_wrapper(*function_args, **function_kwargs):
@@ -259,7 +293,12 @@ def register_ttl_operation_as_ttnn_operation(name, function):
         function_args = preprocess_arg(function_args)
         function_kwargs = preprocess_arg(function_kwargs)
         output = function(*function_args, **function_kwargs)
-        return ttnn.Tensor(output)
+        if isinstance(output, (list, tuple)):
+            return type(output)([ttnn.Tensor(element) for element in output])
+        elif isinstance(output, ttnn.experimental.tensor.Tensor):
+            return ttnn.Tensor(output)
+        else:
+            raise TypeError(f"Expected Tensor, got {type(output)}")
 
     wrapper = register_operation(
         name=name,

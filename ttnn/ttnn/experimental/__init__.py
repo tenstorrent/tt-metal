@@ -4,3 +4,4 @@
 
 import ttnn.experimental.tensor
 import ttnn.experimental.operations.primary
+import ttnn.experimental.operations.primary.transformers

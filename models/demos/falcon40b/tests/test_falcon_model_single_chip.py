@@ -189,6 +189,122 @@ def test_sharded_matmul_1d_in0(
     assert passing
 
 
+@pytest.mark.parametrize("num_devices", [4, 8])
+@pytest.mark.parametrize(
+    "M, K, N, num_cores",
+    [
+        [32, 8192, 65024, 32],
+    ],
+    ids=["lm_head_shape"],
+)
+@pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
+@pytest.mark.parametrize("in0_sharded", [True], ids=["in0_sharded"])
+@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_matmul_1d_in0_multi_chip(
+    pcie_devices,
+    num_devices,
+    in0_sharded,
+    out_sharded,
+    M,
+    K,
+    N,
+    num_cores,
+    activations_dtype,
+    weights_dtype,
+    function_level_defaults,
+):
+    if num_devices == 8:
+        pytest.skip("Need tunnelling support to run on 8 devices!")
+
+    grid_size = (8, 4)
+    devices = pcie_devices[:num_devices]
+
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    in1_slices = torch.chunk(in1, num_devices, dim=-1)
+
+    in0_t = []
+    in1_t = []
+    for i in range(num_devices):
+        logger.info(f"Putting tensors on device: {i}")
+        in0_temp = torch2tt_tensor(in0, devices[i], tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+
+        if in0_sharded:
+            in0_temp = ttl.tensor.interleaved_to_sharded(
+                in0_temp,
+                grid_size,
+                [M, K // num_cores],
+                ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+            )
+        in0_t.append(in0_temp)
+
+        in1_t.append(
+            torch2tt_tensor(in1_slices[i], devices[i], tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
+        )
+
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    if num_devices == 4:
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=16,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    elif num_devices == 8:
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    output_t = []
+    for i in range(num_devices):
+        logger.info(f"Running matmul on device: {i}")
+        output_t.append(
+            ttl.operations.primary.matmul_1d(
+                in0_t[i],
+                in1_t[i],
+                program_config=program_config,
+                output_mem_config=output_mem_config,
+                output_dtype=activations_dtype,
+            )
+        )
+
+    pt_out = in0 @ in1
+
+    tt_out = torch.cat([tt2torch_tensor(out_t) for out_t in output_t], -1)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),

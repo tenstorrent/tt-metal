@@ -684,9 +684,19 @@ Tensor falcon_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_t
     return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
-Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
-    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded());
-    return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
+Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, std::optional<bool> packer_l1_acc) {
+    auto program_config = bmm_op_utils::get_mcast_1d_config(
+        input_tensor_a, input_tensor_b, true, std::nullopt, true, mem_config.is_sharded());
+    std::optional<const DeviceComputeKernelConfig> config = std::nullopt;
+    auto compute_kernel_config = init_device_compute_kernel_config(input_tensor_a.device()->arch(), config, MathFidelity::LoFi, true, false, packer_l1_acc.value_or(false));
+    return operations::primary::matmul_1d(
+        input_tensor_a,
+        input_tensor_b,
+        bias,
+        program_config,
+        mem_config,
+        output_dtype,
+        compute_kernel_config);
 }
 
 Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<UnaryWithParam> fused_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {

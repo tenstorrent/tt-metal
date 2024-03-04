@@ -2,39 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "tt_eager/tt_dnn/op_library/moreh_sum_backward/kernels/utils.hpp"
-
-template <typename T>
-inline T get_next_arg_val()
-{
-    static int arg_idx = 0;
-    return get_arg_val<T> (arg_idx++);
-}
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    const auto output_grad_addr = get_next_arg_val<uint32_t>();
-    const auto num_output_tiles = get_next_arg_val<uint32_t>();
-    const auto start_id = get_next_arg_val<uint32_t>();
-    const auto output_grad_is_dram = (get_next_arg_val<uint32_t>() == 1);
+    ArgFetcher arg_fetcher;
+    const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_grad_is_dram = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
-    const auto output_grad_n = get_next_arg_val<uint32_t>();
-    const auto output_grad_c = get_next_arg_val<uint32_t>();
-    const auto output_grad_ht = get_next_arg_val<uint32_t>();
-    const auto output_grad_wt = get_next_arg_val<uint32_t>();
+    const auto output_grad_n = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_grad_c = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_grad_ht = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_grad_wt = arg_fetcher.get_next_arg_val<uint32_t>();
 
-    const auto input_grad_n = get_next_arg_val<uint32_t>();
-    const auto input_grad_c = get_next_arg_val<uint32_t>();
-    const auto input_grad_ht = get_next_arg_val<uint32_t>();
-    const auto input_grad_wt = get_next_arg_val<uint32_t>();
+    const auto input_grad_n = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto input_grad_c = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto input_grad_ht = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto input_grad_wt = arg_fetcher.get_next_arg_val<uint32_t>();
 
-    const auto n_need_bcast = get_next_arg_val<uint32_t>();
-    const auto c_need_bcast = get_next_arg_val<uint32_t>();
-    const auto ht_need_bcast = get_next_arg_val<uint32_t>();
-    const auto wt_need_bcast = get_next_arg_val<uint32_t>();
+    const auto n_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto c_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto ht_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto wt_need_bcast = arg_fetcher.get_next_arg_val<uint32_t>();
 
     const auto output_grad_HtWt = output_grad_ht * output_grad_wt;
     const auto output_grad_CHtWt = output_grad_c * output_grad_HtWt;

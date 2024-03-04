@@ -61,20 +61,22 @@ inline void reduce_h_fused(
 
     constexpr uint32_t effective_nblocks = is_partial_tile ? 1 : nblocks;
     constexpr uint32_t num_output_tiles = out_ntiles_c * effective_nblocks;
+    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 2 /*fixme 1*/ : 2;
+    constexpr uint32_t num_out_rows = 1;
     cb_reserve_back(out_cb_id, out_ntiles_c * effective_nblocks);
     tile_regs_acquire();
     for (uint32_t out_elem_i = 0; out_elem_i < effective_nblocks; ++ out_elem_i) {
         cb_wait_front(in_cb_id, 1);
-        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
+        unpack_tilizeA_B_block(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */);
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
-            reduce_tile_math(in_ntiles_c * out_elem_i + c_i);
+            reduce_tile_math(in_ntiles_c * out_elem_i + c_i,  num_faces_in_tile /* reduce 1 or 2 faces */);
         }
         cb_pop_front(in_cb_id, 1);
     }
 
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(out_cb_id);
+    pack_untilize_dst<num_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile);  /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
 
     cb_push_back(out_cb_id, out_ntiles_c * effective_nblocks);
@@ -103,9 +105,11 @@ void MAIN {
 
     // const uint32_t TILE_WIDTH = 32;
     const bool is_partial_tile = in_c < 32;
+    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 2 /*fixme 1*/ : 2;
+    constexpr uint32_t num_out_rows = 1;
 
-    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id);
-    pack_untilize_dst_init_short<num_output_tiles>();
+    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, out_cb_id, num_faces_in_tile);
+    pack_untilize_dst_init_short<num_output_tiles>(num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
 
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {

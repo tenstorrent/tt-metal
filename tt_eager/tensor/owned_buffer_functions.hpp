@@ -33,6 +33,10 @@ void validate_datatype(const Tensor& tensor) {
         TT_FATAL(tensor.dtype() == DataType::FLOAT32);
     } else if constexpr (std::is_same_v<T, bfloat16>) {
         TT_FATAL(tensor.dtype() == DataType::BFLOAT16);
+    } else if constexpr (std::is_same_v<T, uint16_t>) {
+        TT_FATAL(tensor.dtype() == DataType::UINT16);
+    } else {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }
 }
 

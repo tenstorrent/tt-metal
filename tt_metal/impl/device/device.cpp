@@ -8,6 +8,7 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
 
 
@@ -501,8 +502,10 @@ void Device::configure_command_queue_programs() {
                     uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(curr_channel, cq_id, curr_cq_size);
                     uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                     vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+                    vector<uint32_t> completion_queue_last_event = {0x0}; // Reset state in case L1 Clear is disabled.
                     detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_READ_PTR, completion_queue_wr_ptr);
                     detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_WRITE_PTR, completion_queue_wr_ptr);
+                    detail::WriteToDeviceL1(this, completion_q_logical_core, CQ_COMPLETION_LAST_EVENT, completion_queue_last_event);
                 }
             }
         }
@@ -548,23 +551,11 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     }
 
     DprintServerAttach(this);
-    llrt::watcher_init(this->id(),
-                       [&, this]() { return this->logical_grid_size(); },
-                       [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
-                       [&, this]() -> const std::unordered_set<CoreCoord> { return this->get_active_ethernet_cores(); },
-                       [&, this](CoreCoord core) { return this->ethernet_core_from_logical_core(core); }
-                       );
+    watcher_init(this);
 
     this->initialize_and_launch_firmware();
 
-    llrt::watcher_attach(this, this->id(),
-                         [&, this]() { return this->logical_grid_size(); },
-                         [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
-                         [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
-                         [&, this]() -> const std::unordered_set<CoreCoord> { return this->get_active_ethernet_cores(); },
-                         [&, this](CoreCoord core) { return this->ethernet_core_from_logical_core(core); },
-                         build_env_.get_out_root_path()
-                         );
+    watcher_attach(this, build_env_.get_out_root_path());
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->initialized_ = true;
@@ -587,7 +578,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
     this->deallocate_buffers();
-    llrt::watcher_detach(this);
+    watcher_detach(this);
     DprintServerDetach(this);
 
     // Assert worker cores

@@ -116,15 +116,16 @@ Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, con
     return unpad_map.at(tensor.dtype())(tensor, output_tensor_start, output_tensor_end);
 }
 
-std::string to_string_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print) {
-    const static std::unordered_map<DataType, std::function<std::string(const Tensor &, Layout, bool)>> to_string_map = {
-        {DataType::BFLOAT16, &to_string<bfloat16>},
-        {DataType::FLOAT32, &to_string<float>},
-        {DataType::UINT32, &to_string<uint32_t>},
-        {DataType::BFLOAT8_B, &to_string<uint32_t>},
-        {DataType::UINT16, &to_string<uint16_t>},
-    };
-    return to_string_map.at(tensor.dtype())(tensor, print_layout, pretty_print);
+std::string to_string_wrapper(const Tensor &tensor) {
+    const static std::unordered_map<DataType, std::function<std::string(const Tensor &, std::optional<DataType>)>>
+        to_string_map = {
+            {DataType::BFLOAT16, &to_string<bfloat16>},
+            {DataType::FLOAT32, &to_string<float>},
+            {DataType::UINT32, &to_string<uint32_t>},
+            {DataType::BFLOAT8_B, &to_string<uint32_t>},
+            {DataType::UINT16, &to_string<uint16_t>},
+        };
+    return to_string_map.at(tensor.dtype())(tensor, std::nullopt);
 }
 
 }  // namespace tensor_impl

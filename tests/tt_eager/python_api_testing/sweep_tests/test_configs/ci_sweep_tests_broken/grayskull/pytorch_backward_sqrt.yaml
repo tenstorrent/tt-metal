@@ -9,11 +9,12 @@ test-list:
         num-samples: 64
         args-sampling-strategy: "all"
       datagen:
-        function: gen_rand
+        function: gen_rand_exclude_range
         dtype: bfloat16
         args:
           low: -100
           high: 100
+          excluderange: [-0.003, 0.003]
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
@@ -34,7 +35,7 @@ test-list:
         num-samples: 64
         args-sampling-strategy: "all"
       datagen:
-        function: gen_rand
+        function: gen_rand_exclude_range
         dtype: bfloat16
         args:
           low: -100

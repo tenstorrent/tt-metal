@@ -18,6 +18,7 @@ Tensor
 .. toctree::
    :maxdepth: 1
 
+   ttnn/as_tensor
    ttnn/from_torch
    ttnn/to_torch
    ttnn/to_device
@@ -186,6 +187,8 @@ Pointwise Binary
    ttnn/isclose
    ttnn/polyval
    ttnn/nextafter
+   ttnn/maximum
+   ttnn/minimum
 
 Pointwise Ternary
 =================
@@ -213,8 +216,11 @@ Reduction
 .. toctree::
    :maxdepth: 1
 
+   ttnn/max
    ttnn/mean
+   ttnn/min
    ttnn/std
+   ttnn/sum
    ttnn/var
 
 Data Movement
@@ -251,6 +257,7 @@ Transformer
    ttnn/transformer/concatenate_heads
    ttnn/transformer/attention_softmax
    ttnn/transformer/attention_softmax_
+   ttnn/transformer/rotary_embedding
 
 Embedding
 =========
@@ -276,6 +283,15 @@ Vision
    :maxdepth: 1
 
    ttnn/upsample
+
+KV Cache
+========
+
+.. toctree::
+   :maxdepth: 1
+
+   ttnn/kv_cache/fill_cache_for_user_
+   ttnn/kv_cache/update_cache_for_token_
 
 
 Model Conversion
