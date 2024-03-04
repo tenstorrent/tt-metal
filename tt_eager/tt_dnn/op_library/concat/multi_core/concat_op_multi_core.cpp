@@ -118,9 +118,10 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(const std::vector<Tenso
         vector<uint32_t> writer_runtime_args = {output.buffer()->address(), core_id,
                             curr_num_output_rows, input_unit_size, num_input_tensors*input_shard_spec.shape[0], input_shard_spec.shape[0]};
         for(uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+            auto input_i_shard_spec = input_tensors[input_id].shard_spec().value();
             reader_runtime_args.push_back(input_id);
-            reader_runtime_args.push_back(input_shard_spec.shape[0]);
-            writer_runtime_args.push_back(input_id);
+            reader_runtime_args.push_back(input_i_shard_spec.shape[0]);
+            writer_runtime_args.push_back(input_i_shard_spec.shape[1] * input_tensors[input_id].element_size());
         }
         tt_metal::SetRuntimeArgs(
             program,
