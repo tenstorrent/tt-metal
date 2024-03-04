@@ -1283,6 +1283,34 @@ op_map = {
         "tt_lib_op": ttnn_ops.eltwise_logical_not,
         "pytorch_op": pytorch_ops.logical_not,
     },
+    "ttnn-eltwise-xlogy": {
+        "tt_lib_op": ttnn_ops.eltwise_xlogy,
+        "pytorch_op": pytorch_ops.xlogy,
+    },
+    "ttnn-eltwise-squared_difference": {
+        "tt_lib_op": ttnn_ops.eltwise_squared_difference,
+        "pytorch_op": pytorch_ops.squared_difference,
+    },
+    "ttnn-eltwise-gtz": {
+        "tt_lib_op": ttnn_ops.eltwise_gtz,
+        "pytorch_op": pytorch_ops.gtz,
+    },
+    "ttnn-eltwise-ltz": {
+        "tt_lib_op": ttnn_ops.eltwise_ltz,
+        "pytorch_op": pytorch_ops.ltz,
+    },
+    "ttnn-eltwise-gez": {
+        "tt_lib_op": ttnn_ops.eltwise_gez,
+        "pytorch_op": pytorch_ops.gez,
+    },
+    "ttnn-eltwise-lez": {
+        "tt_lib_op": ttnn_ops.eltwise_lez,
+        "pytorch_op": pytorch_ops.lez,
+    },
+    "ttnn-eltwise-nez": {
+        "tt_lib_op": ttnn_ops.eltwise_nez,
+        "pytorch_op": pytorch_ops.nez,
+    },
     "ttnn-eltwise-add": {
         "tt_lib_op": ttnn_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,
