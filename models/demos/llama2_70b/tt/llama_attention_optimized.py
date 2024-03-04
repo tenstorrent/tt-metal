@@ -89,7 +89,15 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 )
             )
             layer_past = [cache_k, cache_v]
-            layer_past = [torch2tt_tensor(lp, self.devices[i]) for lp in layer_past]
+            layer_past = [
+                torch2tt_tensor(
+                    lp,
+                    self.devices[i],
+                    tt_memory_config=self.model_config["KV_CACHE_MEMCFG"],
+                    tt_dtype=self.model_config["KV_CACHE_DTYPE"],
+                )
+                for lp in layer_past
+            ]
 
             # add to the list
             self.layer_past_list.append(layer_past)
@@ -113,15 +121,15 @@ class TtLlamaAttention_optimized(torch.nn.Module):
             k_cache_tt = torch2tt_tensor(
                 k_cache,
                 None,
-                tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
-                tt_dtype=self.model_config["DEFAULT_DTYPE"],
+                tt_memory_config=self.model_config["KV_CACHE_MEMCFG"],
+                tt_dtype=self.model_config["KV_CACHE_DTYPE"],
             )
 
             v_cache_tt = torch2tt_tensor(
                 v_cache,
                 None,
-                tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
-                tt_dtype=self.model_config["DEFAULT_DTYPE"],
+                tt_memory_config=self.model_config["KV_CACHE_MEMCFG"],
+                tt_dtype=self.model_config["KV_CACHE_DTYPE"],
             )
 
             tt_lib.tensor.dump_tensor(str(k_cache_path), k_cache_tt)
