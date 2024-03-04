@@ -258,6 +258,7 @@ void write_and_launch_program(
             case (uint32_t) DeviceCommand::TransferType::GO_SIGNALS_UNICAST:
                 multicast = false;
                 num_pages_in_transfer = header->num_go_signal_unicast_pages;
+                noc_async_write_barrier();
                 break;
         }
 
