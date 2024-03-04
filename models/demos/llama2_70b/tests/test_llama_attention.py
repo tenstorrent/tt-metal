@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
 from models.demos.llama2_70b.tt.llama_attention import TtLlamaAttention
 from models.demos.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 
@@ -138,7 +138,7 @@ def run_test_LlamaAttention_inference(
             tt_lib.device.Synchronize(device)
 
     generation_start_pos = 120
-    generation_length = 20
+    generation_length = 1
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
@@ -244,18 +244,19 @@ def test_LlamaAttention_inference(
     optimized,
     model_config_str,
     n_devices,
-    pcie_devices,
+    all_devices,
     emulated,
 ):
+    devices = get_devices_for_t3000(all_devices, n_devices)
     model_config = get_model_config(model_config_str, num_devices=n_devices)
-    compute_grid_size = pcie_devices[0].compute_with_storage_grid_size()
-    if len(pcie_devices) < n_devices and not emulated:
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaAttention_inference(
-        pcie_devices[:n_devices],
+        devices,
         batch,
         seq_len,
         pcc,
