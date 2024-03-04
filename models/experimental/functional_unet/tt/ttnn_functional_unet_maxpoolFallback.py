@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+import sys
 
 import tt_lib as ttl
 import tt_lib.fallback_ops
@@ -33,15 +34,27 @@ def unet_reshard(
             i = ttl_tensor
             ttl_tensor = ttl.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config)
             ttnn.deallocate(ttnn.Tensor(i))
-        if tilize:
-            i = ttl_tensor
-            ttl_tensor = ttnn.to_layout(ttnn.Tensor(ttl_tensor), layout=ttnn.TILE_LAYOUT, dtype=dtype).value
-            ttnn.deallocate(ttnn.Tensor(i))
+        i = ttl_tensor
         ttl_tensor = ttl.tensor.interleaved_to_sharded(
             ttl_tensor,
             sharded_memory_config,
-            dtype,
+            None if tilize else dtype,
         )
+        ttnn.deallocate(ttnn.Tensor(i))
+        if tilize:
+            i = ttl_tensor
+            h, w = list(ttnn_tensor.shape)[2:]
+            pad_h = (ttnn.TILE_SIZE - h % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+            pad_w = (ttnn.TILE_SIZE - w % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+            ttl_tensor = ttl.tensor.tilize_with_val_padding(
+                ttl_tensor,
+                list(ttnn_tensor.shape)[:2] + [h + pad_h, w + pad_w],
+                [0, 0, 0, 0],
+                0,
+                output_mem_config=ttl_tensor.memory_config(),
+                output_dtype=dtype,
+            )
+            ttnn.deallocate(ttnn.Tensor(i))
         return ttnn.Tensor(ttl_tensor)
 
 
@@ -222,10 +235,10 @@ class UNet:
 
         output_tensor = unet_reshard(
             output_tensor,
-            self.c7.get_expected_memory_config(output_tensor.shape, pad_tile=True),
-            tilize=True,
+            self.c7.get_expected_memory_config(output_tensor.shape, pad_tile=False),
+            tilize=False,
             use_reshard=False,
-            dtype=ttnn.bfloat8_b,
+            # dtype=ttnn.bfloat8_b,
         )
         output_tensor = self.c7(output_tensor)
         output_tensor = self.c7_2(output_tensor)
@@ -239,10 +252,10 @@ class UNet:
         output_tensor = unet_concat([output_tensor, save_c1_2_out], dim=-1)
         output_tensor = unet_reshard(
             output_tensor,
-            self.c8.get_expected_memory_config(output_tensor.shape),
-            tilize=True,
+            self.c8.get_expected_memory_config(output_tensor.shape, pad_tile=False),
+            # tilize=True,
             use_reshard=False,
-            dtype=ttnn.bfloat8_b,
+            # dtype=ttnn.bfloat8_b,
         )
         output_tensor = self.c8(output_tensor)
         output_tensor = self.c8_2(output_tensor)

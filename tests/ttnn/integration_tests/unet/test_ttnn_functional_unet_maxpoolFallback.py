@@ -165,6 +165,7 @@ def custom_preprocessor(model, name, ttnn_module_args):
         ttnn_module_args.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
         ttnn_module_args.c7_2["conv_blocking_and_parallelization_config_override"] = None
         ttnn_module_args.c7_3["conv_blocking_and_parallelization_config_override"] = None
+        ttnn_module_args.c7["padded_input_channels"] = 48
 
         ttnn_module_args.c8["math_fidelity"] = ttnn.MathFidelity.LoFi
         ttnn_module_args.c8_2["math_fidelity"] = ttnn.MathFidelity.LoFi
