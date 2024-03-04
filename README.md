@@ -154,7 +154,7 @@ If you're setting up an environment from source, you must further set up and
 activate the environment with:
 
 ```
-export PYTHONPATH=<this repo dir>
+export PYTHONPATH=$PYTHONPATH:<this repo dir>
 export TT_METAL_ENV=dev
 source build/python_env/bin/activate
 ```
