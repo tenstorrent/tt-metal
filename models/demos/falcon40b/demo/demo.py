@@ -397,9 +397,7 @@ def run_falcon_demo_kv(
             del tt_decode_attention_mask
 
         tt_outs = []
-        for i in range(len(devices)):
-            tt_outs.append(tt2torch_tensor(tt_logits[0]).squeeze(1))
-        logits = torch.concat(tt_outs, dim=-1)
+        logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
         del tt_logits
 
         decode_ids = post_processor(logits=logits, index=...).reshape(batch_size, 1)
