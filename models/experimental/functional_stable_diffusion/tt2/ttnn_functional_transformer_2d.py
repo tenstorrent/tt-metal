@@ -200,8 +200,6 @@ class transformer_2d_model:
             hidden_states = pre_process_input(self.device, hidden_states)
 
         else:
-            print(f"Transformer GN: memory_config={ttnn.get_memory_config(hidden_states)}")
-            print(f"Hidden states shape: {hidden_states.shape}")
             hidden_states = ttnn.group_norm(
                 input_tensor=hidden_states,
                 num_groups=norm_num_groups,
