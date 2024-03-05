@@ -18,7 +18,8 @@ TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/dispatch/debug_tools.cpp \
 	tt_metal/impl/dispatch/command_queue.cpp \
 	tt_metal/impl/debug/dprint_server.cpp \
-	tt_metal/impl/debug/watcher_server.cpp
+	tt_metal/impl/debug/watcher_server.cpp \
+	tt_metal/impl/trace/trace.cpp
 
 TT_METAL_IMPL_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_IMPL_SRCS:.cpp=.o))
 TT_METAL_IMPL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_IMPL_SRCS:.cpp=.d))

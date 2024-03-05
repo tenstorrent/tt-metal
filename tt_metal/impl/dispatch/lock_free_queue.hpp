@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <atomic>
 #include <memory>
 #include "tt_metal/common/assert.hpp"
