@@ -298,6 +298,7 @@ class resnetBlock2D:
             hidden_states = ttnn.to_layout(
                 hidden_states, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=ttnn.get_memory_config(hidden_states)
             )
+            # breakpoint()
             hidden_states = ttnn.group_norm(
                 hidden_states,
                 num_groups=groups,
@@ -348,20 +349,21 @@ class resnetBlock2D:
                 output_tensor_end_width_dim += split_input_channels
             # hidden_states = split_hidden_states
         if conv1_split_chunks == 1:
-            if self.group_norm_on_device:
-                # breakpoint()
-                hidden_states = ttnn.to_memory_config(hidden_states, self.conv1s[0].conv.input_sharded_memory_config)
-                # breakpoint()
+            # breakpoint()
+            hidden_states = ttnn.to_memory_config(hidden_states, self.conv1s[0].conv.input_sharded_memory_config)
+            # breakpoint()
             hidden_states = self.conv1s[0](hidden_states)
             # breakpoint()
         else:
             for i in range(conv1_split_chunks):
+                split_hidden_states[i] = ttnn.to_memory_config(
+                    split_hidden_states[i], self.conv1s[i].conv.input_sharded_memory_config
+                )
                 split_hidden_states[i] = self.conv1s[i](split_hidden_states[i])
                 if i != 0:
                     split_hidden_states[i] = ttnn.add(split_hidden_states[i], split_hidden_states[i - 1])
                     ttnn.deallocate(split_hidden_states[i - 1])
             hidden_states = split_hidden_states[-1]
-            ttnn.deallocate(split_hidden_states[-1])
 
         # split_hidden_states = []
         # breakpoint()
