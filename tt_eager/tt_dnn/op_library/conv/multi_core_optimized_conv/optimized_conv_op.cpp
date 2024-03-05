@@ -146,8 +146,8 @@ tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
 operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
-    TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_ASSERT(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    TT_ASSERT(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles = block_config.weight_block_w_ntiles;
@@ -187,17 +187,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     uint32_t act_matrix_width_unpadded = (uint32_t) act_matrix_shape_unpadded[2];
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
-    TT_ASSERT(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
-    TT_ASSERT(b.shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_ASSERT(b.shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.shape()[2];
-    uint32_t weight_matrix_width = b.shape()[3];
+    TT_ASSERT(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
+    TT_ASSERT(b.get_legacy_shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_ASSERT(b.get_legacy_shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.get_legacy_shape()[2];
+    uint32_t weight_matrix_width = b.get_legacy_shape()[3];
 
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
         TT_ASSERT(bias.has_value());
         TT_ASSERT(bias.value().buffer() != nullptr);
-        auto bias_shape_without_padding = bias.value().shape().without_padding();
+        auto bias_shape_without_padding = bias.value().get_legacy_shape().without_padding();
         TT_ASSERT(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
         // TT_ASSERT(bias_shape_without_padding[1] == 1 && bias_shape_without_padding[2] == 1, "Bias should have H == W == 1");
         TT_ASSERT(bias_shape_without_padding[3] == output_channels, "Bias should have output_channels");
@@ -272,10 +272,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {{0, 0}, {0, 0}};
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : DataFormat::Float16_b;
+    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : DataFormat::Float16_b;
     DataFormat tilized_act_df = out_df;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
@@ -316,7 +316,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     if (has_bias) {
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
-        bias_ntiles = bias.value().shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+        bias_ntiles = bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
 
     //uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;

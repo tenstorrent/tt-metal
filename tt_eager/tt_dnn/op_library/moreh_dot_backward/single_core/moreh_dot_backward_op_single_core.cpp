@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
     Buffer *src0_buffer = output_grad.buffer();
@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
 
     uint32_t num_tiles = input.volume() / TILE_HW;
     float scaler = 1.0f;
-    const auto &a_shape_wo_padding = input.shape().without_padding();
+    const auto &a_shape_wo_padding = input.get_legacy_shape().without_padding();
     uint32_t pad_h = a_shape_wo_padding[2] % TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % TILE_WIDTH;
     uint32_t mask_h = (pad_h == 0) ? (TILE_HEIGHT) : (pad_h);

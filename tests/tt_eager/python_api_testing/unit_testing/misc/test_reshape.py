@@ -19,7 +19,7 @@ def test_tile_major_reshape(device):
 
     xtt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
     xtt = ttl.tensor.reshape(xtt, 5, 3, 96, 64)
-    assert list(xtt.shape()) == [5, 3, 96, 64]
+    assert list(xtt.get_legacy_shape()) == [5, 3, 96, 64]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([5, 3, 96, 64])
@@ -27,7 +27,7 @@ def test_tile_major_reshape(device):
     assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 64, 96)
-    assert list(xtt.shape()) == [3, 5, 64, 96]
+    assert list(xtt.get_legacy_shape()) == [3, 5, 64, 96]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 64, 96])
@@ -35,7 +35,7 @@ def test_tile_major_reshape(device):
     assert eq
 
     xtt = ttl.tensor.reshape(xtt, -1, 5, 96, 64)
-    assert list(xtt.shape()) == [3, 5, 96, 64]
+    assert list(xtt.get_legacy_shape()) == [3, 5, 96, 64]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 96, 64])
@@ -43,7 +43,7 @@ def test_tile_major_reshape(device):
     assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, -1, 64, 96)
-    assert list(xtt.shape()) == [3, 5, 64, 96]
+    assert list(xtt.get_legacy_shape()) == [3, 5, 64, 96]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 64, 96])
@@ -51,7 +51,7 @@ def test_tile_major_reshape(device):
     assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, -1, 64)
-    assert list(xtt.shape()) == [3, 5, 96, 64]
+    assert list(xtt.get_legacy_shape()) == [3, 5, 96, 64]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 96, 64])
@@ -59,7 +59,7 @@ def test_tile_major_reshape(device):
     assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 64, -1)
-    assert list(xtt.shape()) == [3, 5, 64, 96]
+    assert list(xtt.get_legacy_shape()) == [3, 5, 64, 96]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 64, 96])
@@ -67,7 +67,7 @@ def test_tile_major_reshape(device):
     assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 32, -1)
-    assert list(xtt.shape()) == [3, 5, 32, 96 * 2]
+    assert list(xtt.get_legacy_shape()) == [3, 5, 32, 96 * 2]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 32, 96 * 2])

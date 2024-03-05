@@ -18,28 +18,28 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx) {
     Program program{};
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
+    tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
     uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
+    tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
     uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
     tt::DataFormat scalar_cb_data_format = DataFormat::Float16_b;
     uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     uint32_t num_tiles = input.volume() / TILE_HW;
-    uint32_t num_rows = input.volume() / input.shape()[-1] / TILE_HEIGHT;
-    uint32_t Ht = input.shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input.shape()[-1] / TILE_WIDTH;
+    uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
+    uint32_t Ht = input.get_legacy_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wt = input.get_legacy_shape()[-1] / TILE_WIDTH;
     uint32_t half_Wt = Wt / 2;
     uint32_t HtWt = Ht * Wt;
-    uint32_t Wbytes = input.shape()[-1] * sizeof(bfloat16);
+    uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
 

@@ -80,9 +80,9 @@ namespace op_profiler {
             }
 
             vector<string> tensorStrs = {
-                shape_to_str(tensor.shape()),
-                fmt::format("{}", magic_enum::enum_name(tensor.layout())),
-                fmt::format("{}", magic_enum::enum_name(tensor.dtype())),
+                shape_to_str(tensor.get_legacy_shape()),
+                fmt::format("{}", magic_enum::enum_name(tensor.get_layout())),
+                fmt::format("{}", magic_enum::enum_name(tensor.get_dtype())),
                 tensorStorageStr
             };
 
@@ -533,8 +533,8 @@ namespace op_profiler {
     {
 #if defined(PROFILER)
         for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-            Kernel * kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
-            detail::operationProfiler.append_kernel_info(kernel);
+            auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
+            detail::operationProfiler.append_kernel_info(kernel.get());
         }
 #endif
     }

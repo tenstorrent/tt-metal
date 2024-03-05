@@ -27,10 +27,10 @@ void MorehSoftmaxBackward::validate_with_output_tensors(const std::vector<Tensor
     TT_ASSERT(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_ASSERT(output_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_ASSERT(output_grad_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-    TT_ASSERT((output_tensor.layout() == Layout::TILE), "Output to softmax must be tilized");
-    TT_ASSERT((output_grad_tensor.layout() == Layout::TILE), "Output_grad to softmax must be tilized");
-    TT_ASSERT(output_tensor.dtype() == DataType::BFLOAT16 || output_tensor.dtype() == DataType::BFLOAT8_B);
-    TT_ASSERT(output_grad_tensor.dtype() == DataType::BFLOAT16 || output_grad_tensor.dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT((output_tensor.get_layout() == Layout::TILE), "Output to softmax must be tilized");
+    TT_ASSERT((output_grad_tensor.get_layout() == Layout::TILE), "Output_grad to softmax must be tilized");
+    TT_ASSERT(output_tensor.get_dtype() == DataType::BFLOAT16 || output_tensor.get_dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT(output_grad_tensor.get_dtype() == DataType::BFLOAT16 || output_grad_tensor.get_dtype() == DataType::BFLOAT8_B);
 
     // validate parameters
     TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
@@ -44,16 +44,16 @@ void MorehSoftmaxBackward::validate_with_output_tensors(const std::vector<Tensor
 }
 
 std::vector<Shape> MorehSoftmaxBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    return {input_tensors.at(0).shape()};
+    return {input_tensors.at(0).get_legacy_shape()};
 }
 
 std::vector<Tensor> MorehSoftmaxBackward::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         return {output_tensors.at(0).value()};
     }
-    const auto& output_shape = input_tensors.at(0).shape();
+    const auto& output_shape = input_tensors.at(0).get_legacy_shape();
 
-    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).dtype(), Layout::TILE, this->output_mem_config)};
+    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
 }
 
 operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(

@@ -18,7 +18,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(int device_id, const tt_metal::Kernel *kernel) {
+std::string get_latest_kernel_binary_path(int device_id, const std::shared_ptr<Kernel> kernel) {
     auto root_dir = jit_build_get_kernel_compile_outpath(device_id);
     TT_FATAL(kernel != nullptr);
     TT_FATAL(std::filesystem::exists(root_dir + kernel->name()));
@@ -121,9 +121,9 @@ int main(int argc, char **argv) {
         // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
         const KernelGroup *kernel_group = program.kernels_on_core(core);
         TT_FATAL(kernel_group != nullptr && kernel_group->compute_id.has_value() and kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value());
-        tt_metal::Kernel *compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->compute_id.value());
-        tt_metal::Kernel *riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv0_id.value());
-        tt_metal::Kernel *riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv1_id.value());
+        auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->compute_id.value());
+        auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv0_id.value());
+        auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv1_id.value());
         std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
         for (auto kernel_name : kernel_names) {
             std::filesystem::remove_all(jit_build_get_kernel_compile_outpath(device->id()) + kernel_name);

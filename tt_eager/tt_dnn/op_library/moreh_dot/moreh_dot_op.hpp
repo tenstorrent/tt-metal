@@ -43,7 +43,7 @@ inline Tensor moreh_dot(
     const Tensor &input_tensor_b,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run(
-               MorehDot{.output_mem_config = mem_config, .output_dtype = input_tensor_a.dtype()},
+               MorehDot{.output_mem_config = mem_config, .output_dtype = input_tensor_a.get_dtype()},
                {input_tensor_a, input_tensor_b})
         .at(0);
 }

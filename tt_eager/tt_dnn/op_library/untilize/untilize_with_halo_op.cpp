@@ -112,11 +112,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    Shape input_shape = input.shape();
-    Shape output_shape = output.shape();
+    Shape input_shape = input.get_legacy_shape();
+    Shape output_shape = output.get_legacy_shape();
 
-    DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
     uint32_t in_tile_size = tt_metal::detail::TileSize(in_df);
@@ -757,11 +757,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
     Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    Shape input_shape = a.shape();
-    Shape output_shape = output.shape();
+    Shape input_shape = a.get_legacy_shape();
+    Shape output_shape = output.get_legacy_shape();
 
-    DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(a.get_dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
     uint32_t in_tile_size = tt_metal::detail::TileSize(in_df);
@@ -1280,7 +1280,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
 void UntilizeWithHalo::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor is not TILE for untilize");
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input tensor is not TILE for untilize");
     TT_FATAL(input_tensor_a.memory_config().is_sharded());
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED or input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Only works for sharded input");
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
@@ -1291,7 +1291,7 @@ void UntilizeWithHalo::validate(const std::vector<Tensor> &input_tensors) const 
 
 std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.shape();
+    const auto& input_shape = input.get_legacy_shape();
     Shape output_shape = input_shape;
     // pad_h, pad_w
     // calculate the sizes (num sticks) for each of the 7 sections (5 local, 2 halo)
@@ -1346,10 +1346,10 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
 
 std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
     auto shard_spec = input_tensor.shard_spec().value();
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-    uint32_t ncores = input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shape[0];
+    uint32_t ncores = input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[2] / shard_spec.shape[0];
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(input_tensor.shard_spec().value().grid.ranges().begin());
         ncores = core_range.end.x - core_range.start.x + 1;
@@ -1405,7 +1405,7 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         in_nsticks_per_core = input_tensor_a.shard_spec().value().shape[0];
     }
 
-    auto input_shape = input_tensor_a.shape();
+    auto input_shape = input_tensor_a.get_legacy_shape();
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = in_b * in_hw;
 

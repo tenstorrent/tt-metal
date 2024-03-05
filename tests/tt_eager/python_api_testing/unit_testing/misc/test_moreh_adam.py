@@ -131,7 +131,7 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, device):
         dev_max_exp_avg_sq,
     )
 
-    assert dev_param.shape() == list(model.weight.shape)
+    assert dev_param.get_legacy_shape() == list(model.weight.shape)
 
     param_result = dev_param.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
     exp_avg_result = dev_exp_avg.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)

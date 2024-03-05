@@ -19,11 +19,11 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     tt_metal::Program program{};
 
-    const auto& ashape = a.shape(), bshape = b.shape();
+    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
+    Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

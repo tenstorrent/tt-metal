@@ -26,9 +26,7 @@ class TtUpsample2D(nn.Module):
         base_address="",
     ):
         super().__init__()
-        assert (
-            not use_conv_transpose
-        ), "StableDiffusion's Unet does not use convTranspose, so leaving it out"
+        assert not use_conv_transpose, "StableDiffusion's Unet does not use convTranspose, so leaving it out"
         self.in_channels = channels
         self.out_channels = out_channels or channels
         self.use_conv = use_conv
@@ -48,21 +46,15 @@ class TtUpsample2D(nn.Module):
                 padding=1,
             )
 
-    def forward(
-        self, hidden_states: ttl.tensor.Tensor, output_size=None
-    ) -> ttl.tensor.Tensor:
-        assert hidden_states.shape()[1] == self.in_channels
+    def forward(self, hidden_states: ttl.tensor.Tensor, output_size=None) -> ttl.tensor.Tensor:
+        assert hidden_states.get_legacy_shape()[1] == self.in_channels
 
         if output_size is None:
             upsampler_nearest2d = TtUpsampleNearest2d()
             hidden_states = upsampler_nearest2d(hidden_states)
         else:
-            assert (
-                False
-            ), "we are not expected to support upsample 2d with output_size yet"
-            hidden_states = F.interpolate(
-                hidden_states, size=output_size, mode="nearest"
-            )
+            assert False, "we are not expected to support upsample 2d with output_size yet"
+            hidden_states = F.interpolate(hidden_states, size=output_size, mode="nearest")
 
         if self.use_conv:
             hidden_states = self.conv(hidden_states)

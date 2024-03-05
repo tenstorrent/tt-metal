@@ -28,16 +28,10 @@ class TtBloomBlock(torch.nn.Module):
         self.hidden_size = config.hidden_size  # 1024
         self.num_heads = config.n_head
         self.layer_norm_epsilon = config.layer_norm_epsilon
-        self.apply_residual_connection_post_layernorm = (
-            config.apply_residual_connection_post_layernorm
-        )
+        self.apply_residual_connection_post_layernorm = config.apply_residual_connection_post_layernorm
 
-        self.tt_beta = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.input_layernorm.bias", state_dict
-        )
-        self.tt_gamma = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.input_layernorm.weight", state_dict
-        )
+        self.tt_beta = bloom_utils.tt_load_layer_weights(f"{base_address}.input_layernorm.bias", state_dict)
+        self.tt_gamma = bloom_utils.tt_load_layer_weights(f"{base_address}.input_layernorm.weight", state_dict)
         self.input_layernorm = TtLayernorm(
             self.tt_gamma,
             self.tt_beta,
@@ -56,9 +50,7 @@ class TtBloomBlock(torch.nn.Module):
             config, state_dict, f"{base_address}.self_attention", device
         )
 
-        self.tt_beta_2 = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.post_attention_layernorm.bias", state_dict
-        )
+        self.tt_beta_2 = bloom_utils.tt_load_layer_weights(f"{base_address}.post_attention_layernorm.bias", state_dict)
         self.tt_gamma_2 = bloom_utils.tt_load_layer_weights(
             f"{base_address}.post_attention_layernorm.weight", state_dict
         )
@@ -76,9 +68,7 @@ class TtBloomBlock(torch.nn.Module):
         # self.post_attention_layernorm.bias = torch.nn.Parameter(state_dict[f"{base_address}.post_attention_layernorm.bias"])
         # self.post_attention_layernorm.weight = torch.nn.Parameter(state_dict[f"{base_address}.post_attention_layernorm.weight"])
 
-        self.mlp = bloom_mlp.TtBloomMLP(
-            config, state_dict, f"{base_address}.mlp", device
-        )
+        self.mlp = bloom_mlp.TtBloomMLP(config, state_dict, f"{base_address}.mlp", device)
 
     def forward(
         self,
@@ -93,9 +83,7 @@ class TtBloomBlock(torch.nn.Module):
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
         # Layer norm at the beginning of the transformer layer.
-        layernorm_output = self.input_layernorm(
-            hidden_states, overrideH=hidden_states.shape()[-2]
-        )
+        layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.get_legacy_shape()[-2])
 
         # Layer norm post the self attention.
         if self.apply_residual_connection_post_layernorm:
@@ -120,7 +108,7 @@ class TtBloomBlock(torch.nn.Module):
         outputs = attn_outputs[1:]
 
         layernorm_output = self.post_attention_layernorm(
-            attention_output, overrideH=attention_output.shape()[-2]
+            attention_output, overrideH=attention_output.get_legacy_shape()[-2]
         )
 
         # Get residual

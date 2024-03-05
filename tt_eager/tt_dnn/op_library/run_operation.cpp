@@ -215,6 +215,19 @@ std::vector<Tensor> run_device_operation(
             using T = std::decay_t<decltype(program)>;
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>> || std::is_same_v<T, std::shared_ptr<Program>> ) {
                 if (USE_FAST_DISPATCH) {
+                    // Program will temporarily own the input buffers. This is required, since with Async command queues, the input
+                    // tensor can preemptively be deallocted on device, unless program maintains explicit ownership.
+                    // This invocation of the program will give up ownership once its enqueued.
+                    for (const auto& input_tensor: input_tensors) {
+                        if (input_tensor.storage_type() == StorageType::DEVICE) {
+                            AssignGlobalBufferToProgram(input_tensor.device_buffer(), program);
+                        }
+                    }
+                    for (auto& optional_input_tensor : optional_input_tensors) {
+                        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() == StorageType::DEVICE) {
+                            AssignGlobalBufferToProgram(optional_input_tensor.value().device_buffer(), program);
+                        }
+                    }
                     TT_ASSERT(queue.has_value(), "CommandQueue is required for fast dispatch mode");
                     CommandQueue& cq = queue.value().get();
                     EnqueueProgram(cq, program, false);
@@ -347,7 +360,7 @@ std::vector<Tensor> run_with_autoformat(
     std::vector<Tensor> formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
-        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), pad_c);
+        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), pad_c);
         auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
         if (pad_input) {
             formatted_input_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, pad_value, Layout::TILE));
@@ -361,7 +374,7 @@ std::vector<Tensor> run_with_autoformat(
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
             auto& input_tensor = optional_input_tensor.value();
-            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), pad_c);
+            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), pad_c);
             auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
             if (pad_input) {
                 formatted_optional_input_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, pad_value, Layout::TILE));

@@ -27,23 +27,23 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
     auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to softmax need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
-    TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
+    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
+    TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
     if (optional_input_tensors.size() == 1) {
         if (optional_input_tensors.at(0).has_value()) {
             auto& mask = optional_input_tensors.at(0).value();
             TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
             TT_FATAL(input_tensor.device() == mask.device());
             if (mask.is_sharded()) { // sharded mask
-                TT_FATAL(mask.layout() == Layout::TILE);
-                TT_FATAL(mask.shape() == input_tensor.shape());
+                TT_FATAL(mask.get_layout() == Layout::TILE);
+                TT_FATAL(mask.get_legacy_shape() == input_tensor.get_legacy_shape());
             } else {
-                if (mask.layout() == Layout::ROW_MAJOR) {
-                    Shape expected_shape = {mask.shape()[0], 1, input_tensor.shape()[-1] / TILE_WIDTH, TILE_WIDTH};
-                    TT_FATAL(mask.shape() == expected_shape);
+                if (mask.get_layout() == Layout::ROW_MAJOR) {
+                    Shape expected_shape = {mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
+                    TT_FATAL(mask.get_legacy_shape() == expected_shape);
                 }
-                for (uint32_t i = 1; i < input_tensor.shape().rank() - 2; i++) {
-                    TT_FATAL(mask.shape()[i] == 1);
+                for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.get_legacy_shape()[i] == 1);
                 }
             }
 
@@ -53,11 +53,11 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                     if constexpr (
                         std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxDefaultProgramConfig>
                     ) {
-                        TT_FATAL(input_tensor.shape()[0] == mask.shape()[0]);
+                        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.get_legacy_shape()[0]);
                     } else if constexpr (
                         std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>
                     ) {
-                        const auto shape = input_tensor.shape();
+                        const auto shape = input_tensor.get_legacy_shape();
                         uint32_t M = input_tensor.volume() / shape[-1];
                         uint32_t K = shape[-1];
                         // block
@@ -92,7 +92,7 @@ std::vector<Shape> Softmax::compute_output_shapes(const std::vector<Tensor> &inp
     if (this->inplace) {
         return {};
     } else {
-        return {input_tensors.at(0).shape()};
+        return {input_tensors.at(0).get_legacy_shape()};
     }
 }
 
@@ -101,7 +101,7 @@ std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor> &in
     if (this->inplace) {
         return {};
     }  else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
     }
 }
 
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = this->inplace ? input_tensors.at(0) : output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
-    // bool causal_mask = mask.has_value() ? mask.value().shape()[-2] == mask.value().shape()[-1] : false;
+    // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] == mask.value().get_legacy_shape()[-1] : false;
     bool causal_mask = this->is_causal_mask;
 
     return std::visit(
@@ -160,11 +160,11 @@ const operation::Hash Softmax::compute_program_hash(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<Softmax>(
         input_tensors.at(0).memory_config(),
-        input_tensors.at(0).dtype(),
+        input_tensors.at(0).get_dtype(),
         input_tensors.at(0).device()->id(),
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
                                                  : std::nullopt,
-        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().get_dtype()}
                                                  : std::nullopt,
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().device()->id()}
                                                  : std::nullopt,
@@ -192,17 +192,17 @@ Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config
 
 namespace transformers {
 Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask) {
-    Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
+    Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
     std::optional<FormatParams> mask_format_params = std::nullopt;
     if (mask.has_value()) {
-        TT_FATAL(input_tensor.shape()[-1] == mask.value().shape()[-1]);
-        TT_FATAL(input_tensor.shape()[0] == mask.value().shape()[0]);
-        TT_FATAL(mask.value().shape()[-2] == 1 or mask.value().shape()[-2] == TILE_HEIGHT);
-        for (uint32_t i = 1; i < input_tensor.shape().rank() - 2; i++) {
-            TT_FATAL(mask.value().shape()[i] == 1);
+        TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1]);
+        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0]);
+        TT_FATAL(mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT);
+        for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
+            TT_FATAL(mask.value().get_legacy_shape()[i] == 1);
         }
-        Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().shape());
+        Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
         mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
     }
     return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params}).at(0);

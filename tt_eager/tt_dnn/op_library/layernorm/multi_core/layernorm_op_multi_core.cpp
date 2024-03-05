@@ -41,13 +41,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 ) {
 
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2];
     uint32_t HW = H*W;
     uint32_t NC = a.volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.dtype();
+    const auto& a_dtype = a.get_dtype();
 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
@@ -56,11 +56,11 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t block_size = find_max_divisor(Wt, 8);
 
-    tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
-    tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().dtype()) : tt::DataFormat::Float16_b;
-    tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype()) : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (b) {
-        inb_data_format = tt_metal::datatype_to_dataformat_converter(b.value().dtype());
+        inb_data_format = tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
         inb_single_tile_size = tt_metal::detail::TileSize(inb_data_format);
     }
 
@@ -85,10 +85,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
         num_gamma_tiles = gamma.has_value() ? gamma.value().volume()/TILE_WIDTH : 0;
     }
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+    if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
         num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_WIDTH : 0;
     }
 
@@ -159,8 +159,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         (std::uint32_t) block_size
     };
 
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -169,8 +169,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         } else {
             reader_compile_time_args.push_back(gamma_stick_size);
         }
-    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     };
 
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<string, string> reader_defines;
     std::map<string, string> compute_defines;
     if (b) {
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_defines["RMSNORM"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     auto reader_kernels_id = CreateKernel(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_unary_interleaved_ln.cpp",
@@ -377,11 +377,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 ) {
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     // convert data format
-    tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat in_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat out_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
-    tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().dtype()) : tt::DataFormat::Float16_b;
-    tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format = beta.has_value() ? tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype()) : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -389,7 +389,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t gamma_single_tile_size = tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt_metal::detail::TileSize(beta_cb_data_format);
     // tensor shape
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
     uint32_t M = a.volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Mt = M / TILE_WIDTH;
@@ -697,8 +697,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t) block_wt
     };
 
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
@@ -710,8 +710,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
             writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
         }
-    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
@@ -732,7 +732,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
 
     // writer kernel
-    bool use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     std::string writer_kernel = use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_sharded_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/writer_unary_sharded_ln.cpp";
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,

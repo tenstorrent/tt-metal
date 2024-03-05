@@ -45,8 +45,8 @@ class TestUpdateCache:
                 input_shard_spec = ttl.tensor.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.shape()[-1] // num_cores,
-                        xt.shape()[-1],
+                        xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
+                        xt.get_legacy_shape()[-1],
                     ],
                     ttl.tensor.ShardOrientation.ROW_MAJOR,
                     False,
@@ -99,8 +99,8 @@ class TestUpdateCache:
             input_shard_spec = ttl.tensor.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.shape()[-1] // num_cores,
-                    xt.shape()[-1],
+                    xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
+                    xt.get_legacy_shape()[-1],
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,

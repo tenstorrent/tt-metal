@@ -61,13 +61,13 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input, Tensor &output) {
     tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
 
-    bool tilized = input.layout() == Layout::TILE;
+    bool tilized = input.get_layout() == Layout::TILE;
 
     uint32_t page_size = input.buffer()->page_size();
 
-    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.shape()[-1];
+    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
     tt_metal::Device *device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;

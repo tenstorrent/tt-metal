@@ -53,15 +53,15 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
         out_mem_config = ttl.tensor.MemoryConfig()
 
     xt = ttl.tensor.Tensor(x, input_dtype)
-    if xt.shape()[-2] % 32 == 0 and xt.shape()[-1] % 32 == 0:
+    if xt.get_legacy_shape()[-2] % 32 == 0 and xt.get_legacy_shape()[-1] % 32 == 0:
         xt = xt.to(ttl.tensor.Layout.TILE)
     elif input_dtype == ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip()
 
     if in_sharded or out_sharded:
-        if xt.layout() != ttl.tensor.Layout.TILE:
+        if xt.get_layout() != ttl.tensor.Layout.TILE:
             pytest.skip("Sharding support required tile size")
-        num_blocks = xt.volume() // xt.shape()[-1] // 32
+        num_blocks = xt.volume() // xt.get_legacy_shape()[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
         for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
             if num_blocks % i == 0:
@@ -77,7 +77,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
                 shard_grid,
                 [
                     Ht * 32,
-                    xt.shape()[-1],
+                    xt.get_legacy_shape()[-1],
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -127,15 +127,15 @@ def test_rotary_embedding_decode(
         out_mem_config = ttl.tensor.MemoryConfig()
 
     xt = ttl.tensor.Tensor(x, input_dtype)
-    if xt.shape()[-2] % 32 == 0 and xt.shape()[-1] % 32 == 0:
+    if xt.get_legacy_shape()[-2] % 32 == 0 and xt.get_legacy_shape()[-1] % 32 == 0:
         xt = xt.to(ttl.tensor.Layout.TILE)
     elif input_dtype == ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip()
 
     if in_sharded or out_sharded:
-        if xt.layout() != ttl.tensor.Layout.TILE:
+        if xt.get_layout() != ttl.tensor.Layout.TILE:
             pytest.skip("Sharding support required tile size")
-        num_blocks = xt.volume() // xt.shape()[-1] // 32
+        num_blocks = xt.volume() // xt.get_legacy_shape()[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
         for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
             if num_blocks % i == 0:
@@ -151,7 +151,7 @@ def test_rotary_embedding_decode(
                 shard_grid,
                 [
                     Ht * 32,
-                    xt.shape()[-1],
+                    xt.get_legacy_shape()[-1],
                 ],
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
                 False,

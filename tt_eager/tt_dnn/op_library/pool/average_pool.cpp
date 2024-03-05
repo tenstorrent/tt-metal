@@ -12,10 +12,10 @@ namespace tt_metal {
 template<PoolType pool>
 Tensor pool_2d(const Tensor& input, const MemoryConfig& output_mem_config, const std::optional<DataType>& output_dtype) {
     TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
-    auto input_shape = input.shape();
+    auto input_shape = input.get_legacy_shape();
     switch (pool) {
         case PoolType::AVG: {
-            auto height_without_padding = input.shape().without_padding()[-2];
+            auto height_without_padding = input.get_legacy_shape().without_padding()[-2];
             return reduce(input, ReduceOpMath::SUM, ReduceOpDim::H, 1 / float(height_without_padding), output_mem_config, output_dtype);
         }
         default:
@@ -27,7 +27,7 @@ Tensor average_pool_2d(const Tensor& input, const MemoryConfig& output_mem_confi
     TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     auto output = input;
 
-    Shape in_shape = input.shape();
+    Shape in_shape = input.get_legacy_shape();
     auto input_padding = in_shape.padding();
     TT_ASSERT(input_padding[1].front == 0 and input_padding[1].back == 0);
     auto output_padding = Padding({input_padding[0], {0, 0}, {0, input_padding[2].back * in_shape[1]}, input_padding[3]}, input_padding.pad_value());

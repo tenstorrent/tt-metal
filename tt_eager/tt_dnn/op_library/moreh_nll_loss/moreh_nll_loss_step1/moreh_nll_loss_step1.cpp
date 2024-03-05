@@ -20,7 +20,7 @@ namespace primary {
 
 operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(const Tensor &input, const Tensor &target, const std::optional<const Tensor> weight, Tensor &output, const int32_t ignore_index, const bool reduction_mean, const CoreRange core_range) {
     // split work
-    auto input_shape = input.shape();
+    auto input_shape = input.get_legacy_shape();
     auto N = input_shape[0];
     auto C = input_shape[1];
     auto H = input_shape[2];
@@ -46,9 +46,9 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(const Tensor &input, c
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    tt::DataFormat target_cb_data_format = tt_metal::datatype_to_dataformat_converter(target.dtype());
+    tt::DataFormat target_cb_data_format = tt_metal::datatype_to_dataformat_converter(target.get_dtype());
     uint32_t single_tile_size = 2 * 1024;
     uint32_t target_cb_index = CB::c_in1;
 

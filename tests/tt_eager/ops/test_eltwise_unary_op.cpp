@@ -49,7 +49,7 @@ Tensor host_function(const Tensor& input_tensor) {
         output_buffer[index] = bfloat16(value);
     }
 
-    return Tensor(OwnedStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, input_tensor.get_legacy_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
 }
 
 template <auto UnaryOpType, typename... Args>
@@ -145,7 +145,7 @@ void test_shape_padding() {
             {padded_input_tensor})
             .at(0);
 
-    auto output_shape = output_tensor.shape();
+    auto output_shape = output_tensor.get_legacy_shape();
     TT_FATAL(output_shape == padded_input_shape);
     TT_FATAL(output_shape.without_padding() == input_shape);
 

@@ -22,7 +22,7 @@ def check_log_pytorch_warning(arg):
 def custom_tensor_print_handler(tensor_cls):
     def custom_tt_tensor_to_str_fn(tensor):
         # We just report that this was a tt tensor and its shape as detailed information is already reported in other columns
-        return f"tt_lib.tensor.Tensor({'_'.join(map(str, tensor.shape()))})"
+        return f"tt_lib.tensor.Tensor({'_'.join(map(str, tensor.get_legacy_shape()))})"
 
     def custom_pt_tensor_to_str_fn(tensor):
         return f"torch.Tensor({'|'.join(['_'.join(map(str, tensor.shape)), str(tensor.layout), str(tensor.dtype), str(tensor.device)])})"
@@ -80,7 +80,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
 
     if output_format["layout"] == ttl_tensor.Layout.TILE:
         if (
-            tt_tensor.shape()[2] % 32 == 0 and tt_tensor.shape()[3] % 32 == 0
+            tt_tensor.get_legacy_shape()[2] % 32 == 0 and tt_tensor.get_legacy_shape()[3] % 32 == 0
         ):  # Restore tile layout only if legal or else leave as RM
             tt_tensor = tt_tensor.to(ttl_tensor.Layout.TILE)
     else:
@@ -90,9 +90,9 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
         assert "device" in output_format
         assert isinstance(output_format["device"], ttl_device.Device)
         if (
-            tt_tensor.layout() == ttl_tensor.Layout.TILE
-            or tt_tensor.layout() == ttl_tensor.Layout.ROW_MAJOR
-            and tt_tensor.shape()[3] % 2 == 0
+            tt_tensor.get_layout() == ttl_tensor.Layout.TILE
+            or tt_tensor.get_layout() == ttl_tensor.Layout.ROW_MAJOR
+            and tt_tensor.get_legacy_shape()[3] % 2 == 0
         ):
             tt_tensor = tt_tensor.to(output_format["device"])
     if ttl_profiler.get_profiler_flag():

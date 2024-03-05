@@ -25,10 +25,10 @@ operation::ProgramWithCallbacks moreh_sum_backward_program(const Tensor &output_
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    const auto &output_grad_shape = output_grad.shape();
+    const auto &output_grad_shape = output_grad.get_legacy_shape();
     const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
     const auto output_grad_n = output_grad_shape[0];
     const auto output_grad_c = output_grad_shape[1];
@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_program(const Tensor &output_
     const auto output_grad_origin_h = output_grad_shape_wo_padding[2];
     const auto output_grad_origin_w = output_grad_shape_wo_padding[3];
 
-    const auto &input_grad_shape = input_grad.shape();
+    const auto &input_grad_shape = input_grad.get_legacy_shape();
     const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const auto input_grad_n = input_grad_shape[0];
     const auto input_grad_c = input_grad_shape[1];

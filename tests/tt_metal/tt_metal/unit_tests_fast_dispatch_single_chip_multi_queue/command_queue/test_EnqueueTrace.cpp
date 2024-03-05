@@ -177,7 +177,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
     // Single Q for data and commands
-    CommandQueue command_queue(this->device_, 0, CommandQueue::CommandQueueMode::ASYNC);
+    // Keep this queue in passthrough mode for now
+    CommandQueue command_queue(this->device_, 0);
 
     Program simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);

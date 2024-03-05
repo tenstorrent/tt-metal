@@ -31,16 +31,16 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t b_start_tile_id,
     uint32_t output_start_tile_id) {
     tt_metal::Program program{};
-    const auto &ashape = a.shape(), bshape = b.shape();
+    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *src1_buffer = b.buffer();
 
     tt_metal::Device *device = a.device();
-    Shape cshape = output.shape();
+    Shape cshape = output.get_legacy_shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -65,8 +65,8 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t b_B2KtNt = b_B2 * KtNt;
     uint32_t B2MtNt = B2 * MtNt;
 
-    const auto &a_shape_wo_padding = a.shape().without_padding();
-    const auto &b_shape_wo_padding = b.shape().without_padding();
+    const auto &a_shape_wo_padding = a.get_legacy_shape().without_padding();
+    const auto &b_shape_wo_padding = b.get_legacy_shape().without_padding();
 
     uint32_t a_pad_h = a_shape_wo_padding[2] % TILE_HEIGHT;
     uint32_t a_pad_w = a_shape_wo_padding[3] % TILE_WIDTH;

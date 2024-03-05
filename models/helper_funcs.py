@@ -23,17 +23,17 @@ def Linear(
 
     ``weight`` must be tt_tensor.
     """
-    assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
+    assert weight.get_legacy_shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
 
     if bias is not None:
-        assert bias.shape()[-1] == out_features, "bias does not have the expected shape"
+        assert bias.get_legacy_shape()[-1] == out_features, "bias does not have the expected shape"
 
     weight = weight
     bias = bias
     weight_T = tensor.transpose(weight, -2, -1)
 
     def linear_(activation):
-        assert activation.shape()[-1] == in_features, "activation tensor do not have the expected shape"
+        assert activation.get_legacy_shape()[-1] == in_features, "activation tensor do not have the expected shape"
         output = tensor.matmul(activation, weight_T, output_mem_config)
 
         if bias is not None:

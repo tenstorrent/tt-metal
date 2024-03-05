@@ -33,16 +33,16 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
-    Shape input_shape = input.shape();
-    Shape output_shape = output.shape();
+    Shape input_shape = input.get_legacy_shape();
+    Shape output_shape = output.get_legacy_shape();
 
     log_debug("SHAPES: input = {}, output = {}", input_shape, output_shape);
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 
     // TODO [AS]: Support other data formats??
-    DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
     uint32_t in_nbytes_c = input_shape[3] * in_nbytes;      // row of input (channels)

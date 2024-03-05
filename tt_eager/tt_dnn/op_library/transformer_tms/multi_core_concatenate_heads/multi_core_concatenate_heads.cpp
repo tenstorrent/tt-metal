@@ -17,11 +17,11 @@ namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
 
-    const auto& ashape = a.shape();
+    const auto& ashape = a.get_legacy_shape();
 
     tt_metal::Device *device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
         {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}
     );
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {

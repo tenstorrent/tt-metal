@@ -5,9 +5,12 @@
 #include <algorithm>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <unordered_set>
 #include <string>
 
+#include "impl/allocator/allocator.hpp"
+#include "impl/dispatch/command_queue.hpp"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "dev_msgs.h"
@@ -81,6 +84,41 @@ inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
             SetRuntimeArgs(program, kernel_id, CoreCoord(x,y), runtime_args);
         }
+    }
+}
+
+inline void SetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, std::shared_ptr<RuntimeArgs> runtime_args, bool blocking) {
+    // SetRuntimeArgs API for Async CQ Mode
+    std::visit([&](auto&& core_spec) {
+            using T = std::decay_t<decltype(core_spec)>;
+            if constexpr (std::is_same_v<T, CoreCoord>) {
+                EnqueueSetRuntimeArgs(cq, kernel, core_spec, runtime_args, blocking);
+            }
+            else if constexpr (std::is_same_v<T, CoreRange>) {
+                for (auto x = core_spec.start.x; x <= core_spec.end.x; x++) {
+                    for (auto y = core_spec.start.y; y <= core_spec.end.y; y++) {
+                        EnqueueSetRuntimeArgs(cq, kernel, CoreCoord(x, y), runtime_args, blocking);
+                    }
+                }
+            }
+            else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& core_range : core_spec.ranges()) {
+                    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                                EnqueueSetRuntimeArgs(cq, kernel, CoreCoord(x, y), runtime_args, blocking);
+                        }
+                    }
+                }
+            }
+        },
+        core_spec
+    );
+}
+
+inline void SetRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const std::vector< CoreCoord > & core_spec, const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args, bool blocking) {
+    // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
+    for (size_t i = 0; i < core_spec.size(); i++) {
+        EnqueueSetRuntimeArgs(cq, kernel, core_spec[i], runtime_args[i], blocking);
     }
 }
 
@@ -460,10 +498,14 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         DumpDeviceProfileResults(device, program);
     }
 
-    bool ConfigureDeviceWithProgram(Device *device, Program &program) {
+    bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootloader_mode) {
         ZoneScoped;
         bool pass = true;
-        detail::DispatchStateCheck( false );
+        // This is function is shared between FD and SD.
+        // We call this function when initializing HW Command Queues (tracked as fd_bootloader_mode) for Fast Dispatch.
+        // Used to Launch programs for Slow dispatch.
+        bool using_fast_dispatch = fd_bootloader_mode;
+        detail::DispatchStateCheck( using_fast_dispatch );
         detail::ProfileTTMetalScope profile_this =
             detail::ProfileTTMetalScope(std::string("ConfigureDeviceWithProgram ") + std::to_string(device->id()));
 
@@ -554,6 +596,22 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         ZoneScoped;
         program.compile(device);
     }
+
+    void AllocateBuffer(Buffer* buffer, bool bottom_up) {
+        detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
+        EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
+    }
+
+    void DeallocateBuffer(Buffer *buffer) {
+        detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
+        EnqueueDeallocateBuffer(buffer->device()->command_queue(), *(buffer->device()->allocator_), buffer->address(), buffer->buffer_type(), false);
+    }
+
+    void GetBufferAddress(const Buffer* buffer, uint32_t* address_on_host) {
+        detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
+        EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
+    }
+
 }   // namespace detail
 
 size_t GetNumAvailableDevices() {
@@ -638,6 +696,7 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
         TT_FATAL("Only L1 buffers can have an associated circular buffer!");
     }
     detail::GetCircularBuffer(program, cb_handle)->config().set_globally_allocated_address(buffer);
+    detail::GetCircularBuffer(program, cb_handle)->assign_global_address();
 }
 
 uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value) {
@@ -673,7 +732,6 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
         core_spec);
 }
 
-
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
     return std::make_shared<Buffer>(
         config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout);
@@ -691,8 +749,14 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
+void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program) {
+    detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
+    EnqueueAddBufferToProgram(buffer-> device()->command_queue(), buffer, program, false);
+}
+
 void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
+    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
     std::visit(
         [&](auto&& core_spec)
         {
@@ -713,14 +777,32 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::v
 void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args)
 {
     ZoneScoped;
+    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
     TT_FATAL( core_spec.size() == runtime_args.size(), "Mistmatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
-    Kernel * k = detail::GetKernel(program, kernel);
+    auto k = detail::GetKernel(program, kernel);
     for (size_t i = 0; i < core_spec.size(); i++)
         k->set_runtime_args(core_spec[i], runtime_args[i]);
 }
 
+void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const std::variant<CoreCoord, CoreRange,CoreRangeSet> &core_spec, std::shared_ptr<RuntimeArgs> runtime_args) {
+    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
+}
+
+void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const std::vector< CoreCoord > & core_spec, const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args) {
+    TT_FATAL( core_spec.size() == runtime_args.size(), "Mistmatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
+    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
+}
+
 std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
+    TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
+}
+
+void UpdateRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args) {
+    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    EnqueueUpdateRuntimeArgs(device->command_queue(), kernel, core_coord, update_idx, runtime_args, false);
 }
 
 }  // namespace tt_metal

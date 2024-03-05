@@ -43,7 +43,7 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
+    if tt_output.get_layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
     return tt_output.to_torch()
 
@@ -84,10 +84,10 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             untilized_x = ttl.tensor.untilize(x)
             reshaped_unt = ttl.tensor.reshape(
                 untilized_x,
-                x.shape()[0],
-                x.shape()[2],
+                x.get_legacy_shape()[0],
+                x.get_legacy_shape()[2],
                 num_heads,
-                x.shape()[3] // num_heads,
+                x.get_legacy_shape()[3] // num_heads,
             )
 
             # N, 128, 2, 64
@@ -165,7 +165,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         # Attention scores computation
         # profiler.start("___op8_scale_mask_softmax")
 
-        N, C, H, W = qkt.shape()
+        N, C, H, W = qkt.get_legacy_shape()
         new_shape = [N, 1, C * H, W]
         ttl.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
@@ -208,7 +208,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
             # profiler.start("___op10_unmake_attention_heads")
             ctx = ttl.tensor.transpose(x, 1, -2)
-            ushape = ctx.shape()
+            ushape = ctx.get_legacy_shape()
             reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttl.tensor.tilize(reshaped)
             # profiler.end("___op10_unmake_attention_heads")

@@ -53,9 +53,7 @@ class TtTrOCRDecoder(nn.Module):
         self.base_address = base_address
         self.layerdrop = config.decoder_layerdrop
         self.padding_idx = config.pad_token_id
-        self.embed_scale = (
-            math.sqrt(config.hidden_size) if config.scale_embedding else 1.0
-        )
+        self.embed_scale = math.sqrt(config.hidden_size) if config.scale_embedding else 1.0
         self.embed_tokens = TtTrOCREmbedTokens(
             config,
             self.device,
@@ -113,9 +111,7 @@ class TtTrOCRDecoder(nn.Module):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
 
-    def _prepare_decoder_attention_mask(
-        self, attention_mask, input_shape, inputs_embeds, past_key_values_length
-    ):
+    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
         dtype = tt_to_torch_tensor(inputs_embeds).dtype
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
@@ -130,13 +126,9 @@ class TtTrOCRDecoder(nn.Module):
 
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = _expand_mask(
-                attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
-            )
+            expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
             combined_attention_mask = (
-                expanded_attn_mask
-                if combined_attention_mask is None
-                else expanded_attn_mask + combined_attention_mask
+                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
             )
 
         return combined_attention_mask
@@ -156,58 +148,36 @@ class TtTrOCRDecoder(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> tt_lib.tensor.Tensor:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                "You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time"
-            )
+            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
         elif input_ids is not None:
             input = input_ids
-            input_ids = fallback_ops.reshape(input_ids, 1, 1, -1, input.shape()[-1])
+            input_ids = fallback_ops.reshape(input_ids, 1, 1, -1, input.get_legacy_shape()[-1])
 
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
             input = inputs_embeds[:, :, -1]
         else:
-            raise ValueError(
-                "You have to specify either decoder_input_ids or decoder_inputs_embeds"
-            )
+            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        past_key_values_length = (
-            past_key_values[0][0].shape[2] if past_key_values is not None else 0
-        )
+        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if inputs_embeds is None:
-            inputs_embeds = tt_lib.tensor.mul_unary(
-                self.embed_tokens(input_ids), self.embed_scale
-            )
+            inputs_embeds = tt_lib.tensor.mul_unary(self.embed_tokens(input_ids), self.embed_scale)
 
         if self.config.use_learned_position_embeddings:
-            embed_pos = self.embed_positions(
-                input, past_key_values_length=past_key_values_length
-            )
-            embed_pos = torch_to_tt_tensor_rm(
-                embed_pos, self.device, put_on_device=False
-            )
+            embed_pos = self.embed_positions(input, past_key_values_length=past_key_values_length)
+            embed_pos = torch_to_tt_tensor_rm(embed_pos, self.device, put_on_device=False)
         else:
-            embed_pos = self.embed_positions(
-                input_ids, past_key_values_length=past_key_values_length
-            )
+            embed_pos = self.embed_positions(input_ids, past_key_values_length=past_key_values_length)
 
         hidden_states = tt_lib.tensor.add(inputs_embeds, embed_pos)
 
@@ -219,7 +189,7 @@ class TtTrOCRDecoder(nn.Module):
                 beta=self.layernorm_embedding_bias,
             )
 
-        input_shape = input.shape()
+        input_shape = input.get_legacy_shape()
 
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, input_shape, inputs_embeds, past_key_values_length
@@ -228,9 +198,7 @@ class TtTrOCRDecoder(nn.Module):
         # expand encoder attention mask
         if encoder_hidden_states is not None and encoder_attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            encoder_attention_mask = _expand_mask(
-                encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
-            )
+            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -242,15 +210,11 @@ class TtTrOCRDecoder(nn.Module):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        all_cross_attentions = (
-            () if (output_attentions and encoder_hidden_states is not None) else None
-        )
+        all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
         next_decoder_cache = () if use_cache else None
 
         # check if head_mask/cross_attn_head_mask has a correct number of layers specified if desired
-        for attn_mask, mask_name in zip(
-            [head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]
-        ):
+        for attn_mask, mask_name in zip([head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]):
             if attn_mask is not None:
                 if attn_mask.size()[0] != (len(self.layers)):
                     raise ValueError(
@@ -266,9 +230,7 @@ class TtTrOCRDecoder(nn.Module):
                 if dropout_probability < self.layerdrop:
                     continue
 
-            past_key_value = (
-                past_key_values[idx] if past_key_values is not None else None
-            )
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
 
             if self.gradient_checkpointing and self.training:
                 layer_outputs = torch.utils.checkpoint.checkpoint(
@@ -278,9 +240,7 @@ class TtTrOCRDecoder(nn.Module):
                     encoder_hidden_states,
                     encoder_attention_mask,
                     head_mask[idx] if head_mask is not None else None,
-                    cross_attn_head_mask[idx]
-                    if cross_attn_head_mask is not None
-                    else None,
+                    cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None,
                     None,
                 )
             else:
@@ -291,9 +251,7 @@ class TtTrOCRDecoder(nn.Module):
                     encoder_attention_mask=encoder_attention_mask,
                     layer_head_mask=(head_mask[idx] if head_mask is not None else None),
                     cross_attn_layer_head_mask=(
-                        cross_attn_head_mask[idx]
-                        if cross_attn_head_mask is not None
-                        else None
+                        cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
                     ),
                     past_key_value=past_key_value,
                     output_attentions=output_attentions,

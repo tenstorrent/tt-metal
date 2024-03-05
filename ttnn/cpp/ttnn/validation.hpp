@@ -46,12 +46,12 @@ void validate_input_tensor(
             input_schema.max_rank);
     }
 
-    if (input_schema.dtypes.find(tensor.dtype()) == input_schema.dtypes.end()) {
-        TT_THROW("{}: Tensor must be of type {}, but got {}", operation_name, input_schema.dtypes, tensor.dtype());
+    if (input_schema.dtypes.find(tensor.get_dtype()) == input_schema.dtypes.end()) {
+        TT_THROW("{}: Tensor must be of type {}, but got {}", operation_name, input_schema.dtypes, tensor.get_dtype());
     }
 
-    if (input_schema.layouts.find(tensor.layout()) == input_schema.layouts.end()) {
-        TT_THROW("{}: Tensor must be of layout {}, but got {}", operation_name, input_schema.layouts, tensor.layout());
+    if (input_schema.layouts.find(tensor.get_layout()) == input_schema.layouts.end()) {
+        TT_THROW("{}: Tensor must be of layout {}, but got {}", operation_name, input_schema.layouts, tensor.get_layout());
     }
 
     if (input_schema.can_be_on_device and input_schema.can_be_on_cpu) {

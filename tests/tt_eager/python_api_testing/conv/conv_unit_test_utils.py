@@ -40,7 +40,7 @@ def create_conv_bias_tensor(torch_tensor, N, K, padded_K, pad=0):
         torch.flatten(torch_tensor).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR
     ).pad(bias_padded_shape, (0, 0, 0, 0), 0.0)
     tt_tensor = tt_tensor.pad_to_tile(pad).to(ttl.tensor.Layout.TILE)
-    print(f"tt_tensor shape: {tt_tensor.shape()}")
+    print(f"tt_tensor shape: {tt_tensor.get_legacy_shape()}")
     return tt_tensor
 
 

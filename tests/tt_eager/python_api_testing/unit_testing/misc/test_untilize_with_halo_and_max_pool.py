@@ -206,7 +206,7 @@ def test_run_max_pool(
     out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
-    out_shape_padded = out_padded.shape()
+    out_shape_padded = out_padded.get_legacy_shape()
     out_pytorch_padded = out_padded.to_torch().reshape(out_shape_padded)  ## N, 1, HW, C
     out_pytorch = out_pytorch_padded[:, :, :, :in_c]
     out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, 1, HW

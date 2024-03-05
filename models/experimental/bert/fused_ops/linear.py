@@ -18,12 +18,12 @@ def Linear(
 
     ``weight`` must be the weight as a tilized list of values.
     """
-    assert weight.shape() == [1, 1, out_features, in_features]
+    assert weight.get_legacy_shape() == [1, 1, out_features, in_features]
 
     if bias is None:
         bias = None
     else:
-        assert bias.shape() == [1, 1, 32, out_features]
+        assert bias.get_legacy_shape() == [1, 1, 32, out_features]
 
     def linear_(activation):
         weight_T = tensor.transpose(weight, -2, -1)

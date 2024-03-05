@@ -115,7 +115,7 @@ class TtFalconRotaryEmbedding:
             )
 
     def __call__(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
-        seq_len = layer[0].shape()[2]
+        seq_len = layer[0].get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
         # TODO: Make rotary embedding in place
         output = []
@@ -244,8 +244,8 @@ class TtFalconAttention:
 
     # TODO: Remove hack for GQA for 8 chip since it would be MQA
     def prefill_grouped_attention_matmul_for_4_chips(self, query_layer, kv_layer, output_mem_config):
-        _, num_q_heads, M, K = query_layer[0].shape()
-        _, num_kv_heads, _, N = kv_layer[0].shape()
+        _, num_q_heads, M, K = query_layer[0].get_legacy_shape()
+        _, num_kv_heads, _, N = kv_layer[0].get_legacy_shape()
         assert num_kv_heads == 2
 
         first_query_layer = []
@@ -360,12 +360,12 @@ class TtFalconAttention:
         assert not output_attentions
 
         if llm_mode == "prefill":
-            batch = hidden_states[0].shape()[0]
-            q_len = hidden_states[0].shape()[2]
+            batch = hidden_states[0].get_legacy_shape()[0]
+            q_len = hidden_states[0].get_legacy_shape()[2]
             assert layer_past is not None
         elif llm_mode == "decode":
-            batch = hidden_states[0].shape()[2]
-            q_len = hidden_states[0].shape()[0]
+            batch = hidden_states[0].get_legacy_shape()[2]
+            q_len = hidden_states[0].get_legacy_shape()[0]
             padded_layer_past_len = nearest_32(layer_past_len + 1)
             # We always store max_position_embeddings for kv_cache,
             # so we need separate variable to store the actual len of the kv_cache
@@ -489,7 +489,7 @@ class TtFalconAttention:
             kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
             if kv_cache_memcfg.is_sharded():
                 kv_cache_shard_shape = kv_cache_memcfg.shard_spec.shape
-                kv_cache_shard_shape[0] = layer_past[0][0].shape()[1] * padded_layer_past_len
+                kv_cache_shard_shape[0] = layer_past[0][0].get_legacy_shape()[1] * padded_layer_past_len
                 kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
             # Update kv_cache in place
             for i in range(len(key_layer)):

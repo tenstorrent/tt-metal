@@ -19,8 +19,8 @@ std::vector< std::vector<uint32_t> >  get_runtime_args_wh(const Tensor &input_te
                                                         )
 {
 
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1]*input_shape[0];
     uint32_t HW = H*W;
 
@@ -40,15 +40,15 @@ std::vector< std::vector<uint32_t> >  get_runtime_args_wh(const Tensor &input_te
 
 operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor& output) {
 
-    const auto shape = a.shape();
+    const auto shape = a.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    Shape output_shape = output.shape();
+    Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
 
 std::pair< std::vector<uint32_t>, std::vector<uint32_t> > get_runtime_args_hc(const Tensor &input_tensor, Tensor &output_tensor){
 
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t HW = H*W;
     uint32_t HW_bytes = HW * input_tensor.element_size();
@@ -204,7 +204,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    Shape output_shape = output.shape();
+    Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -294,7 +294,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 
 std::pair< std::vector<uint32_t>, std::vector<uint32_t> > get_runtime_args_cn(const Tensor &input_tensor, Tensor &output_tensor){
 
-    const auto input_shape = input_tensor.shape();
+    const auto input_shape = input_tensor.get_legacy_shape();
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
 
     uint32_t Wt = W/TILE_WIDTH;
@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();

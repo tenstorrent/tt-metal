@@ -46,7 +46,7 @@ inline Tensor embeddings(
                    .tilized = tilized,
                    .embeddings_type = embeddings_type,
                    .pad_token = pad_token,
-                   .output_dtype = output_dtype.value_or(weights.dtype())},
+                   .output_dtype = output_dtype.value_or(weights.get_dtype())},
                {input_tensor, weights})
         .at(0);
 }

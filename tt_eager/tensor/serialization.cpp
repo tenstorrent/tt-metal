@@ -76,9 +76,9 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
 
-    auto shape = tensor.shape();
-    auto data_type = tensor.dtype();
-    auto layout = tensor.layout();
+    auto shape = tensor.get_legacy_shape();
+    auto data_type = tensor.get_dtype();
+    auto layout = tensor.get_layout();
 
     output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(Shape));
     output_stream.write(reinterpret_cast<const char*>(&data_type), sizeof(DataType));

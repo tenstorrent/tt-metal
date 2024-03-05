@@ -13,7 +13,7 @@ namespace tt_metal {
 
     template <typename T>
     Tensor to_weight_special_padding_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-        auto w_shape = conv_weight_tensor.shape();
+        auto w_shape = conv_weight_tensor.get_legacy_shape();
         auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
@@ -57,7 +57,7 @@ namespace tt_metal {
 
     template <typename T>
     Tensor to_weight_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-        auto w_shape = conv_weight_tensor.shape();
+        auto w_shape = conv_weight_tensor.get_legacy_shape();
         auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
         auto weight_matrix_cols = w_shape[0];
         // width padding
@@ -102,7 +102,7 @@ namespace tt_metal {
     // Converts convolution weights to tilized 2d matrix layout.
     // Returns a new tensor with layout=Tile
     Tensor convert_conv_weight_tensor_to_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
-        TT_ASSERT(conv_weight_tensor.layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
+        TT_ASSERT(conv_weight_tensor.get_layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
         const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype)>> to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout<float>},
@@ -110,18 +110,18 @@ namespace tt_metal {
         };
         if (output_dtype.has_value()) {
             if (output_dtype == DataType::BFLOAT8_B) {
-                TT_ASSERT(conv_weight_tensor.dtype() == DataType::FLOAT32);
+                TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
             } else {
-                TT_ASSERT(conv_weight_tensor.dtype() == conv_weight_tensor.dtype());
+                TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
             }
         }
-        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.dtype()));
+        return to_w_tile_layout_map.at(conv_weight_tensor.get_dtype())(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
     }
 
     // Converts convolution weights to tilized 2d matrix layout.
     // Returns a new tensor with layout=Tile
     Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
-        TT_ASSERT(conv_weight_tensor.layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
+        TT_ASSERT(conv_weight_tensor.get_layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
         const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype)>> to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_special_padding_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_special_padding_tile_layout<float>},
@@ -129,12 +129,12 @@ namespace tt_metal {
         };
         if (output_dtype.has_value()) {
             if (output_dtype == DataType::BFLOAT8_B) {
-                TT_ASSERT(conv_weight_tensor.dtype() == DataType::FLOAT32);
+                TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
             } else {
-                TT_ASSERT(conv_weight_tensor.dtype() == conv_weight_tensor.dtype());
+                TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
             }
         }
-        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.dtype()));
+        return to_w_tile_layout_map.at(conv_weight_tensor.get_dtype())(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
     }
 
 const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {

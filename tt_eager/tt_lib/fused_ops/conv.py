@@ -66,11 +66,11 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
 
         if bias_on_device is not None:
             output_plus_bias = tensor.bcast(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
-            if output_plus_bias.layout() != tensor.Layout.ROW_MAJOR:
-                assert output_plus_bias.layout() == tensor.Layout.TILE
+            if output_plus_bias.get_layout() != tensor.Layout.ROW_MAJOR:
+                assert output_plus_bias.get_layout() == tensor.Layout.TILE
                 assert output_plus_bias.storage_type() == tensor.StorageType.DEVICE
                 output_plus_bias = tensor.untilize(output_plus_bias, output_plus_bias.memory_config())
-                assert output_plus_bias.layout() == tensor.Layout.ROW_MAJOR
+                assert output_plus_bias.get_layout() == tensor.Layout.ROW_MAJOR
             return output_plus_bias
 
         return output
@@ -251,7 +251,7 @@ def resnet50_optimized_conv(
     )
 
     def conv_(activation):
-        # assert(activation.layout() == tensor.Layout.ROW_MAJOR)
+        # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
         output = tensor.optimized_conv(
             activation,
             weight_on_device,
@@ -371,7 +371,7 @@ def resnet50_first_conv(
     )
 
     def conv_(activation):
-        # assert(activation.layout() == tensor.Layout.ROW_MAJOR)
+        # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
         output_plus_bias = tensor.optimized_conv(
             activation,
             weight_on_device,
@@ -390,7 +390,7 @@ def resnet50_first_conv(
             output_dtype,
         )
         # assert(output.storage_type() == tensor.StorageType.DEVICE)
-        # assert output.layout() == tensor.Layout.TILE
+        # assert output.get_layout() == tensor.Layout.TILE
         return output_plus_bias
 
     return conv_

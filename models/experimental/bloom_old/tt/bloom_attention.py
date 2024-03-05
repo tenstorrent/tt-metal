@@ -16,9 +16,7 @@ from fused_ops.softmax import softmax as TtSoftmax
 from typing import Optional, Tuple, Union
 
 
-def split_heads(
-    fused_qkv: torch.Tensor, num_heads, head_dim
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Split the last dimension into (num_heads, head_dim) without making any copies, results share same memory
     storage as `fused_qkv`
@@ -214,35 +212,21 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        self.weight_q = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.query_key_value.weight", state_dict, device
-        )
-        self.bias_q = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.query_key_value.bias", state_dict, device
-        )
+        self.weight_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.weight", state_dict, device)
+        self.bias_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.bias", state_dict, device)
 
-        self.weight_d = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.dense.weight", state_dict, device
-        )
-        self.bias_d = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.dense.bias", state_dict, device
-        )
+        self.weight_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.weight", state_dict, device)
+        self.bias_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.bias", state_dict, device)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
         self.beta = 1.0
 
         alpha_beta_shape = [1, self.num_heads, self.head_dim, self.head_dim]
-        self.inv_norm_factor = bloom_utils.tt_const_tensor(
-            self.inv_norm_factor, alpha_beta_shape, device
-        )
+        self.inv_norm_factor = bloom_utils.tt_const_tensor(self.inv_norm_factor, alpha_beta_shape, device)
 
-        self.query_key_value = TtLinear(
-            self.hidden_size, 3 * self.hidden_size, self.weight_q, self.bias_q, device
-        )
-        self.dense = TtLinear(
-            self.hidden_size, self.hidden_size, self.weight_d, self.bias_d, device
-        )
+        self.query_key_value = TtLinear(self.hidden_size, 3 * self.hidden_size, self.weight_q, self.bias_q, device)
+        self.dense = TtLinear(self.hidden_size, self.hidden_size, self.weight_d, self.bias_d, device)
         self.attention_dropout = torch.nn.Dropout(0.0)
 
     def forward(
@@ -257,15 +241,11 @@ class TtBloomAttention(torch.nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ):
-        fused_qkv = self.query_key_value(
-            hidden_states
-        )  # [batch_size, seq_length, 3 x hidden_size]
+        fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
         fused_qkv = bloom_utils.tt2torch_tensor(fused_qkv)
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
-        (query_layer, key_layer, value_layer) = split_heads(
-            fused_qkv, self.num_heads, self.head_dim
-        )
+        (query_layer, key_layer, value_layer) = split_heads(fused_qkv, self.num_heads, self.head_dim)
 
         if use_cache is True:
             present = (key_layer, value_layer)
@@ -279,26 +259,20 @@ class TtBloomAttention(torch.nn.Module):
 
         query_layer = query_layer.transpose(1, 2)
         query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
-        reshaped_query_layer = ttm.tensor.reshape(
-            query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
-        )
+        reshaped_query_layer = ttm.tensor.reshape(query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
 
         # key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.num_heads, self.head_dim, q_length)
         key_layer = key_layer.permute(0, 2, 3, 1)
 
         key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
-        reshaped_key_layer = ttm.tensor.reshape(
-            key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length
-        )
+        reshaped_key_layer = ttm.tensor.reshape(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
 
         # value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
         value_layer = value_layer.transpose(1, 2)
         value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
-        reshaped_value_layer = ttm.tensor.reshape(
-            value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
-        )
+        reshaped_value_layer = ttm.tensor.reshape(value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
 
-        _, _, _, kv_length = reshaped_key_layer.shape()
+        _, _, _, kv_length = reshaped_key_layer.get_legacy_shape()
 
         matmul_result = baddbmm.tt_baddbmm(
             device=device,
@@ -310,18 +284,14 @@ class TtBloomAttention(torch.nn.Module):
         )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        attention_scores = ttm.tensor.reshape(
-            matmul_result, batch_size, self.num_heads, q_length, kv_length
-        )
+        attention_scores = ttm.tensor.reshape(matmul_result, batch_size, self.num_heads, q_length, kv_length)
         attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
         attn_weights = torch.masked_fill(
             attention_scores, attention_mask, -100000.0
         )  # torch.finfo(attention_scores.dtype).min)
 
-        attention_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
-            attention_scores.dtype
-        )
+        attention_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(attention_scores.dtype)
         attention_probs = bloom_utils.torch2tt_tensor(attention_probs, device)
 
         # attn_weights = bloom_utils.torch2tt_tensor(attn_weights, device)

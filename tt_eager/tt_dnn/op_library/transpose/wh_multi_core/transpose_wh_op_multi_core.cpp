@@ -31,8 +31,8 @@ std::vector< std::array< std::vector<uint32_t>, 3 > > get_runtime_args(const Ten
                                                         )
 {
 
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1]*input_shape[0];
     uint32_t HW = H*W;
@@ -95,9 +95,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
-    Shape output_shape = output.shape();
+    Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -249,9 +249,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -273,7 +273,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
 
-    Shape output_shape = output.shape();
+    Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
 
@@ -323,9 +323,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     );
 
     uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;
-    uint32_t Ht = a.shape()[-2] / TILE_HEIGHT;
+    uint32_t Ht = a.get_legacy_shape()[-2] / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
-    uint32_t N = shard_spec.shape[0] / a.shape()[-2];
+    uint32_t N = shard_spec.shape[0] / a.get_legacy_shape()[-2];
     uint32_t NHtWt = N * HtWt;
 
     auto bbox = all_cores.bounding_box();
@@ -386,9 +386,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         }
 
         uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;
-        uint32_t Ht = src_tensor.shape()[-2] / TILE_HEIGHT;
+        uint32_t Ht = src_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
         uint32_t HtWt = Ht * Wt;
-        uint32_t N = shard_spec.shape[0] / src_tensor.shape()[-2];
+        uint32_t N = shard_spec.shape[0] / src_tensor.get_legacy_shape()[-2];
         uint32_t NHtWt = N * HtWt;
 
         const auto& all_cores = shard_spec.grid;

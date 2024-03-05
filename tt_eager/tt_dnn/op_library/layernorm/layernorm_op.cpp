@@ -29,48 +29,48 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
-    TT_FATAL(a.layout() == Layout::TILE);
-    TT_FATAL(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(a.get_layout() == Layout::TILE);
+    TT_FATAL(a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
-        TT_FATAL(b.value().layout() == Layout::TILE, "layot is not tile!");
-        TT_FATAL(a.shape() == b.value().shape(), "shape is not same!");
+        TT_FATAL(b.value().get_layout() == Layout::TILE, "layot is not tile!");
+        TT_FATAL(a.get_legacy_shape() == b.value().get_legacy_shape(), "shape is not same!");
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
 
     if (gamma.has_value()) {
-        if (gamma.value().layout() == Layout::TILE) {
-            TT_FATAL(a.shape()[3] == gamma.value().shape()[3], fmt::format("{} != {}", a.shape()[3], gamma.value().shape()[3]));
+        if (gamma.value().get_layout() == Layout::TILE) {
+            TT_FATAL(a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3], fmt::format("{} != {}", a.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().shape()[2] == TILE_HEIGHT);
+            TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT);
         } else {
-            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR);
-            TT_FATAL((gamma.value().shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR);
+            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[3] / TILE_WIDTH));
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().dtype() == DataType::BFLOAT16);
+            TT_FATAL(gamma.value().get_dtype() == DataType::BFLOAT16);
         }
         if (beta.has_value()) {
-            TT_FATAL(gamma.value().layout() == beta.value().layout(), "Gamma and beta must have the same layout!");
+            TT_FATAL(gamma.value().get_layout() == beta.value().get_layout(), "Gamma and beta must have the same layout!");
         }
     }
 
     if (beta.has_value()) {
-        if (beta.value().layout() == Layout::TILE) {
-            TT_FATAL(a.shape()[3] == beta.value().shape()[3]);
+        if (beta.value().get_layout() == Layout::TILE) {
+            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3]);
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().shape()[2] == TILE_HEIGHT);
+            TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT);
         } else {
-            TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR);
-            TT_FATAL((beta.value().shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR);
+            TT_FATAL((beta.value().get_legacy_shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[3] / TILE_WIDTH));
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().dtype() == DataType::BFLOAT16);
+            TT_FATAL(beta.value().get_dtype() == DataType::BFLOAT16);
         }
     }
     if (a.is_sharded()) {
@@ -85,14 +85,14 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
                 if (program_config.inplace) {
-                    TT_FATAL(a.dtype() == program_config.out_data_format);
+                    TT_FATAL(a.get_dtype() == program_config.out_data_format);
                     TT_FATAL(this->output_mem_config.is_sharded());
                 }
                 TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type);
                 TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout);
 
                 // tensor shape
-                const auto shape = a.shape();
+                const auto shape = a.get_legacy_shape();
                 uint32_t M = a.volume() / shape[-1];
                 uint32_t K = shape[-1];
                 uint32_t Mt = M / TILE_WIDTH;
@@ -140,7 +140,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 }
 std::vector<Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -161,7 +161,7 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
                 DataType out_data_format = program_config.out_data_format;
                 return operation::generic_create_output_tensors(*this, input_tensors, out_data_format, Layout::TILE, this->output_mem_config);
             } else {
-                return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+                return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
             }
         },
         this->program_config

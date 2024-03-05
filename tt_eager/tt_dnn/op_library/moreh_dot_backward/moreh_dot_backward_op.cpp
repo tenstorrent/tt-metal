@@ -19,8 +19,8 @@ namespace operations {
 namespace primary {
 
 void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
-    const auto& tensor_shape = tensor.shape().without_padding();
-    const auto& grad_tensor_shape = grad_tensor.shape().without_padding();
+    const auto& tensor_shape = tensor.get_legacy_shape().without_padding();
+    const auto& grad_tensor_shape = grad_tensor.get_legacy_shape().without_padding();
     TT_ASSERT(tensor_shape == grad_tensor_shape);
     TT_ASSERT(grad_tensor.storage_type() == StorageType::DEVICE, "Operands to dot backward need to be on device!");
     TT_ASSERT(grad_tensor.device() == tensor.device(), "Operands to dot backward need to be on the same device!");
@@ -39,7 +39,7 @@ void MorehDotBackward::validate(
     TT_ASSERT(is_1d_tensor(other));
     TT_ASSERT(is_same_shape(input, other));
 
-    TT_ASSERT(input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B, "Unsupported data format");
+    TT_ASSERT(input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B, "Unsupported data format");
     TT_ASSERT(
         output_grad.storage_type() == StorageType::DEVICE and input.storage_type() == StorageType::DEVICE and
             other.storage_type() == StorageType::DEVICE,

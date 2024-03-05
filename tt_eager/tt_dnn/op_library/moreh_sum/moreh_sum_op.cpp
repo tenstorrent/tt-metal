@@ -22,10 +22,10 @@ void MorehSum::validate(const std::vector<Tensor>& inputs) const {
     const auto& input = inputs.at(0);
     const auto& output = inputs.at(1);
 
-    auto input_shape = input.shape();
-    const auto& output_shape = output.shape();
-    auto input_shape_wo_padding = input.shape().without_padding();
-    const auto& output_shape_wo_padding = output.shape().without_padding();
+    auto input_shape = input.get_legacy_shape();
+    const auto& output_shape = output.get_legacy_shape();
+    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
 
     if (dim == 0 || dim == 1) {
         input_shape[dim] = 1;
@@ -88,7 +88,7 @@ inline Shape compute_output_shape(const Shape& input_shape, const int64_t& dim) 
 inline Tensor create_output_tensor(
     const Tensor& input_tensor, const Shape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-    return create_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), mem_config);
+    return create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
 
 // output as arg
@@ -99,11 +99,11 @@ Tensor moreh_sum_(const Tensor& input, const Tensor& output, const int64_t& dim)
 
 // output creation inside
 Tensor moreh_sum_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_config) {
-    const auto& input_shape = input.shape();
+    const auto& input_shape = input.get_legacy_shape();
     const auto& output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
 
-    const auto& output_shape_wo_padding = output.shape().without_padding();
+    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
     operation::run(MorehSum{.dim = dim}, {input, output});
     return output;
 }

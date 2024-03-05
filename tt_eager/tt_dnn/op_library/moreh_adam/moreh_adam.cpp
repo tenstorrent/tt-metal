@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(param.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(param.get_dtype());
     CreateCircularBuffer(
         program,
         all_cores,

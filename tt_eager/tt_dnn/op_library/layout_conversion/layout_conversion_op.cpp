@@ -17,16 +17,16 @@ namespace tt_metal {
 void LayoutConversionOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (this->target_layout == Layout::TILE) {
-        TT_FATAL(input_tensor.shape()[2] % TILE_HEIGHT == 0 && input_tensor.shape()[3] % TILE_WIDTH == 0);
+        TT_FATAL(input_tensor.get_legacy_shape()[2] % TILE_HEIGHT == 0 && input_tensor.get_legacy_shape()[3] % TILE_WIDTH == 0);
     }
 }
 std::vector<Shape> LayoutConversionOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 std::vector<Tensor> LayoutConversionOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.layout() == this->target_layout){
+    if (input_tensor.get_layout() == this->target_layout){
         return {input_tensor};
     } else {
         return {input_tensor.to(target_layout)};

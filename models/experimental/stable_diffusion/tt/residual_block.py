@@ -52,7 +52,9 @@ class TtResnetBlock2D(nn.Module):
         self.output_scale_factor = output_scale_factor
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
         if groups_out is None:
             groups_out = groups
@@ -86,9 +88,7 @@ class TtResnetBlock2D(nn.Module):
             elif self.time_embedding_norm == "scale_shift":
                 time_emb_proj_out_channels = out_channels * 2
             else:
-                raise ValueError(
-                    f"unknown time_embedding_norm : {self.time_embedding_norm} "
-                )
+                raise ValueError(f"unknown time_embedding_norm : {self.time_embedding_norm} ")
 
             time_emb_proj_weights = state_dict[f"{base_address}.time_emb_proj.weight"]
             time_emb_proj_bias = state_dict[f"{base_address}.time_emb_proj.bias"]
@@ -147,11 +147,7 @@ class TtResnetBlock2D(nn.Module):
         elif self.down:
             assert False, "Down block within residual block is not implemented!"
 
-        self.use_in_shortcut = (
-            self.in_channels != self.out_channels
-            if use_in_shortcut is None
-            else use_in_shortcut
-        )
+        self.use_in_shortcut = self.in_channels != self.out_channels if use_in_shortcut is None else use_in_shortcut
         self.conv_shortcut = None
         if self.use_in_shortcut:
             conv_shortcut_weights = state_dict[f"{base_address}.conv_shortcut.weight"]
@@ -170,7 +166,9 @@ class TtResnetBlock2D(nn.Module):
         out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
-        hidden_states = self.nonlinearity(hidden_states, )
+        hidden_states = self.nonlinearity(
+            hidden_states,
+        )
 
         if self.upsample is not None:
             assert False, "Upsample in residual block is not implemented!"
@@ -183,7 +181,7 @@ class TtResnetBlock2D(nn.Module):
             temb = self.nonlinearity(temb)
 
             temb = self.time_emb_proj(temb)
-            temb = fallback_ops.reshape(temb, temb.shape()[2], temb.shape()[3], 1, 1)
+            temb = fallback_ops.reshape(temb, temb.get_legacy_shape()[2], temb.get_legacy_shape()[3], 1, 1)
 
         if temb is not None and self.time_embedding_norm == "default":
             hidden_states = ttl.tensor.bcast(
@@ -206,7 +204,7 @@ class TtResnetBlock2D(nn.Module):
 
         # create a tensor of size output_scale_factor
         output_sc_recip = 1 / self.output_scale_factor
-        output_sc_recip = ttl.tensor.full(input_tensor.shape(), output_sc_recip)
+        output_sc_recip = ttl.tensor.full(input_tensor.get_legacy_shape(), output_sc_recip)
         output_tensor = ttl.tensor.add(input_tensor, hidden_states)
         output_tensor = ttl.tensor.mul(output_tensor, output_sc_recip)
 

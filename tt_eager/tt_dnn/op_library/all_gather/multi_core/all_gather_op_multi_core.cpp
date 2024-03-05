@@ -58,22 +58,22 @@ operation::ProgramWithCallbacks all_gather_multi_core(const Tensor& input_tensor
         pages_per_link[i]++;
     }
 
-    bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.shape().rank() - 1 == dim;
-    DataFormat df = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
+    bool width = input_tensor.get_legacy_shape().rank() - 1 == dim;
+    DataFormat df = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t num_rows = 0, num_cols = 0, row_offset = 0, col_offset = 0, num_tiles = 0;
 
     if (rm) {
-        num_cols = input_tensor.shape()[-1];
-        auto input_shape = input_tensor.shape();
-        auto output_shape = output_tensor.shape();
+        num_cols = input_tensor.get_legacy_shape()[-1];
+        auto input_shape = input_tensor.get_legacy_shape();
+        auto output_shape = output_tensor.get_legacy_shape();
         num_rows = std::accumulate(input_shape.begin()+dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>());
         row_offset = std::accumulate(output_shape.begin()+dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) - num_rows;
     } else {
-        num_cols = input_tensor.shape()[-1] / TILE_WIDTH;
-        auto input_shape = input_tensor.shape();
-        auto output_shape = output_tensor.shape();
-        uint32_t num_output_cols = output_tensor.shape()[-1] / TILE_WIDTH;
+        num_cols = input_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
+        auto input_shape = input_tensor.get_legacy_shape();
+        auto output_shape = output_tensor.get_legacy_shape();
+        uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
         num_rows = std::accumulate(input_shape.begin()+dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>()) / TILE_HEIGHT;
         row_offset = (std::accumulate(output_shape.begin()+dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) / TILE_HEIGHT - num_rows) * num_output_cols;
         col_offset = num_output_cols - num_cols;

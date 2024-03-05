@@ -21,7 +21,7 @@ namespace primary {
 operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
     log_info(LogTest, "Large tensor algorithm selected");
     // split work
-    auto shape = input.shape();
+    auto shape = input.get_legacy_shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
     CreateCircularBuffer(
         program,

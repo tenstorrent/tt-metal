@@ -18,9 +18,7 @@ from tt_lib.fallback_ops import fallback_ops
 
 
 class TtSwinEmbeddings(nn.Module):
-    def __init__(
-        self, config, state_dict, base_address, device, use_mask_token=False
-    ):
+    def __init__(self, config, state_dict, base_address, device, use_mask_token=False):
         super().__init__()
         self.config = config
         self.device = device
@@ -32,28 +30,16 @@ class TtSwinEmbeddings(nn.Module):
         )
         num_patches = self.patch_embeddings.num_patches
         self.patch_grid = self.patch_embeddings.grid_size
-        self.mask_token = (
-            nn.Parameter(torch.zeros(1, 1, config.embed_dim))
-            if use_mask_token
-            else None
-        )
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.embed_dim)) if use_mask_token else None
 
         if config.use_absolute_embeddings:
-            self.position_embeddings = nn.Parameter(
-                torch.zeros(1, num_patches + 1, config.embed_dim)
-            )
+            self.position_embeddings = nn.Parameter(torch.zeros(1, num_patches + 1, config.embed_dim))
         else:
             self.position_embeddings = None
 
-        gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.norm.weight"], self.device
-        )
-        beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.norm.bias"], self.device
-        )
-        self.norm = fallback_ops.LayerNorm(
-            gamma, beta, normalized_shape=config.embed_dim, eps=config.layer_norm_eps
-        )
+        gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.norm.weight"], self.device)
+        beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.norm.bias"], self.device)
+        self.norm = fallback_ops.LayerNorm(gamma, beta, normalized_shape=config.embed_dim, eps=config.layer_norm_eps)
 
     def const_tensor(self, shape, value):
         return tt_lib.tensor.full(shape, value)
@@ -65,7 +51,7 @@ class TtSwinEmbeddings(nn.Module):
     ) -> Tuple[tt_lib.tensor.Tensor]:
         embeddings, output_dimensions = self.patch_embeddings(pixel_values)
         embeddings = self.norm(embeddings)
-        _, batch_size, seq_len, _ = embeddings.shape()
+        _, batch_size, seq_len, _ = embeddings.get_legacy_shape()
 
         if bool_masked_pos is not None:
             mask_tokens = self.mask_token.expand(batch_size, seq_len, -1)
@@ -78,16 +64,14 @@ class TtSwinEmbeddings(nn.Module):
 
             mask_tokens = tt_lib.tensor.mul(mask_tokens, mask)
 
-            unit_tensor = self.const_tensor(mask.shape(), 1)
+            unit_tensor = self.const_tensor(mask.get_legacy_shape(), 1)
             mask = tt_lib.tensor.sub(unit_tensor, mask)
 
             embeddings = tt_lib.tensor.mul(embeddings, mask)
             embeddings = tt_lib.tensor.add(embeddings, mask_tokens)
 
         if self.position_embeddings is not None:
-            self.position_embeddings = torch_to_tt_tensor_rm(
-                self.position_embeddings, self.device
-            )
+            self.position_embeddings = torch_to_tt_tensor_rm(self.position_embeddings, self.device)
         if self.position_embeddings is not None:
             embeddings = tt_lib.tensor.add(embeddings, self.position_embeddings)
 

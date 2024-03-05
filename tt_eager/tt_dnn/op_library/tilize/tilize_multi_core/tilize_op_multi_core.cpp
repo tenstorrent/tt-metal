@@ -136,15 +136,15 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = detail::TileSize(input_cb_data_format);
-    DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = detail::TileSize(output_cb_data_format);
 
     int32_t ntiles = a.volume() / TILE_HW;
-    uint32_t ntiles_per_block = a.shape()[-1] / TILE_WIDTH;
+    uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.shape()[-1] * a.element_size();
+    uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * a.element_size();
 
     {
         log_debug(LogOp, "ntiles: {}", ntiles);
@@ -370,9 +370,9 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, Tensor &output) {
     tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     uint32_t num_tiles = input.volume() / TILE_HW;
@@ -495,9 +495,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     Device *device = a.device();
@@ -507,7 +507,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
 
     auto all_cores = output_shard_spec.grid;
 
-    uint32_t num_batches = output.volume() / (output.shape()[-2] * output.shape()[-1]);
+    uint32_t num_batches = output.volume() / (output.get_legacy_shape()[-2] * output.get_legacy_shape()[-1]);
 
     uint32_t num_input_rows = input_shard_spec.shape[0];
     uint32_t input_shard_width_bytes = input_shard_spec.shape[1] * a.element_size();
@@ -516,7 +516,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     uint32_t ntiles_per_batch = ntiles_per_core / num_batches;
     uint32_t ntiles_per_block = output_shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = output_shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t num_padded_rows = output.shape()[-2] - a.shape()[-2];
+    uint32_t num_padded_rows = output.get_legacy_shape()[-2] - a.get_legacy_shape()[-2];
 
     uint32_t src0_cb_index = CB::c_in1;
 

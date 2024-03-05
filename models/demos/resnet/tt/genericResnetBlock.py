@@ -27,11 +27,11 @@ def _nearest_y(x, y):
 
 # Local copy of unpad_from_zero to always set output to
 def unpad_from_zero(x, desired_shape):
-    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2]:
+    if x.get_legacy_shape()[-1] == desired_shape[-1] and x.get_legacy_shape()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
             (0, 0, 0, 0),
@@ -630,7 +630,12 @@ class ResNet(nn.Module):
         x = torch.permute(x, (0, 2, 3, 1))
         x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         x = x.pad(
-            (x.shape()[0], x.shape()[1], x.shape()[2], _nearest_y(x.shape()[3], 16)),
+            (
+                x.get_legacy_shape()[0],
+                x.get_legacy_shape()[1],
+                x.get_legacy_shape()[2],
+                _nearest_y(x.get_legacy_shape()[3], 16),
+            ),
             (0, 0, 0, 0),
             0,
         )
@@ -648,11 +653,11 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
-        # x = fallback_ops.reshape(x, 1, 1, 1, x.shape()[3])
+        # x = fallback_ops.reshape(x, 1, 1, 1, x.get_legacy_shape()[3])
         # x = torch.flatten(x, 1).unsqueeze(1).unsqueeze(1)
 
         x = self.fc(x)
-        desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
+        desired_shape = [x.get_legacy_shape()[0], x.get_legacy_shape()[1], 1, 1000]
         x = unpad_from_zero(x, desired_shape)
         return x
 

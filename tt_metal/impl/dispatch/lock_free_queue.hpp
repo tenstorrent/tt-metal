@@ -4,15 +4,14 @@
 
 #include <atomic>
 #include <memory>
-
 #include "tt_metal/common/assert.hpp"
 
 template<typename T>
 class LockFreeQueue {
     private:
         struct Node {
-            std::shared_ptr<T> data;
-            Node* next;
+            std::shared_ptr<T> data = nullptr;
+            Node* next = nullptr;
         };
 
         std::atomic<Node*> head;

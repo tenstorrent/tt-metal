@@ -22,10 +22,10 @@ def Linear(
 
     ``weight`` must be tt_tensor.
     """
-    assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
+    assert weight.get_legacy_shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
 
     if bias is not None:
-        assert bias.shape()[-1] == out_features, "bias does not have the expected shape"
+        assert bias.get_legacy_shape()[-1] == out_features, "bias does not have the expected shape"
 
     weight = weight
     bias = bias
@@ -34,7 +34,7 @@ def Linear(
     weight_T = torch_to_tt_tensor_rm(weight_T, device, put_on_device=False)
 
     def linear_(activation):
-        assert activation.shape()[-1] == in_features, "activation tensor do not have the expected shape"
+        assert activation.get_legacy_shape()[-1] == in_features, "activation tensor do not have the expected shape"
         output = tt_lib.tensor.matmul(activation, weight_T, output_mem_config)
 
         if bias is not None:
@@ -49,18 +49,18 @@ def Linear(
 
 
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
-    if x.layout() == target_layout:
+    if x.get_layout() == target_layout:
         return x
-    if x.layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.shape(), False, False, True, True)
-        if x.shape() != x_padded_shape:
+    if x.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
+        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+        if x.get_legacy_shape() != x_padded_shape:
             return tt_lib.tensor.format_input_tensor(
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
             return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
-    elif x.layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
-        if x.shape() != x.shape_without_padding():
+    elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.get_legacy_shape() != x.shape_without_padding():
             return tt_lib.tensor.format_output_tensor(
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
@@ -71,11 +71,11 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
 
 
 def unpad_from_zero(x, desired_shape):
-    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2]:
+    if x.get_legacy_shape()[-1] == desired_shape[-1] and x.get_legacy_shape()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
             (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)

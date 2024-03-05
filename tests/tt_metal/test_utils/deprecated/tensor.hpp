@@ -40,7 +40,7 @@ class Tensor
         const std::vector<T>& get_values() const {
             return this->values;
         }
-        const std::array<uint32_t, 4>& get_shape() const {
+        const std::array<uint32_t, 4>& get_legacy_shape() const {
             return this->shape;
         }
         const std::array<uint32_t, 4>& get_strides() const {
@@ -57,7 +57,7 @@ class Tensor
 
 template <class T>
 void print(const Tensor<T>& tensor) {
-    auto tensor_shape = tensor.get_shape();
+    auto tensor_shape = tensor.get_legacy_shape();
     auto tensor_strides = tensor.get_strides();
     auto tensor_data = tensor.get_values();
 
@@ -124,7 +124,7 @@ Tensor<T> initialize_tensor(std::array<uint32_t, 4> &shape, Initialize init_type
 // {0, 2, 3, 1} -> NHWC
 template <class T>
 Tensor<T> permute(const Tensor<T> &input, std::array<int, 4> dims) {
-    auto in_shape = input.get_shape();
+    auto in_shape = input.get_legacy_shape();
     std::array<uint32_t, 4> out_shape = {in_shape[dims[0]], in_shape[dims[1]], in_shape[dims[2]], in_shape[dims[3]]};
     auto output_volume = out_shape[0] * out_shape[1] * out_shape[2] * out_shape[3];
     std::vector<T> out = std::vector<T>(output_volume);
@@ -147,7 +147,7 @@ Tensor<T> permute(const Tensor<T> &input, std::array<int, 4> dims) {
 
 template <class T>
 Tensor<T> permute_nhwc_to_nchw(const Tensor<T> &input) {
-    std::array<uint32_t, 4> in_shape = input.get_shape();
+    std::array<uint32_t, 4> in_shape = input.get_legacy_shape();
     std::array<uint32_t, 4> out_shape = {in_shape[0], in_shape[3], in_shape[1], in_shape[2]};
     auto output_volume = out_shape[0] * out_shape[1] * out_shape[2] * out_shape[3];
     std::vector<T> out = std::vector<T>(output_volume, 0);
@@ -169,7 +169,7 @@ Tensor<T> permute_nhwc_to_nchw(const Tensor<T> &input) {
 
 template <class T>
 Tensor<T> pad(Tensor<T> &input, std::array<std::array<uint32_t, 2>, 4> pad_size, T val = 0) {
-    auto in_shape = input.get_shape();
+    auto in_shape = input.get_legacy_shape();
     std::array<uint32_t, 4> out_shape = {
         in_shape[0]+ pad_size[0][0] + pad_size[0][1],
         in_shape[1] + pad_size[1][0] + pad_size[1][1],

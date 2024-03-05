@@ -37,13 +37,13 @@ void MorehSGD::validate(
     TT_ASSERT(grad.buffer() != nullptr, "grad to SGD need to be allocated in buffers on device!");
     TT_ASSERT(param_out.buffer() != nullptr, "param_out to SGD need to be allocated in buffers on device!");
 
-    TT_ASSERT((param_in.layout() == Layout::TILE), "param_in to SGD must be tilized");
-    TT_ASSERT((grad.layout() == Layout::TILE), "grad to SGD must be tilized");
-    TT_ASSERT((param_out.layout() == Layout::TILE), "param_out to SGD must be tilized");
+    TT_ASSERT((param_in.get_layout() == Layout::TILE), "param_in to SGD must be tilized");
+    TT_ASSERT((grad.get_layout() == Layout::TILE), "grad to SGD must be tilized");
+    TT_ASSERT((param_out.get_layout() == Layout::TILE), "param_out to SGD must be tilized");
 
-    TT_ASSERT(param_in.dtype() == DataType::BFLOAT16 || param_in.dtype() == DataType::BFLOAT8_B);
-    TT_ASSERT(grad.dtype() == DataType::BFLOAT16 || grad.dtype() == DataType::BFLOAT8_B);
-    TT_ASSERT(param_out.dtype() == DataType::BFLOAT16 || param_out.dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT(param_in.get_dtype() == DataType::BFLOAT16 || param_in.get_dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT(grad.get_dtype() == DataType::BFLOAT16 || grad.get_dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT(param_out.get_dtype() == DataType::BFLOAT16 || param_out.get_dtype() == DataType::BFLOAT8_B);
 }
 
 std::vector<Shape> MorehSGD::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

@@ -23,9 +23,7 @@ from models.utility_functions import (
 
 def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
     if for_audio_classification:
-        model = WhisperForAudioClassification.from_pretrained(
-            "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-        )
+        model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
     else:
         model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
 
@@ -44,9 +42,7 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     hidden_state_input_tensor = torch.rand(1, 1500, embed_dim)
     attention_mask_input_tensor = None
-    ttm_tensor_hidden_state = torch2tt_tensor(
-        hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR)
     ttm_tensor_attention_mask = None
     layer_head_mask_input_tensor = None
 
@@ -87,7 +83,7 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
     # First check: attention output
 
     # Unpad output tensor
-    input_tensors_shape = ttm_output[0].shape()
+    input_tensors_shape = ttm_output[0].get_legacy_shape()
     logger.info(input_tensors_shape)
 
     ttm_output_to_torch_0 = tt2torch_tensor(ttm_output[0])

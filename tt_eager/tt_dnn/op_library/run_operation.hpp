@@ -144,16 +144,16 @@ static operation_history::TensorRecord create_tensor_record(const Tensor& tensor
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, OwnedStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), std::nullopt
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), std::nullopt
                 };
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), tensor.memory_config()};
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.memory_config()};
             }
             else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout()
+                    tensor.storage_type(), tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()
                 };
             } else {
                 raise_unsupported_storage<T>();

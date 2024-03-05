@@ -23,14 +23,14 @@ void Sharded::validate(const std::vector<Tensor>& input_tensors) const {
     } else if (this->sharded_op_type == ShardedOpType::ShardedToInterleaved) {
         TT_FATAL(input_tensor.memory_config().is_sharded());
         if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (input_tensor.shape()[-1] % this->shard_spec.shape[1] != 0 ||
-                ((input_tensor.volume() / input_tensor.shape()[-1]) % this->shard_spec.shape[0]) != 0) {
+            if (input_tensor.get_legacy_shape()[-1] % this->shard_spec.shape[1] != 0 ||
+                ((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % this->shard_spec.shape[0]) != 0) {
                 TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
             }
         }
     }
-    if (input_tensor.dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.layout() == Layout::TILE);
+    if (input_tensor.get_dtype() != this->output_dtype) {
+        TT_FATAL(input_tensor.get_layout() == Layout::TILE);
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y);
@@ -39,7 +39,7 @@ void Sharded::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<Shape> Sharded::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 
 std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -50,13 +50,13 @@ std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& in
         return {create_sharded_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             this->output_dtype,
-            input_tensor.layout(),
+            input_tensor.get_layout(),
             input_tensor.device(),
             mem_config
             )};
     } else {
         return operation::generic_create_output_tensors(
-            *this, input_tensors, this->output_dtype, input_tensor.layout(), this->output_mem_config);
+            *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
     }
 }
 
@@ -85,7 +85,7 @@ void Reshard::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
     TT_FATAL(this->output_mem_config.is_sharded(), "output must be sharded");
-    if(input_tensor.layout() == Layout::ROW_MAJOR) {
+    if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
         bool same_row_size = input_tensor.memory_config().shard_spec.value().shape[1] == this->output_mem_config.shard_spec.value().shape[1];
         TT_FATAL(same_row_size, "row major must have shard_spec[1] be the same on both input and output");
     }
@@ -93,7 +93,7 @@ void Reshard::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<Shape> Reshard::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 
 operation::ProgramWithCallbacks Reshard::create_program(
@@ -116,8 +116,8 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
 
     return {create_sharded_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.dtype(),
-        input_tensor.layout(),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
         input_tensor.device(),
         mem_config
         )};

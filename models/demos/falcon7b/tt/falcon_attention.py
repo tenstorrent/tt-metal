@@ -98,7 +98,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             )
 
     def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
-        seq_len = layer.shape()[2]
+        seq_len = layer.get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
         return tt_lib.tensor.rotary_embedding(
@@ -221,12 +221,12 @@ class TtFalconAttention(nn.Module):
         assert not output_attentions
 
         if llm_mode == "prefill":
-            batch = hidden_states.shape()[0]
-            q_len = hidden_states.shape()[2]
+            batch = hidden_states.get_legacy_shape()[0]
+            q_len = hidden_states.get_legacy_shape()[2]
             assert layer_past is not None
         elif llm_mode == "decode":
-            batch = hidden_states.shape()[2]
-            q_len = hidden_states.shape()[0]
+            batch = hidden_states.get_legacy_shape()[2]
+            q_len = hidden_states.get_legacy_shape()[0]
             # We always store max_position_embeddings for kv_cache,
             # so we need separate variable to store the actual len of the kv_cache
             assert layer_past is not None

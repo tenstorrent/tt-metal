@@ -115,13 +115,13 @@ template <LayerNormType norm_type>
 struct make_layernorm {
     Tensor operator()(
         const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
-        TT_FATAL(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+        TT_FATAL(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
 
-        if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-            TT_FATAL(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
+        if (gamma.has_value() and gamma.value().get_layout() == Layout::TILE) {
+            TT_FATAL(gamma.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Gamma width must be equal to input width");
         }
-        if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-            TT_FATAL(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
+        if (beta.has_value() and beta.value().get_layout() == Layout::TILE) {
+            TT_FATAL(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
         }
         return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig()}, {a}, {std::nullopt, gamma, beta}).at(0);
     }
@@ -131,13 +131,13 @@ template <LayerNormType norm_type>
 struct make_add_layernorm {
     Tensor operator()(
         const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
-        TT_FATAL(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
-        TT_FATAL(a.shape() == b.shape(), "Input shapes must be equal");
-        if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-            TT_FATAL(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
+        TT_FATAL(a.get_legacy_shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
+        TT_FATAL(a.get_legacy_shape() == b.get_legacy_shape(), "Input shapes must be equal");
+        if (gamma.has_value() and gamma.value().get_layout() == Layout::TILE) {
+            TT_FATAL(gamma.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Gamma width must be equal to input width");
         }
-        if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-            TT_FATAL(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
+        if (beta.has_value() and beta.value().get_layout() == Layout::TILE) {
+            TT_FATAL(beta.value().get_legacy_shape()[3] == a.get_legacy_shape()[3], "Beta width must be equal to input width");
         }
         return operation::run_with_autoformat(LayerNorm{.norm_type=norm_type, .eps=eps, .output_mem_config=mem_config, .program_config=LayerNormDefaultProgramConfig()}, {a}, {b, gamma, beta}).at(0);
     }

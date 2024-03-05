@@ -42,7 +42,7 @@ Tensor host_function(const Tensor& input_tensor) {
         auto value = UnaryFunction(input_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
-    return Tensor(OwnedStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, input_tensor.get_legacy_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
 }
 
 void test_multi_queue_api() {

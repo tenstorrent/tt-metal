@@ -49,8 +49,8 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
 
 inline void moreh_matmul_validate(
     const Tensor& input_tensor, const Tensor& other_tensor, bool transpose_input, bool transpose_other) {
-    const auto& input_shape = input_tensor.shape().without_padding();
-    const auto& other_shape = other_tensor.shape().without_padding();
+    const auto& input_shape = input_tensor.get_legacy_shape().without_padding();
+    const auto& other_shape = other_tensor.get_legacy_shape().without_padding();
     // check dim-1
     TT_ASSERT(
         (input_shape[1] == other_shape[1]) || input_shape[1] == 1 || other_shape[1] == 1,
@@ -87,7 +87,7 @@ inline Shape compute_output_shape(
 
 // Must be provided in the case where an optional output tensor was not provided
 std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {compute_output_shape(input_tensors.at(0).shape(), input_tensors.at(1).shape(), this->transpose_input, this->transpose_other)};
+    return {compute_output_shape(input_tensors.at(0).get_legacy_shape(), input_tensors.at(1).get_legacy_shape(), this->transpose_input, this->transpose_other)};
 }
 
 std::vector<Tensor> MorehMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
@@ -97,18 +97,18 @@ std::vector<Tensor> MorehMatmul::create_output_tensors(const std::vector<Tensor>
     const auto& output_shapes = this->compute_output_shapes(input_tensors);
     const auto& output_shape = output_shapes.at(0);
 
-    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).dtype(), Layout::TILE, this->output_mem_config)};
+    return {operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
 }
 
 void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);
     TT_ASSERT(
-        (input_tensor.layout() == Layout::TILE && other_tensor.layout() == Layout::TILE),
+        (input_tensor.get_layout() == Layout::TILE && other_tensor.get_layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
 
     TT_ASSERT(
-        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
+        input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B,
         "Unsupported data format");
     TT_ASSERT(
         input_tensor.storage_type() == StorageType::DEVICE and other_tensor.storage_type() == StorageType::DEVICE,
@@ -123,10 +123,10 @@ void MorehMatmul::validate_with_output_tensors(const std::vector<Tensor> &input_
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
         return;
     }
-    const auto& input_shape = input_tensor.shape();
-    const auto& other_shape = other_tensor.shape();
+    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& other_shape = other_tensor.get_legacy_shape();
     const auto output_shape_required = compute_output_shape(input_shape, other_shape, this->transpose_input, this->transpose_other);
-    const auto& actual_shape = output_tensors.at(0).value().shape();
+    const auto& actual_shape = output_tensors.at(0).value().get_legacy_shape();
     bool shape_ok = output_shape_required.rank() == actual_shape.rank();
     for(size_t i=0; i < std::min(actual_shape.rank(),output_shape_required.rank()) ; i++){
         shape_ok &= output_shape_required[i] <= actual_shape[i];
@@ -142,8 +142,8 @@ Tensor moreh_matmul_(
     bool transpose_other,
     const MemoryConfig& mem_config) {
 
-    const auto& input_shape = input_tensor.shape();
-    const auto& other_shape = other_tensor.shape();
+    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& other_shape = other_tensor.get_legacy_shape();
     const auto& output_shape = compute_output_shape(input_shape, other_shape, transpose_input, transpose_other);
 
     uint32_t input_other2MtKt = input_shape[1] * input_shape[2] * input_shape[3];

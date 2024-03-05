@@ -119,16 +119,16 @@ def run_falcon_matmul_test(
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
-    assert a_t.dtype() == in0_dtype
+    assert a_t.get_dtype() == in0_dtype
     assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
-    assert b_t.dtype() == in1_dtype
+    assert b_t.get_dtype() == in1_dtype
     assert out.memory_config().buffer_type == out_mem_config.buffer_type
-    assert out.dtype() == out_dtype
-    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}")
-    logger.debug(f"out ({expected_output_shape}): {out.memory_config().buffer_type} and {out.dtype()}")
+    assert out.get_dtype() == out_dtype
+    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.get_dtype()}")
+    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
+    logger.debug(f"out ({expected_output_shape}): {out.memory_config().buffer_type} and {out.get_dtype()}")
 
-    assert out.shape() == expected_output_shape
+    assert out.get_legacy_shape() == expected_output_shape
     pyt_got_back_rm = tt2torch_tensor(out)
 
     ref_bmm = torch.matmul(A, B)

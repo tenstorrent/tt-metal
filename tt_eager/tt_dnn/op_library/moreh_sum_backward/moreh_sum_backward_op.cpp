@@ -23,10 +23,10 @@ void MorehSumBackward::validate(const std::vector<Tensor>& inputs) const {
     const auto& output_grad = inputs.at(0);
     const auto& input_grad = inputs.at(1);
 
-    auto output_grad_shape = output_grad.shape();
-    const auto& input_grad_shape = input_grad.shape();
-    auto output_grad_shape_wo_padding = output_grad.shape().without_padding();
-    const auto& input_grad_shape_wo_padding = input_grad.shape().without_padding();
+    auto output_grad_shape = output_grad.get_legacy_shape();
+    const auto& input_grad_shape = input_grad.get_legacy_shape();
+    auto output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
+    const auto& input_grad_shape_wo_padding = input_grad.get_legacy_shape().without_padding();
 }
 
 operation::ProgramWithCallbacks MorehSumBackward::create_program(

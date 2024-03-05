@@ -126,7 +126,7 @@ def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momen
         momentum_initialized,
     )
 
-    assert dev_param_in.shape() == list(model.weight.shape)
+    assert dev_param_in.get_legacy_shape() == list(model.weight.shape)
 
     # check param_out
     param_result = dev_param_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)

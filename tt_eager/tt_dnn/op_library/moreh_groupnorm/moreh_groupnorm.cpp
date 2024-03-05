@@ -57,7 +57,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.shape();
+    const auto input_shape = input.get_legacy_shape();
 
     const auto n = input_shape[0];
     const auto c = input_shape[1];
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +

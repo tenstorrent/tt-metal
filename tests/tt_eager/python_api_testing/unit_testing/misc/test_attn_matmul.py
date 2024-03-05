@@ -42,7 +42,6 @@ def test_attn_matmul(in0_dtype, in1_dtype, out_dtype, device):
         tt_input_tensor_b = ttl.tensor.Tensor(input_tensor_b, in1_dtype).to(ttl.tensor.Layout.TILE).to(device)
 
         compute_grid_size = device.compute_with_storage_grid_size()
-
         tt_output_tensor_on_device = ttl.operations.primary.transformers.attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,

@@ -58,7 +58,7 @@ class test_config {
          mem_config.shard_spec = get_shard_spec();
      }
 
-        Shape get_shape(){
+        Shape get_legacy_shape(){
             Shape shape = {1, (uint32_t) num_cores_height, (uint32_t)page_height * num_pages_per_core_height, num_cores_width*num_pages_per_core_width * (uint32_t)page_width};
             return shape;
         }
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
                 2,
                 2,
                 MemoryConfig{.memory_layout = TensorMemoryLayout::BLOCK_SHARDED, .buffer_type = BufferType::L1});
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
+            pass &= test_sharded_loopback(device, config.layout, config.get_legacy_shape(), config.mem_config);
         }
 
         // 4x4 TILES
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
                 2,
                 MemoryConfig{.memory_layout = TensorMemoryLayout::BLOCK_SHARDED, .buffer_type = BufferType::L1});
 
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
+            pass &= test_sharded_loopback(device, config.layout, config.get_legacy_shape(), config.mem_config);
 
         }
 
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
                 2,
                 2,
                 MemoryConfig{.memory_layout = TensorMemoryLayout::WIDTH_SHARDED, .buffer_type = BufferType::L1});
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
+            pass &= test_sharded_loopback(device, config.layout, config.get_legacy_shape(), config.mem_config);
         }
 
         // 8x2 TILES
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
                 2,
                 2,
                 MemoryConfig{.memory_layout = TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type = BufferType::L1});
-            pass &= test_sharded_loopback(device, config.layout, config.get_shape(), config.mem_config);
+            pass &= test_sharded_loopback(device, config.layout, config.get_legacy_shape(), config.mem_config);
         }
 
 

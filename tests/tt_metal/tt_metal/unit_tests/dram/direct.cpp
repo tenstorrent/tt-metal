@@ -223,8 +223,8 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        -1.0f, 1.0f, byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
@@ -334,8 +334,8 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        -1.0f, 1.0f, byte_size / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////

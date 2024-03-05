@@ -151,17 +151,17 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     Device *device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
-    uint32_t ntiles_per_block = a.shape()[-1] / TILE_WIDTH;
+    uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.shape()[-1] * output.element_size();
+    uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
 
     {
         log_debug(LogOp, "ntiles: {}", ntiles);
@@ -193,9 +193,9 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         num_rows_block = shard_spec.shape[0];
         block_row_size = shard_spec.shape[1] * output.element_size();     // in0_block_w * TILE_WIDTH * dtype_nbytes
-        output_row_size = output.shape()[-1] * output.element_size();    // output row size bytes
-        last_block_row_size_unpadded = block_row_size - (round_up(output.shape()[-1], shard_spec.shape[1]) - output.shape()[-1]) * output.element_size();
-        uint32_t num_output_rows = output.volume() / output.shape()[-1];
+        output_row_size = output.get_legacy_shape()[-1] * output.element_size();    // output row size bytes
+        last_block_row_size_unpadded = block_row_size - (round_up(output.get_legacy_shape()[-1], shard_spec.shape[1]) - output.get_legacy_shape()[-1]) * output.element_size();
+        uint32_t num_output_rows = output.volume() / output.get_legacy_shape()[-1];
         num_output_rows_unpadded = num_rows_block - (round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
         end_core = (*shard_spec.grid.ranges().begin()).end;
 
@@ -589,17 +589,17 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     Device *device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
-    uint32_t ntiles_per_block = a.shape()[3] / TILE_WIDTH;
+    uint32_t ntiles_per_block = a.get_legacy_shape()[3] / TILE_WIDTH;
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.shape()[3] * output.element_size();
+    uint32_t block_size_nbytes = a.get_legacy_shape()[3] * output.element_size();
 
     auto grid_size = device->compute_with_storage_grid_size();
     bool row_major = true;
@@ -615,21 +615,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     uint32_t ncores = all_cores.num_cores();
     ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t batch = a.volume() / (a.shape()[-2] * a.shape()[-1]);
+    uint32_t batch = a.volume() / (a.get_legacy_shape()[-2] * a.get_legacy_shape()[-1]);
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = shard_spec.shape[0];
     block_row_size = shard_spec.shape[1] * output.element_size();     // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.shape()[-1] * output.element_size();    // output row size bytes
-    last_block_row_size_unpadded = block_row_size - (round_up(output.shape()[-1], shard_spec.shape[1]) - output.shape()[-1]) * output.element_size();
-    uint32_t num_output_rows = output.volume() / output.shape()[-1];
+    output_row_size = output.get_legacy_shape()[-1] * output.element_size();    // output row size bytes
+    last_block_row_size_unpadded = block_row_size - (round_up(output.get_legacy_shape()[-1], shard_spec.shape[1]) - output.get_legacy_shape()[-1]) * output.element_size();
+    uint32_t num_output_rows = output.volume() / output.get_legacy_shape()[-1];
     num_output_rows_unpadded = num_rows_block - (round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
     if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        last_idx = div_up(output.shape()[-1], shard_spec.shape[1]) - 1;
+        last_idx = div_up(output.get_legacy_shape()[-1], shard_spec.shape[1]) - 1;
     } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         last_idx = div_up(num_output_rows, shard_spec.shape[0]) - 1;
     } else {
-        end_core = {div_up(output.shape()[-1], shard_spec.shape[1]) - 1, div_up(num_output_rows, shard_spec.shape[0]) - 1};
+        end_core = {div_up(output.get_legacy_shape()[-1], shard_spec.shape[1]) - 1, div_up(num_output_rows, shard_spec.shape[0]) - 1};
     }
     if (!row_major) {
         std::swap(end_core.x, end_core.y);

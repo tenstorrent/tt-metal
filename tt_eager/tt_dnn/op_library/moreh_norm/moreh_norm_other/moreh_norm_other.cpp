@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.shape();
+    const auto input_shape = input.get_legacy_shape();
     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
 
     const auto N = input_shape[0];
@@ -81,7 +81,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
     const uint32_t in0_t{1};  // input
     const uint32_t in1_t{1};  // one
