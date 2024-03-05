@@ -269,6 +269,7 @@ def device_init_destroy(request):
 
     yield device
 
+    ttl.device.Synchronize(device)
     ttl.device.CloseDevice(device)
 
 
