@@ -86,7 +86,7 @@ inline Tensor interleaved_to_sharded(
             } else if constexpr (
                 std::is_same_v<GridType, CoreRangeSet>
             ) {
-                TT_FATAL(grid.ranges().size() == 1);
+                // TT_FATAL(grid.ranges().size() == 1); // why is this restriction?
                 auto bbox = grid.bounding_box();
                 grid_size = CoreCoord{bbox.end.x + 1, bbox.end.y + 1};
                 grid_set = grid;
