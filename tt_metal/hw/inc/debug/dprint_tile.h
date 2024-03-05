@@ -59,43 +59,43 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
         // access to CBs, so TileSlice printing is skipped on this risc.
         this->count_ = 0;
         volatile Tile* t;
-        #if defined(TRISC_PACK) || defined(COMPILE_FOR_NCRISC)
-            this->ptr_ = cb_interface[cb].fifo_wr_ptr<<4;
-        #elif defined(TRISC_UNPACK) || defined(COMPILE_FOR_BRISC)
-            this->ptr_ = cb_interface[cb].fifo_rd_ptr<<4;
-        #else
-            this->ptr_ = 0;
-        #endif
-        #if defined(TRISC_PACK) || defined(TRISC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-            this->ptr_ += itile * sizeof(Tile);
-            if (this->ptr_ < 120*1024 || this->ptr_ >= 1024*1024) { // TODO(AP): magic
-                this->w0_ = 0xFFFF;
-                return; // bad tile pointer, return
-            }
-            this->endl_rows_ = endl_rows;
-            this->w0_ = s.w0;  this->w1_ = s.w1;  this->ws_ = s.ws;
-            this->h0_ = s.h0;  this->h1_ = s.h1;  this->hs_ = s.hs;
-            t = reinterpret_cast<volatile Tile*>(this->ptr_);
-            bool max_count_exceeded = false;
-            for (int h = s.h0; h < s.h1; h += s.hs) {
-                for (int w = s.w0; w < s.w1; w += s.ws) {
-                    // Tile size is 32, so 1D index is w_idx + h_idx * 32
-                    const int log_tile_height = 5;
-                    int i = w + (h << log_tile_height);
-                    if (print_untilized) i = TileSlice::tilize_rm_index(i); // tilize the index
-                    this->samples_[this->count_] = t->vals[i];
-                    this->count_ ++;
-                    // If we've gone over the maximum data points to print, break
-                    if (this->count_ >= MAXCOUNT) {
-                        max_count_exceeded = true;
-                        break;
-                    }
-                }
-
-                if (max_count_exceeded)
+#if defined(TRISC_PACK) || defined(COMPILE_FOR_NCRISC)
+        this->ptr_ = cb_interface[cb].fifo_wr_ptr<<4;
+#elif defined(TRISC_UNPACK) || defined(COMPILE_FOR_BRISC)
+        this->ptr_ = cb_interface[cb].fifo_rd_ptr<<4;
+#else
+        this->ptr_ = 0;
+#endif
+#if defined(TRISC_PACK) || defined(TRISC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        this->ptr_ += itile * sizeof(Tile);
+        if (this->ptr_ < L1_UNRESERVED_BASE || this->ptr_ >= MEM_L1_SIZE) {
+            this->w0_ = 0xFFFF;
+            return; // bad tile pointer, return
+        }
+        this->endl_rows_ = endl_rows;
+        this->w0_ = s.w0;  this->w1_ = s.w1;  this->ws_ = s.ws;
+        this->h0_ = s.h0;  this->h1_ = s.h1;  this->hs_ = s.hs;
+        t = reinterpret_cast<volatile Tile*>(this->ptr_);
+        bool max_count_exceeded = false;
+        for (int h = s.h0; h < s.h1; h += s.hs) {
+            for (int w = s.w0; w < s.w1; w += s.ws) {
+                // Tile size is 32, so 1D index is w_idx + h_idx * 32
+                const int log_tile_height = 5;
+                int i = w + (h << log_tile_height);
+                if (print_untilized) i = TileSlice::tilize_rm_index(i); // tilize the index
+                this->samples_[this->count_] = t->vals[i];
+                this->count_ ++;
+                // If we've gone over the maximum data points to print, break
+                if (this->count_ >= MAXCOUNT) {
+                    max_count_exceeded = true;
                     break;
+                }
             }
-        #endif
+
+            if (max_count_exceeded)
+                break;
+        }
+#endif
     }
 } ATTR_PACK;
 
