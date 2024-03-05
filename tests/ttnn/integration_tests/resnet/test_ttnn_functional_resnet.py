@@ -407,6 +407,7 @@ def test_bottleneck_block_with_downsample(device):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.skip(reason="Tries to allocate >1MB L1 space for CBs - Issue #5966 for optimized_conv")
 def test_resnet_50(device):
     torch.manual_seed(0)
 
