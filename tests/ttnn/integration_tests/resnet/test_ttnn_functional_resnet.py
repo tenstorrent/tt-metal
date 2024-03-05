@@ -407,18 +407,15 @@ def test_bottleneck_block_with_downsample(device):
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.skip(reason="Tries to allocate >1MB L1 space for CBs - Issue #5966 for optimized_conv")
 def test_resnet_50(device):
     torch.manual_seed(0)
 
     torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
-    activation = {}
 
-    def get_activation(name):
-        def hook(model, input, output):
-            activation[name] = output.detach()
-
-        return hook
+    def update_ttnn_module_args_resnet50(ttnn_module_args):
+        ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels <= 256
+        ttnn_module_args["enable_auto_formatting"] = ttnn_module_args.kernel_size < (7, 7)
+        ttnn_module_args["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
 
     def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         parameters = {}
@@ -429,9 +426,9 @@ def test_resnet_50(device):
             conv2_weight, conv2_bias = fold_batch_norm2d_into_conv2d(model.conv2, model.bn2)
             conv3_weight, conv3_bias = fold_batch_norm2d_into_conv2d(model.conv3, model.bn3)
 
-            update_ttnn_module_args(ttnn_module_args.conv1)
-            update_ttnn_module_args(ttnn_module_args.conv2)
-            update_ttnn_module_args(ttnn_module_args.conv3)
+            update_ttnn_module_args_resnet50(ttnn_module_args.conv1)
+            update_ttnn_module_args_resnet50(ttnn_module_args.conv2)
+            update_ttnn_module_args_resnet50(ttnn_module_args.conv3)
 
             parameters["conv1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1)
             parameters["conv2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.conv2)
@@ -441,7 +438,7 @@ def test_resnet_50(device):
                 downsample_weight, downsample_bias = fold_batch_norm2d_into_conv2d(
                     model.downsample[0], model.downsample[1]
                 )
-                update_ttnn_module_args(ttnn_module_args.downsample[0])
+                update_ttnn_module_args_resnet50(ttnn_module_args.downsample[0])
                 parameters["downsample"] = preprocess_conv2d(
                     downsample_weight, downsample_bias, ttnn_module_args.downsample[0]
                 )
