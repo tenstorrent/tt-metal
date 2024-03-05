@@ -584,7 +584,7 @@ TEST_F(CommandQueueSingleCardFixture, EthKernelsNocWriteNoReceive) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, EthKernelsDirectSendAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
