@@ -1081,7 +1081,6 @@ op_map = {
     },
     "bert-large-ff2-matmul": {
         "tt_lib_op": tt_lib_ops.bert_large_ff2_matmul,
-
         "pytorch_op": pytorch_ops.bert_large_ff2_matmul,
     },
     "embeddings": {
@@ -1540,5 +1539,5 @@ op_map = {
     "ttnn-clip": {
         "tt_lib_op": ttnn_ops.clip,
         "pytorch_op": pytorch_ops.clip,
-    },    
+    },
 }

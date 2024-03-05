@@ -1554,6 +1554,7 @@ def eltwise_isclose(
 
     return ttnn_tensor_to_torch(t2)
 
+
 def abs(
     x,
     *args,
