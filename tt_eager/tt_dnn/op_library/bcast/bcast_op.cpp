@@ -82,13 +82,13 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     TT_FATAL(input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr, "Operands to bcast need to be on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
 
-    const auto input_shape_a = input_tensor_a.shape();
-    const auto input_shape_b = input_tensor_b.shape();
+    const auto input_shape_a = input_tensor_a.get_legacy_shape();
+    const auto input_shape_b = input_tensor_b.get_legacy_shape();
 
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE);
-    TT_FATAL(input_tensor_b.layout() == Layout::TILE);
-    TT_FATAL(input_tensor_a.dtype() == input_tensor_b.dtype());
-    TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE);
+    TT_FATAL(input_tensor_b.get_layout() == Layout::TILE);
+    TT_FATAL(input_tensor_a.get_dtype() == input_tensor_b.get_dtype());
+    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED && input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED && this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Bcast does not currently support sharding");
 
     auto batch_size_a = input_shape_a[0];
@@ -114,13 +114,13 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
 
 std::vector<Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
+    return {input_tensor.get_legacy_shape()};
 }
 
 
 std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -146,15 +146,15 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
 const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-    bool bcast_scalar = (input_tensors.at(1).shape()[-2] * input_tensors.at(1).shape()[-1] == 1) && this->dim == BcastOpDim::HW;
+    bool bcast_scalar = (input_tensors.at(1).get_legacy_shape()[-2] * input_tensors.at(1).get_legacy_shape()[-1] == 1) && this->dim == BcastOpDim::HW;
     return operation::hash_operation<EltwiseBinaryBroadcast>(
         *this,
         parallelization_strategy,
         input_tensors.at(0).memory_config(),
-        input_tensors.at(0).dtype(),
+        input_tensors.at(0).get_dtype(),
         input_tensors.at(1).memory_config(),
         input_tensors.at(0).device()->id(),
-        input_tensors.at(1).dtype(),
+        input_tensors.at(1).get_dtype(),
         input_tensors.at(1).device()->id(),
         bcast_scalar);
 }
@@ -163,8 +163,8 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     const auto& input_tensor_a = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.shape()[2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.shape()[3] / TILE_WIDTH;
+    uint32_t Ht = input_tensor_a.get_legacy_shape()[2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.get_legacy_shape()[3] / TILE_WIDTH;
 
     if(Ht > 1 and this->dim == BcastOpDim::H){
         return BcastOpParallelizationStrategy::MULTI_CORE_H;

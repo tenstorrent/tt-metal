@@ -53,13 +53,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Buffer *dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
+    bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
 
-    Shape input_shape = input_tensor.shape();
-    Shape output_shape = output_tensor.shape();
+    Shape input_shape = input_tensor.get_legacy_shape();
+    Shape output_shape = output_tensor.get_legacy_shape();
 
-    DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
     auto grid_size = device->compute_with_storage_grid_size();
@@ -166,9 +166,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
-    TT_ASSERT(padding_config.dtype() == DataType::UINT16);
-    TT_ASSERT(local_config.dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config.dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
     Buffer* padding_config_buffer = padding_config.buffer();
     auto padding_config_cb_config =
@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
 void validate_untilize_with_halo_v2_config_tensor(const Tensor& tensor) {
     TT_FATAL(tensor.buffer() != nullptr, "Input tensors need to be allocated buffers on device");
-    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(tensor.get_layout() == Layout::ROW_MAJOR);
     TT_FATAL(tensor.memory_config().is_sharded());
     TT_FATAL(tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
 }
@@ -269,7 +269,7 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) cons
     const auto& input_tensor = input_tensors.at(0);
 
     // validate input data tensor
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         // skip the untilize, only do halo
         log_debug(LogOp, "Input is ROW_MAJOR, no need to untilize.");
     } else {
@@ -281,7 +281,7 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) cons
 
 std::vector<Shape> UntilizeWithHaloV2::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.shape();
+    const auto& input_shape = input.get_legacy_shape();
     Shape output_shape = input_shape;
 
     uint32_t nbatch = input_shape[0];
@@ -303,7 +303,7 @@ std::vector<Shape> UntilizeWithHaloV2::compute_output_shapes(const std::vector<T
 std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     // NOTE: output is always ROW_MAJOR
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
     auto shard_spec = input_tensor.shard_spec().value();
     // log_debug(LogOp, "INPUT SHARD SPEC: {}", shard_spec);
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);

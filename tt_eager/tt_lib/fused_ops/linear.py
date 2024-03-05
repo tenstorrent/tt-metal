@@ -15,13 +15,13 @@ def Linear(in_features: int, out_features: int, weight: List[Union[int, float]],
     ``weight`` must be the weight as a tilized list of values.
     """
     logger.warning("Linear will be deprecated soon, please use linear in models/helper_funcs")
-    assert weight.layout() == tensor.Layout.TILE
+    assert weight.get_layout() == tensor.Layout.TILE
     weight = weight.to(device)
 
     if bias is None:
         bias = None
     else:
-        assert bias.layout() == tensor.Layout.TILE
+        assert bias.get_layout() == tensor.Layout.TILE
         bias = bias.to(device)
 
     def linear_(activation):

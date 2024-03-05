@@ -82,9 +82,9 @@ void py_module(py::module& module) {
         .def_property_readonly("value", [](const TensorWrapper& self) -> auto& { return self.value; })
         .def("__repr__", [](const TensorWrapper& self) { return self.value.write_to_string(); })
         .def("__hash__", [](const TensorWrapper& self) { return tt::stl::hash::hash_object(self.value); })
-        .def_property_readonly("shape", [](const TensorWrapper& self) { return py::cast(Shape{self.value.shape()}); })
-        .def_property_readonly("dtype", [](const TensorWrapper& self) { return self.value.dtype(); })
-        .def_property_readonly("layout", [](const TensorWrapper& self) { return self.value.layout(); })
+        .def_property_readonly("shape", [](const TensorWrapper& self) { return py::cast(Shape{self.value.get_legacy_shape()}); })
+        .def_property_readonly("dtype", [](const TensorWrapper& self) { return self.value.get_dtype(); })
+        .def_property_readonly("layout", [](const TensorWrapper& self) { return self.value.get_layout(); })
         .def_property_readonly("device", [](const TensorWrapper& self) -> Device& { return *self.value.device(); })
         .def("is_contiguous", [](const TensorWrapper& self) -> bool { return self.value.is_contiguous(); });
 }

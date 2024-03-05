@@ -22,10 +22,10 @@ namespace primary {
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor) {
-    auto h = tensor.shape()[2];
+    auto h = tensor.get_legacy_shape()[2];
     int32_t Ht = (h + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
 
     auto tile_size = tt_metal::detail::TileSize(data_format);
 
@@ -45,7 +45,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor) {
 operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
-    auto shape = input_grad.shape();
+    auto shape = input_grad.get_legacy_shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
 
     CreateCircularBuffer(
         program,

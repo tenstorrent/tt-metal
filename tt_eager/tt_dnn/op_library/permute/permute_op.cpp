@@ -37,8 +37,8 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
     bool pad_n = H == 0 || W == 0;
     bool pad_c = H == 1 || W == 1;
     // Convert tensor back to original
-    auto a_pad_shape = AutoFormat::pad_to_tile_shape(a.shape(), pad_c, pad_n);
-    auto out_shape = a.shape();
+    auto a_pad_shape = AutoFormat::pad_to_tile_shape(a.get_legacy_shape(), pad_c, pad_n);
+    auto out_shape = a.get_legacy_shape();
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
     auto formatted_input_tensor = a;
@@ -106,7 +106,7 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
 Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConfig& output_mem_config) {
 
     std::vector<uint32_t> normalized_dims(dims.size());
-    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.shape().get_normalized_index(idx);});
+    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});
     std::vector<uint32_t> seq_dims(dims.size());
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
     if (normalized_dims == seq_dims) {

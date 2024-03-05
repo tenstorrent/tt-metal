@@ -29,8 +29,8 @@ namespace primary {
 namespace {
 
 inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
     TT_ASSERT(
         tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
     TT_ASSERT(
@@ -56,9 +56,9 @@ inline Shape compute_output_shape(const Shape &input_shape, int64_t dim) {
 }
 
 inline Tensor create_output_tensor(const Tensor &input, int64_t dim, const MemoryConfig &output_mem_config) {
-    const auto output_shape = compute_output_shape(input.shape(), dim);
+    const auto output_shape = compute_output_shape(input.get_legacy_shape(), dim);
     const auto &output =
-        create_device_tensor(output_shape, input.dtype(), Layout::TILE, input.device(), output_mem_config);
+        create_device_tensor(output_shape, input.get_dtype(), Layout::TILE, input.device(), output_mem_config);
     return std::move(output);
 }
 
@@ -93,7 +93,7 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
     const std::optional<std::reference_wrapper<const Tensor>> output,
     const MemoryConfig &output_mem_config) {
     if (dim == std::nullopt) {
-        std::vector<int64_t> dims(input.shape().rank());
+        std::vector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
         dim = std::make_optional(dims);
     }
@@ -109,7 +109,7 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
     auto dims = std::get<std::vector<int64_t>>(dim.value());
 
     if (dims.empty()) {
-        std::vector<int64_t> all_dims(input.shape().rank());
+        std::vector<int64_t> all_dims(input.get_legacy_shape().rank());
         std::iota(all_dims.begin(), all_dims.end(), 0);
         dims = all_dims;
     }
@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks MorehNorm::create_program(
     const auto &output = input_tensors.at(1);
 
     const auto dim = this->dim;
-    const auto input_rank = static_cast<decltype(dim)>(input.shape().rank());
+    const auto input_rank = static_cast<decltype(dim)>(input.get_legacy_shape().rank());
 
     if (dim == input_rank - 1) {
         return moreh_norm_w_impl(input, this->p, output);

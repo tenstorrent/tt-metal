@@ -90,15 +90,15 @@ def ResnetLinear(
     Returns a function for linear operation in resnet with bias.
     """
     if bias is not None:
-        assert bias.shape()[-1] == out_features, "bias shape is not as expected"
+        assert bias.get_legacy_shape()[-1] == out_features, "bias shape is not as expected"
         if device is not None:
             bias = bias.to(device)
 
     if transpose:
-        assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
+        assert weight.get_legacy_shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
         weight_T = tt_lib.tensor.transpose(weight, -2, -1)
     else:
-        assert weight.shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
+        assert weight.get_legacy_shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
         weight_T = weight
     if device is not None:
         weight_T = weight_T.to(device)
@@ -148,18 +148,18 @@ def _nearest_y(x, y):
 
 
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
-    if x.layout() == target_layout:
+    if x.get_layout() == target_layout:
         return x
-    if x.layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.shape(), False, False, True, True)
-        if x.shape() != x_padded_shape:
+    if x.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
+        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+        if x.get_legacy_shape() != x_padded_shape:
             return tt_lib.tensor.format_input_tensor(
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
             return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
-    elif x.layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
-        if x.shape() != x.shape_without_padding():
+    elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.get_legacy_shape() != x.shape_without_padding():
             return tt_lib.tensor.format_output_tensor(
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
@@ -171,11 +171,11 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
 
 # Local copy of unpad_from_zero to always set output to
 def unpad_from_zero(x, desired_shape):
-    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2]:
+    if x.get_legacy_shape()[-1] == desired_shape[-1] and x.get_legacy_shape()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
             (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
@@ -2007,7 +2007,7 @@ class ResNet(nn.Module):
 
     def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
         if self.sharded:
-            untilize_with_halo_input_shard_height = (int)(x.shape()[2] / self.first_conv_num_cores_nhw)
+            untilize_with_halo_input_shard_height = (int)(x.get_legacy_shape()[2] / self.first_conv_num_cores_nhw)
 
             shard_grid = tt_lib.tensor.CoreRangeSet(
                 {
@@ -2025,7 +2025,7 @@ class ResNet(nn.Module):
                 shard_grid,
                 [
                     untilize_with_halo_input_shard_height,
-                    x.shape()[3],
+                    x.get_legacy_shape()[3],
                 ],
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -2036,8 +2036,10 @@ class ResNet(nn.Module):
             x = x.to(self.device, mem_config)
 
         else:
-            original_A_cl_host_shape = x.shape()
-            x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
+            original_A_cl_host_shape = x.get_legacy_shape()
+            x = x.reshape(
+                x.get_legacy_shape()[0], x.get_legacy_shape()[1], 1, x.get_legacy_shape()[2] * x.get_legacy_shape()[3]
+            )
 
             x = x.to(self.device, self.memory_config)  # to l1
             # re-shape back to original shape (N, H, W, C)
@@ -2093,8 +2095,8 @@ class ResNet(nn.Module):
                 x,
                 self.layer_3_grid_size,
                 [
-                    math.ceil((x.shape()[-2] // 32) / self.layer_3_grid_size[0]) * 32,
-                    x.shape()[-1] // self.layer_3_grid_size[1],
+                    math.ceil((x.get_legacy_shape()[-2] // 32) / self.layer_3_grid_size[0]) * 32,
+                    x.get_legacy_shape()[-1] // self.layer_3_grid_size[1],
                 ],
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
@@ -2110,8 +2112,8 @@ class ResNet(nn.Module):
                 x,
                 self.layer_4_grid_size,
                 [
-                    math.ceil((x.shape()[-2] // 32) / self.layer_4_grid_size[0]) * 32,
-                    x.shape()[-1] // self.layer_4_grid_size[1],
+                    math.ceil((x.get_legacy_shape()[-2] // 32) / self.layer_4_grid_size[0]) * 32,
+                    x.get_legacy_shape()[-1] // self.layer_4_grid_size[1],
                 ],
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
@@ -2128,18 +2130,23 @@ class ResNet(nn.Module):
             self.memory_config,
         )
 
-        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
+        x = x.reshape(
+            self.batch_size,
+            x.get_legacy_shape()[1],
+            (int)(x.get_legacy_shape()[2] / self.batch_size),
+            x.get_legacy_shape()[3],
+        )
         if self.sharded:
             grid_size = (8, 4)
             x = tt_lib.tensor.interleaved_to_sharded(
                 x,
                 grid_size,
-                [x.volume() // x.shape()[-1], x.shape()[-1] // (grid_size[0] * grid_size[1])],
+                [x.volume() // x.get_legacy_shape()[-1], x.get_legacy_shape()[-1] // (grid_size[0] * grid_size[1])],
                 tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
             )
 
-        unpadded_shape = x.shape()
+        unpadded_shape = x.get_legacy_shape()
         padded_shape = [
             unpadded_shape[0],
             unpadded_shape[1],
@@ -2168,7 +2175,12 @@ class ResNet(nn.Module):
 
         x = self.avgpool(x, self.width_sharded_memory_config)
 
-        unpadded_shape_end = [x.shape()[0] - 1, x.shape()[1] - 1, 1 - 1, x.shape()[3] - 1]
+        unpadded_shape_end = [
+            x.get_legacy_shape()[0] - 1,
+            x.get_legacy_shape()[1] - 1,
+            1 - 1,
+            x.get_legacy_shape()[3] - 1,
+        ]
         if self.sharded:
             x = tt_lib.tensor.untilize_with_unpadding(
                 x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
@@ -2177,9 +2189,9 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
             x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
 
-        x = x.reshape(1, x.shape()[1], self.batch_size * x.shape()[2], x.shape()[3])
+        x = x.reshape(1, x.get_legacy_shape()[1], self.batch_size * x.get_legacy_shape()[2], x.get_legacy_shape()[3])
 
-        unpadded_shape = x.shape()
+        unpadded_shape = x.get_legacy_shape()
         padded_shape = [
             unpadded_shape[0],
             unpadded_shape[1],
@@ -2215,6 +2227,11 @@ class ResNet(nn.Module):
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             self.memory_config,
         )
-        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
+        x = x.reshape(
+            self.batch_size,
+            x.get_legacy_shape()[1],
+            (int)(x.get_legacy_shape()[2] / self.batch_size),
+            x.get_legacy_shape()[3],
+        )
 
         return x

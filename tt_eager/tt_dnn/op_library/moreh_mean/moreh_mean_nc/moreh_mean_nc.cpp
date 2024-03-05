@@ -28,10 +28,10 @@ operation::ProgramWithCallbacks moreh_mean_nc(const Tensor &input, const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    const auto &input_shape = input.shape();
+    const auto &input_shape = input.get_legacy_shape();
     const auto &input_shape_without_padding = input_shape.without_padding();
 
     const auto N = input_shape[0];

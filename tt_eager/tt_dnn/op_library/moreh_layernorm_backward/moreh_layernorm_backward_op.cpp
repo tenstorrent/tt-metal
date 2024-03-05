@@ -18,8 +18,8 @@ namespace primary {
 
 namespace {
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
-    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
     TT_ASSERT(
         tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
     TT_ASSERT(
@@ -50,7 +50,7 @@ void MorehLayerNormBackwardInputGrad::validate(
     check_tensor(input_grad, "moreh_layernorm_backward_input_grad");
 
     TT_ASSERT(this->normalized_dims > 0);
-    TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
+    TT_ASSERT(this->normalized_dims <= output_grad.get_legacy_shape().rank());
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm_backward_input_grad");
@@ -107,7 +107,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate(
     check_tensor(rstd, "moreh_layernorm_backward_gamma_beta_grad");
 
     TT_ASSERT(this->normalized_dims > 0);
-    TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
+    TT_ASSERT(this->normalized_dims <= output_grad.get_legacy_shape().rank());
 
     if (gamma_grad.has_value()) {
         check_tensor(gamma_grad.value(), "moreh_layernorm_backward_gamma_beta_grad");

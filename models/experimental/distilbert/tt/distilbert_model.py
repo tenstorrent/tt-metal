@@ -51,13 +51,9 @@ class TtDistilBertModel(nn.Module):
             head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
             head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
         elif head_mask.dim() == 2:
-            head_mask = (
-                head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
-            )  # We can specify head_mask for each layer
+            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # We can specify head_mask for each layer
         assert head_mask.dim() == 5, f"head_mask.dim != 5, instead {head_mask.dim()}"
-        head_mask = head_mask.to(
-            dtype=self.dtype
-        )  # switch to float if need + fp16 compatibility
+        head_mask = head_mask.to(dtype=self.dtype)  # switch to float if need + fp16 compatibility
         return head_mask
 
     def get_head_mask(
@@ -72,9 +68,7 @@ class TtDistilBertModel(nn.Module):
             torch_head_mask = None
 
         if torch_head_mask is not None:
-            torch_head_mask = self._convert_head_mask_to_5d(
-                torch_head_mask, num_hidden_layers
-            )
+            torch_head_mask = self._convert_head_mask_to_5d(torch_head_mask, num_hidden_layers)
             if is_attention_chunked is True:
                 torch_head_mask = torch_head_mask.unsqueeze(-1)
 
@@ -96,28 +90,18 @@ class TtDistilBertModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[TtBaseModelOutput, Tuple[tt_lib.tensor.Tensor, ...]]:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                "You cannot specify both input_ids and inputs_embeds at the same time"
-            )
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
             input_shape = list(input_ids.shape)
         elif inputs_embeds is not None:
-            input_shape = inputs_embeds.shape()[:-1]
+            input_shape = inputs_embeds.get_legacy_shape()[:-1]
 
         if attention_mask is not None:
             input_shape[0:0] = [1, 1]

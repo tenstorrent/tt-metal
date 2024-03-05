@@ -39,7 +39,7 @@ class TtDeiTSelfAttention(nn.Module):
         self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        new_x_shape = list(x.shape())[1:-1] + [
+        new_x_shape = list(x.get_legacy_shape())[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
@@ -66,7 +66,7 @@ class TtDeiTSelfAttention(nn.Module):
 
         attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = tt_lib.tensor.full(attention_scores.shape(), self.attention_head_size)
+        attention_head_size_tt = tt_lib.tensor.full(attention_scores.get_legacy_shape(), self.attention_head_size)
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
         attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
 
@@ -81,7 +81,7 @@ class TtDeiTSelfAttention(nn.Module):
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
-        new_context_layer_shape = (1,) + tuple(context_layer.shape())[:-2] + (self.all_head_size,)
+        new_context_layer_shape = (1,) + tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)

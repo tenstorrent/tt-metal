@@ -65,7 +65,9 @@ def mha(
         # Reshape expects the expected output shape to be in TILE layout
         # Input shape : [1, 1, 128, 128]
         # Expected output shape: [1, 128, 2, 64]
-        reshape_unt = fallback_ops.reshape(x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
+        reshape_unt = fallback_ops.reshape(
+            x, x.get_legacy_shape()[0], x.get_legacy_shape()[2], num_heads, x.get_legacy_shape()[3] // num_heads
+        )
         # Permute expects input to be in TILE layout
         # Input shape: [1, 128, 2, 64]
         transposed = tt_lib.tensor.permute(reshape_unt, [0, 2, 1, 3])

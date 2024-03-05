@@ -36,7 +36,7 @@ def run_tilize_matmul_test(M, K, N, device):
         device,
     )
     a_t = ttl.tensor.tilize_with_zero_padding(a)
-    print("Shape of A_t - " + str(a_t.shape()))
+    print("Shape of A_t - " + str(a_t.get_legacy_shape()))
     b_t = ttl.tensor.Tensor(
         tilize_to_list(B),
         b_shape,
@@ -44,9 +44,9 @@ def run_tilize_matmul_test(M, K, N, device):
         ttl.tensor.Layout.TILE,
         device,
     )
-    print("Shape of B_t - " + str(b_t.shape()))
+    print("Shape of B_t - " + str(b_t.get_legacy_shape()))
     t2 = ttl.tensor.bmm(a_t, b_t)
-    assert list(t2.shape()) == output_shape
+    assert list(t2.get_legacy_shape()) == output_shape
     tt_host_rm = t2.cpu().to_torch()
     pyt_got_back = tt_host_rm.reshape(output_shape)
     # TODO: add support to remove padding in untilize

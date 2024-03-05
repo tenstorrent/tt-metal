@@ -68,17 +68,9 @@ class TtT5Stack(nn.Module):
         self.embed_tokens = embed_tokens
         self.is_decoder = config["is_decoder"]
         self.config_use_cache = config["use_cache"] if "use_cache" in config else False
-        self.config_output_attentions = (
-            config["output_attentions"] if "output_attentions" in config else False
-        )
-        self.config_output_hidden_states = (
-            config["output_hidden_states"]
-            if "output_hidden_states" in config
-            else False
-        )
-        self.config_use_return_dict = (
-            config["use_return_dict"] if "use_return_dict" in config else False
-        )
+        self.config_output_attentions = config["output_attentions"] if "output_attentions" in config else False
+        self.config_output_hidden_states = config["output_hidden_states"] if "output_hidden_states" in config else False
+        self.config_use_return_dict = config["use_return_dict"] if "use_return_dict" in config else False
         self.device = device
         self.block = nn.ModuleList()
         self.main_input_name = "input_ids"
@@ -93,9 +85,7 @@ class TtT5Stack(nn.Module):
             )
             self.block.append(tmp_block)
 
-        self.final_layer_norm = TtT5LayerNorm(
-            config, state_dict, f"{base_address}.final_layer_norm", device
-        )
+        self.final_layer_norm = TtT5LayerNorm(config, state_dict, f"{base_address}.final_layer_norm", device)
         self.dropout = nn.Dropout(config["dropout_rate"])
 
         self.cached_extended_attention_mask = None
@@ -114,10 +104,7 @@ class TtT5Stack(nn.Module):
     def create_extended_attention_mask_for_decoder(self, input_shape, attention_mask):
         batch_size, seq_length = input_shape
         seq_ids = torch.arange(seq_length)
-        causal_mask = (
-            seq_ids[None, None, :].repeat(batch_size, seq_length, 1)
-            <= seq_ids[None, :, None]
-        )
+        causal_mask = seq_ids[None, None, :].repeat(batch_size, seq_length, 1) <= seq_ids[None, :, None]
         # in case past_key_values are used we need to add a prefix ones mask to the causal mask
         # causal and attention masks must have same type with pytorch version < 1.3
         causal_mask = causal_mask.to(attention_mask.dtype)
@@ -135,9 +122,7 @@ class TtT5Stack(nn.Module):
                 axis=-1,
             )
 
-        extended_attention_mask = (
-            causal_mask[:, None, :, :] * attention_mask[:, None, None, :]
-        )
+        extended_attention_mask = causal_mask[:, None, :, :] * attention_mask[:, None, None, :]
         return extended_attention_mask
 
     def get_extended_attention_mask(self, attention_mask, input_shape):
@@ -169,11 +154,7 @@ class TtT5Stack(nn.Module):
             # - if the model is a decoder, apply a causal mask in addition to the padding mask
             # - if the model is an encoder, make the mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
             if self.config["is_decoder"]:
-                extended_attention_mask = (
-                    self.create_extended_attention_mask_for_decoder(
-                        input_shape, attention_mask
-                    )
-                )
+                extended_attention_mask = self.create_extended_attention_mask_for_decoder(input_shape, attention_mask)
             else:
                 extended_attention_mask = attention_mask[:, None, None, :]
         else:
@@ -189,12 +170,8 @@ class TtT5Stack(nn.Module):
 
         # Check what dtype is self.dtype, attention_mask.dtype?
         # Added "/ 2" bec of Tt device preccision
-        extended_attention_mask = extended_attention_mask.to(
-            dtype=torch.float16
-        )  # fp16 compatibility
-        extended_attention_mask = (
-            (1.0 - extended_attention_mask) * torch.finfo(torch.float16).min / 2
-        )
+        extended_attention_mask = extended_attention_mask.to(dtype=torch.float16)  # fp16 compatibility
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(torch.float16).min / 2
         self.cached_extended_attention_mask = extended_attention_mask
 
         return extended_attention_mask
@@ -205,19 +182,13 @@ class TtT5Stack(nn.Module):
             head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
             head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
         elif head_mask.dim() == 2:
-            head_mask = (
-                head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
-            )  # We can specify head_mask for each layer
+            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # We can specify head_mask for each layer
         assert head_mask.dim() == 5, f"head_mask.dim != 5, instead {head_mask.dim()}"
 
-        head_mask = head_mask.to(
-            dtype=self.dtype
-        )  # switch to float if need + fp16 compatibility
+        head_mask = head_mask.to(dtype=self.dtype)  # switch to float if need + fp16 compatibility
         return head_mask
 
-    def get_head_mask(
-        self, head_mask, num_hidden_layers: int, is_attention_chunked: bool = False
-    ):
+    def get_head_mask(self, head_mask, num_hidden_layers: int, is_attention_chunked: bool = False):
         """
         Prepare the head mask if needed.
         Args:
@@ -261,37 +232,21 @@ class TtT5Stack(nn.Module):
 
         # dtype fixed to torch.float16 (instead of self.dtype)
         # Added "/ 2" bec of Tt device preccision
-        encoder_extended_attention_mask = encoder_extended_attention_mask.to(
-            dtype=torch.float16
-        )  # fp16 compatibility
-        encoder_extended_attention_mask = (
-            (1.0 - encoder_extended_attention_mask) * torch.finfo(torch.float16).min / 2
-        )
+        encoder_extended_attention_mask = encoder_extended_attention_mask.to(dtype=torch.float16)  # fp16 compatibility
+        encoder_extended_attention_mask = (1.0 - encoder_extended_attention_mask) * torch.finfo(torch.float16).min / 2
         return encoder_extended_attention_mask
 
-    def get_encoder_extended_attention_mask(
-        self, encoder_attention_mask, encoder_batch_size, encoder_sequence_length
-    ):
+    def get_encoder_extended_attention_mask(self, encoder_attention_mask, encoder_batch_size, encoder_sequence_length):
         # Take from cache if we have it
         if self.cached_encoder_extended_attention_mask is not None:
-            if (
-                encoder_batch_size
-                == self.cached_encoder_extended_attention_mask.shape[0]
-            ):
-                if (
-                    encoder_sequence_length
-                    == self.cached_encoder_extended_attention_mask.shape[3]
-                ):
+            if encoder_batch_size == self.cached_encoder_extended_attention_mask.shape[0]:
+                if encoder_sequence_length == self.cached_encoder_extended_attention_mask.shape[3]:
                     return self.cached_encoder_extended_attention_mask
 
         if encoder_attention_mask is None:
-            encoder_attention_mask = torch.ones(
-                encoder_batch_size, encoder_sequence_length, dtype=torch.long
-            )
+            encoder_attention_mask = torch.ones(encoder_batch_size, encoder_sequence_length, dtype=torch.long)
 
-        encoder_extended_attention_mask = self.invert_attention_mask(
-            encoder_attention_mask
-        )
+        encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         self.cached_encoder_extended_attention_mask = encoder_extended_attention_mask
 
         return encoder_extended_attention_mask
@@ -312,19 +267,11 @@ class TtT5Stack(nn.Module):
         return_dict=None,
     ):
         use_cache = use_cache if use_cache is not None else self.config_use_cache
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config_output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config_output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config_output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config_output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config_use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config_use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
             err_msg_prefix = "decoder_" if self.is_decoder else ""
@@ -335,17 +282,13 @@ class TtT5Stack(nn.Module):
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
         elif inputs_embeds is not None:
-            input_shape = (inputs_embeds.shape()[1], inputs_embeds.shape()[2])
+            input_shape = (inputs_embeds.get_legacy_shape()[1], inputs_embeds.get_legacy_shape()[2])
         else:
             err_msg_prefix = "decoder_" if self.is_decoder else ""
-            raise ValueError(
-                f"You have to specify either {err_msg_prefix}input_ids or {err_msg_prefix}inputs_embeds"
-            )
+            raise ValueError(f"You have to specify either {err_msg_prefix}input_ids or {err_msg_prefix}inputs_embeds")
 
         if inputs_embeds is None:
-            assert (
-                self.embed_tokens is not None
-            ), "You have to initialize the model with valid token embeddings"
+            assert self.embed_tokens is not None, "You have to initialize the model with valid token embeddings"
             inputs_embeds = self.embed_tokens(input_ids)
 
             # Make it broadcastable to num_heads
@@ -355,16 +298,10 @@ class TtT5Stack(nn.Module):
         batch_size, seq_length = input_shape
 
         # required mask seq length can be calculated via length of past
-        mask_seq_length = (
-            past_key_values[0][0].shape[2] + seq_length
-            if past_key_values is not None
-            else seq_length
-        )
+        mask_seq_length = past_key_values[0][0].shape[2] + seq_length if past_key_values is not None else seq_length
 
         if use_cache is True:
-            assert (
-                self.is_decoder
-            ), f"`use_cache` can only be set to `True` if {self} is used as a decoder"
+            assert self.is_decoder, f"`use_cache` can only be set to `True` if {self} is used as a decoder"
 
         if attention_mask is None:
             attention_mask = torch.ones(batch_size, mask_seq_length)
@@ -375,9 +312,7 @@ class TtT5Stack(nn.Module):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        extended_attention_mask = self.get_extended_attention_mask(
-            attention_mask, input_shape
-        )
+        extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
 
         # Do not copy for now. Copy later.
         # Copy data to Tt device
@@ -391,7 +326,7 @@ class TtT5Stack(nn.Module):
                 _,
                 encoder_sequence_length,
                 _,
-            ) = encoder_hidden_states.shape()
+            ) = encoder_hidden_states.get_legacy_shape()
             encoder_extended_attention_mask = self.get_encoder_extended_attention_mask(
                 encoder_attention_mask, encoder_batch_size, encoder_sequence_length
             )
@@ -415,9 +350,7 @@ class TtT5Stack(nn.Module):
 
         # Prepare head mask if needed
         head_mask = self.get_head_mask(head_mask, self.config["num_layers"])
-        cross_attn_head_mask = self.get_head_mask(
-            cross_attn_head_mask, self.config["num_layers"]
-        )
+        cross_attn_head_mask = self.get_head_mask(cross_attn_head_mask, self.config["num_layers"])
         present_key_value_states = () if use_cache else None
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
@@ -428,9 +361,7 @@ class TtT5Stack(nn.Module):
         # hidden_states = self.dropout(inputs_embeds)
         hidden_states = inputs_embeds
 
-        for i, (layer_module, past_key_value) in enumerate(
-            zip(self.block, past_key_values)
-        ):
+        for i, (layer_module, past_key_value) in enumerate(zip(self.block, past_key_values)):
             layer_head_mask = head_mask[i]
             cross_attn_layer_head_mask = cross_attn_head_mask[i]
 
@@ -503,15 +434,11 @@ class TtT5Stack(nn.Module):
             position_bias = layer_outputs[2]
 
             if self.is_decoder and encoder_hidden_states is not None:
-                encoder_decoder_position_bias = layer_outputs[
-                    4 if output_attentions else 3
-                ]
+                encoder_decoder_position_bias = layer_outputs[4 if output_attentions else 3]
 
             # append next layer key value states
             if use_cache:
-                present_key_value_states = present_key_value_states + (
-                    present_key_value_state,
-                )
+                present_key_value_states = present_key_value_states + (present_key_value_state,)
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[3],)

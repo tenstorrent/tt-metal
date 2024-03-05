@@ -43,20 +43,20 @@ class TtLlamaMLP(nn.Module):
             self.act_fn = tt_lib.tensor.silu
 
         self.gate_proj_linear = TTLinear(
-            self.out_gate_proj.shape()[-1],
-            self.out_gate_proj.shape()[-2],
+            self.out_gate_proj.get_legacy_shape()[-1],
+            self.out_gate_proj.get_legacy_shape()[-2],
             self.out_gate_proj,
             self.bias,
         )
         self.up_proj_linear = TTLinear(
-            self.out_up_proj.shape()[-1],
-            self.out_up_proj.shape()[-2],
+            self.out_up_proj.get_legacy_shape()[-1],
+            self.out_up_proj.get_legacy_shape()[-2],
             self.out_up_proj,
             self.bias,
         )
         self.down_proj_linear = TTLinear(
-            self.out_down_proj.shape()[-1],
-            self.out_down_proj.shape()[-2],
+            self.out_down_proj.get_legacy_shape()[-1],
+            self.out_down_proj.get_legacy_shape()[-2],
             self.out_down_proj,
             self.bias,
         )

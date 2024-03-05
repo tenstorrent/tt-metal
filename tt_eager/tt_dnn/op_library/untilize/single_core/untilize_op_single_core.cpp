@@ -24,19 +24,19 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     CoreRange core({0, 0}, {0, 0});
 
-    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    uint32_t num_sticks = a.volume() / a.shape()[-1];
-    uint32_t stick_size = a.shape()[-1] * output.element_size();
+    uint32_t num_sticks = a.volume() / a.get_legacy_shape()[-1];
+    uint32_t stick_size = a.get_legacy_shape()[-1] * output.element_size();
 
-    uint32_t stick_s = a.shape()[-1];
+    uint32_t stick_s = a.get_legacy_shape()[-1];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
@@ -183,15 +183,15 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize) {
 
-    const Shape output_shape = output.shape();
+    const Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
-    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
-    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -204,14 +204,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t num_padded_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t num_unpadded_sticks = a.shape()[0] * a.shape()[1] * output_shape[2];
-    uint32_t padded_stick_size = a.shape()[3] * output.element_size(); // Assuming bfloat16 dataformat
+    uint32_t num_padded_sticks = a.get_legacy_shape()[0] * a.get_legacy_shape()[1] * a.get_legacy_shape()[2];
+    uint32_t num_unpadded_sticks = a.get_legacy_shape()[0] * a.get_legacy_shape()[1] * output_shape[2];
+    uint32_t padded_stick_size = a.get_legacy_shape()[3] * output.element_size(); // Assuming bfloat16 dataformat
     uint32_t unpadded_stick_size = output_shape[3] * output.element_size();
 
     constexpr uint32_t alignment = 32;
 
-    uint32_t num_tiles_in_row = a.shape()[3] / TILE_WIDTH;
+    uint32_t num_tiles_in_row = a.get_legacy_shape()[3] / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
@@ -239,9 +239,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     // Number of blocks that differ between input and output
     const uint32_t num_blocks_w_diff = num_blocks_w_input - num_blocks_w_output - (block_row_leftover_size > 0 ? 1 : 0);
 
-    const uint32_t padded_Y_diff_blocks = (a.shape()[2] - output_shape[2]) / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t padded_Z_diff_blocks = (a.shape()[1] - output_shape[1]) * a.shape()[2] / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t padded_W_diff_blocks = (a.shape()[0] - output_shape[0]) * a.shape()[1] * a.shape()[2] / TILE_HEIGHT * num_blocks_w_input;
+    const uint32_t padded_Y_diff_blocks = (a.get_legacy_shape()[2] - output_shape[2]) / TILE_HEIGHT * num_blocks_w_input;
+    const uint32_t padded_Z_diff_blocks = (a.get_legacy_shape()[1] - output_shape[1]) * a.get_legacy_shape()[2] / TILE_HEIGHT * num_blocks_w_input;
+    const uint32_t padded_W_diff_blocks = (a.get_legacy_shape()[0] - output_shape[0]) * a.get_legacy_shape()[1] * a.get_legacy_shape()[2] / TILE_HEIGHT * num_blocks_w_input;
     const uint32_t num_leftover_Y = output_shape[2] - output_shape[2] / TILE_HEIGHT * TILE_HEIGHT;
 
     uint32_t src0_cb_index = 0;

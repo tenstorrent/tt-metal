@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
         auto weight_tensor_p = tt::deprecated::permute(weight_tensor, {0, 2, 3, 1}); // NHWC
 
         // generate address map to generic reader kernel
-        std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> addr_ = gen_source_addresses_for_conv_act_layout_transform(tensor_p.get_shape(), conv_params, sizeof(bfloat16));
+        std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> addr_ = gen_source_addresses_for_conv_act_layout_transform(tensor_p.get_legacy_shape(), conv_params, sizeof(bfloat16));
         auto num_tiles_generated_with_source_addresses = std::get<0>(addr_);
         auto num_addresses_per_tile = std::get<1>(addr_);
         auto dram_read_size_bytes = std::get<2>(addr_);

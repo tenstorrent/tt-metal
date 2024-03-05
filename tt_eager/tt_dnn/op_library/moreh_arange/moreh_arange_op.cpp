@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks moreh_arange_(
     // split work
     // N and C are always 1
     // H is always TILE_HEIGHT
-    auto shape = input.shape();
+    auto shape = input.get_legacy_shape();
     auto W = shape[3];
     auto Wt = W / TILE_WIDTH;
 
@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks moreh_arange_(
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
     CreateCircularBuffer(
         program,

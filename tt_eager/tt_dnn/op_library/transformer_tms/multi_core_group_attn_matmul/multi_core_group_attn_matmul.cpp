@@ -21,7 +21,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     tt_metal::Program program{};
 
-    const auto& ashape = a.shape(), bshape = b.shape();
+    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -51,10 +51,10 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     }, compute_kernel_config);
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_data_format);
@@ -310,7 +310,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         tt_metal::Buffer *src1_buffer = b.buffer();
         tt_metal::Buffer *dst_buffer = output.buffer();
 
-        const auto& ashape = a.shape(), bshape = b.shape();
+        const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
         tt_metal::Device *device = a.device();
 

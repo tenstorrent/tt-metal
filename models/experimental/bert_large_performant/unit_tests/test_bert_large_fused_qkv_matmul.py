@@ -82,7 +82,7 @@ def run_bert_large_fused_qkv_matmul_test(
         logger.debug(f"bias is on: {bias_t.memory_config().buffer_type}")
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
-    assert t2.shape() == [9, 1, 384, 3072]
+    assert t2.get_legacy_shape() == [9, 1, 384, 3072]
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = tt_host_rm.to_torch()
 

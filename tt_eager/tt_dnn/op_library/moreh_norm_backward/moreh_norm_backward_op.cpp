@@ -26,8 +26,8 @@ namespace primary {
 
 namespace {
 inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
     TT_ASSERT(
         tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
     TT_ASSERT(
@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks MorehNormBackward::create_program(
 
     // Make input_grad
     auto created_input_grad =
-        create_device_tensor(input.shape(), input.dtype(), Layout::TILE, input.device(), input_grad_mem_config);
+        create_device_tensor(input.get_legacy_shape(), input.get_dtype(), Layout::TILE, input.device(), input_grad_mem_config);
     return moreh_norm_backward_impl(input, output, output_grad, p, created_input_grad);
 }
 

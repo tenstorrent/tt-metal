@@ -72,8 +72,8 @@ inline Tensor interleaved_to_sharded(
             ) {
                 grid_size = grid;
                 uint32_t num_cores = 0;
-                uint32_t total_height = input_tensor.volume() / input_tensor.shape()[-1];
-                uint32_t total_width = input_tensor.shape()[-1];
+                uint32_t total_height = input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
+                uint32_t total_width = input_tensor.get_legacy_shape()[-1];
                 switch (shard_scheme) {
                     case TensorMemoryLayout::HEIGHT_SHARDED: num_cores = div_up(total_height, shard_shape[0]); break;
                     case TensorMemoryLayout::WIDTH_SHARDED: num_cores = div_up(total_width, shard_shape[1]); break;
@@ -102,7 +102,7 @@ inline Tensor interleaved_to_sharded(
                    .shard_spec = shard_spec,
                    .sharded_op_type = ShardedOpType::InterleavedToSharded,
                    .output_mem_config = sharded_mem_config,
-                   .output_dtype = output_dtype.value_or(input_tensor.dtype())},
+                   .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
                {input_tensor})
         .at(0);
 }
@@ -152,7 +152,7 @@ inline Tensor interleaved_to_sharded(
                    .shard_spec = sharded_mem_config.shard_spec.value(),
                    .sharded_op_type = ShardedOpType::InterleavedToSharded,
                    .output_mem_config = sharded_mem_config,
-                   .output_dtype = output_dtype.value_or(input_tensor.dtype())},
+                   .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
                {input_tensor})
         .at(0);
 }
@@ -170,7 +170,7 @@ inline Tensor sharded_to_interleaved(
                    .shard_spec = shard_spec,
                    .sharded_op_type = ShardedOpType::ShardedToInterleaved,
                    .output_mem_config = output_mem_config,
-                   .output_dtype = output_dtype.value_or(input_tensor.dtype())},
+                   .output_dtype = output_dtype.value_or(input_tensor.get_dtype())},
                {input_tensor})
         .at(0);
 }

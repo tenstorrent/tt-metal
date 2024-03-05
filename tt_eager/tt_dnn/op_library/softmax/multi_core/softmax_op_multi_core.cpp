@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool causal_mask
 ) {
 
-    const auto shape = input_tensor.shape();
+    const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
 
@@ -48,13 +48,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t scalar_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t in0_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
 
-    tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     uint32_t out0_tile_size = tt_metal::detail::TileSize(out0_cb_data_format);
 
-    tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().get_dtype()) : tt::DataFormat::Float16_b;
     uint32_t mask_tile_size = tt_metal::detail::TileSize(mask_cb_data_format);
 
     tt::DataFormat im_cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         reader_compile_time_args.push_back(mask_is_dram);
     }
     if (causal_mask) {
-        uint32_t num_tiles_causal_mask = mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+        uint32_t num_tiles_causal_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
         reader_compile_time_args.push_back(num_tiles_causal_mask);
     }
 
@@ -250,7 +250,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         auto mask_buffer_address = optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
         auto dst_buffer_address = output_tensors.size() == 1 ? output_tensors.at(0).buffer()->address() : src_buffer_address;
 
-        const auto shape = input_tensors.at(0).shape();
+        const auto shape = input_tensors.at(0).get_legacy_shape();
         uint32_t W = shape[-1], H = (input_tensors.at(0).volume() / (shape[0] * shape[-1])), NC = shape[0];
         uint32_t HW = H*W;
 
@@ -357,13 +357,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t block_wt
 ) {
     // convert data format
-    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat im_cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
-    tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    // tt::DataFormat scale_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    // tt::DataFormat scale_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     // log_info(LogTest, "in0 dtype {}", in0_cb_data_format);
     // log_info(LogTest, "im dtype {}", in0_cb_data_format);
@@ -375,7 +375,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
-    const auto shape = input_tensor.shape();
+    const auto shape = input_tensor.get_legacy_shape();
     uint32_t M = shape[2] * shape[0];
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
@@ -451,9 +451,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         (std::uint32_t) is_dram_mask
     };
     std::map<string, string> softmax_defines;
-    bool use_row_major_kernel = (mask.has_value() and mask.value().layout() == Layout::ROW_MAJOR);
+    bool use_row_major_kernel = (mask.has_value() and mask.value().get_layout() == Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
-        auto mask_stick_size = mask.value().shape()[3] * mask.value().element_size();
+        auto mask_stick_size = mask.value().get_legacy_shape()[3] * mask.value().element_size();
         bool mask_stick_size_is_power_of_two = is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
@@ -575,17 +575,17 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
             if (shard_orient == ShardOrientation::COL_MAJOR) {
                 if (mask.has_value()) {
                     if (causal_mask) {
-                        mask_start_tile_id += mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                        mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
                     } else {
-                        mask_start_tile_id += use_row_major_kernel ? mask.value().shape()[-2] : mask.value().shape()[-1] / TILE_WIDTH;
+                        mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
                     }
                 }
             } else if (core_idx_x == num_cores_c - 1) {
                 if (mask.has_value()) {
                     if (causal_mask) {
-                        mask_start_tile_id += mask.value().shape()[-1] * mask.value().shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                        mask_start_tile_id += mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
                     } else {
-                        mask_start_tile_id += use_row_major_kernel ? mask.value().shape()[-2] : mask.value().shape()[-1] / TILE_WIDTH;
+                        mask_start_tile_id += use_row_major_kernel ? mask.value().get_legacy_shape()[-2] : mask.value().get_legacy_shape()[-1] / TILE_WIDTH;
                     }
                 }
             }

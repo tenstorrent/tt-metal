@@ -94,8 +94,8 @@ class TtTransformer(nn.Module):
         )
 
         mask: Optional[torch.Tensor] = None
-        if input_ids.shape()[-1] > 1:
-            seqlen = input_ids.shape()[-1]
+        if input_ids.get_legacy_shape()[-1] > 1:
+            seqlen = input_ids.get_legacy_shape()[-1]
             tensor = tt_lib.tensor.full(
                 (1, 1, seqlen, seqlen),
                 fill_value=1.0,
@@ -119,7 +119,7 @@ class TtTransformer(nn.Module):
         bcast_freq_xq.deallocate()
         bcast_freq_xk.deallocate()
         output = self.output(self.norm(h))
-        desired_output_shape = list(output.shape())
+        desired_output_shape = list(output.get_legacy_shape())
         desired_output_shape[2] = seqlen
         output = unpad_from_zero(output, desired_output_shape)
         output = torch_to_tt_tensor_rm(output, self.device, put_on_device=False)

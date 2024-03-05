@@ -18,9 +18,9 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
     tt_metal::Program program{};
     CoreRange core({0, 0}, {0, 0});
 
-    const auto& ashape = a.shape(), bshape = b.shape();
+    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
+    Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

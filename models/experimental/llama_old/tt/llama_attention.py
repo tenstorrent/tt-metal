@@ -146,10 +146,18 @@ class TtLlamaAttention(nn.Module):
 
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
 
-        self.query_linear = TTLinear(self.q_weights.shape()[-1], self.q_weights.shape()[-2], self.q_weights)
-        self.key_linear = TTLinear(self.k_weights.shape()[-1], self.k_weights.shape()[-2], self.k_weights)
-        self.value_linear = TTLinear(self.v_weights.shape()[-1], self.v_weights.shape()[-2], self.v_weights)
-        self.attn_linear = TTLinear(self.o_weights.shape()[-1], self.o_weights.shape()[-2], self.o_weights)
+        self.query_linear = TTLinear(
+            self.q_weights.get_legacy_shape()[-1], self.q_weights.get_legacy_shape()[-2], self.q_weights
+        )
+        self.key_linear = TTLinear(
+            self.k_weights.get_legacy_shape()[-1], self.k_weights.get_legacy_shape()[-2], self.k_weights
+        )
+        self.value_linear = TTLinear(
+            self.v_weights.get_legacy_shape()[-1], self.v_weights.get_legacy_shape()[-2], self.v_weights
+        )
+        self.attn_linear = TTLinear(
+            self.o_weights.get_legacy_shape()[-1], self.o_weights.get_legacy_shape()[-2], self.o_weights
+        )
 
         self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
 
@@ -168,8 +176,8 @@ class TtLlamaAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
-        bsz = hidden_states.shape()[0]
-        q_len = hidden_states.shape()[2]
+        bsz = hidden_states.get_legacy_shape()[0]
+        q_len = hidden_states.get_legacy_shape()[2]
         query = self.query_linear(hidden_states)
         query_states = shape_tt(query, bsz, q_len, self.num_heads, self.head_dim)
 
@@ -223,17 +231,17 @@ class TtLlamaAttention(nn.Module):
         # TODO: Fuse into softmax
         attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
 
-        if attn_weights.shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
+        if attn_weights.get_legacy_shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
                 f"Attention weights should be of size {(bsz * self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.shape()}"
+                f" {attn_weights.get_legacy_shape()}"
             )
 
         # change attention_mask to TT tensor
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.shape()}"
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.get_legacy_shape()}"
                 )
             # TT eltwise add operation, expand attention_mask shape
             attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
@@ -256,10 +264,10 @@ class TtLlamaAttention(nn.Module):
         attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
 
-        if attn_output.shape() != [bsz, self.num_heads, q_len, self.head_dim]:
+        if attn_output.get_legacy_shape() != [bsz, self.num_heads, q_len, self.head_dim]:
             raise ValueError(
                 f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.shape()}"
+                f" {attn_output.get_legacy_shape()}"
             )
 
         attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)

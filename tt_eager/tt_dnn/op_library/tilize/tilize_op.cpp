@@ -26,14 +26,14 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to tilize need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
 
-    auto width = input_tensor_a.shape()[-1];
+    auto width = input_tensor_a.get_legacy_shape()[-1];
     uint32_t stick_s =  width;
     uint32_t num_sticks = input_tensor_a.volume() / width;
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16);
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size(); // Assuming bfloat16 dataformat
 
@@ -52,7 +52,7 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
 
 std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto output_shape = input_tensor_a.shape();
+    auto output_shape = input_tensor_a.get_legacy_shape();
     return {output_shape};
 }
 
@@ -89,24 +89,24 @@ TilizeOpParallelizationStrategy Tilize::get_parallelization_strategy(const std::
 
 Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype, bool use_multicore) {
     // No-op (Will do a tensor copy)
-    if (input_tensor_a.layout() == Layout::TILE) {
+    if (input_tensor_a.get_layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
-    return operation::run_without_autoformat(Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.dtype()), use_multicore}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), use_multicore}, {input_tensor_a}).at(0);
 }
 
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16);
 
-    TT_FATAL(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
-    TT_FATAL(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);
-    TT_FATAL(input_tensor_a.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2]);
-    TT_FATAL(input_tensor_a.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3]);
+    TT_FATAL(input_tensor_a.get_legacy_shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
+    TT_FATAL(input_tensor_a.get_legacy_shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);
+    TT_FATAL(input_tensor_a.get_legacy_shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2]);
+    TT_FATAL(input_tensor_a.get_legacy_shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3]);
     TT_FATAL((this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0), "On device padding only supports padding at end of dims");
 
     uint32_t num_rows = this->output_tensor_shape[2];
@@ -117,15 +117,15 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
         TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
-        for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
-            if (i != input_tensor_a.shape().rank() - 2) {
-                TT_FATAL(input_tensor_a.shape()[i] == this->output_tensor_shape[i]);
+        for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
+            if (i != input_tensor_a.get_legacy_shape().rank() - 2) {
+                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == this->output_tensor_shape[i]);
             }
         }
     }
 }
 std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto input_shape = input_tensors.at(0).shape();
+    auto input_shape = input_tensors.at(0).get_legacy_shape();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
     for (auto index = 0; index < input_shape.rank(); index++) {
         auto front = this->input_tensor_start[index];
@@ -174,25 +174,25 @@ TilizeWithValPaddingOpParallelizationStrategy TilizeWithValPadding::get_parallel
 Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
-    if (input_tensor_a.layout() == Layout::TILE) {
-        if (output_tensor_shape == input_tensor_a.shape()) {
+    if (input_tensor_a.get_layout() == Layout::TILE) {
+        if (output_tensor_shape == input_tensor_a.get_legacy_shape()) {
             log_warning("Perf warning: tilize with padding called on already tilized tensor of target shape.");
             return input_tensor_a;
         } else {
             TT_FATAL(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
-    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
 
 }
 
 Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
     // No-op (Will do a tensor copy)
-    if (input_tensor_a.layout() == Layout::TILE) {
+    if (input_tensor_a.get_layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
     }
-    auto shape = input_tensor_a.shape();
+    auto shape = input_tensor_a.get_legacy_shape();
 
 
     shape[2] = round_up(shape[2], TILE_HEIGHT);

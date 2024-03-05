@@ -24,13 +24,13 @@ def bloom_gelu_forward(x: torch.Tensor) -> torch.Tensor:
 def tt_bloom_gelu_forward(x, device):
     z = x
 
-    k1 = torch.full(tuple(x.shape()), 0.5)
+    k1 = torch.full(tuple(x.get_legacy_shape()), 0.5)
     tt_k1 = bloom_utils.torch2tt_tensor(k1, device)
 
-    k2 = torch.full(tuple(x.shape()), 0.044715)
+    k2 = torch.full(tuple(x.get_legacy_shape()), 0.044715)
     tt_k2 = bloom_utils.torch2tt_tensor(k2, device)
 
-    k3 = torch.full(tuple(x.shape()), 0.79788456)
+    k3 = torch.full(tuple(x.get_legacy_shape()), 0.79788456)
     tt_k3 = bloom_utils.torch2tt_tensor(k3, device)
 
     # 0.5*x
@@ -50,7 +50,7 @@ def tt_bloom_gelu_forward(x, device):
     sumtanh = tt_lib.tensor.mul(tt_k3, factor3, output_mem_config=mem_config)
     tanh = tt_lib.tensor.tanh(sumtanh, output_mem_config=mem_config)
 
-    k4 = torch.full(tuple(x.shape()), 1.0)
+    k4 = torch.full(tuple(x.get_legacy_shape()), 1.0)
     tt_k4 = bloom_utils.torch2tt_tensor(k4, device)
 
     total = tt_lib.tensor.add(tt_k4, tanh, output_mem_config=mem_config)

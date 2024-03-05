@@ -146,7 +146,7 @@ class TtSwinLayer(nn.Module):
         else:
             pass
         height, width = input_dimensions
-        _, batch_size, _, channels = hidden_states.shape()
+        _, batch_size, _, channels = hidden_states.get_legacy_shape()
         shortcut = hidden_states
 
         hidden_states = self.LayerNorm_before(hidden_states)
@@ -156,7 +156,7 @@ class TtSwinLayer(nn.Module):
         # pad hidden_states to multiples of window size
         hidden_states, pad_values = self.maybe_pad(hidden_states, height, width)
 
-        _, height_pad, width_pad, _ = hidden_states.shape()
+        _, height_pad, width_pad, _ = hidden_states.get_legacy_shape()
         hidden_states = tt_to_torch_tensor(hidden_states)
         # cyclic shift
         if self.shift_size > 0:

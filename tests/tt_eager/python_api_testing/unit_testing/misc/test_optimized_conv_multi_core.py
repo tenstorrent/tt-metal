@@ -183,8 +183,8 @@ def test_run_optimized_conv(
             out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
             out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
-        assert list(out.shape()) == conv_output_shape
-        assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert list(out.get_legacy_shape()) == conv_output_shape
+        assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
 
         # Copy output to host and convert tt tensor to pytorch tensor
         out_result = out.to_torch().float()

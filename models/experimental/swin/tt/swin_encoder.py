@@ -52,9 +52,7 @@ class TtSwinEncoder(nn.Module):
                     ),
                     depth=config.depths[i_layer],
                     num_heads=config.num_heads[i_layer],
-                    downsample=TtSwinPatchMerging
-                    if (i_layer < self.num_layers - 1)
-                    else None,
+                    downsample=TtSwinPatchMerging if (i_layer < self.num_layers - 1) else None,
                     state_dict=state_dict,
                     base_address=f"{base_address}.layers.{i_layer}",
                     device=self.device,
@@ -81,14 +79,10 @@ class TtSwinEncoder(nn.Module):
         all_self_attentions = () if output_attentions else None
 
         if output_hidden_states:
-            _, batch_size, _, hidden_size = hidden_states.shape()
+            _, batch_size, _, hidden_size = hidden_states.get_legacy_shape()
 
-            reshaped_hidden_state = fallback_ops.reshape(
-                hidden_states, batch_size, *input_dimensions, hidden_size
-            )
-            reshaped_hidden_state = tt_lib.tensor.permute(
-                reshaped_hidden_state, (0, 3, 1, 2)
-            )
+            reshaped_hidden_state = fallback_ops.reshape(hidden_states, batch_size, *input_dimensions, hidden_size)
+            reshaped_hidden_state = tt_lib.tensor.permute(reshaped_hidden_state, (0, 3, 1, 2))
             all_hidden_states += (hidden_states,)
             all_reshaped_hidden_states += (reshaped_hidden_state,)
 
@@ -131,7 +125,7 @@ class TtSwinEncoder(nn.Module):
                     batch_size,
                     _,
                     hidden_size,
-                ) = hidden_states_before_downsampling.shape()
+                ) = hidden_states_before_downsampling.get_legacy_shape()
                 # rearrange b (h w) c -> b c h w
                 # here we use the original (not downsampled) height and width
                 reshaped_hidden_state = fallback_ops.reshape(
@@ -140,20 +134,16 @@ class TtSwinEncoder(nn.Module):
                     *(output_dimensions[0], output_dimensions[1]),
                     hidden_size,
                 )
-                reshaped_hidden_state = tt_lib.tensor.permute(
-                    reshaped_hidden_state, (0, 3, 1, 2)
-                )
+                reshaped_hidden_state = tt_lib.tensor.permute(reshaped_hidden_state, (0, 3, 1, 2))
                 all_hidden_states += (hidden_states_before_downsampling,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)
             elif output_hidden_states and not output_hidden_states_before_downsampling:
-                _, batch_size, _, hidden_size = hidden_states.shape()
+                _, batch_size, _, hidden_size = hidden_states.get_legacy_shape()
                 # rearrange b (h w) c -> b c h w
                 reshaped_hidden_state = fallback_ops.reshape(
                     reshaped_hidden_state, batch_size, *input_dimensions, hidden_size
                 )
-                reshaped_hidden_state = tt_lib.tensor.permute(
-                    reshaped_hidden_state, (0, 3, 1, 2)
-                )
+                reshaped_hidden_state = tt_lib.tensor.permute(reshaped_hidden_state, (0, 3, 1, 2))
                 all_hidden_states += (hidden_states,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)
 
@@ -161,11 +151,7 @@ class TtSwinEncoder(nn.Module):
                 all_self_attentions += layer_outputs[3:]
 
         if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, all_hidden_states, all_self_attentions]
-                if v is not None
-            )
+            return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
 
         return TtSwinEncoderOutput(
             last_hidden_state=hidden_states,

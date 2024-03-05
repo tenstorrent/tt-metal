@@ -105,11 +105,11 @@ class TtWhisperAttention(nn.Module):
             bsz,
             tgt_len,
             _,
-        ) = hidden_states.shape()
+        ) = hidden_states.get_legacy_shape()
 
         q_proj_output = linear(hidden_states, self.q_proj_weight, self.q_proj_bias)
 
-        q_proj_shape = q_proj_output.shape()
+        q_proj_shape = q_proj_output.get_legacy_shape()
 
         if q_proj_shape == self.cached_q_proj_shape:
             q_proj_mul_const = self.q_proj_mul_const
@@ -123,7 +123,7 @@ class TtWhisperAttention(nn.Module):
         if (
             is_cross_attention
             and past_key_value is not None
-            and past_key_value[0].shape[2] == key_value_states.shape()[1]
+            and past_key_value[0].shape[2] == key_value_states.get_legacy_shape()[1]
         ):
             # reuse k,v, cross_attentions
             key_states = past_key_value[0]
@@ -166,19 +166,19 @@ class TtWhisperAttention(nn.Module):
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
         key_states_transposed = tt_lib.tensor.transpose(key_states, -2, -1)
-        src_len = key_states.shape()[-2]
+        src_len = key_states.get_legacy_shape()[-2]
         attn_weights = tt_lib.tensor.bmm(query_states, key_states_transposed)
 
-        if attn_weights.shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
+        if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
                 f"Attention weights should be of size {(1, bsz * self.num_heads, tgt_len, src_len)}, but is"
-                f" {attn_weights.shape()}"
+                f" {attn_weights.get_legacy_shape()}"
             )
 
         if attention_mask is not None:
-            if attention_mask.shape() != [bsz, 1, tgt_len, src_len]:
+            if attention_mask.get_legacy_shape() != [bsz, 1, tgt_len, src_len]:
                 raise ValueError(
-                    f"Attention mask should be of size {[bsz, 1, tgt_len, src_len]}, but is {attention_mask.shape()}"
+                    f"Attention mask should be of size {[bsz, 1, tgt_len, src_len]}, but is {attention_mask.get_legacy_shape()}"
                 )
             # TTM implementation. Doesn't work for now
             torch_attn_weights = tt2torch_tensor(attn_weights)
@@ -190,10 +190,10 @@ class TtWhisperAttention(nn.Module):
         attn_weights = fallback_ops.softmax(attn_weights, dim=-1)
 
         if layer_head_mask is not None:
-            if layer_head_mask.shape() != [1, 1, 1, self.num_heads]:
+            if layer_head_mask.get_legacy_shape() != [1, 1, 1, self.num_heads]:
                 raise ValueError(
                     f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-                    f" {layer_head_mask.shape()}"
+                    f" {layer_head_mask.get_legacy_shape()}"
                 )
 
             layer_head_mask_reshaped = fallback_ops.reshape(layer_head_mask, 1, -1, 1, 1)
@@ -229,10 +229,10 @@ class TtWhisperAttention(nn.Module):
         attn_output = tt_lib.tensor.bmm(attn_probs, value_states)
         value_states.deallocate()
 
-        if attn_output.shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
+        if attn_output.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
             raise ValueError(
                 f"`attn_output` should be of size {(bsz * self.num_heads, tgt_len, self.head_dim)}, but is"
-                f" {attn_output.shape()}"
+                f" {attn_output.get_legacy_shape()}"
             )
         attn_output = tt_lib.tensor.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
         attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)

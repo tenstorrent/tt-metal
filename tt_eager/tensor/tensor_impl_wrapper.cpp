@@ -43,7 +43,7 @@ Tensor to_host_wrapper(const Tensor &tensor, bool blocking) {
         {DataType::BFLOAT8_B, &to_host<uint32_t>},
         {DataType::UINT16, &to_host<uint16_t>},
     };
-    return to_host_map.at(tensor.dtype())(tensor, blocking);
+    return to_host_map.at(tensor.get_dtype())(tensor, blocking);
 }
 
 
@@ -55,7 +55,7 @@ Tensor to_extract_shard_wrapper(const Tensor &tensor, const uint32_t & core_id) 
         {DataType::BFLOAT8_B, &extract_shard<uint32_t>},
         {DataType::UINT16, &extract_shard<uint16_t>},
     };
-    return to_host_map.at(tensor.dtype())(tensor, core_id);
+    return to_host_map.at(tensor.get_dtype())(tensor, core_id);
 }
 
 Tensor to_host_wrapper_sharded(const Tensor &tensor) {
@@ -66,7 +66,7 @@ Tensor to_host_wrapper_sharded(const Tensor &tensor) {
         {DataType::BFLOAT8_B, &to_host_sharded<uint32_t>},
         {DataType::UINT16, &to_host_sharded<uint16_t>},
     };
-    return to_host_map.at(tensor.dtype())(tensor);
+    return to_host_map.at(tensor.get_dtype())(tensor);
 }
 
 Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config, std::optional< std::reference_wrapper<CommandQueue> > q) {
@@ -78,7 +78,7 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
             {DataType::BFLOAT8_B, &to_device<uint32_t>},
             {DataType::UINT16, &to_device<uint16_t>},
         };
-    return to_device_map.at(tensor.dtype())(tensor, target_device, mem_config, q);
+    return to_device_map.at(tensor.get_dtype())(tensor, target_device, mem_config, q);
 }
 
 
@@ -90,7 +90,7 @@ Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
         {DataType::BFLOAT8_B, &to_layout_bfloat8_b},
         {DataType::UINT16, &to_layout<uint16_t>},
     };
-    return to_layout_map.at(tensor.dtype())(tensor, target_layout);
+    return to_layout_map.at(tensor.get_dtype())(tensor, target_layout);
 }
 
 Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) {
@@ -102,7 +102,7 @@ Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const
             {DataType::BFLOAT8_B, &pad_bfloat8_b},
             {DataType::UINT16, &pad<uint16_t>},
         };
-    return pad_map.at(tensor.dtype())(tensor, output_tensor_shape, input_tensor_start, pad_value);
+    return pad_map.at(tensor.get_dtype())(tensor, output_tensor_shape, input_tensor_start, pad_value);
 }
 
 Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, const Shape &output_tensor_end) {
@@ -113,7 +113,7 @@ Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, con
         {DataType::BFLOAT8_B, &unpad_bfloat8_b},
         {DataType::UINT16, &unpad<uint16_t>},
     };
-    return unpad_map.at(tensor.dtype())(tensor, output_tensor_start, output_tensor_end);
+    return unpad_map.at(tensor.get_dtype())(tensor, output_tensor_start, output_tensor_end);
 }
 
 std::string to_string_wrapper(const Tensor &tensor) {
@@ -125,7 +125,7 @@ std::string to_string_wrapper(const Tensor &tensor) {
             {DataType::BFLOAT8_B, &to_string<uint32_t>},
             {DataType::UINT16, &to_string<uint16_t>},
         };
-    return to_string_map.at(tensor.dtype())(tensor, std::nullopt);
+    return to_string_map.at(tensor.get_dtype())(tensor, std::nullopt);
 }
 
 }  // namespace tensor_impl

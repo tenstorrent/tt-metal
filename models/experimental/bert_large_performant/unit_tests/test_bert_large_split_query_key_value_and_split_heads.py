@@ -46,14 +46,14 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
     assert q.memory_config().buffer_type == out_mem_config.buffer_type
     assert k.memory_config().buffer_type == out_mem_config.buffer_type
     assert v.memory_config().buffer_type == out_mem_config.buffer_type
-    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"q: {q.memory_config().buffer_type} and {q.dtype()}")
-    logger.debug(f"k: {k.memory_config().buffer_type} and {k.dtype()}")
-    logger.debug(f"v: {v.memory_config().buffer_type} and {v.dtype()}")
+    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.get_dtype()}")
+    logger.debug(f"q: {q.memory_config().buffer_type} and {q.get_dtype()}")
+    logger.debug(f"k: {k.memory_config().buffer_type} and {k.get_dtype()}")
+    logger.debug(f"v: {v.memory_config().buffer_type} and {v.get_dtype()}")
 
-    assert q.shape() == [batch, 16, 384, 64]
-    assert k.shape() == [batch, 16, 64, 384]
-    assert v.shape() == [batch, 16, 384, 64]
+    assert q.get_legacy_shape() == [batch, 16, 384, 64]
+    assert k.get_legacy_shape() == [batch, 16, 64, 384]
+    assert v.get_legacy_shape() == [batch, 16, 384, 64]
 
     tt_host_rm_q = q.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_q = tt_host_rm_q.to_torch()

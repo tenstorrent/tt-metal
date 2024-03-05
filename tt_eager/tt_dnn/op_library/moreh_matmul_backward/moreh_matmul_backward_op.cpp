@@ -49,14 +49,14 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
     if (input_grad) {
         const auto& input_grad_tensor = input_grad->get();
         if (is_same_batch_shape(output_grad, input_grad_tensor)) {
-            const auto& input_grad_shape = input_grad_tensor.shape().without_padding();
-            const auto& output_grad_shape = output_grad.shape().without_padding();
+            const auto& input_grad_shape = input_grad_tensor.get_legacy_shape().without_padding();
+            const auto& output_grad_shape = output_grad.get_legacy_shape().without_padding();
             moreh_matmul(output_grad, other, input_grad_tensor, false, true, output_mem_config);
         } else {
-            const auto& input_shape = input.shape().without_padding();
+            const auto& input_shape = input.get_legacy_shape().without_padding();
             const auto& temp_input_grad =
                 moreh_matmul(output_grad, other, std::nullopt, false, true, output_mem_config);
-            auto reduce_dims = find_reduce_dim(temp_input_grad.shape(), input_grad_tensor.shape());
+            auto reduce_dims = find_reduce_dim(temp_input_grad.get_legacy_shape(), input_grad_tensor.get_legacy_shape());
             moreh_sum(temp_input_grad, input_grad_tensor, reduce_dims);
         }
         outputs.push_back(input_grad_tensor);
@@ -71,7 +71,7 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         } else {
             const auto& temp_other_grad =
                 moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
-            auto reduce_dims = find_reduce_dim(temp_other_grad.shape(), other_grad_tensor.shape());
+            auto reduce_dims = find_reduce_dim(temp_other_grad.get_legacy_shape(), other_grad_tensor.get_legacy_shape());
             moreh_sum(temp_other_grad, other_grad_tensor, reduce_dims);
         }
         outputs.push_back(other_grad_tensor);

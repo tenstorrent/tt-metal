@@ -182,7 +182,7 @@ class TTPyMaxPool(TTPyOp):
             shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
             shard_halo = False
             shard_spec = ttl.tensor.ShardSpec(
-                self.shard_grid, [1, reader_indices_tt_tensor.shape()[-1]], shard_orientation, shard_halo
+                self.shard_grid, [1, reader_indices_tt_tensor.get_legacy_shape()[-1]], shard_orientation, shard_halo
             )
             mem_config = ttl.tensor.MemoryConfig(self.shard_layout, ttl.tensor.BufferType.L1, shard_spec)
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(self.device, mem_config)
@@ -233,7 +233,7 @@ class TTPyMaxPool(TTPyOp):
         interleaved_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
         )
-        in_shape = input.shape()
+        in_shape = input.get_legacy_shape()
         in_c = in_shape[-1]
         in_n = self.sliding_window_op_params.batch_size
         in_h = self.sliding_window_op_params.input_h
@@ -243,7 +243,7 @@ class TTPyMaxPool(TTPyOp):
         ## this op expects input tensor as { N, 1, H * W, C } or { 1, 1, N * H * W, C }
 
         in_hw = in_h * in_w
-        if input.dtype() == ttl.tensor.DataType.BFLOAT8_B:
+        if input.get_dtype() == ttl.tensor.DataType.BFLOAT8_B:
             ## currently the case when the input is bfp8_b and height is not divible by tile height is not supported. TODO.
             assert in_hw % 32 == 0, "For BFP8_B datatype, input height * width should be multiple of 32"
             ## last two dims are multiple of tile size (padded if needed)
@@ -255,7 +255,7 @@ class TTPyMaxPool(TTPyOp):
 
         act_reshaped = input.reshape(act_shape).to(self.device, interleaved_mem_config)
 
-        # padded_shape = ttl.tensor.pad_to_tile_shape(act_reshaped.shape(), False, False, False, True)
+        # padded_shape = ttl.tensor.pad_to_tile_shape(act_reshaped.get_legacy_shape(), False, False, False, True)
         # act_reshaped = ttl.tensor.format_input_tensor(
         #             act_reshaped,
         #             self.device,

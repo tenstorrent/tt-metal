@@ -47,7 +47,7 @@ def test_tile_simple_concat(memcfg, dtype, nChannels, device, function_level_def
     assert tt_cpu.shape == torch.Size(output_shape)
 
     tt = ttl.tensor.concat(xtt, dim)
-    assert list(tt.shape()) == output_shape
+    assert list(tt.get_legacy_shape()) == output_shape
     xtt_data = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     tt_dev = xtt_data.to_torch()
 
@@ -103,7 +103,7 @@ def test_tile_concat(shape_a, shape_b, dim, device, function_level_defaults):
     assert tt_cpu.shape == torch.Size(output_shape)
 
     tt = ttl.tensor.concat([xtt[0], xtt[1]], dim)
-    assert list(tt.shape()) == output_shape
+    assert list(tt.get_legacy_shape()) == output_shape
     tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     passing, output = comp_equal(tt_cpu, tt_dev)

@@ -102,12 +102,10 @@ class TtSSD(nn.Module):
 
     def get_in_channels(self, backbone: TtSSDLiteFeatureExtractorMobileNet):
         size = (320, 320)
-        temporary_image = tt_lib.tensor.ones(
-            [1, 3, size[1], size[0]], device=self.device
-        )
+        temporary_image = tt_lib.tensor.ones([1, 3, size[1], size[0]], device=self.device)
         backbone.eval()
         features = backbone(temporary_image)
-        out_channels = [tensor.shape()[1] for i, tensor in features.items()]
+        out_channels = [tensor.get_legacy_shape()[1] for i, tensor in features.items()]
         return out_channels
 
     def postprocess_detections(
@@ -119,13 +117,11 @@ class TtSSD(nn.Module):
         bbox_regression = head_outputs["bbox_regression"]
         pred_scores = fallback_ops.softmax(head_outputs["cls_logits"], dim=-1)
 
-        num_classes = pred_scores.shape()[-1]
+        num_classes = pred_scores.get_legacy_shape()[-1]
 
         detections: List[Dict[str, tt_lib.tensor.Tensor]] = []
 
-        boxes = (
-            tt_to_torch_tensor(bbox_regression).to(torch.float).squeeze(0).squeeze(0)
-        )
+        boxes = tt_to_torch_tensor(bbox_regression).to(torch.float).squeeze(0).squeeze(0)
         anchors = tt_to_torch_tensor(image_anchors[0]).squeeze(0).squeeze(0)
         scores = tt_to_torch_tensor(pred_scores).to(torch.float).squeeze(0).squeeze(0)
 
@@ -149,9 +145,7 @@ class TtSSD(nn.Module):
 
             image_boxes.append(box)
             image_scores.append(score)
-            image_labels.append(
-                torch.full_like(score, fill_value=label, dtype=torch.int64)
-            )
+            image_labels.append(torch.full_like(score, fill_value=label, dtype=torch.int64))
 
         image_boxes = torch.cat(image_boxes, dim=0)
         image_scores = torch.cat(image_scores, dim=0)
@@ -178,7 +172,7 @@ class TtSSD(nn.Module):
     ) -> List[Dict[str, tt_lib.tensor.Tensor]]:
         original_image_sizes: List[tuple[int, int]] = []
 
-        val = image.shape()[-2:]
+        val = image.get_legacy_shape()[-2:]
         original_image_sizes.append((val[0], val[1]))
 
         image = tt_to_torch_tensor(image)
@@ -196,7 +190,5 @@ class TtSSD(nn.Module):
         detections: List[Dict[str, tt_lib.tensor.Tensor]] = []
 
         detections = self.postprocess_detections(head_outputs, anchors, image_shape[0])
-        detections = self.transform.postprocess(
-            detections, image_shape, original_image_sizes
-        )
+        detections = self.transform.postprocess(detections, image_shape, original_image_sizes)
         return detections

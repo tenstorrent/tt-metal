@@ -54,19 +54,19 @@ operation::ProgramWithCallbacks embeddings_tilized(
     uint32_t weights_element_size_bytes = weights.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.shape()[-1] * weights_element_size_bytes;
+    uint32_t input_page_size = a.get_legacy_shape()[-1] * input_element_size_bytes;
+    uint32_t weight_page_size = weights.get_legacy_shape()[-1] * weights_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.shape()[-2];
+    uint32_t num_embeddings = weights.get_legacy_shape()[-2];
 
-    uint32_t batch_size = a.shape()[0];
-    uint32_t num_output_rows_per_batch = a.shape()[-1];
+    uint32_t batch_size = a.get_legacy_shape()[0];
+    uint32_t num_output_rows_per_batch = a.get_legacy_shape()[-1];
     uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
     uint32_t num_blocks = num_output_rows / TILE_HEIGHT;
     uint32_t num_blocks_per_batch = num_output_rows_per_batch / TILE_HEIGHT;
 
-    auto num_embedding_dims = weights.shape()[-1];
+    auto num_embedding_dims = weights.get_legacy_shape()[-1];
 
     // setup problem and grid size
     uint32_t start_core_x = 0;
@@ -83,15 +83,15 @@ operation::ProgramWithCallbacks embeddings_tilized(
     uint32_t g2_numcores = core_group_2.num_cores();
 
     // Create Buffers
-    uint32_t num_tiles_per_block = weights.shape()[-1] / TILE_WIDTH;
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t num_tiles_per_block = weights.get_legacy_shape()[-1] / TILE_WIDTH;
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
     uint32_t weights_single_tile_size = tt_metal::detail::TileSize(weights_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t buffering = weights.shape()[-1] > 2048 ? 1 : 2;
+    uint32_t buffering = weights.get_legacy_shape()[-1] > 2048 ? 1 : 2;
 
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config =
@@ -296,22 +296,22 @@ operation::ProgramWithCallbacks embeddings_rm(
     uint32_t output_element_size_bytes = output.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.shape()[-1] * weights_element_size_bytes;
-    uint32_t output_page_size = output.shape()[-1] * output_element_size_bytes;
+    uint32_t input_page_size = a.get_legacy_shape()[-1] * input_element_size_bytes;
+    uint32_t weight_page_size = weights.get_legacy_shape()[-1] * weights_element_size_bytes;
+    uint32_t output_page_size = output.get_legacy_shape()[-1] * output_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.shape()[-2];
+    uint32_t num_embeddings = weights.get_legacy_shape()[-2];
 
-    uint32_t batch_size = a.shape()[0];
-    uint32_t num_output_rows_per_batch = a.shape()[-1];
+    uint32_t batch_size = a.get_legacy_shape()[0];
+    uint32_t num_output_rows_per_batch = a.get_legacy_shape()[-1];
     uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
     constexpr uint32_t alignment = 32;
     uint32_t block_height = (alignment / input_element_size_bytes);
     uint32_t num_blocks = num_output_rows;
     uint32_t num_blocks_per_batch = num_output_rows_per_batch;
 
-    auto num_embedding_dims = weights.shape()[-1];
+    auto num_embedding_dims = weights.get_legacy_shape()[-1];
 
     // setup problem and grid size
     uint32_t start_core_x = 0;
@@ -328,10 +328,10 @@ operation::ProgramWithCallbacks embeddings_rm(
     uint32_t g2_numcores = core_group_2.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t src0_cb_index = 0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
@@ -495,25 +495,25 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
     auto &a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
-    TT_FATAL(a.layout() == Layout::ROW_MAJOR);
-    TT_FATAL(weights.layout() == Layout::ROW_MAJOR);
-    TT_FATAL(a.dtype() == DataType::UINT32, "Input must be UINT32");
-    TT_FATAL(weights.dtype() == DataType::BFLOAT16);
+    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(a.get_dtype() == DataType::UINT32, "Input must be UINT32");
+    TT_FATAL(weights.get_dtype() == DataType::BFLOAT16);
     TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
 
-    TT_FATAL(weights.shape()[0] == 1 && weights.shape()[1] == 1, "First two dimensions for the weights must be 1");
+    TT_FATAL(weights.get_legacy_shape()[0] == 1 && weights.get_legacy_shape()[1] == 1, "First two dimensions for the weights must be 1");
     if (this->tilized) {
-        TT_FATAL(a.shape()[-1] % TILE_HEIGHT == 0);
-        TT_FATAL(weights.shape()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
+        TT_FATAL(a.get_legacy_shape()[-1] % TILE_HEIGHT == 0);
+        TT_FATAL(weights.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
     } else {
         TT_FATAL(this->output_dtype != DataType::BFLOAT8_B);
     }
-    TT_FATAL(a.shape()[1] == 1 && a.shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     switch (this->embeddings_type) {
         case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value()); break;
-        case EmbeddingsType::BINARY: TT_FATAL(weights.shape()[-2] == 2);
+        case EmbeddingsType::BINARY: TT_FATAL(weights.get_legacy_shape()[-2] == 2);
         default: TT_FATAL(!this->pad_token.has_value());
     }
 }
@@ -521,9 +521,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
 std::vector<Shape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &weight_tensor = input_tensors.at(1);
-    auto num_output_embeddings = input_tensor.shape()[3];
-    auto batch_num = input_tensor.shape()[0];
-    auto num_embedding_dims = weight_tensor.shape()[3];
+    auto num_output_embeddings = input_tensor.get_legacy_shape()[3];
+    auto batch_num = input_tensor.get_legacy_shape()[0];
+    auto num_embedding_dims = weight_tensor.get_legacy_shape()[3];
 
     Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     return {output_shape};

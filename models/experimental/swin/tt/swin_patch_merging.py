@@ -37,16 +37,10 @@ class TtSwinPatchMerging(nn.Module):
             state_dict[f"{base_address}.downsample.reduction.weight"], self.device
         )
 
-        self.gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.downsample.norm.weight"], self.device
-        )
-        self.beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.downsample.norm.bias"], self.device
-        )
+        self.gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.downsample.norm.weight"], self.device)
+        self.beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.downsample.norm.bias"], self.device)
 
-        self.norm = fallback_ops.LayerNorm(
-            self.gamma, self.beta, normalized_shape=4 * dim, eps=config.layer_norm_eps
-        )
+        self.norm = fallback_ops.LayerNorm(self.gamma, self.beta, normalized_shape=4 * dim, eps=config.layer_norm_eps)
 
     def maybe_pad(self, input_feature, height, width):
         should_pad = (height % 2 == 1) or (width % 2 == 1)
@@ -56,15 +50,11 @@ class TtSwinPatchMerging(nn.Module):
 
         return input_feature
 
-    def forward(
-        self, input_feature: tt_lib.tensor.Tensor, input_dimensions: Tuple[int, int]
-    ) -> tt_lib.tensor.Tensor:
+    def forward(self, input_feature: tt_lib.tensor.Tensor, input_dimensions: Tuple[int, int]) -> tt_lib.tensor.Tensor:
         height, width = input_dimensions
-        _, batch_size, dim, num_channels = input_feature.shape()
+        _, batch_size, dim, num_channels = input_feature.get_legacy_shape()
 
-        input_feature = fallback_ops.reshape(
-            input_feature, batch_size, height, width, num_channels
-        )
+        input_feature = fallback_ops.reshape(input_feature, batch_size, height, width, num_channels)
 
         input_feature = self.maybe_pad(input_feature, height, width)
         input_feature = tt_to_torch_tensor(input_feature)
@@ -83,13 +73,9 @@ class TtSwinPatchMerging(nn.Module):
         input_feature_2 = torch_to_tt_tensor_rm(input_feature_2, self.device)
         input_feature_3 = torch_to_tt_tensor_rm(input_feature_3, self.device)
 
-        input_feature = tt_lib.tensor.concat(
-            [input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1
-        )
+        input_feature = tt_lib.tensor.concat([input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1)
 
-        input_feature = fallback_ops.reshape(
-            input_feature, 1, batch_size, -1, 4 * num_channels
-        )
+        input_feature = fallback_ops.reshape(input_feature, 1, batch_size, -1, 4 * num_channels)
 
         input_feature = self.norm(input_feature)
         input_feature = TtLinear(input_feature, self.reduction_weight)

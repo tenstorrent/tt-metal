@@ -24,15 +24,15 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
     Program program{};
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_unit_size = input.shape()[-1] * input.element_size();
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_unit_size = output.shape()[-1] * output.element_size();
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    uint32_t input_unit_size = input.get_legacy_shape()[-1] * input.element_size();
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t output_unit_size = output.get_legacy_shape()[-1] * output.element_size();
 
-    uint32_t output_num_units = output.volume() / output.shape()[-1]; // N*H*W for outout
-    uint32_t input_num_units = input.volume() / input.shape()[-1];  // N*H*W for input
+    uint32_t output_num_units = output.volume() / output.get_legacy_shape()[-1]; // N*H*W for outout
+    uint32_t input_num_units = input.volume() / input.get_legacy_shape()[-1];  // N*H*W for input
 
-    auto output_shape = output.shape();
+    auto output_shape = output.get_legacy_shape();
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = output.device();
 

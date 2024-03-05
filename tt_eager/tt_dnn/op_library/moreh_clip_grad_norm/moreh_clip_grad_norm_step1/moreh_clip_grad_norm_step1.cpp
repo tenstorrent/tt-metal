@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     origin_hw_vec.reserve(num_inputs);
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
-        const auto& input_shape_without_padding = inputs.at(j).shape().without_padding();
+        const auto& input_shape_without_padding = inputs.at(j).get_legacy_shape().without_padding();
         origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
     }
 
@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     const uint32_t im4_t = 1;  // exp(log(|x|) * decimal)
     const uint32_t im5_t = 1;  // |x|^p * exp(log(|x|) * decimal)
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
 
     CreateCircularBuffer(
         program,

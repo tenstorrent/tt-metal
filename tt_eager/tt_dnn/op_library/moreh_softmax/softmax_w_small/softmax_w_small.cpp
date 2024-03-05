@@ -22,10 +22,10 @@ namespace primary {
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
-    auto w = tensor.shape()[3];
+    auto w = tensor.get_legacy_shape()[3];
     int32_t Wt = (w + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
 
     auto tile_size = tt_metal::detail::TileSize(data_format);
 
@@ -43,7 +43,7 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
 operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
-    auto shape = input.shape();
+    auto shape = input.get_legacy_shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
     CreateCircularBuffer(
         program,

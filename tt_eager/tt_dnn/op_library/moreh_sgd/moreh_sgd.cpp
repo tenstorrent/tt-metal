@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     bool momentum_initialized,
     const CoreRange core_range) {
     // split work
-    auto shape = param_in.shape();
+    auto shape = param_in.get_legacy_shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(param_in.dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
 
     CreateCircularBuffer(
         program,

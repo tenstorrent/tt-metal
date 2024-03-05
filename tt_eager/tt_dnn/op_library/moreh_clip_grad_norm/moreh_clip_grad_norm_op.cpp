@@ -17,8 +17,8 @@ namespace primary {
 
 namespace {
 inline void check_tensor(const Tensor &tensor, const std::string &op_name) {
-    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
     TT_ASSERT(
         tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
     TT_ASSERT(
@@ -208,7 +208,7 @@ Tensor moreh_clip_grad_norm_impl(
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     Shape tmp_pow_sum_shape{1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs};
     const auto &tmp_pow_sum =
-        create_device_tensor(tmp_pow_sum_shape, inputs.at(0).dtype(), Layout::TILE, inputs.at(0).device());
+        create_device_tensor(tmp_pow_sum_shape, inputs.at(0).get_dtype(), Layout::TILE, inputs.at(0).device());
 
     if (total_norm.has_value() && (total_norm != std::nullopt)) {
         return moreh_clip_grad_norm_impl(
@@ -219,7 +219,7 @@ Tensor moreh_clip_grad_norm_impl(
     Padding padding{{{0, 0}, {0, 0}, {0, TILE_HEIGHT - 1}, {0, TILE_WIDTH - 1}}, Padding::PadValue::Zero};
     Shape total_norm_shape{{1, 1, TILE_HEIGHT, TILE_WIDTH}, padding};
     const auto &created_total_norm = create_device_tensor(
-        total_norm_shape, inputs.at(0).dtype(), Layout::TILE, inputs.at(0).device(), output_mem_config);
+        total_norm_shape, inputs.at(0).get_dtype(), Layout::TILE, inputs.at(0).device(), output_mem_config);
 
     return moreh_clip_grad_norm_impl(inputs, max_norm, norm_type, error_if_nonfinite, tmp_pow_sum, created_total_norm);
 }

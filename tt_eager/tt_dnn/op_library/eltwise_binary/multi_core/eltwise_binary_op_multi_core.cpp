@@ -22,11 +22,11 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
     Program program{};
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -225,8 +225,8 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
                 block_width = shard_spec.value().shape[1] / TILE_WIDTH;
                 block_size = block_width * block_height;
                 end_core = (*shard_spec.value().grid.ranges().begin()).end;
-                output_width = output.shape()[-1] / TILE_WIDTH;
-                uint32_t output_height = output.volume() / output.shape()[-1] / TILE_HEIGHT;
+                output_width = output.get_legacy_shape()[-1] / TILE_WIDTH;
+                uint32_t output_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
                 last_unpadded_block_height = block_height -  (round_up(output_height, block_height) - output_height);
                 last_unpadded_block_width = block_width -  (round_up(output_width, block_width) - output_width);
             }

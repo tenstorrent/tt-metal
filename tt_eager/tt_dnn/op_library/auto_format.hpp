@@ -77,7 +77,7 @@ class AutoFormat {
 
 
         static bool check_input_tensor_format(const Tensor &a, const Shape& shape, Layout target_layout = Layout::TILE) {
-            if (a.layout() == target_layout && a.shape() == shape && a.storage_type() == StorageType::DEVICE) {
+            if (a.get_layout() == target_layout && a.get_legacy_shape() == shape && a.storage_type() == StorageType::DEVICE) {
                 return true;
             }
             return false;

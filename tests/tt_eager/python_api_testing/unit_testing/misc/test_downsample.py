@@ -100,11 +100,11 @@ def test_run_downsample(
             buffer_type=ttl.tensor.BufferType.L1,
         ),
     )
-    assert A_interleaved.shape()[0] == 1 and A_interleaved.shape()[1] == 1
+    assert A_interleaved.get_legacy_shape()[0] == 1 and A_interleaved.get_legacy_shape()[1] == 1
 
     # image flattened params
-    input_2d_height = A_interleaved.shape()[2]
-    input_2d_width = A_interleaved.shape()[3]
+    input_2d_height = A_interleaved.get_legacy_shape()[2]
+    input_2d_width = A_interleaved.get_legacy_shape()[3]
     input_2d_height_padded = _nearest_y(input_2d_height, num_cores_height_slices * 32)
     input_shard_height = (int)(input_2d_height_padded / num_cores_height_slices)
     output_2d_height_padded = _nearest_y(batch_size * output_height * output_width, num_cores_height_slices * 32)
@@ -151,7 +151,7 @@ def test_run_downsample(
     )
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size * output_height * output_width, 32), input_channels]
-    assert out_shape == list(out.shape())
+    assert out_shape == list(out.get_legacy_shape())
     out_shape_unpadded = [1, 1, batch_size * output_height * output_width, input_channels]
     assert out_shape_unpadded == list(out.shape_without_padding())
     out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
@@ -195,7 +195,7 @@ def test_run_downsample(
     logger.debug(f"Num errors: {num_errors}")
 
     out = out.reshape(batch_size, output_height, output_width, input_channels)
-    assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
+    assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
 
     # Copy output to host and convert tt tensor to pytorch tensor
     out_result = out.to_torch().float()

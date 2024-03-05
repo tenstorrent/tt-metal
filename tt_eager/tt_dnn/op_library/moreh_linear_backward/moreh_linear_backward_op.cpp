@@ -96,9 +96,9 @@ inline void moreh_linear_backward_validate(
         const auto& temp_weight_grad = moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
         const auto& transposed_weight_grad = transpose(temp_weight_grad, 2, 3);
         // transpose op does not set the transposed shape.
-        auto transposed_weight_grad_shape = weight_grad->get().shape();
-        transposed_weight_grad_shape[0] = temp_weight_grad.shape()[0];
-        transposed_weight_grad_shape[1] = temp_weight_grad.shape()[1];
+        auto transposed_weight_grad_shape = weight_grad->get().get_legacy_shape();
+        transposed_weight_grad_shape[0] = temp_weight_grad.get_legacy_shape()[0];
+        transposed_weight_grad_shape[1] = temp_weight_grad.get_legacy_shape()[1];
         const auto& reshaped_weight_grad = transposed_weight_grad.reshape(transposed_weight_grad_shape);
         std::vector<int64_t> dims {0, 1};
         moreh_sum(reshaped_weight_grad, weight_grad->get(), dims);

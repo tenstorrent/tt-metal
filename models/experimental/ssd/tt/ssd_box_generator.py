@@ -38,10 +38,7 @@ class TtDefaultBoxGenerator(nn.Module):
         if scales is None:
             if num_outputs > 1:
                 range_ratio = max_ratio - min_ratio
-                self.scales = [
-                    min_ratio + range_ratio * k / (num_outputs - 1.0)
-                    for k in range(num_outputs)
-                ]
+                self.scales = [min_ratio + range_ratio * k / (num_outputs - 1.0) for k in range(num_outputs)]
                 self.scales.append(1.0)
             else:
                 self.scales = [min_ratio, max_ratio]
@@ -127,17 +124,13 @@ class TtDefaultBoxGenerator(nn.Module):
     def forward(
         self, image: tt_lib.tensor.Tensor, feature_maps: List[tt_lib.tensor.Tensor]
     ) -> List[tt_lib.tensor.Tensor]:
-        grid_sizes = [feature_map.shape()[-2:] for feature_map in feature_maps]
-        image_size = image.shape()[-2:]
+        grid_sizes = [feature_map.get_legacy_shape()[-2:] for feature_map in feature_maps]
+        image_size = image.get_legacy_shape()[-2:]
         image_sizes = [image_size]
         default_boxes = self._grid_default_boxes(grid_sizes, image_size)
-        default_boxes = (
-            tt_to_torch_tensor(default_boxes).squeeze(0).squeeze(0)
-        )
+        default_boxes = tt_to_torch_tensor(default_boxes).squeeze(0).squeeze(0)
         dboxes = []
-        x_y_size = torch.tensor(
-            [image_size[1], image_size[0]], device=default_boxes.device
-        )
+        x_y_size = torch.tensor([image_size[1], image_size[0]], device=default_boxes.device)
         for _ in image_sizes:
             dboxes_in_image = default_boxes
             dboxes_in_image = torch.cat(

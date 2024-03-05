@@ -100,7 +100,7 @@ class TtFeedForwardModel:
             encoder0_ff1_bias = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.bin")
             ).to(device, model_config["OP9_FF1_MM_BIAS_MEMCFG"])
-            encoder0_ff1_weight_shape = encoder0_ff1_weight.shape()
+            encoder0_ff1_weight_shape = encoder0_ff1_weight.get_legacy_shape()
 
             encoder0_ff2_weight = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.bin")

@@ -33,7 +33,7 @@ void test_operation_infrastructure() {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
     auto output_tensor = operation::run(PadOnHost{padded_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
 
-    auto output_shape = output_tensor.shape();
+    auto output_shape = output_tensor.get_legacy_shape();
     TT_FATAL(output_shape == padded_shape);
     TT_FATAL(output_shape.without_padding() == input_shape);
 }

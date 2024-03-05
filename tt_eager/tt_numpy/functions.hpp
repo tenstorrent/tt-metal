@@ -109,11 +109,11 @@ static Tensor full_like(
     std::optional<DataType> data_type = std::nullopt,
     std::optional<Layout> layout = std::nullopt,
     std::optional<MemoryConfig> output_mem_config = std::nullopt) {
-    DataType data_type_to_use = input_tensor.dtype();
+    DataType data_type_to_use = input_tensor.get_dtype();
     if (data_type.has_value()) {
         data_type_to_use = data_type.value();
     }
-    Layout layout_to_use = input_tensor.layout();
+    Layout layout_to_use = input_tensor.get_layout();
     if (layout.has_value()) {
         layout_to_use = layout.value();
     }
@@ -123,14 +123,14 @@ static Tensor full_like(
             output_mem_config_to_use = output_mem_config.value();
         }
         return full(
-            input_tensor.shape(),
+            input_tensor.get_legacy_shape(),
             value,
             data_type_to_use,
             layout_to_use,
             input_tensor.device(),
             output_mem_config_to_use);
     } else {
-        return full(input_tensor.shape(), value, data_type_to_use, layout_to_use);
+        return full(input_tensor.get_legacy_shape(), value, data_type_to_use, layout_to_use);
     }
 }
 
@@ -427,7 +427,7 @@ static Tensor manual_insertion(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
         shape[0] * shape[1] * shape[2] * shape[3] == input_tensor.volume(),
         "Required shape volume must match old shape volume");
@@ -538,11 +538,11 @@ static bool nearly_equal(bfloat16 a, bfloat16 b, Args... args) {
 
 template <typename DataType, typename... Args>
 static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... args) {
-    if (tensor_a.shape() != tensor_b.shape()) {
+    if (tensor_a.get_legacy_shape() != tensor_b.get_legacy_shape()) {
         return false;
     }
 
-    if (tensor_a.dtype() != tensor_b.dtype()) {
+    if (tensor_a.get_dtype() != tensor_b.get_dtype()) {
         return false;
     }
 

@@ -21,8 +21,8 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_arg
                                                                                 const Shape &output_tensor_start
                                                                                 ){
 
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
     uint32_t num_dims = input_shape.rank();
     uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * output_tensor.element_size();
@@ -75,7 +75,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_arg
 
 operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
-    const Shape output_shape = output.shape();
+    const Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -86,9 +86,9 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    uint32_t padded_row_size_bytes = a.shape()[-1] * a.element_size();
+    uint32_t padded_row_size_bytes = a.get_legacy_shape()[-1] * a.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -187,8 +187,8 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_arg
                                                                                 const Shape &output_tensor_start
                                                                                 ){
 
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
     uint32_t num_dims = input_shape.rank();
 
     std::vector<uint32_t> num_unpadded_tiles_per_dim(num_dims);
@@ -246,7 +246,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t> >   get_unpad_runtime_arg
 operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
 
-    const Shape output_shape = output.shape();
+    const Shape output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
@@ -345,7 +345,7 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
 }
 
 operation::ProgramWithCallbacks unpad_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
-    switch (a.layout()) {
+    switch (a.get_layout()) {
         case Layout::ROW_MAJOR:
             return unpad_rm_single_core(a, output, output_tensor_start, output_tensor_end);
         case Layout::TILE:

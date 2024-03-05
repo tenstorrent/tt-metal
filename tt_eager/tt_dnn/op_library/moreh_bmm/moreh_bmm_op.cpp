@@ -12,8 +12,8 @@ namespace operations {
 namespace primary {
 
 inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
-    const auto& a_shape = input.shape();
-    const auto& b_shape = mat2.shape();
+    const auto& a_shape = input.get_legacy_shape();
+    const auto& b_shape = mat2.get_legacy_shape();
 
     TT_ASSERT(a_shape[0] == 1, "input must be a 3D tensor");
     TT_ASSERT(b_shape[0] == 1, "mat2 must be a 3D tensor");

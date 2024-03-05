@@ -362,9 +362,7 @@ class UNet2DConditionModel(nn.Module):
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[
-                min(i + 1, len(block_out_channels) - 1)
-            ]
+            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
 
             # add upsample block for all BUT final layer
             if not is_final_block:
@@ -398,9 +396,7 @@ class UNet2DConditionModel(nn.Module):
             prev_output_channel = output_channel
 
         # out
-        conv_norm_out_w = state_dict[
-            f"{self.base_address_with_dot}conv_norm_out.weight"
-        ]
+        conv_norm_out_w = state_dict[f"{self.base_address_with_dot}conv_norm_out.weight"]
         conv_norm_out_b = state_dict[f"{self.base_address_with_dot}conv_norm_out.bias"]
         self.conv_norm_out = fallback_ops.GroupNorm(
             num_channels=block_out_channels[0],
@@ -461,7 +457,7 @@ class UNet2DConditionModel(nn.Module):
         forward_upsample_size = False
         upsample_size = None
 
-        if any(s % default_overall_up_factor != 0 for s in sample.shape()[-2:]):
+        if any(s % default_overall_up_factor != 0 for s in sample.get_legacy_shape()[-2:]):
             logger.info("Forward upsample size to force interpolation output size.")
             forward_upsample_size = True
 
@@ -496,9 +492,7 @@ class UNet2DConditionModel(nn.Module):
         if self.class_embedding is not None:
             assert False, "this should not be trigerred!"
             if class_labels is None:
-                raise ValueError(
-                    "class_labels should be provided when num_class_embeds > 0"
-                )
+                raise ValueError("class_labels should be provided when num_class_embeds > 0")
 
             if self.config.class_embed_type == "timestep":
                 class_labels = self.time_proj(class_labels)
@@ -512,10 +506,7 @@ class UNet2DConditionModel(nn.Module):
         # 3. down
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
-            if (
-                hasattr(downsample_block, "has_cross_attention")
-                and downsample_block.has_cross_attention
-            ):
+            if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -542,18 +533,13 @@ class UNet2DConditionModel(nn.Module):
             is_final_block = i == len(self.up_blocks) - 1
 
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[
-                : -len(upsample_block.resnets)
-            ]
+            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             # if we have not reached the final block and need to forward the
             # upsample size, we do it here
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
-            if (
-                hasattr(upsample_block, "has_cross_attention")
-                and upsample_block.has_cross_attention
-            ):
+            if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
                 sample = upsample_block(
                     hidden_states=sample,
                     temb=emb,

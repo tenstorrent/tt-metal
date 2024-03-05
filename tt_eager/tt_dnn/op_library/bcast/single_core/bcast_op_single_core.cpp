@@ -20,8 +20,8 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor &b, Tensor& output, BcastOpMath bcast_math, BcastOpDim bcast_dim) {
 
-    const auto ashape = a.shape();
-    const auto bshape = b.shape();
+    const auto ashape = a.get_legacy_shape();
+    const auto bshape = b.get_legacy_shape();
     uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
     uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
     uint32_t NC = N*C;
@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
@@ -164,8 +164,8 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
         auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-        const auto ashape = input_tensors.at(0).shape();
-        const auto bshape = input_tensors.at(1).shape();
+        const auto ashape = input_tensors.at(0).get_legacy_shape();
+        const auto bshape = input_tensors.at(1).get_legacy_shape();
         uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
         uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
         uint32_t NC = N*C;

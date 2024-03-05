@@ -20,11 +20,11 @@ void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
-    TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
-    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
+    TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
+    TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
 
     // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in reader to generic one.
-    uint32_t in_nbytes_c = (input.shape()[3]) * (input.dtype() == DataType::BFLOAT16 ? 2 : 1);
+    uint32_t in_nbytes_c = (input.get_legacy_shape()[3]) * (input.get_dtype() == DataType::BFLOAT16 ? 2 : 1);
     bool is_pow2 = (in_nbytes_c & (in_nbytes_c - 1)) == 0;
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
@@ -51,7 +51,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.shape();
+    const auto input_shape = input.get_legacy_shape();
     // confirm that the output size supplied to the function matches
     TT_ASSERT(out_h_ == ((in_h_ + 2 * pad_h_ - (dilation_h_ * kernel_size_h_ - 1) - 1) / stride_h_) + 1);
     TT_ASSERT(out_w_ == ((in_w_ + 2 * pad_w_ - (dilation_w_ * kernel_size_w_ - 1) - 1) / stride_w_) + 1);
@@ -60,7 +60,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
     uint32_t out_c_padded = ceil_multiple_of(out_c, (out_c <= 16) ? 16 : constants::TILE_WIDTH);
-    uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.dtype()));
+    uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.get_dtype()));
     uint32_t out_hw = out_h * out_w;
     uint32_t out_hw_padded = (uint32_t) ceil_multiple_of(out_hw, constants::TILE_HEIGHT);
 
@@ -87,13 +87,13 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
         uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw, nbatch);
         uint32_t out_nhw_per_core = out_nhw / ncores;
         CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
-        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.shape()[-1]};
+        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
         auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false};
         auto mem_config = this->out_mem_config_;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), mem_config)};
+        return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
     } else {
-        return operation::generic_create_output_tensors(*this, inputs, input.dtype(), input.layout(), out_mem_config_);
+        return operation::generic_create_output_tensors(*this, inputs, input.get_dtype(), input.get_layout(), out_mem_config_);
     }
 }
 

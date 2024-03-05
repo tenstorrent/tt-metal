@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
 
     auto output_shape = output_tensor_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.get_legacy_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();   // Assuming output is same datatype as input
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
@@ -44,7 +44,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     uint32_t cb_id = CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering
     uint32_t cb_pagesize = round_up(padded_row_size_nbytes, constants::TILE_WIDTH);
-    DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
+    DataFormat in_df = datatype_to_dataformat_converter(a.get_dtype());
     tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
     auto cb = tt_metal::CreateCircularBuffer(program, cores, cb_config);
@@ -86,13 +86,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     {
         log_debug("src0_buffer_addr: {}", src0_buffer->address());
         log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        log_debug("a.shape[0]: {}", a.shape()[0]);
+        log_debug("a.shape[0]: {}", a.get_legacy_shape()[0]);
         log_debug("out.shape[0]: {}", output_shape[0]);
-        log_debug("a.shape[1]: {}", a.shape()[1]);
+        log_debug("a.shape[1]: {}", a.get_legacy_shape()[1]);
         log_debug("out.shape[1]: {}", output_shape[1]);
-        log_debug("a.shape[2]: {}", a.shape()[2]);
+        log_debug("a.shape[2]: {}", a.get_legacy_shape()[2]);
         log_debug("out.shape[2]: {}", output_shape[2]);
-        log_debug("s.shape[3]: {}", a.shape()[3]);
+        log_debug("s.shape[3]: {}", a.get_legacy_shape()[3]);
         log_debug("out.shape[3]: {}", output_shape[3]);
         log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -107,13 +107,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     uint32_t start_dst_stick_id = 0;
     vector<uint32_t> reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
-                                       a.shape()[0],
+                                       a.get_legacy_shape()[0],
                                        output_shape[0],
-                                       a.shape()[1],
+                                       a.get_legacy_shape()[1],
                                        output_shape[1],
-                                       a.shape()[2],
+                                       a.get_legacy_shape()[2],
                                        output_shape[2],
-                                       a.shape()[3],
+                                       a.get_legacy_shape()[3],
                                        output_shape[3],
                                        unpadded_row_size_nbytes,
                                        padded_row_size_nbytes,
@@ -127,11 +127,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                        0,
                                        0,
                                        output_shape[2],
-                                       a.shape()[2],
+                                       a.get_legacy_shape()[2],
                                        unpadded_row_size_nbytes,
                                        padded_row_size_nbytes,
                                        0,
-                                       output.shape()[0]
+                                       output.get_legacy_shape()[0]
                                        };
     vector<uint32_t> writer_rt_args = reader_rt_args;
     SetRuntimeArgs(program,
@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
     auto output_shape = output_tensor_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.get_legacy_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();   // Assuming output is same datatype as input
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
@@ -224,13 +224,13 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     {
         log_debug("src0_buffer_addr: {}", src0_buffer->address());
         log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        log_debug("a.shape[0]: {}", a.shape()[0]);
+        log_debug("a.shape[0]: {}", a.get_legacy_shape()[0]);
         log_debug("out.shape[0]: {}", output_shape[0]);
-        log_debug("a.shape[1]: {}", a.shape()[1]);
+        log_debug("a.shape[1]: {}", a.get_legacy_shape()[1]);
         log_debug("out.shape[1]: {}", output_shape[1]);
-        log_debug("a.shape[2]: {}", a.shape()[2]);
+        log_debug("a.shape[2]: {}", a.get_legacy_shape()[2]);
         log_debug("out.shape[2]: {}", output_shape[2]);
-        log_debug("s.shape[3]: {}", a.shape()[3]);
+        log_debug("s.shape[3]: {}", a.get_legacy_shape()[3]);
         log_debug("out.shape[3]: {}", output_shape[3]);
         log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -244,13 +244,13 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
     vector<uint32_t> reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
-                                       a.shape()[0],
+                                       a.get_legacy_shape()[0],
                                        output_shape[0],
-                                       a.shape()[1],
+                                       a.get_legacy_shape()[1],
                                        output_shape[1],
-                                       a.shape()[2],
+                                       a.get_legacy_shape()[2],
                                        output_shape[2],
-                                       a.shape()[3],
+                                       a.get_legacy_shape()[3],
                                        output_shape[3],
                                        unpadded_row_size_nbytes,
                                        padded_row_size_nbytes,
@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
-    uint32_t unpadded_row_size_bytes = a.shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_bytes = a.get_legacy_shape()[3] * a.element_size();
     uint32_t padded_row_size_bytes = output_shape[3] * a.element_size();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -319,13 +319,13 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     vector<uint32_t> reader_kernel_args = {
         src0_buffer->address(),
         dst_buffer->address(),
-        a.shape()[0],
+        a.get_legacy_shape()[0],
         output_shape[0],
-        a.shape()[1],
+        a.get_legacy_shape()[1],
         output_shape[1],
-        a.shape()[2],
+        a.get_legacy_shape()[2],
         output_shape[2],
-        a.shape()[3],
+        a.get_legacy_shape()[3],
         output_shape[3],
         unpadded_row_size_bytes,
         padded_row_size_bytes,
@@ -400,7 +400,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
@@ -418,16 +418,16 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    uint32_t num_unpadded_Xt = a.shape()[3] / TILE_WIDTH;
+    uint32_t num_unpadded_Xt = a.get_legacy_shape()[3] / TILE_WIDTH;
     uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
-    uint32_t num_unpadded_Yt = a.shape()[2] / TILE_HEIGHT;
+    uint32_t num_unpadded_Yt = a.get_legacy_shape()[2] / TILE_HEIGHT;
     uint32_t num_total_Yt = output_shape[2] / TILE_HEIGHT;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
-    uint32_t num_unpadded_Z = a.shape()[1];
+    uint32_t num_unpadded_Z = a.get_legacy_shape()[1];
     uint32_t num_total_Z = output_shape[1];
     uint32_t num_padded_Zt = (num_total_Z - num_unpadded_Z) * num_total_Yt * num_total_Xt;
-    uint32_t num_unpadded_W = a.shape()[0];
+    uint32_t num_unpadded_W = a.get_legacy_shape()[0];
     uint32_t num_total_W = output_shape[0];
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
@@ -522,23 +522,23 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_FATAL(input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_FATAL(
         (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
         "On device padding only supports padding at end of dims"
     );
-    TT_FATAL(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
 
-    if (input_tensor.layout() == Layout::TILE) {
+    if (input_tensor.get_layout() == Layout::TILE) {
         TT_FATAL((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
-    } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
+    } else if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Pad does not currently support sharding");
@@ -550,7 +550,7 @@ std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_t
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), input_tensor.layout(), this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
@@ -558,13 +558,13 @@ std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_
 operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         if (use_multicore) {
             return pad_rm_reader_writer_multi_core(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
         } else {
             return pad_rm_reader_writer(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
         }
-    } else if (input_tensor.layout() == Layout::TILE) {
+    } else if (input_tensor.get_layout() == Layout::TILE) {
         if (this->use_multicore) {
             log_warning(LogType::LogOp, "TILE layout does not have multicore implementation yet. Falling back to 1 core.");
         }
@@ -585,7 +585,7 @@ tt::stl::reflection::Attributes Pad::attributes() const {
 }
 
 Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
-    if (input_tensor.shape() == output_tensor_shape) {
+    if (input_tensor.get_legacy_shape() == output_tensor_shape) {
         return AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore}, {input_tensor}).at(0);
@@ -595,15 +595,15 @@ Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const S
 void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() != StorageType::DEVICE);
-    TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR);
-    TT_FATAL(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor.get_legacy_shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_legacy_shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
 }
 
 std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto input_shape = input_tensors.at(0).shape();
+    auto input_shape = input_tensors.at(0).get_legacy_shape();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
     for (auto index = 0; index < input_shape.rank(); index++) {
         auto front = this->input_tensor_start[index];
@@ -617,7 +617,7 @@ std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &i
 std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.shape() == this->output_tensor_shape) {
+    if (input_tensor.get_legacy_shape() == this->output_tensor_shape) {
         return {input_tensor};
     } else {
         return {input_tensor.pad(output_shape, this->input_tensor_start, this->pad_value)};

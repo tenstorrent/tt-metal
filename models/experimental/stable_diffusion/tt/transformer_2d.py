@@ -62,14 +62,12 @@ class TtBasicTransformerBlock(nn.Module):
         self.host = host
         self.only_cross_attention = only_cross_attention
         self.base_address = base_address
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
-        self.use_ada_layer_norm_zero = (
-            num_embeds_ada_norm is not None
-        ) and norm_type == "ada_norm_zero"
-        self.use_ada_layer_norm = (
-            num_embeds_ada_norm is not None
-        ) and norm_type == "ada_norm"
+        self.use_ada_layer_norm_zero = (num_embeds_ada_norm is not None) and norm_type == "ada_norm_zero"
+        self.use_ada_layer_norm = (num_embeds_ada_norm is not None) and norm_type == "ada_norm"
 
         if norm_type in ("ada_norm", "ada_norm_zero") and num_embeds_ada_norm is None:
             raise ValueError(
@@ -123,9 +121,7 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_ada_layer_norm:
             assert False, "AdaLayerNorm not supported and not used in stable diffusion"
         elif self.use_ada_layer_norm_zero:
-            assert (
-                False
-            ), "AdaLayerNormZero not supported and not used in stable diffusion"
+            assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
         else:
             if self.use_fallback_ops:
                 norm1_weights = state_dict[f"{base_address}.norm1.weight"]
@@ -159,9 +155,7 @@ class TtBasicTransformerBlock(nn.Module):
             # We currently only use AdaLayerNormZero for self attention where there will only be one attention block.
             # I.e. the number of returned modulation chunks from AdaLayerZero would not make sense if returned during
             # the second cross attention block.
-            assert (
-                not self.use_ada_layer_norm
-            ), "AdaLayerNorm is not supported and not used in stable diffusion"
+            assert not self.use_ada_layer_norm, "AdaLayerNorm is not supported and not used in stable diffusion"
 
             if self.use_fallback_ops:
                 norm2_weights = state_dict[f"{base_address}.norm2.weight"]
@@ -235,38 +229,31 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_ada_layer_norm:
             assert False, "AdaLayerNorm not supported and not used in stable diffusion"
         elif self.use_ada_layer_norm_zero:
-            assert (
-                False
-            ), "AdaLayerNormZero not supported and not used in stable diffusion"
+            assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
         else:
             norm_hidden_states = self.norm1(hidden_states)
 
         # 1. Self-Attention
-        cross_attention_kwargs = (
-            cross_attention_kwargs if cross_attention_kwargs is not None else {}
-        )
+        cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
 
         attn_output = self.attn1(
             norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states
-            if self.only_cross_attention
-            else None,
+            encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
             attention_mask=attention_mask,
             **cross_attention_kwargs,
         )
 
         if self.use_ada_layer_norm_zero:
-            assert (
-                False
-            ), "AdaLayerNormZero not supported and not used in stable diffusion"
+            assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(attn_output, hidden_states,)
+        hidden_states = ttl.tensor.add(
+            attn_output,
+            hidden_states,
+        )
         if self.attn2 is not None:
             norm_hidden_states = (
-                self.norm2(hidden_states, timestep)
-                if self.use_ada_layer_norm
-                else self.norm2(hidden_states)
+                self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
             )
             # 2. Cross-Attention
             attn_output = self.attn2(
@@ -276,22 +263,24 @@ class TtBasicTransformerBlock(nn.Module):
                 **cross_attention_kwargs,
             )
 
-            hidden_states = ttl.tensor.add(attn_output, hidden_states,)
+            hidden_states = ttl.tensor.add(
+                attn_output,
+                hidden_states,
+            )
 
         # 3. Feed-forward
         norm_hidden_states = self.norm3(hidden_states)
         if self.use_ada_layer_norm_zero:
-            assert (
-                False
-            ), "AdaLayerNormZero not supported and not used in stable diffusion"
+            assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
         ff_output = self.ff(norm_hidden_states)
 
         if self.use_ada_layer_norm_zero:
-            assert (
-                False
-            ), "AdaLayerNormZero not supported and not used in stable diffusion"
+            assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(ff_output, hidden_states,)
+        hidden_states = ttl.tensor.add(
+            ff_output,
+            hidden_states,
+        )
         return hidden_states
 
 
@@ -329,7 +318,9 @@ class TtTransformer2DModel(nn.Module):
         self.use_linear_projection = use_linear_projection
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
         inner_dim = num_attention_heads * attention_head_dim
 
@@ -339,9 +330,7 @@ class TtTransformer2DModel(nn.Module):
         self.is_input_vectorized = num_vector_embeds is not None
         self.is_input_patches = in_channels is not None and patch_size is not None
         assert (
-            self.is_input_continuous
-            and (not self.is_input_patches)
-            and (not self.is_input_vectorized)
+            self.is_input_continuous and (not self.is_input_patches) and (not self.is_input_vectorized)
         ), "we only support continuous input."
         if norm_type == "layer_norm" and num_embeds_ada_norm is not None:
             deprecation_message = (
@@ -395,9 +384,7 @@ class TtTransformer2DModel(nn.Module):
                     padding=0,
                 )
         else:
-            assert (
-                False
-            ), "only continuous input is acceptable for stable diffusion in transformer model"
+            assert False, "only continuous input is acceptable for stable diffusion in transformer model"
 
         # 3. Define transformers blocks
         self.transformer_blocks = nn.ModuleList(
@@ -451,9 +438,7 @@ class TtTransformer2DModel(nn.Module):
                 )
 
         else:
-            assert (
-                False
-            ), "only continuous input is acceptable for stable diffusion in transformer model"
+            assert False, "only continuous input is acceptable for stable diffusion in transformer model"
 
     def forward(
         self,
@@ -487,7 +472,7 @@ class TtTransformer2DModel(nn.Module):
         """
         # 1. Input
         if self.is_input_continuous:
-            batch, _, height, width = hidden_states.shape()
+            batch, _, height, width = hidden_states.get_legacy_shape()
             residual = hidden_states
 
             hidden_states = self.norm(hidden_states)
@@ -495,18 +480,14 @@ class TtTransformer2DModel(nn.Module):
             if not self.use_linear_projection:
                 hidden_states = self.proj_in(hidden_states)
 
-                inner_dim = hidden_states.shape()[1]
+                inner_dim = hidden_states.get_legacy_shape()[1]
 
                 hidden_states = ttl.tensor.permute(hidden_states, (0, 2, 3, 1))
-                hidden_states = fallback_ops.reshape(
-                    hidden_states, 1, batch, height * width, inner_dim
-                )
+                hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
             else:
-                inner_dim = hidden_states.shape()[1]
+                inner_dim = hidden_states.get_legacy_shape()[1]
                 hidden_states = ttl.tensor.permute(hidden_states, (0, 2, 3, 1))
-                hidden_states = fallback_ops.reshape(
-                    hidden_states, 1, batch, height * width, inner_dim
-                )
+                hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
 
                 hidden_states = self.proj_in(hidden_states)
 
@@ -523,20 +504,19 @@ class TtTransformer2DModel(nn.Module):
         # 3. Output
         if self.is_input_continuous:
             if not self.use_linear_projection:
-                hidden_states = fallback_ops.reshape(
-                    hidden_states, batch, height, width, inner_dim
-                )
+                hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
                 hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
 
                 hidden_states = self.proj_out(hidden_states)
             else:
                 hidden_states = self.proj_out(hidden_states)
-                hidden_states = fallback_ops.reshape(
-                    hidden_states, batch, height, width, inner_dim
-                )
+                hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
                 hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
 
-            output = ttl.tensor.add(hidden_states, residual,)
+            output = ttl.tensor.add(
+                hidden_states,
+                residual,
+            )
 
         if not return_dict:
             return (output,)

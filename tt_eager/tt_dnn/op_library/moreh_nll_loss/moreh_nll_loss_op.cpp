@@ -30,25 +30,25 @@ void MorehNllLossStep1::validate(const std::vector<Tensor> &input_tensors, const
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
-    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_tensor.get_layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
+    TT_ASSERT(input_tensor.get_dtype() == DataType::BFLOAT16);
 
     TT_ASSERT(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(target_tensor.dtype() == DataType::UINT32);
+    TT_ASSERT((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_ASSERT(target_tensor.get_dtype() == DataType::UINT32);
 
     if (weight_tensor.has_value()) {
         TT_ASSERT(weight_tensor.value().storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
         TT_ASSERT(weight_tensor.value().buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-        TT_ASSERT((weight_tensor.value().layout() == Layout::ROW_MAJOR), "target_tensor to nll_loss must be tilized");
-        TT_ASSERT(weight_tensor.value().dtype() == DataType::BFLOAT16);
+        TT_ASSERT((weight_tensor.value().get_layout() == Layout::ROW_MAJOR), "target_tensor to nll_loss must be tilized");
+        TT_ASSERT(weight_tensor.value().get_dtype() == DataType::BFLOAT16);
     }
 }
 
 std::vector<Shape> MorehNllLossStep1::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto input_shape = input_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
     const Shape output_shape = {input_shape[0], 1, input_shape[2], input_shape[3]};
     return {output_shape};
 }
@@ -56,7 +56,7 @@ std::vector<Shape> MorehNllLossStep1::compute_output_shapes(const std::vector<Te
 std::vector<Tensor> MorehNllLossStep1::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks MorehNllLossStep1::create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -80,32 +80,32 @@ void MorehNllLossStep2::validate(const std::vector<Tensor> &input_tensors, const
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "intput_tensor to nll_loss need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "intput_tensor to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
-    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_tensor.get_layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
+    TT_ASSERT(input_tensor.get_dtype() == DataType::BFLOAT16);
 
     TT_ASSERT(target_tensor.storage_type() == StorageType::DEVICE, "target_tensor to nll_loss need to be on device!");
     TT_ASSERT(target_tensor.buffer() != nullptr, "target_tensor to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(target_tensor.dtype() == DataType::UINT32);
+    TT_ASSERT((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_ASSERT(target_tensor.get_dtype() == DataType::UINT32);
 
     if (weight_tensor.has_value()) {
         TT_ASSERT(weight_tensor.value().storage_type() == StorageType::DEVICE, "weight_tensor to nll_loss need to be on device!");
         TT_ASSERT(weight_tensor.value().buffer() != nullptr, "weight_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_ASSERT((weight_tensor.value().layout() == Layout::ROW_MAJOR), "weight_tensor to nll_loss must be in row major layout");
-        TT_ASSERT(weight_tensor.value().dtype() == DataType::BFLOAT16);
+        TT_ASSERT((weight_tensor.value().get_layout() == Layout::ROW_MAJOR), "weight_tensor to nll_loss must be in row major layout");
+        TT_ASSERT(weight_tensor.value().get_dtype() == DataType::BFLOAT16);
     }
 
     if (divisor_tensor.has_value()) {
         TT_ASSERT(divisor_tensor.value().storage_type() == StorageType::DEVICE, "divisor_tensor to nll_loss need to be on device!");
         TT_ASSERT(divisor_tensor.value().buffer() != nullptr, "divisor_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_ASSERT((divisor_tensor.value().layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
-        TT_ASSERT(divisor_tensor.value().dtype() == DataType::BFLOAT16);
+        TT_ASSERT((divisor_tensor.value().get_layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
+        TT_ASSERT(divisor_tensor.value().get_dtype() == DataType::BFLOAT16);
     }
 }
 
 std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto input_shape = input_tensor.shape();
+    auto input_shape = input_tensor.get_legacy_shape();
     const Shape output_shape = {input_shape[0], 1, input_shape[2], input_shape[3]};
     return {output_shape};
 }
@@ -113,7 +113,7 @@ std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Te
 std::vector<Tensor> MorehNllLossStep2::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks MorehNllLossStep2::create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {

@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.shape();
+    const auto output_grad_shape = output_grad.get_legacy_shape();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const uint32_t im6_t = 1;
     uint32_t im7_t = 1;
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +

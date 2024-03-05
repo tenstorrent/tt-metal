@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.shape();
+    const auto output_grad_shape = output_grad.get_legacy_shape();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const uint32_t im4_t = 1;  // x - mean
     const uint32_t im5_t = 1;  // dycopy
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
 
     CreateCircularBuffer(
         program,
