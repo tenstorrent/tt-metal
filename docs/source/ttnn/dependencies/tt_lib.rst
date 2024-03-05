@@ -1006,6 +1006,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_eq_bw
 
+.. autofunction:: tt_lib.tensor.binary_gt_bw
+
 Loss Functions
 ==============
 
