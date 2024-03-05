@@ -646,26 +646,49 @@ ALWI void silu_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_silu_init<APPROX>() ));
 }
 
+/**
+ * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
+ *
+ * Return value: None
+ */
 ALWI void dbg_halt() {
+    PACK (dbg_thread_halt<PackThreadId>());
     UNPACK (dbg_thread_halt<UnpackThreadId>());
     MATH (dbg_thread_halt<MathThreadId>());
-    PACK (dbg_thread_halt<PackThreadId>());
 }
 
+/**
+ * Resumes the execution of the cores after a debug halt.
+ *
+ * Return value: None
+ */
 ALWI void dbg_unhalt() {
     PACK (dbg_thread_unhalt<PackThreadId>());
     UNPACK (dbg_thread_unhalt<UnpackThreadId>());
     MATH (dbg_thread_unhalt<MathThreadId>());
 }
 
-ALWI void dbg_thread_dump_srca_row(int row_addr, uint32_t *rd_data) {
-    MATH (( dbg_get_array_row(dbg_array_id::SRCA, row_addr, rd_data)));
-}
-
-ALWI void dbg_thread_dump_srcb_row(int row_addr, uint32_t *rd_data) {
-    MATH (( dbg_get_array_row(dbg_array_id::SRCB, row_addr, rd_data)));
-}
-
+/**
+ * Reads the contents of the specified row of the destination register. It reads 8 dwords at a time.
+ *
+ * | Argument        | Description                                                                | Type      | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | row_addr        | The row address in the destination register to read                        | int       |                                                       | True     |
+ * | rd_data         | The array of 8 dwords to store the data                                    | uint32_t* |                                                       | True     |
+ *
+ * Example usage:
+ *            dbg_halt()
+ *            MATH({
+ *                uint32_t rd_data[17];        // 16 for data, 1 for array_type
+ *                for (int row = 0; row < 32; row++) {
+ *                    dbg_thread_dump_dest_acc_row(2*row, rd_data);
+ *                    dbg_thread_dump_dest_acc_row(2*row+1, rd_data+8);
+ *                    DPRINT_MATH(DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_TensixRegister_FP16_B, rd_data, 16) << ENDL());
+ *                }
+ *            })
+ *            dbg_unhalt()
+ * Return value: None
+*/
 ALWI void dbg_thread_dump_dest_acc_row(int row_addr, uint32_t *rd_data) {
     MATH (( dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
 }

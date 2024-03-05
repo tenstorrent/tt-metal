@@ -81,6 +81,13 @@ struct HEX  { char tmp; } ATTR_PACK; // Analog of cout << std::hex
 struct OCT  { char tmp; } ATTR_PACK; // Analog of cout << std::oct
 struct DEC  { char tmp; } ATTR_PACK; // Analog of cout << std::dec
 struct SETW { char w; SETW(char w) : w(w) {} } ATTR_PACK; // Analog of cout << std::setw()
+struct U32_ARRAY {
+    uint32_t* ptr; uint32_t len;
+    U32_ARRAY(uint32_t* ptr, uint32_t len) : ptr(ptr), len(len) {}
+} ATTR_PACK;
+struct TYPED_U32_ARRAY : public U32_ARRAY {
+    TYPED_U32_ARRAY(uint32_t my_type, uint32_t* ptr, uint32_t len) : U32_ARRAY(ptr, len+1) { ptr[len] = my_type; }
+} ATTR_PACK;
 
 // These primitives are intended for ordering debug prints
 // A possible use here is to synchronize debug print order between cores/harts
@@ -108,6 +115,10 @@ inline uint32_t DebugPrintStrCopy(char* dst, const char* src) {
 template<typename T> uint8_t DebugPrintTypeToId();
 template<typename T> uint32_t DebugPrintTypeToSize(T val) { return sizeof(T); };
 template<typename T> const uint8_t* DebugPrintTypeAddr(T* val) { return reinterpret_cast<const uint8_t*>(val); }
+template<> uint32_t DebugPrintTypeToSize<U32_ARRAY>(U32_ARRAY val) { return val.len * sizeof(uint32_t); }
+template<> const uint8_t* DebugPrintTypeAddr<U32_ARRAY>(U32_ARRAY *val) { return (const uint8_t*)val->ptr; }
+template<> uint32_t DebugPrintTypeToSize<TYPED_U32_ARRAY>(TYPED_U32_ARRAY val) { return val.len * sizeof(uint32_t); }
+template<> const uint8_t* DebugPrintTypeAddr<TYPED_U32_ARRAY>(TYPED_U32_ARRAY *val) { return (const uint8_t*)val->ptr; }
 
 template<> uint8_t DebugPrintTypeToId<const char*>()   { return DPrintCSTR; }
 template<> uint8_t DebugPrintTypeToId<char*>()         { return DPrintCSTR; }
@@ -135,6 +146,8 @@ template<> uint8_t DebugPrintTypeToId<OCT>()           { return DPrintOCT; }
 template<> uint8_t DebugPrintTypeToId<DEC>()           { return DPrintDEC; }
 template<> uint8_t DebugPrintTypeToId<F32>()           { return DPrintFLOAT32; }
 template<> uint8_t DebugPrintTypeToId<U32>()           { return DPrintUINT32; }
+template<> uint8_t DebugPrintTypeToId<U32_ARRAY>()     { return DPrintU32_ARRAY; }
+template<> uint8_t DebugPrintTypeToId<TYPED_U32_ARRAY>() { return DPrintTYPED_U32_ARRAY; }
 static_assert(sizeof(int) == 4);
 
 // Specializations for const char* (string literals), typically you will not need these for other types
