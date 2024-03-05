@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/dispatch/kernels/cq_dispatcher.hpp"
-#include "debug/dprint.h"
 
 void kernel_main() {
     bool db_buf_switch = false;
@@ -33,8 +32,6 @@ void kernel_main() {
         const db_cb_config_t* remote_db_cb_config = get_remote_db_cb_config(CQ_DISPATCHER_CB_CONFIG_BASE);
         uint32_t completion_data_size = header->completion_data_size;
         reset_dispatch_message_addr();
-        // DPRINT << "Dispatcher got program" << ENDL();
-        // DPRINT << "LAUNCH PROGRAM" << ENDL();
         write_and_launch_program<true>(
             db_cb_config,
             remote_db_cb_config,
@@ -43,11 +40,7 @@ void kernel_main() {
             producer_noc_encoding,
             program_transfer_num_pages,
             l1_consumer_fifo_limit);
-        // DPRINT << "Dispatcher launched program" << ENDL();
-        // DPRINT << "WAIT FOR PROGRAM" << ENDL();
         wait_for_program_completion(num_workers);
-        // DPRINT << "DONE WAIT" << ENDL();
-        // DPRINT << "Dispatcher done program" << ENDL();
 
         // notify producer that it has completed a command
         noc_semaphore_inc(producer_noc_encoding | get_semaphore(2), 1);

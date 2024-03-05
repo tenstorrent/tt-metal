@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "debug/dprint.h"
 
 #define ATTR_ALIGNL1 __attribute__((aligned(L1_ALIGNMENT)))
 struct db_cb_config_t {

@@ -129,7 +129,6 @@ FORCE_INLINE void write_and_launch_program(
             case (uint32_t) DeviceCommand::TransferType::RUNTIME_ARGS:
                 multicast = false;
                 num_pages_in_transfer = header->num_runtime_arg_pages;
-                // DPRINT << "NUM RUNTIME ARG PAGES: " << num_pages_in_transfer << ENDL();
                 break;
             case (uint32_t) DeviceCommand::TransferType::CB_CONFIGS:
                 num_pages_in_transfer = header->num_cb_config_pages;
@@ -246,10 +245,8 @@ FORCE_INLINE void wait_for_program_completion(uint32_t num_workers) {
     volatile tt_l1_ptr uint32_t* message_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
 
-    // DPRINT << "WAIT FOR PROG COMPLETION" << ENDL();
     while (*message_addr_ptr != num_workers)
         ;
-    // DPRINT << "DONE PROGRAM" << ENDL();
 
 
     DEBUG_STATUS('Q', 'D');

@@ -7,7 +7,6 @@
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "cq_cmds.hpp"
-#include "debug/dprint.h"
 
 CQWriteInterface cq_write_interface;
 CQReadInterface cq_read_interface;
@@ -277,7 +276,6 @@ FORCE_INLINE void relay_command(bool db_buf_switch, uint64_t consumer_noc_encodi
 FORCE_INLINE void write_event(uint32_t event_address) {
     uint32_t completion_write_ptr = *get_cq_completion_write_ptr() << 4;
     constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
-    //DPRINT << "WRITING EVENT " << *reinterpret_cast<volatile uint32_t*>(event_address) << " TO " << completion_write_ptr << ENDL();
     uint64_t host_completion_queue_write_addr = pcie_core_noc_encoding | completion_write_ptr;
     noc_async_write(event_address, host_completion_queue_write_addr, 4);
     noc_async_write_barrier();
@@ -337,15 +335,11 @@ class ProgramEventBuffer {
         while (this->num_events) {
             uint32_t event = (this->buffer >> 32);
             if constexpr (write_to_completion_queue) {
-                //DPRINT << "Write " << event << " back to completion queue" << ENDL();
                 completion_queue_reserve_back(32); // Need to clean up
-                // DPRINT << "DEVICE WRITING EVENT: " << event << ENDL();
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(event_addr) = event;
                 write_event(event_addr);
                 completion_queue_push_back(32, this->completion_queue_start_addr, this->host_completion_queue_write_addr);
-                //DPRINT << "Done write " << event << " back to completion queue" << ENDL();
             } else {
-                //DPRINT << "Send " << event << " back to MMIO" << ENDL();
                 uint64_t my_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
                 // todo: get this passed in
                 constexpr uint32_t completion_cmd_eth_src_base = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + eth_l1_mem::address_map::ERISC_L1_TUNNEL_BUFFER_SIZE;
@@ -367,7 +361,6 @@ class ProgramEventBuffer {
                 relay_command<L1_UNRESERVED_BASE, completion_cmd_eth_src_base, 0>(false, push_noc_encoding); // SRC router has one cmd slot
                 update_producer_consumer_sync_semaphores(my_noc_encoding, this->push_noc_encoding, push_semaphore_addr, eth_get_semaphore(0));
 
-                //DPRINT << "Done sending " << event << " back to MMIO" << ENDL();
                 // reset changes to command
                 header->event = curr_event;
                 header->num_buffer_transfers = curr_num_buffer_transfers;
@@ -433,10 +426,6 @@ void pull_and_relay(
                 */
 
                 // wait for dst router to push data
-                // //DPRINT << " pull and relay " << HEX() << " addr " <<  (uint32_t)src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg << DEC() << " data " <<
-                    // src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->num_pages << " " << src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->rd_ptr_16B <<
-                    // " " << src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << " " << num_pages_to_read << ENDL();
-                // //DPRINT << "Waiting for " << num_pages_to_read << ENDL();
                 multicore_cb_wait_front(src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg, num_pages_to_read);
 
                 uint32_t src_addr = (src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->rd_ptr_16B << 4);
@@ -444,8 +433,6 @@ void pull_and_relay(
 
                 noc_async_read(src_noc_addr, get_write_ptr(0), (src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_read);
                 noc_async_read_barrier();
-
-                // //DPRINT << "Read " << num_pages_to_read  << " into " <<  get_write_ptr(0) << ENDL();
 
                 multicore_cb_pop_front(
                     src_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
@@ -462,9 +449,7 @@ void pull_and_relay(
                     buffers when our src is in system memory, or we are pulling in
                     data from local chip SRAM/DRAM.
                 */
-                // //DPRINT << "Reading into " << get_write_ptr(0) << " num pages: " << num_pages_to_read << ENDL();
                 src_pr_cfg.buff_cfg.buffer.noc_async_read_buffer(get_write_ptr(0), src_pr_cfg.buff_cfg.page_id, num_pages_to_read);
-                // //DPRINT << "DONE READING" << ENDL();
                 src_pr_cfg.buff_cfg.page_id += num_pages_to_read;
             }
 
@@ -496,16 +481,8 @@ void pull_and_relay(
                 uint32_t dst_addr = dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->wr_ptr_16B << 4;
                 uint64_t dst_noc_addr = dst_pr_cfg.cb_buff_cfg.remote_noc_encoding | dst_addr;
 
-                // uint32_t rd_ptr = get_read_ptr(0);
-                // DPRINT << "Writing " << num_pages_to_write << " to dispatch addr: " << dst_addr << ENDL();
-                // for (uint32_t i = 0; i < num_pages_to_write * 2048; i += 4) {
-                //     DPRINT << reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rd_ptr + i)[0] << ENDL();
-                // }
-                // if (num_pages != 1) {
                 uint32_t num_bytes = (dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg->page_size_16B << 4) * num_pages_to_write;
-                // DPRINT << "SENDING NUM BYTES: " << num_bytes << ENDL();
                 noc_async_write(get_read_ptr(0), dst_noc_addr, num_bytes);
-                // }
                 multicore_cb_push_back(
                     dst_pr_cfg.cb_buff_cfg.local_multicore_cb_cfg,
                     dst_pr_cfg.cb_buff_cfg.remote_multicore_cb_cfg,
@@ -519,13 +496,11 @@ void pull_and_relay(
                 /*
                     In this case, we are writing data directly to a buffer.
                 */
-                // //DPRINT << "Wait consumer idle write to buffer" << ENDL();
                 wait_consumer_idle<2>(dst_pr_cfg.dispatch_synchronization_semaphore);
                 dst_pr_cfg.program_event_buffer.write_events<write_to_completion_queue>();
                 // Drain the program event buffer
                 dst_pr_cfg.buff_cfg.buffer.noc_async_write_buffer(get_read_ptr(0), dst_pr_cfg.buff_cfg.page_id, num_pages_to_write);
                 dst_pr_cfg.buff_cfg.page_id += num_pages_to_write;
-                // //DPRINT << "Done write to buffer of " << num_pages_to_write << ENDL();
             }
             noc_async_writes_flushed();
             cb_pop_front(0, num_pages_to_write);
