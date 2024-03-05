@@ -65,9 +65,11 @@ def test_all_gather(
 
     if num_devices == 8:
         pytest.skip("All gather on 8 chips requires tunnelling! Re-enable once that's merged in.")
-    elif num_devices > len(devices):
+
+    if num_devices > len(devices):
         pytest.skip("Not enough devices detected!")
-    elif mem_config == ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM):
+
+    if mem_config == ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM):
         pytest.skip("Disabling input in DRAM for all gather tests!")
 
     devices = get_devices_for_t3000(devices, num_devices)

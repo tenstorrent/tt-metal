@@ -68,8 +68,14 @@ const DeviceCommand EnqueueReadShardedBufferCommand::create_buffer_transfer_inst
 
     uint32_t num_cores = this->buffer.num_cores();
     uint32_t shard_size = this->buffer.shard_spec().size();
-    // TODO: for now all shards are same size of pages
-    vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
+
+    auto core_host_page_indices = this->buffer.core_host_page_indices();
+    vector<uint32_t> num_pages_in_shards;
+    num_pages_in_shards.reserve(num_cores);
+    for(size_t core_id = 0; core_id < num_cores; core_id++) {
+        num_pages_in_shards.push_back(core_host_page_indices[core_id].size());
+    }
+
     vector<uint32_t> core_id_x;
     core_id_x.reserve(num_cores);
     vector<uint32_t> core_id_y;
@@ -243,8 +249,14 @@ const DeviceCommand EnqueueWriteShardedBufferCommand::create_buffer_transfer_ins
 
     uint32_t num_cores = this->buffer.num_cores();
     uint32_t shard_size = this->buffer.shard_spec().size();
-    // TODO: for now all shards are same size of pages
-    vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
+
+    auto core_host_page_indices = this->buffer.core_host_page_indices();
+    vector<uint32_t> num_pages_in_shards;
+    num_pages_in_shards.reserve(num_cores);
+    for(size_t core_id = 0; core_id < num_cores; core_id++) {
+        num_pages_in_shards.push_back(core_host_page_indices[core_id].size());
+    }
+
     vector<uint32_t> core_id_x;
     core_id_x.reserve(num_cores);
     vector<uint32_t> core_id_y;
@@ -782,13 +794,17 @@ void convert_interleaved_to_sharded_on_host(const void* host, const Buffer& buff
 
     const void* dst = host;
     std::set<uint32_t> pages_seen;
-    for (uint32_t host_page_id = 0; host_page_id < num_pages; host_page_id++) {
-        auto dev_page_id = buffer.get_mapped_page_id(host_page_id);
+    for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
 
-        TT_ASSERT(dev_page_id < num_pages and dev_page_id >= 0);
         if (read) {
+            auto host_page_id = page_id;
+            auto dev_page_id = buffer.get_host_to_dev_mapped_page_id(host_page_id);
+            TT_ASSERT(dev_page_id < num_pages and dev_page_id >= 0);
             memcpy((char*)dst + dev_page_id * page_size, (char*)temp + host_page_id * page_size, page_size);
         } else {
+            auto dev_page_id = page_id;
+            auto host_page_id = buffer.get_dev_to_host_mapped_page_id(dev_page_id);
+            TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
             memcpy((char*)dst + host_page_id * page_size, (char*)temp + dev_page_id * page_size, page_size);
         }
     }

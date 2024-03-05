@@ -12,7 +12,6 @@ from models.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_height, input_width, input_memory_layout, input_sharded_memory_config_args, output_sharded_memory_config_args, input_override, output_override",
     [
@@ -90,9 +89,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
         (
             32,
-            8192,
+            7168,
             ttnn.TILE_LAYOUT,
-            dict(core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=7, x=8), strategy=ttnn.ShardStrategy.BLOCK),
             dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.BLOCK),
             [32, 128],
             None,

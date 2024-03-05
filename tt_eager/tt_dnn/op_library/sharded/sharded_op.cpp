@@ -52,7 +52,8 @@ std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& in
             this->output_dtype,
             input_tensor.get_layout(),
             input_tensor.device(),
-            mem_config
+            mem_config,
+            true
             )};
     } else {
         return operation::generic_create_output_tensors(

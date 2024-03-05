@@ -54,18 +54,31 @@ def get_tensor(shape, dtype):
     ],
 )
 @pytest.mark.parametrize(
-    "tensor_shape, shard_scheme, shard_shape",
+    "tensor_shape, shard_scheme, shard_shape, grid_override",
     [
-        ([1, 4, 64, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (64, 64)),
-        ([1, 1, 128, 128], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (64, 64)),
-        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (512, 64)),
-        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 4096, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 8192, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 14336, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 256, 32], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (32, 32)),
-        ([1, 1, 128, 64], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (32, 64)),
-        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (1024, 64)),
+        ([1, 4, 64, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (64, 64), None),
+        ([1, 1, 128, 128], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (64, 64), None),
+        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (512, 64), None),
+        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), None),
+        ([1, 1, 4096, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), None),
+        ([1, 1, 8192, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), None),
+        ([1, 1, 14336, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), None),
+        ([1, 1, 256, 32], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (32, 32), None),
+        ([1, 1, 128, 64], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (32, 64), None),
+        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (1024, 64), None),
+        (
+            [1, 1, 32, 16256],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            (32, 512),
+            ttl.tensor.CoreRangeSet(
+                {
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(4, 4)),  # 25 cores
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(5, 5), ttl.tensor.CoreCoord(6, 6)),  # 4 cores
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(6, 7), ttl.tensor.CoreCoord(7, 7)),  # 2 cores
+                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(5, 4), ttl.tensor.CoreCoord(5, 4)),  # 1 cores
+                }
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -73,13 +86,17 @@ def get_tensor(shape, dtype):
     [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
 def test_tensor_conversion_between_torch_and_tt_tile(
-    tt_dtype, device, tensor_shape, shard_scheme, shard_shape, shard_orientation
+    tt_dtype, device, tensor_shape, shard_scheme, shard_shape, grid_override, shard_orientation
 ):
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
     compute_grid = ttl.tensor.CoreCoord(
         device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
     )
-    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
+
+    if grid_override == None:
+        shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
+    else:
+        shard_grid = grid_override
     shard_halo = False
     shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
 

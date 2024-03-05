@@ -9,8 +9,10 @@
 #include "common/bfloat16.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/math.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/math.hpp"
 #include <map>
 #include <optional>
 
@@ -205,11 +207,18 @@ class Buffer {
         return all_cores_[dev_page_to_core_mapping_[dev_page_id]];
     }
 
-    uint32_t get_mapped_page_id(uint32_t input_id) const {
+    uint32_t get_host_to_dev_mapped_page_id(uint32_t input_id) const {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        TT_ASSERT(input_id < host_page_to_dev_page_mapping_.size());
+        return host_page_to_dev_page_mapping_[input_id];
+    }
+
+    uint32_t get_dev_to_host_mapped_page_id(uint32_t input_id) const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         TT_ASSERT(input_id < dev_page_to_core_mapping_.size());
         return dev_page_to_host_page_mapping_[input_id];
     }
+
 
     std::vector<CoreCoord> all_cores() const{
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
@@ -226,7 +235,7 @@ class Buffer {
             return 1;
         else{
             auto num_pages = this->size()/this->page_size();
-            auto shards_for_compute = num_pages/this->shard_spec().size();
+            auto shards_for_compute = div_up(num_pages, this->shard_spec().size());
             return shards_for_compute;
         }
     }
