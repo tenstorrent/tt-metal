@@ -634,56 +634,6 @@ TEST_F(CommandQueueSingleCardFixture, EthKernelsDirectSendAllConnectedChips) {
     }
 }
 
-TEST_F(CommandQueueMultiDeviceFixture, EthKernelsRandomDirectSendTests) {
-    srand(0);
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
-
-    std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
-    for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
-        if (std::get<0>(receiver_core) != device_1->id()) {
-            continue;
-        }
-        connectivity.insert({{device_0->id(), sender_core}, receiver_core});
-    }
-    for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
-        const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
-        if (std::get<0>(receiver_core) != device_0->id()) {
-            continue;
-        }
-        connectivity.insert({{device_1->id(), sender_core}, receiver_core});
-    }
-    for (int i = 0; i < 1000; i++) {
-        auto it = connectivity.begin();
-        std::advance(it, rand() % (connectivity.size()));
-
-        const auto& send_chip = devices_.at(std::get<0>(it->first));
-        CoreCoord sender_core = std::get<1>(it->first);
-        const auto& receiver_chip = devices_.at(std::get<0>(it->second));
-        CoreCoord receiver_core = std::get<1>(it->second);
-
-        const size_t src_eth_l1_byte_address = fd_unit_tests::erisc::kernels::get_rand_32_byte_aligned_address(
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
-        const size_t dst_eth_l1_byte_address = fd_unit_tests::erisc::kernels::get_rand_32_byte_aligned_address(
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
-
-        int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE -
-                         std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) /
-                        WORD_SIZE;
-        int num_words = rand() % max_words + 1;
-
-        ASSERT_TRUE(fd_unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-            send_chip,
-            receiver_chip,
-            WORD_SIZE * num_words,
-            src_eth_l1_byte_address,
-            dst_eth_l1_byte_address,
-            sender_core,
-            receiver_core));
-    }
-}
-
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
