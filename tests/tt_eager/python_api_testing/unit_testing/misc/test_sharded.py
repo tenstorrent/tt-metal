@@ -17,11 +17,12 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 
 
 @pytest.mark.parametrize(
-    "input_shape, shard_scheme, shard_size",
+    "input_shape, shard_scheme, shard_size, num_cores, bfloat_8_only",
     [
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64)),
-        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512)),
-        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32)),
+        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), 98, False),
+        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512), 98, False),
+        ([1, 1, 128, 262144], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 8192), 32, True),
+        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32), 98, False),
     ],
 )
 @pytest.mark.parametrize(
@@ -30,14 +31,29 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 @pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_tile(
-    device, input_shape, shard_size, shard_scheme, shard_orientation, input_dtype, output_dtype, function_level_defaults
+    device,
+    input_shape,
+    shard_size,
+    num_cores,
+    bfloat_8_only,
+    shard_scheme,
+    shard_orientation,
+    input_dtype,
+    output_dtype,
+    function_level_defaults,
 ):
-    grid_size = device.compute_with_storage_grid_size()
+    if num_cores == 98:
+        grid_size = device.compute_with_storage_grid_size()
+    else:
+        grid_size = (8, 4)
     input_size = torch.Size(input_shape)
-    num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    if bfloat_8_only and (
+        (input_dtype != ttl.tensor.DataType.BFLOAT8_B) or (output_dtype != ttl.tensor.DataType.BFLOAT8_B)
+    ):
+        pytest.skip(f"Test requires BFLOAT8_B")
 
     x = torch.arange(input_size.numel()).reshape(input_size).bfloat16().float()
 
