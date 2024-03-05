@@ -78,12 +78,17 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
+        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
         const chip_id_t mmio_device_id = 0;
         reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
-        for (const auto &[id, device] : reserved_devices_) {
-            devices_.push_back(device);
+        if (enable_remote_chip) {
+            for (const auto &[id, device] : reserved_devices_) {
+                devices_.push_back(device);
+            }
+        } else {
+            devices_.push_back(reserved_devices_.at(mmio_device_id));
         }
 
         num_devices_ = reserved_devices_.size();
