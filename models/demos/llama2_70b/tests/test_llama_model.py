@@ -96,6 +96,8 @@ def run_test_LlamaModel_inference(
 
     print(f"Running optimized: {optimized}")
     print(f"Running emulated: {emulated}")
+    print(f"Running on {n_devices} devices")
+    print(f"Running with {n_layers} layers")
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)

@@ -111,6 +111,7 @@ def run_test_LlamaDecoder_inference(
 
     print(f"Running optimized: {optimized}")
     print(f"Running emulated: {emulated}")
+    print(f"Running on {n_devices} devices")
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, layer_num)
@@ -137,7 +138,7 @@ def run_test_LlamaDecoder_inference(
             tt_lib.device.Synchronize(device)
 
     generation_start_pos = 1
-    generation_length = 20
+    generation_length = 50
     all_tests_pass = True
     for i in range(generation_length):
         # Prepare input
